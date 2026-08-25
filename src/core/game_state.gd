@@ -60,6 +60,7 @@ var inventory_reserves: Dictionary:
 		locations[MAIN_BASE_LOCATION_ID]["reserves"] = value.duplicate(true)
 var infrastructure_sites := {"earth_orbit":true}
 var megastructures := {}
+var megastructure_projects := {}
 var major_discoveries := {}
 var game_complete := false
 var completed_at_ms := 0
@@ -85,22 +86,38 @@ var manufacturing_module_inventory := {}
 var manufacturing_modules_built := {}
 var pinned_items: Array = []
 var saved_loadouts := {}
+var next_loadout_serial := 1
 var region_states := {}
 var mining_site_states := {}
 var combat_area_states := {}
 var extraction_network_states := {}
 var equipment_instances := {}
 var next_equipment_serial := 1
+## v2 stores ordinary modules directly as Loadout definition ids. Only recovered,
+## prototype and Boss equipment retains an EQUIP instance and ownership record.
+var asset_semantics_version := 2
 var next_ship_serial := 1
 var refit_projects: Array = []
+var ship_service_projects: Array = []
+var naval_archive: Array = []
+var fleet_maintenance := {"fractional":{}, "debt":{}, "coverage":{}}
 var fleet_logistics := {
 	"expedition":{
 		"command_capacity":100,
 		"supplies":{},
 		"recovered":{},
 		"supply_plan":{"kinetic_munitions":60, "chemical_propellant":20, "repair_supplies":10},
-		"policies":{"ammunition_empty":"RETURN", "repair_empty":"RETURN", "cargo_full":"RETURN"}
+		"policies":{"ammunition_empty":"RETURN", "repair_empty":"RETURN", "cargo_full":"RETURN"},
+		"formation":{"doctrine":"HOLD_FORMATION", "ship_zones":{}, "retreat_policy":{"mode":"HULL_THRESHOLD", "threshold":0.25}}
 	}
+}
+var logistics_network := {
+	"dispatch_interval_ms":5000.0,
+	"dispatch_progress_ms":0.0,
+	"shipments":[],
+	"next_shipment_serial":1,
+	"route_statistics":{},
+	"item_statistics":{}
 }
 
 
@@ -115,7 +132,7 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	state.extraction_command = {"capacity":40}
 	state.expedition_fleet = {"ship_ids":[]}
 	for index in MAX_INDUSTRIAL_OPERATIONS:
-		state.industrial_operations.append(_empty_industrial_operation(index, MANUFACTURING_FACILITY_IDS[index]))
+		state.industrial_operations.append(_empty_industrial_operation(index, MANUFACTURING_FACILITY_IDS[index], MAIN_BASE_LOCATION_ID))
 	for index in MAX_CONSTRUCTION_OPERATIONS:
 		state.construction_operations.append(_empty_operation(index, "construction"))
 	state.active_expedition = _empty_operation(0, "expedition")
@@ -127,11 +144,12 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 		"orbital_construction_yard":{"level":1, "status":"ACTIVE", "installed_modules":[]},
 		"orbital_starport":{"level":1, "status":"ACTIVE", "installed_modules":[]}
 	}
+	state.ensure_main_location_industries()
 	state.ships = []
 	state._create_ship_instance("patchwork_prospector", ["light_autocannon", "civilian_shield", "basic_drive", "mining_laser", "civilian_reactor_core"], "ISS Pioneer")
 	# The founding stockpile prevents an early circular dependency before basic
 	# electronics production comes online.
-	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":12, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10}
+	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":12, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}
 	state.saved_at_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	return state
 
@@ -147,8 +165,8 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	if data.get("locations", null) is Dictionary and not data.get("locations", {}).is_empty():
 		state._load_locations(data.get("locations", {}), location_definitions)
 	else:
-		# Lab schema 24 stored one global stockpile. Schema 25 gives it exactly
-		# one owner and omits the legacy fields on the next save.
+		# Lab schema 24 stored one global stockpile. Newer schemas give it exactly
+		# one owner and omit the legacy fields on the next save.
 		state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = data.get("inventory", {}).duplicate(true)
 		state.locations[MAIN_BASE_LOCATION_ID]["reserves"] = data.get("inventory_reserves", {}).duplicate(true)
 	state.ships = data.get("ships", state.ships).duplicate(true)
@@ -167,6 +185,13 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 		operation["productivity_progress"] = 0.0
 	state.active_expedition = data.get("active_expedition", state.active_expedition).duplicate(true)
 	state.facilities = data.get("facilities", state.facilities).duplicate(true)
+	state.ensure_main_location_industries()
+	for operation in state.industrial_operations:
+		var industry_location_id := str(operation.get("location_id", MAIN_BASE_LOCATION_ID))
+		if state.has_location(industry_location_id):
+			var local_industry := state.ensure_location_industry(industry_location_id, str(operation.get("facility_id", "")), 1)
+			if not str(operation.get("activity_id", "")).is_empty():
+				local_industry["production_method_id"] = str(operation.get("activity_id", ""))
 	if not state.facilities.has("orbital_construction_yard"):
 		state.facilities["orbital_construction_yard"] = {"level":1, "status":"ACTIVE", "installed_modules":[]}
 	if not state.facilities.has("orbital_starport"):
@@ -181,6 +206,7 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.shipyard_queue = _normalized_shipyard_queue(data.get("shipyard_queue", []))
 	state.infrastructure_sites = data.get("infrastructure_sites", state.infrastructure_sites).duplicate(true)
 	state.megastructures = data.get("megastructures", {}).duplicate(true)
+	state.megastructure_projects = _normalized_megastructure_projects(data.get("megastructure_projects", {}), state.megastructures)
 	state.major_discoveries = data.get("major_discoveries", {}).duplicate(true)
 	state.game_complete = bool(data.get("game_complete", false))
 	state.completed_at_ms = int(data.get("completed_at_ms", 0))
@@ -193,16 +219,22 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.manufacturing_module_inventory = data.get("manufacturing_module_inventory", {}).duplicate(true)
 	state.manufacturing_modules_built = data.get("manufacturing_modules_built", {}).duplicate(true)
 	state.pinned_items = data.get("pinned_items", []).duplicate()
-	state.saved_loadouts = data.get("saved_loadouts", {}).duplicate(true)
+	state.saved_loadouts = _normalized_saved_loadouts(data.get("saved_loadouts", {}))
+	state.next_loadout_serial = maxi(int(data.get("next_loadout_serial", state.saved_loadouts.size() + 1)), state.saved_loadouts.size() + 1)
 	state.region_states = data.get("region_states", {}).duplicate(true)
 	state.mining_site_states = data.get("mining_site_states", {}).duplicate(true)
 	state.combat_area_states = data.get("combat_area_states", {}).duplicate(true)
 	state.extraction_network_states = data.get("extraction_network_states", {}).duplicate(true)
 	state.equipment_instances = data.get("equipment_instances", {}).duplicate(true)
 	state.next_equipment_serial = maxi(1, int(data.get("next_equipment_serial", 1)))
+	state.asset_semantics_version = maxi(1, int(data.get("asset_semantics_version", 1)))
 	state.next_ship_serial = maxi(1, int(data.get("next_ship_serial", state.ships.size() + 1)))
 	state.refit_projects = data.get("refit_projects", []).duplicate(true)
+	state.ship_service_projects = _normalized_ship_service_projects(data.get("ship_service_projects", []))
+	state.naval_archive = data.get("naval_archive", []).duplicate(true)
+	state.fleet_maintenance = _normalized_fleet_maintenance(data.get("fleet_maintenance", {}))
 	state.fleet_logistics = _normalized_fleet_logistics(data.get("fleet_logistics", {}))
+	state.logistics_network = _normalized_logistics_network(data.get("logistics_network", {}))
 	var loaded_domains: Dictionary = data.get("domains", {})
 	for domain_id in domain_ids:
 		if loaded_domains.has(domain_id):
@@ -252,6 +284,7 @@ func to_dictionary() -> Dictionary:
 		"shipyard_queue":shipyard_queue,
 		"infrastructure_sites":infrastructure_sites,
 		"megastructures":megastructures,
+		"megastructure_projects":megastructure_projects,
 		"major_discoveries":major_discoveries,
 		"game_complete":game_complete,
 		"completed_at_ms":completed_at_ms,
@@ -265,15 +298,21 @@ func to_dictionary() -> Dictionary:
 		"manufacturing_modules_built":manufacturing_modules_built,
 		"pinned_items":pinned_items,
 		"saved_loadouts":saved_loadouts,
+		"next_loadout_serial":next_loadout_serial,
 		"region_states":region_states,
 		"mining_site_states":mining_site_states,
 		"combat_area_states":combat_area_states,
 		"extraction_network_states":extraction_network_states,
 		"equipment_instances":equipment_instances,
 		"next_equipment_serial":next_equipment_serial,
+		"asset_semantics_version":asset_semantics_version,
 		"next_ship_serial":next_ship_serial,
 		"refit_projects":refit_projects,
-		"fleet_logistics":fleet_logistics
+		"ship_service_projects":ship_service_projects,
+		"naval_archive":naval_archive,
+		"fleet_maintenance":fleet_maintenance,
+		"fleet_logistics":fleet_logistics,
+		"logistics_network":logistics_network
 	}
 
 
@@ -284,9 +323,11 @@ func initialize_locations(location_definitions: Dictionary = {}) -> void:
 		return
 	for location_value in location_definitions.keys():
 		var location_id := str(location_value)
+		var definition: Dictionary = location_definitions.get(location_id, {})
 		var known := bool(regions.get(location_id, location_id == MAIN_BASE_LOCATION_ID))
-		var location_type := LocationState.ARTIFICIAL if location_id == MAIN_BASE_LOCATION_ID else LocationState.NATURAL
-		_ensure_location(location_id, location_type, known)
+		var location_type := str(definition.get("location_type", LocationState.ARTIFICIAL if location_id == MAIN_BASE_LOCATION_ID else LocationState.NATURAL))
+		var system_id := str(definition.get("system_id", SYSTEM_ID))
+		_ensure_location(location_id, location_type, known, system_id)
 	_ensure_location(MAIN_BASE_LOCATION_ID, LocationState.ARTIFICIAL, true)
 
 
@@ -294,8 +335,8 @@ func has_location(location_id: String) -> bool:
 	return locations.has(location_id)
 
 
-func ensure_location(location_id: String, location_type: String = LocationState.NATURAL, known: bool = false) -> void:
-	_ensure_location(location_id, location_type, known)
+func ensure_location(location_id: String, location_type: String = LocationState.NATURAL, known: bool = false, system_id: String = SYSTEM_ID) -> void:
+	_ensure_location(location_id, location_type, known, system_id)
 
 
 func location_state(location_id: String) -> Dictionary:
@@ -312,6 +353,66 @@ func location_reserves(location_id: String = MAIN_BASE_LOCATION_ID) -> Dictionar
 	if not locations.has(location_id):
 		return {}
 	return locations[location_id].get("reserves", {})
+
+
+func location_industries(location_id: String = MAIN_BASE_LOCATION_ID) -> Dictionary:
+	if not locations.has(location_id):
+		return {}
+	var industry: Dictionary = locations[location_id].get("industry", {})
+	if industry.get("industries", null) is not Dictionary:
+		industry["industries"] = {}
+	locations[location_id]["industry"] = industry
+	return industry["industries"]
+
+
+func location_industry(location_id: String, facility_id: String) -> Dictionary:
+	return location_industries(location_id).get(facility_id, {})
+
+
+func ensure_location_industry(location_id: String, facility_id: String, initial_level: int = 1) -> Dictionary:
+	if not has_location(location_id) or facility_id.is_empty():
+		return {}
+	var industries := location_industries(location_id)
+	if not industries.has(facility_id):
+		industries[facility_id] = {
+			"facility_id":facility_id,
+			"level":maxi(1, initial_level),
+			"production_method_id":"",
+			"expertise_cycles":0,
+			"expertise_level":0,
+			"product_mastery":{}
+		}
+	var runtime: Dictionary = industries[facility_id]
+	runtime["level"] = maxi(1, int(runtime.get("level", initial_level)))
+	runtime["production_method_id"] = str(runtime.get("production_method_id", ""))
+	runtime["expertise_cycles"] = maxi(0, int(runtime.get("expertise_cycles", 0)))
+	runtime["expertise_level"] = maxi(0, int(runtime.get("expertise_level", 0)))
+	runtime["product_mastery"] = runtime.get("product_mastery", {}).duplicate(true)
+	return runtime
+
+
+func ensure_main_location_industries() -> void:
+	if not has_location(MAIN_BASE_LOCATION_ID):
+		return
+	for facility_id in MANUFACTURING_FACILITY_IDS:
+		if facilities.has(facility_id) and str(facilities[facility_id].get("status", "")) == "ACTIVE":
+			ensure_location_industry(MAIN_BASE_LOCATION_ID, facility_id, 1)
+
+
+func industrial_operation_for(location_id: String, facility_id: String) -> Dictionary:
+	for operation in industrial_operations:
+		if str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) == location_id and str(operation.get("facility_id", "")) == facility_id:
+			return operation
+	return {}
+
+
+func ensure_industrial_operation(location_id: String, facility_id: String) -> Dictionary:
+	var existing := industrial_operation_for(location_id, facility_id)
+	if not existing.is_empty():
+		return existing
+	var operation := _empty_industrial_operation(industrial_operations.size(), facility_id, location_id)
+	industrial_operations.append(operation)
+	return operation
 
 
 func item_quantity(item_id: String, location_id: String = MAIN_BASE_LOCATION_ID) -> int:
@@ -442,13 +543,16 @@ func ship_plan_queued(plan_id: String) -> bool:
 	return false
 
 
-func enqueue_ship_plan(plan_id: String) -> bool:
-	if not bool(unlocked_ship_plans.get(plan_id, false)):
+func enqueue_ship_plan(plan_id: String, quantity: int = 1) -> bool:
+	if not bool(unlocked_ship_plans.get(plan_id, false)) or quantity <= 0:
 		return false
 	var project_id := "SHIPBUILD-%06d" % (shipyard_queue.size() + int(statistics.get("ships_built", 0)) + 1)
 	shipyard_queue.append({
 		"project_id":project_id,
 		"plan_id":plan_id,
+		"quantity_total":clampi(quantity, 1, 100),
+		"quantity_remaining":clampi(quantity, 1, 100),
+		"quantity_completed":0,
 		"completed_segments":0,
 		"paid_cycles":0,
 		"cycle_progress":0.0,
@@ -564,16 +668,20 @@ func _create_ship_instance(blueprint_id: String, module_definitions: Array = [],
 		"repair_remaining_ms":0.0,
 		"modules":[],
 		"built_at_ms":int(total_elapsed_ms),
+		"commissioned_at_ms":int(total_elapsed_ms),
+		"current_loadout_id":"",
+		"maintenance_state":"ACTIVE",
+		"maintenance_coverage":1.0,
+		"maintenance_debt":0.0,
 		"lifetime_output":0,
 		"lifetime_damage":0,
 		"damage_taken":0.0,
-		"service_record":{"extraction_cycles":0, "combat_deployments":0, "discoveries":0},
+		"service_record":{"extraction_cycles":0, "combat_deployments":0, "discoveries":0, "victories":0, "defeats":0, "damage_dealt":0.0, "combat_experience":0.0},
 		"location_id":MAIN_BASE_LOCATION_ID
 	}
 	ships.append(ship)
 	for definition_value in module_definitions:
-		var equipment_id := create_equipment_instance(str(definition_value), "SHIP_CONSTRUCTION")
-		install_equipment_instance(equipment_id, instance_id)
+		ship["modules"].append(str(definition_value))
 	return ship
 
 
@@ -599,11 +707,10 @@ func equipment_definition_id(equipment_id: String) -> String:
 
 func ship_module_definition_ids(ship: Dictionary) -> Array:
 	var result: Array = []
-	for equipment_value in ship.get("modules", []):
-		var equipment_id := str(equipment_value)
-		var definition_id := equipment_definition_id(equipment_id)
-		if not definition_id.is_empty():
-			result.append(definition_id)
+	for module_value in ship.get("modules", []):
+		var stored_value := str(module_value)
+		var definition_id := equipment_definition_id(stored_value)
+		result.append(definition_id if not definition_id.is_empty() else stored_value)
 	return result
 
 
@@ -659,7 +766,7 @@ func ship_by_id(instance_id: String) -> Dictionary:
 
 func ship_is_docked(instance_id: String) -> bool:
 	var ship := ship_by_id(instance_id)
-	return not ship.is_empty() and ship.get("status", "") == "DOCKED" and ship.get("condition", "") == "OPERATIONAL"
+	return not ship.is_empty() and ship.get("status", "") == "DOCKED" and ship.get("condition", "") == "OPERATIONAL" and str(ship.get("maintenance_state", "ACTIVE")) != "MOTHBALLED"
 
 
 func ship_is_unassigned_docked(instance_id: String) -> bool:
@@ -732,7 +839,7 @@ func extraction_command_capacity() -> int:
 
 func fleet_logistics_runtime(fleet_id: String = "expedition") -> Dictionary:
 	if not fleet_logistics.has(fleet_id):
-		fleet_logistics[fleet_id] = {"command_capacity":100, "supplies":{}, "recovered":{}, "supply_plan":{}, "policies":{}}
+		fleet_logistics[fleet_id] = {"command_capacity":100, "supplies":{}, "recovered":{}, "supply_plan":{}, "policies":{}, "formation":{"doctrine":"HOLD_FORMATION", "ship_zones":{}, "retreat_policy":{"mode":"HULL_THRESHOLD", "threshold":0.25}}}
 	return fleet_logistics[fleet_id]
 
 
@@ -795,9 +902,12 @@ static func create_operation_record(index: int, domain_id: String) -> Dictionary
 	return _empty_operation(index, domain_id)
 
 
-static func _empty_industrial_operation(index: int, facility_id: String) -> Dictionary:
+static func _empty_industrial_operation(index: int, facility_id: String, location_id: String = MAIN_BASE_LOCATION_ID) -> Dictionary:
 	var operation := _empty_operation(index, "industry")
 	operation["facility_id"] = facility_id
+	operation["location_id"] = location_id
+	operation["material_savings_fractional"] = {}
+	operation["waste_fractional"] = {}
 	operation.erase("allocated_capacity")
 	return operation
 
@@ -821,19 +931,31 @@ static func _normalized_operations(source: Array, minimum: int, domain_id: Strin
 
 static func _normalized_industrial_operations(source: Array) -> Array:
 	var result: Array = []
-	for index in MAX_INDUSTRIAL_OPERATIONS:
-		var normalized := _empty_industrial_operation(index, MANUFACTURING_FACILITY_IDS[index])
-		if index < source.size():
-			var operation: Dictionary = source[index].duplicate(true)
-			for key in operation:
-				normalized[key] = operation[key]
+	for index in source.size():
+		if source[index] is not Dictionary:
+			continue
+		var operation: Dictionary = source[index].duplicate(true)
+		var facility_id := str(operation.get("facility_id", MANUFACTURING_FACILITY_IDS[index] if index < MANUFACTURING_FACILITY_IDS.size() else ""))
+		if facility_id.is_empty():
+			continue
+		var normalized := _empty_industrial_operation(result.size(), facility_id, str(operation.get("location_id", MAIN_BASE_LOCATION_ID)))
+		for key in operation:
+			normalized[key] = operation[key]
 		normalized["slot"] = index
 		normalized["domain"] = "industry"
-		normalized["facility_id"] = MANUFACTURING_FACILITY_IDS[index]
+		normalized["facility_id"] = facility_id
 		normalized.erase("allocated_capacity")
 		if str(normalized.get("location_id", "")).is_empty():
 			normalized["location_id"] = MAIN_BASE_LOCATION_ID
+		normalized["material_savings_fractional"] = normalized.get("material_savings_fractional", {}).duplicate(true)
+		normalized["waste_fractional"] = normalized.get("waste_fractional", {}).duplicate(true)
 		result.append(normalized)
+	for facility_id in MANUFACTURING_FACILITY_IDS:
+		if result.any(func(operation): return str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) == MAIN_BASE_LOCATION_ID and str(operation.get("facility_id", "")) == facility_id):
+			continue
+		result.append(_empty_industrial_operation(result.size(), facility_id, MAIN_BASE_LOCATION_ID))
+	for index in result.size():
+		result[index]["slot"] = index
 	return result
 
 
@@ -866,20 +988,48 @@ static func _normalized_shipyard_queue(source: Array) -> Array:
 	return result
 
 
-func _ensure_location(location_id: String, location_type: String, known: bool) -> void:
+static func _normalized_ship_service_projects(source: Array) -> Array:
+	var result: Array = []
+	for value in source:
+		if value is not Dictionary:
+			continue
+		var runtime: Dictionary = value.duplicate(true)
+		if str(runtime.get("project_id", "")).is_empty() or str(runtime.get("ship_id", "")).is_empty():
+			continue
+		runtime["project_kind"] = str(runtime.get("project_kind", "REACTIVATION"))
+		runtime["status"] = str(runtime.get("status", "RUNNING"))
+		runtime["progress_ms"] = maxf(0.0, float(runtime.get("progress_ms", 0.0)))
+		runtime["duration_ms"] = maxf(1.0, float(runtime.get("duration_ms", 1.0)))
+		runtime["consumed_materials"] = runtime.get("consumed_materials", {}).duplicate(true)
+		runtime["location_id"] = str(runtime.get("location_id", MAIN_BASE_LOCATION_ID))
+		result.append(runtime)
+	return result
+
+
+static func _normalized_fleet_maintenance(source: Dictionary) -> Dictionary:
+	var result := {"fractional":{}, "debt":{}, "coverage":{}}
+	for key in result:
+		if source.get(key, null) is Dictionary:
+			result[key] = source[key].duplicate(true)
+	return result
+
+
+func _ensure_location(location_id: String, location_type: String, known: bool, system_id: String = SYSTEM_ID) -> void:
 	if location_id.is_empty():
 		location_id = MAIN_BASE_LOCATION_ID
 	if not locations.has(location_id):
-		locations[location_id] = LocationState.create(location_id, location_type, SYSTEM_ID, known)
+		locations[location_id] = LocationState.create(location_id, location_type, system_id, known)
 
 
 func _load_locations(source: Dictionary, location_definitions: Dictionary) -> void:
 	initialize_locations(location_definitions)
 	for location_value in source.keys():
 		var location_id := str(location_value)
-		var location_type := LocationState.ARTIFICIAL if location_id == MAIN_BASE_LOCATION_ID else LocationState.NATURAL
+		var definition: Dictionary = location_definitions.get(location_id, {})
+		var location_type := str(definition.get("location_type", LocationState.ARTIFICIAL if location_id == MAIN_BASE_LOCATION_ID else LocationState.NATURAL))
+		var system_id := str(definition.get("system_id", source[location_id].get("system_id", SYSTEM_ID)))
 		var known := bool(regions.get(location_id, location_id == MAIN_BASE_LOCATION_ID))
-		locations[location_id] = LocationState.normalize(source[location_value], location_id, location_type, SYSTEM_ID, known)
+		locations[location_id] = LocationState.normalize(source[location_value], location_id, location_type, system_id, known)
 	_ensure_location(MAIN_BASE_LOCATION_ID, LocationState.ARTIFICIAL, true)
 
 
@@ -941,17 +1091,84 @@ static func _normalized_fleet_logistics(source: Dictionary) -> Dictionary:
 			"supplies":{},
 			"recovered":{},
 			"supply_plan":{"kinetic_munitions":60, "chemical_propellant":20, "repair_supplies":10},
-			"policies":{"ammunition_empty":"RETURN", "repair_empty":"RETURN", "cargo_full":"RETURN"}
+			"policies":{"ammunition_empty":"RETURN", "repair_empty":"RETURN", "cargo_full":"RETURN"},
+			"formation":{"doctrine":"HOLD_FORMATION", "ship_zones":{}, "retreat_policy":{"mode":"HULL_THRESHOLD", "threshold":0.25}}
 		}
 	}
 	for fleet_id in source:
 		if source[fleet_id] is not Dictionary:
 			continue
-		var normalized: Dictionary = result.get(fleet_id, {"command_capacity":100, "supplies":{}, "recovered":{}, "supply_plan":{}, "policies":{}}).duplicate(true)
-		for field in ["command_capacity", "supplies", "recovered", "supply_plan", "policies"]:
+		var normalized: Dictionary = result.get(fleet_id, {"command_capacity":100, "supplies":{}, "recovered":{}, "supply_plan":{}, "policies":{}, "formation":{"doctrine":"HOLD_FORMATION", "ship_zones":{}, "retreat_policy":{"mode":"HULL_THRESHOLD", "threshold":0.25}}}).duplicate(true)
+		for field in ["command_capacity", "supplies", "recovered", "supply_plan", "policies", "formation"]:
 			if source[fleet_id].has(field):
 				normalized[field] = source[fleet_id][field].duplicate(true) if source[fleet_id][field] is Dictionary else source[fleet_id][field]
+		var formation: Dictionary = normalized.get("formation", {})
+		formation["doctrine"] = str(formation.get("doctrine", "HOLD_FORMATION"))
+		formation["ship_zones"] = formation.get("ship_zones", {}).duplicate(true)
+		var retreat_policy: Dictionary = formation.get("retreat_policy", {})
+		retreat_policy["mode"] = str(retreat_policy.get("mode", "HULL_THRESHOLD"))
+		retreat_policy["threshold"] = clampf(float(retreat_policy.get("threshold", 0.25)), 0.05, 0.95)
+		formation["retreat_policy"] = retreat_policy
+		normalized["formation"] = formation
 		result[fleet_id] = normalized
+	return result
+
+
+static func _normalized_logistics_network(source: Dictionary) -> Dictionary:
+	var result := {
+		"dispatch_interval_ms":5000.0,
+		"dispatch_progress_ms":0.0,
+		"shipments":[],
+		"next_shipment_serial":1,
+		"route_statistics":{},
+		"item_statistics":{}
+	}
+	for key in result:
+		if not source.has(key):
+			continue
+		result[key] = source[key].duplicate(true) if source[key] is Dictionary or source[key] is Array else source[key]
+	result["dispatch_interval_ms"] = maxf(100.0, float(result.get("dispatch_interval_ms", 5000.0)))
+	result["dispatch_progress_ms"] = maxf(0.0, float(result.get("dispatch_progress_ms", 0.0)))
+	result["next_shipment_serial"] = maxi(1, int(result.get("next_shipment_serial", 1)))
+	return result
+
+
+static func _normalized_saved_loadouts(source: Dictionary) -> Dictionary:
+	var result := {}
+	for source_key in source:
+		if source[source_key] is not Dictionary:
+			continue
+		var loadout: Dictionary = source[source_key].duplicate(true)
+		var blueprint_id := str(loadout.get("blueprint_id", loadout.get("id", source_key)))
+		if blueprint_id.is_empty():
+			continue
+		var loadout_id := str(loadout.get("id", source_key))
+		if loadout_id.is_empty():
+			loadout_id = str(source_key)
+		loadout["id"] = loadout_id
+		loadout["blueprint_id"] = blueprint_id
+		loadout["name"] = str(loadout.get("name", "%s Loadout" % blueprint_id))
+		loadout["modules"] = loadout.get("modules", []).duplicate()
+		result[loadout_id] = loadout
+	return result
+
+
+static func _normalized_megastructure_projects(source: Dictionary, completed: Dictionary) -> Dictionary:
+	var result := {}
+	for project_id in source:
+		if source[project_id] is not Dictionary:
+			continue
+		var runtime: Dictionary = source[project_id].duplicate(true)
+		runtime["id"] = str(runtime.get("id", project_id))
+		runtime["progress_percent"] = clampi(int(runtime.get("progress_percent", 0)), 0, 100)
+		runtime["stage_index"] = maxi(0, int(runtime.get("stage_index", 0)))
+		runtime["delivered_materials"] = runtime.get("delivered_materials", {}).duplicate(true)
+		runtime["status"] = str(runtime.get("status", "PLANNED"))
+		result[str(project_id)] = runtime
+	for project_id in completed:
+		if not bool(completed.get(project_id, false)) or result.has(project_id):
+			continue
+		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "stage_index":0, "stage_name":"COMPLETE", "delivered_materials":{}, "status":"COMPLETE"}
 	return result
 
 
@@ -981,6 +1198,18 @@ func _normalize_ship_assignments() -> void:
 			ship["condition"] = "OPERATIONAL"
 		if not ship.has("damage_taken"):
 			ship["damage_taken"] = 0.0
+		if not ship.has("commissioned_at_ms"):
+			ship["commissioned_at_ms"] = int(ship.get("built_at_ms", 0))
+		if not ship.has("current_loadout_id"):
+			ship["current_loadout_id"] = ""
+		ship["maintenance_state"] = str(ship.get("maintenance_state", "ACTIVE"))
+		if str(ship["maintenance_state"]) not in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
+			ship["maintenance_state"] = "ACTIVE"
+		ship["maintenance_coverage"] = clampf(float(ship.get("maintenance_coverage", 1.0)), 0.0, 1.0)
+		ship["maintenance_debt"] = maxf(0.0, float(ship.get("maintenance_debt", 0.0)))
+		var service_record: Dictionary = ship.get("service_record", {})
+		service_record.merge({"extraction_cycles":0, "combat_deployments":0, "discoveries":0, "victories":0, "defeats":0, "damage_dealt":0.0, "combat_experience":0.0}, false)
+		ship["service_record"] = service_record
 
 
 func _normalize_activity_fleets() -> void:
@@ -989,17 +1218,18 @@ func _normalize_activity_fleets() -> void:
 		var normalized_ids: Array = []
 		for ship_id in fleet_ship_ids(domain_id):
 			var id := str(ship_id)
-			if not id.is_empty() and not claimed.has(id) and not ship_by_id(id).is_empty():
+			var candidate := ship_by_id(id)
+			if not id.is_empty() and not claimed.has(id) and not candidate.is_empty() and str(candidate.get("maintenance_state", "ACTIVE")) == "ACTIVE":
 				normalized_ids.append(id)
 				claimed.append(id)
 		set_fleet_ship_ids(domain_id, normalized_ids)
 	for ship in ships:
-		if ship.get("status", "") in ["REPAIRING", "DISABLED", "BUILDING", "REFITTING"]:
+		if ship.get("status", "") in ["REPAIRING", "DISABLED", "BUILDING", "REFITTING", "REACTIVATING"]:
 			continue
 		var ship_id := str(ship.get("instance_id", ""))
 		var domain_id := ship_fleet_domain(ship_id)
 		ship["status"] = "DOCKED"
-		ship["assignment"] = {} if domain_id.is_empty() else {"domain":domain_id, "fleet":"default"}
+		ship["assignment"] = {} if domain_id.is_empty() or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" else {"domain":domain_id, "fleet":"default"}
 	for operation in mining_operations:
 		if operation.get("status", "IDLE") != "RUNNING":
 			continue

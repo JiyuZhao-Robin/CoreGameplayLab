@@ -97,9 +97,13 @@ func _test_offline_round_trip(database: ContentDatabase) -> void:
 	simulation.ensure_frontier_state(state)
 	var restored := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
 	var before := restored.aggregate_inventory().duplicate(true)
+	var repair_before := restored.aggregate_item_quantity("repair_material")
 	simulation.advance(restored, 6.0 * 60.0 * 60.0 * 1000.0)
 	var second_restore := SpaceGameState.from_dictionary(restored.to_dictionary(), database.domains.keys(), database.regions)
-	_check(restored.aggregate_inventory() == before, "idle offline advance neither creates nor loses resources")
+	var after := restored.aggregate_inventory().duplicate(true)
+	before.erase("repair_material")
+	after.erase("repair_material")
+	_check(after == before and repair_before - restored.aggregate_item_quantity("repair_material") == 1, "idle offline advance changes only the explicit Active-fleet maintenance sink")
 	_check(second_restore.aggregate_inventory() == restored.aggregate_inventory(), "offline save/load does not duplicate Location resources")
 
 

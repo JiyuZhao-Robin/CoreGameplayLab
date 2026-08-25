@@ -48,6 +48,18 @@ func content(definition: Dictionary, field: String = "name") -> String:
 	return str(_translations.get("content", {}).get(id, {}).get(field, fallback))
 
 
+func goal_step(step_id: String, fallback: String) -> String:
+	if not is_chinese():
+		return fallback
+	return str(_translations.get("goal_steps", {}).get(step_id, fallback))
+
+
+func megastructure_stage(megastructure_id: String, percent: int, fallback: String) -> String:
+	if not is_chinese():
+		return fallback
+	return str(_translations.get("megastructure_stages", {}).get(megastructure_id, {}).get(str(percent), fallback))
+
+
 func domain_name(domain_id: String, database: ContentDatabase) -> String:
 	return content(database.domains.get(domain_id, {"id":domain_id, "name":domain_id.capitalize()}), "name")
 
@@ -79,6 +91,13 @@ func _load_translations() -> void:
 	var parsed = JSON.parse_string(FileAccess.get_file_as_string(TRANSLATION_PATH))
 	if typeof(parsed) == TYPE_DICTIONARY:
 		_translations = parsed
+		var content_translations: Dictionary = _translations.get("content", {})
+		for definition_id_value in _translations.get("content_overrides", {}).keys():
+			var definition_id := str(definition_id_value)
+			var merged: Dictionary = content_translations.get(definition_id, {}).duplicate(true)
+			merged.merge(_translations["content_overrides"][definition_id], true)
+			content_translations[definition_id] = merged
+		_translations["content"] = content_translations
 	else:
 		push_warning("Chinese translation file is invalid")
 

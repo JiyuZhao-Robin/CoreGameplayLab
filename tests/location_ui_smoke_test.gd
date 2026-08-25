@@ -28,15 +28,17 @@ func _run() -> void:
 	var resources_tab := main.find_child("LocationTab_resources", true, false) as Button
 	resources_tab.pressed.emit()
 	await _redraw()
-	_check(_has_text_fragment(main, "Known Resource Sites"), "Resources tab reads known Resource Site state")
+	_check(_has_text_fragment(main, "已知资源点"), "Resources tab reads known Resource Site state")
 	var logistics_tab := main.find_child("LocationTab_logistics", true, false) as Button
 	logistics_tab.pressed.emit()
 	await _redraw()
-	_check(_has_text_fragment(main, "NOT_CONNECTED"), "Logistics explicitly reports its unimplemented connection")
+	_check(_has_text_fragment(main, "供给 / 需求策略"), "Logistics exposes configurable policy controls")
+	_check(main.find_child("LogisticsItemSelector", true, false) != null, "Logistics can add a policy for any content item")
+	_check(not _has_text_fragment(main, "Shipment is intentionally not implemented"), "Logistics no longer renders the Phase 1 placeholder")
 	var projects_tab := main.find_child("LocationTab_projects", true, false) as Button
 	projects_tab.pressed.emit()
 	await _redraw()
-	_check(_has_text_fragment(main, "NO ACTIVE PROJECTS"), "Projects reads the real empty queues")
+	_check(_has_text_fragment(main, "当前没有进行中的工程"), "Projects reads the real empty queues")
 	_finish()
 
 
