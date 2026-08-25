@@ -1,0 +1,167 @@
+extends Node
+
+const MainScene := preload("res://src/ui/main.tscn")
+
+var failures: Array[String] = []
+
+
+func _ready() -> void:
+	call_deferred("_run")
+
+
+func _run() -> void:
+	Game.persistence_enabled = false
+	Game.reset_game()
+	var main: Control = MainScene.instantiate()
+	add_child(main)
+	await _redraw()
+
+	_check(main.find_child("SystemMap2D", true, false) != null, "formal UI contains the interactive 2D System Map")
+	for page_id in ["overview", "system_map", "location", "frontier", "industry", "megastructure", "research", "fleet", "expedition"]:
+		_check(main.find_child("Navigation_%s" % page_id, true, false) != null, "navigation exposes %s" % page_id)
+
+	var fleet_nav := main.find_child("Navigation_fleet", true, false) as Button
+	_press(fleet_nav)
+	await _redraw()
+	for section_id in ["roster", "readiness", "shipyard", "archive"]:
+		_check(main.find_child("FleetSection_%s" % section_id, true, false) != null, "Fleet exposes %s workspace" % section_id)
+	var ship_id := String((Game.state.ships[0] as Dictionary).get("instance_id", ""))
+	var assign_mining := main.find_child("AssignMining_%s" % ship_id, true, false) as Button
+	_check(assign_mining != null and not assign_mining.disabled, "starter ship can be assigned through Fleet UI")
+	_press(assign_mining)
+	await _redraw()
+	_check(Game.state.ship_fleet_domain(ship_id) == "mining", "Fleet UI changes the real ship assignment")
+
+	var readiness := main.find_child("FleetSection_readiness", true, false) as Button
+	_press(readiness)
+	await _redraw()
+	var retreat_label := _find_label(main, "撤退策略")
+	_check(retreat_label != null and retreat_label.size.x >= 100.0 and retreat_label.size.y < 60.0, "Fleet retreat policy keeps a horizontal readable layout")
+	_check(_has_text_fragment(main, "前列") and _has_text_fragment(main, "中列") and _has_text_fragment(main, "后列"), "Fleet UI exposes the translated three-line formation")
+
+	var mining_nav := main.find_child("Navigation_frontier", true, false) as Button
+	_press(mining_nav)
+	await _redraw()
+	var start_mining := main.find_child("StartMining_earth_resource_cluster_prospect", true, false) as Button
+	if start_mining == null or start_mining.disabled:
+		var mining_activity := Game.content.activities.get("extract_earth_mixed_ore", {}) as Dictionary
+		print("UI_PLAYFLOW_DIAGNOSTIC mining_button=", start_mining, " disabled=", start_mining.disabled if start_mining != null else "missing", " can_start=", Game.can_start_activity("mining", mining_activity), " assignment=", Game.state.ship_fleet_domain(ship_id), " status=", Game.state.ship_by_id(ship_id).get("status", ""), " notice=", Game.last_notice)
+		for diagnostic_button_value in main.find_children("*", "Button", true, false):
+			var diagnostic_button := diagnostic_button_value as Button
+			if "采矿" in diagnostic_button.text or "Mining" in diagnostic_button.name:
+				print("UI_PLAYFLOW_BUTTON name=", diagnostic_button.name, " text=", diagnostic_button.text, " disabled=", diagnostic_button.disabled)
+	_check(start_mining != null and not start_mining.disabled, "Mining operation is startable through the UI")
+	_press(start_mining)
+	await _redraw()
+	_check(_has_running_mining(), "Mining UI starts the real extraction runtime")
+	Game.simulation.advance(Game.state, 10001.0)
+	Game.state_changed.emit()
+	await _redraw()
+	_check(Game.state.item_quantity("mixed_raw_ore", SpaceGameState.MAIN_BASE_LOCATION_ID) >= 2, "UI-started mining produces real inventory")
+
+	var industry_nav := main.find_child("Navigation_industry", true, false) as Button
+	_press(industry_nav)
+	await _redraw()
+	var start_separation := main.find_child("StartIndustry_separate_iron_ore", true, false) as Button
+	_check(start_separation != null and not start_separation.disabled, "first industrial recipe is startable through the UI")
+	_press(start_separation)
+	await _redraw()
+	_check(String(Game.runtime_for_domain("industry").get("activity_id", "")) == "separate_iron_ore", "Industry UI starts the real production runtime")
+
+	var workshop_runtime: Dictionary = Game.runtime_for_domain("industry")
+	if not workshop_runtime.is_empty():
+		Game.stop_industry_operation(int(workshop_runtime.get("slot", 0)))
+	var existing_iron := Game.state.item_quantity("iron_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	if existing_iron > 0:
+		Game.state.remove_item("iron_ingot", existing_iron, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	Game.state.completed_activities["assemble_frame"] = 1
+	Game.state.add_item("structural_frame", 1, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	Game.state_changed.emit()
+	await _redraw()
+	_check("4 铁锭" in String(main.call("_next_flow_step")) and String(main.call("_next_flow_industry_section")) == "production", "guide states the exact Orbital Foundry shortage and keeps the player in Production")
+	Game.state.add_item("iron_ingot", 4, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	Game.state_changed.emit()
+	await _redraw()
+	var next_step_button := main.find_child("NextStepCTA", true, false) as Button
+	_press(next_step_button)
+	await _redraw()
+	_check(String(main.get("_industry_section")) == "construction", "guide CTA switches directly to the Construction workspace once Foundry materials are ready")
+	var start_foundry := main.find_child("StartConstruction_build_orbital_foundry", true, false) as Button
+	_check(start_foundry != null and not start_foundry.disabled and _has_text_fragment(main, "建设轨道铸造厂"), "Orbital Foundry construction card uses the same name as the guide")
+	var premature_electronics := main.find_child("StartConstruction_build_electronics_facility", true, false) as Button
+	_check(premature_electronics != null and premature_electronics.disabled, "construction cannot bypass the missing sponsor facility to build High-Energy Systems early")
+	_press(start_foundry)
+	Game.simulation.advance(Game.state, 35000.0)
+	_check("orbital_foundry" in Game.state.facilities, "guide-provided Foundry materials complete the real construction project")
+
+	var mega_nav := main.find_child("Navigation_megastructure", true, false) as Button
+	_press(mega_nav)
+	await _redraw()
+	_check(main.find_child("StartMegastructure_stellar_energy", true, false) != null, "Megastructure projects have a formal UI action")
+	_check(_has_text_fragment(main, "阶段里程碑"), "Megastructure UI exposes the real stage timeline")
+
+	var expedition_nav := main.find_child("Navigation_expedition", true, false) as Button
+	_press(expedition_nav)
+	await _redraw()
+	_check(main.find_child("StartRoute_lunar_route", true, false) != null, "Expedition route has a formal UI action")
+	_check(_has_text_fragment(main, "指挥容量") and _has_text_fragment(main, "货舱"), "Expedition UI exposes translated readiness and fleet capacity")
+	_finish()
+
+
+func _press(button: Button) -> void:
+	if button == null:
+		return
+	button.pressed.emit()
+
+
+func _redraw() -> void:
+	await get_tree().process_frame
+	await get_tree().create_timer(0.21).timeout
+	await get_tree().process_frame
+	RenderingServer.force_draw(false)
+	await get_tree().process_frame
+
+
+func _has_running_mining() -> bool:
+	for operation_value in Game.state.mining_operations:
+		if String((operation_value as Dictionary).get("status", "")) == "RUNNING":
+			return true
+	return false
+
+
+func _find_label(node: Node, text_value: String) -> Label:
+	if node is Label and String(node.text) == text_value:
+		return node as Label
+	for child in node.get_children():
+		var found := _find_label(child, text_value)
+		if found != null:
+			return found
+	return null
+
+
+func _has_text_fragment(node: Node, fragment: String) -> bool:
+	if node is Label and fragment in String(node.text):
+		return true
+	if node is RichTextLabel and fragment in String(node.text):
+		return true
+	if node is Button and fragment in String(node.text):
+		return true
+	for child in node.get_children():
+		if _has_text_fragment(child, fragment):
+			return true
+	return false
+
+
+func _check(condition: bool, message: String) -> void:
+	if not condition:
+		failures.append(message)
+
+
+func _finish() -> void:
+	if failures.is_empty():
+		print("PASS: UI-driven core playflow and product navigation")
+		get_tree().quit(0)
+		return
+	for failure in failures:
+		push_error("FAIL: %s" % failure)
+	get_tree().quit(1)

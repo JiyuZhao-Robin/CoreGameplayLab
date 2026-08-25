@@ -3,6 +3,8 @@ extends RefCounted
 
 var version := ""
 var pack_metadata := {}
+var industry_rules := {}
+var fleet_rules := {}
 var definitions_by_canonical_id := {}
 var domains := {}
 var items := {}
@@ -17,6 +19,8 @@ var resource_regions := {}
 var mining_sites := {}
 var combat_areas := {}
 var extraction_networks := {}
+var logistics_routes := {}
+var industrial_templates := {}
 var activities := {}
 var regions := {}
 var goals := {}
@@ -47,6 +51,8 @@ func load_from_file(path: String) -> bool:
 	if version != GameVersion.PRODUCT_VERSION:
 		errors.append("Content version %s does not match product version %s" % [version, GameVersion.PRODUCT_VERSION])
 	pack_metadata = parsed.get("content_pack", {"id":"base", "version":version, "namespace":"base"}).duplicate(true)
+	industry_rules = parsed.get("industry_rules", {}).duplicate(true)
+	fleet_rules = parsed.get("fleet_rules", {}).duplicate(true)
 	construction_engineering_requirements = parsed.get("construction_engineering_requirements", {}).duplicate(true)
 	_index_definitions(parsed.get("domains", []), domains, "domain")
 	_index_definitions(parsed.get("items", []), items, "item")
@@ -61,6 +67,8 @@ func load_from_file(path: String) -> bool:
 	_index_definitions(parsed.get("mining_sites", []), mining_sites, "mining_site")
 	_index_definitions(parsed.get("combat_areas", []), combat_areas, "combat_area")
 	_index_definitions(parsed.get("extraction_networks", []), extraction_networks, "extraction_network")
+	_index_definitions(parsed.get("logistics_routes", []), logistics_routes, "logistics_route")
+	_index_definitions(parsed.get("industrial_templates", []), industrial_templates, "industrial_template")
 	_index_definitions(parsed.get("activities", []), activities, "activity")
 	_index_definitions(parsed.get("regions", []), regions, "region")
 	_index_definitions(parsed.get("goals", []), goals, "goal")
@@ -98,6 +106,8 @@ func clear() -> void:
 	mining_sites.clear()
 	combat_areas.clear()
 	extraction_networks.clear()
+	logistics_routes.clear()
+	industrial_templates.clear()
 	activities.clear()
 	regions.clear()
 	goals.clear()
@@ -113,6 +123,8 @@ func clear() -> void:
 	progression_edges.clear()
 	graph_validation_errors.clear()
 	pack_metadata.clear()
+	industry_rules.clear()
+	fleet_rules.clear()
 	definitions_by_canonical_id.clear()
 	errors.clear()
 
@@ -121,6 +133,101 @@ func validate() -> void:
 	var produced_items := {}
 	var consumed_items := {}
 	var unique_ship_grants := {}
+	if float(industry_rules.get("economy_of_scale_per_level", 0.0)) < 0.0 or float(industry_rules.get("economy_of_scale_cap", 0.0)) < 0.0:
+		errors.append("industry_rules must define non-negative Economy of Scale values")
+	if float(industry_rules.get("production_speed_multiplier", 0.0)) <= 0.0:
+		errors.append("industry_rules production_speed_multiplier must be positive")
+	if float(industry_rules.get("expansion_cost_growth", 0.0)) < 0.0:
+		errors.append("industry_rules expansion_cost_growth must be non-negative")
+	_validate_item_entries(industry_rules.get("expansion_base_costs", []), "industry_rules")
+	if not items.has(str(fleet_rules.get("maintenance_item", ""))):
+		errors.append("fleet_rules references a missing maintenance item")
+	for maintenance_state in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
+		if float(fleet_rules.get("maintenance_rates", {}).get(maintenance_state, -1.0)) < 0.0:
+			errors.append("fleet_rules must define non-negative maintenance rate for %s" % maintenance_state)
+	if float(fleet_rules.get("reactivation_material_per_command", 0.0)) <= 0.0 or float(fleet_rules.get("reactivation_ms_per_command", 0.0)) <= 0.0:
+		errors.append("fleet_rules must define positive Mothball reactivation costs")
+	if float(fleet_rules.get("scrap_recovery_fraction", 0.0)) <= 0.0 or float(fleet_rules.get("scrap_recovery_fraction", 0.0)) >= 1.0:
+		errors.append("fleet_rules scrap recovery must be between zero and one")
+	for slot_value in industry_rules.get("module_bom_defaults", {}).keys():
+		_validate_item_entries(industry_rules.get("module_bom_defaults", {}).get(slot_value, []), "industry_rules module BOM '%s'" % slot_value)
+	for module_value in modules.values():
+		var module := module_value as Dictionary
+		if not bool(module.get("special_equipment", false)) and module_bom(str(module.get("id", ""))).is_empty():
+			errors.append("ordinary module '%s' must resolve to a manufacturing BOM" % module.get("id", "?"))
+		var weapon_kind := str(module.get("weapon_kind", module.get("combat_stats", {}).get("weapon_kind", "DIRECT"))).to_upper()
+		if weapon_kind not in ["DIRECT", "MISSILE", "STRIKE_CRAFT", "PENETRATION"]:
+			errors.append("module '%s' has invalid weapon_kind '%s'" % [module.get("id", "?"), weapon_kind])
+		for defense_stat in ["point_defense", "electronic_warfare", "shield_penetration"]:
+			var defense_value := float(module.get("combat_stats", {}).get(defense_stat, 0.0))
+			if defense_value < 0.0 or defense_value > 1.0:
+				errors.append("module '%s' combat stat '%s' must be between zero and one" % [module.get("id", "?"), defense_stat])
+	var logistics_tiers := {}
+	for technology_value in technologies.values():
+		var technology := technology_value as Dictionary
+		if not technology.has("logistics_tier"):
+			continue
+		var logistics_tier := int(technology.get("logistics_tier", 0))
+		if logistics_tier <= 0 or logistics_tiers.has(logistics_tier):
+			errors.append("logistics technology '%s' has an invalid or duplicate tier" % technology.get("id", "?"))
+		logistics_tiers[logistics_tier] = true
+		for multiplier_key in ["freight_capacity_multiplier", "transit_time_multiplier", "fuel_cost_multiplier"]:
+			if float(technology.get(multiplier_key, -1.0)) < 0.0:
+				errors.append("logistics technology '%s' has invalid %s" % [technology.get("id", "?"), multiplier_key])
+	for template in industrial_templates.values():
+		var template_label := "industrial template '%s'" % template.get("id", "?")
+		var template_items := {}
+		if template.get("policies", []).is_empty():
+			errors.append("%s must define at least one logistics policy" % template_label)
+		if int(template.get("auto_expand_target", 0)) < 1:
+			errors.append("%s must define a positive auto_expand_target" % template_label)
+		for facility_value in template.get("managed_facilities", []):
+			if not facilities.has(str(facility_value)) or str(facility_value) not in SpaceGameState.MANUFACTURING_FACILITY_IDS:
+				errors.append("%s manages invalid manufacturing facility '%s'" % [template_label, facility_value])
+		for policy_value in template.get("policies", []):
+			var policy := policy_value as Dictionary
+			var item_id := str(policy.get("item", ""))
+			if not items.has(item_id):
+				errors.append("%s references missing item '%s'" % [template_label, item_id])
+			if template_items.has(item_id):
+				errors.append("%s defines duplicate item '%s'" % [template_label, item_id])
+			template_items[item_id] = true
+			if str(policy.get("mode", "")) not in ["SUPPLY", "DEMAND", "STORAGE"]:
+				errors.append("%s has invalid logistics mode" % template_label)
+			if int(policy.get("reserve", 0)) < 0 or int(policy.get("target", 0)) < 0 or int(policy.get("dispatch_threshold", 1)) <= 0:
+				errors.append("%s has invalid stock or dispatch values" % template_label)
+	for route in logistics_routes.values():
+		var route_label := "logistics route '%s'" % route.get("id", "?")
+		var from_id := str(route.get("from", ""))
+		var to_id := str(route.get("to", ""))
+		if not regions.has(from_id) or not regions.has(to_id) or from_id == to_id:
+			errors.append("%s must connect two different known Locations" % route_label)
+		if float(route.get("transit_time_ms", 0.0)) <= 0.0:
+			errors.append("%s must define positive transit_time_ms" % route_label)
+		if int(route.get("freight_capacity", 0)) <= 0:
+			errors.append("%s must define positive freight_capacity" % route_label)
+		_validate_item_entries(route.get("dispatch_costs", []), route_label)
+	for megastructure in megastructures.values():
+		var megastructure_label := "megastructure '%s'" % megastructure.get("id", "?")
+		var construction_activity := str(megastructure.get("construction_activity", ""))
+		if construction_activity.is_empty() or not activities.has(construction_activity):
+			errors.append("%s references a missing construction activity" % megastructure_label)
+		var previous_percent := -1
+		for stage_value in megastructure.get("stages", []):
+			var stage := stage_value as Dictionary
+			var percent := int(stage.get("percent", -1))
+			if percent <= previous_percent or percent < 0 or percent > 100 or str(stage.get("name", "")).is_empty():
+				errors.append("%s has invalid ordered construction stages" % megastructure_label)
+				break
+			previous_percent = percent
+		if previous_percent != 100:
+			errors.append("%s construction stages must end at 100 percent" % megastructure_label)
+	for region in regions.values():
+		var region_label := "Location '%s'" % region.get("id", "?")
+		if str(region.get("system_id", "")).is_empty():
+			errors.append("%s must declare system_id" % region_label)
+		if str(region.get("location_type", "")) not in [LocationState.NATURAL, LocationState.ARTIFICIAL]:
+			errors.append("%s has invalid location_type" % region_label)
 	for activity in activities.values():
 		var label := "activity '%s'" % activity.get("id", "?")
 		if not domains.has(str(activity.get("domain", ""))):
@@ -149,6 +256,8 @@ func validate() -> void:
 				errors.append("%s repeat recipe must belong to a manufacturing regime" % label)
 			if bool(activity.get("repeat", true)) and activity.get("required_facility_capabilities", []).is_empty():
 				errors.append("%s repeat recipe must declare at least one manufacturing capability" % label)
+			if float(activity.get("production_energy_multiplier", 1.0)) <= 0.0:
+				errors.append("%s must define a positive production energy multiplier" % label)
 			for capability_id in activity.get("required_facility_capabilities", []):
 				if str(capability_id).is_empty():
 					errors.append("%s has an empty facility capability" % label)
@@ -173,10 +282,13 @@ func validate() -> void:
 				_validate_requirement(requirement, label)
 		_validate_item_entries(activity.get("costs", []), label)
 		_validate_item_entries(activity.get("rewards", []), label)
+		_validate_item_entries(activity.get("waste", []), "%s waste" % label)
 		for cost in activity.get("costs", []):
 			consumed_items[str(cost.get("item", ""))] = true
 		for reward in activity.get("rewards", []):
 			produced_items[str(reward.get("item", ""))] = true
+		for waste in activity.get("waste", []):
+			produced_items[str(waste.get("item", ""))] = true
 		if activity.get("domain", "") == "industry" and bool(activity.get("repeat", true)) and activity.get("costs", []).is_empty() and not activity.get("rewards", []).is_empty():
 			errors.append("%s creates a zero-cost infinite production loop" % label)
 		for loot in activity.get("loot", []):
@@ -412,6 +524,8 @@ func validate() -> void:
 			errors.append("mining location '%s' references a missing region" % location.get("id", "?"))
 		if float(location.get("density", 0)) <= 0:
 			errors.append("mining location '%s' has invalid density" % location.get("id", "?"))
+		if float(location.get("extraction_potential", 0)) <= 0:
+			errors.append("mining location '%s' has invalid extraction potential" % location.get("id", "?"))
 		for hazard_id in location.get("hazards", []):
 			if not mining_hazards.has(str(hazard_id)):
 				errors.append("mining location '%s' references missing hazard '%s'" % [location.get("id", "?"), hazard_id])
@@ -467,9 +581,59 @@ func validate() -> void:
 	for item_id in consumed_items:
 		if not produced_items.has(item_id):
 			errors.append("Consumed item '%s' has no production source" % item_id)
+	_validate_closed_economy()
 	# Gameplay Lab ships no visual profiles, but keep the validator active so a
 	# future optional presentation pack cannot introduce broken resource paths.
 	_validate_planet_visual_profiles()
+
+
+func _validate_closed_economy() -> void:
+	var stable_sources := {}
+	var consumers := {}
+	for activity_value in activities.values():
+		var activity := activity_value as Dictionary
+		if bool(activity.get("repeat", true)):
+			for field in ["rewards", "waste"]:
+				for entry_value in activity.get(field, []):
+					stable_sources[str((entry_value as Dictionary).get("item", ""))] = true
+		for cost_value in activity.get("costs", []):
+			consumers[str((cost_value as Dictionary).get("item", ""))] = "activity '%s'" % activity.get("id", "?")
+	for project_value in research_projects.values():
+		var project := project_value as Dictionary
+		for cost_value in project.get("costs", []):
+			consumers[str((cost_value as Dictionary).get("item", ""))] = "research project '%s'" % project.get("id", "?")
+	for plan_value in ship_construction_projects.values():
+		var plan := plan_value as Dictionary
+		for field in ["costs", "fixed_costs"]:
+			for cost_value in plan.get(field, []):
+				consumers[str((cost_value as Dictionary).get("item", ""))] = "ship construction project '%s'" % plan.get("id", "?")
+	for cost_value in industry_rules.get("expansion_base_costs", []):
+		consumers[str((cost_value as Dictionary).get("item", ""))] = "Industry expansion"
+	for bom_value in industry_rules.get("module_bom_defaults", {}).values():
+		for cost_value in bom_value as Array:
+			consumers[str((cost_value as Dictionary).get("item", ""))] = "ordinary module BOM"
+	for module_collection in [process_modules, universal_industry_plugins]:
+		for module_value in module_collection.values():
+			var module := module_value as Dictionary
+			for cost_value in module.get("costs", []):
+				consumers[str((cost_value as Dictionary).get("item", ""))] = "manufacturing module '%s'" % module.get("id", "?")
+	for facility_value in facilities.values():
+		var facility := facility_value as Dictionary
+		for module_value in facility.get("upgrade_modules", {}).values():
+			var module := module_value as Dictionary
+			for cost_value in module.get("costs", []):
+				consumers[str((cost_value as Dictionary).get("item", ""))] = "facility module '%s'" % module.get("id", "?")
+	for item_id in consumers:
+		if item_id.is_empty() or stable_sources.has(item_id):
+			continue
+		errors.append("Closed economy violation: consumed item '%s' used by %s has no repeatable deterministic source; random loot cannot be its only source" % [item_id, consumers[item_id]])
+	for item_value in items.values():
+		var item := item_value as Dictionary
+		var item_id := str(item.get("id", ""))
+		var category := str(item.get("category", ""))
+		if not stable_sources.has(item_id) or category in ["Module", "Consumable", "Special Equipment"] or consumers.has(item_id):
+			continue
+		errors.append("Closed economy violation: produced %s item '%s' has no repeatable use or disposal path" % [category, item_id])
 
 
 func _validate_planet_visual_profiles() -> void:
@@ -675,6 +839,71 @@ func _index_definitions(source: Array, target: Dictionary, kind: String) -> void
 			definition["canonical_id"] = "%s:%s.%s" % [pack_metadata.get("namespace", "base"), kind, id]
 			target[id] = definition
 			definitions_by_canonical_id[definition["canonical_id"]] = definition
+
+
+func module_bom_activity(module_id: String) -> Dictionary:
+	var module: Dictionary = modules.get(module_id, {})
+	if module.is_empty() or bool(module.get("special_equipment", false)):
+		return {}
+	for activity_value in activities.values():
+		var activity := activity_value as Dictionary
+		if str(activity.get("domain", "")) != "industry":
+			continue
+		for reward_value in activity.get("rewards", []):
+			var reward := reward_value as Dictionary
+			if str(reward.get("item", "")) == module_id and int(reward.get("quantity", 0)) > 0:
+				return activity
+	return {}
+
+
+func is_module_bom_activity(activity: Dictionary) -> bool:
+	return not module_bom_activity_for_definition(activity).is_empty()
+
+
+func module_bom_activity_for_definition(activity: Dictionary) -> Dictionary:
+	if str(activity.get("domain", "")) != "industry":
+		return {}
+	for reward_value in activity.get("rewards", []):
+		var module_id := str((reward_value as Dictionary).get("item", ""))
+		if modules.has(module_id) and not bool(modules[module_id].get("special_equipment", false)):
+			return activity
+	return {}
+
+
+func module_bom(module_id: String) -> Array:
+	var module: Dictionary = modules.get(module_id, {})
+	if module.is_empty() or bool(module.get("special_equipment", false)):
+		return []
+	var recipe := module_bom_activity(module_id)
+	if not recipe.is_empty():
+		var output_quantity := 1
+		for reward_value in recipe.get("rewards", []):
+			var reward := reward_value as Dictionary
+			if str(reward.get("item", "")) == module_id:
+				output_quantity = maxi(1, int(reward.get("quantity", 1)))
+				break
+		var result: Array = []
+		for cost_value in recipe.get("costs", []):
+			var cost := cost_value as Dictionary
+			result.append({"item":str(cost.get("item", "")), "quantity":maxi(1, int(ceil(float(cost.get("quantity", 0)) / float(output_quantity))))})
+		return result
+	var multiplier := maxi(1, int(industry_rules.get("module_bom_size_multipliers", {}).get(str(module.get("size", "S")), 1)))
+	var defaults: Array = industry_rules.get("module_bom_defaults", {}).get(str(module.get("slot", "")), [])
+	var result: Array = []
+	for cost_value in defaults:
+		var cost := cost_value as Dictionary
+		result.append({"item":str(cost.get("item", "")), "quantity":maxi(1, int(cost.get("quantity", 0)) * multiplier)})
+	return result
+
+
+func module_bom_totals(module_ids: Array) -> Dictionary:
+	var result := {}
+	for module_value in module_ids:
+		for cost_value in module_bom(str(module_value)):
+			var cost := cost_value as Dictionary
+			var item_id := str(cost.get("item", ""))
+			result[item_id] = int(result.get(item_id, 0)) + int(cost.get("quantity", 0))
+	return result
 
 
 func _validate_item_entries(entries: Array, owner: String) -> void:
