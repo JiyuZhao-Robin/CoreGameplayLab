@@ -44,6 +44,10 @@ func evaluate(state: SpaceGameState, requirement: Dictionary) -> bool:
 			return state.owns_ship_model(str(requirement.get("id", "")))
 		"own_facility":
 			return state.facilities.get(str(requirement.get("id", "")), {}).get("status", "") == "ACTIVE"
+		"manufacturing_module_installed":
+			var facility: Dictionary = state.facilities.get(str(requirement.get("facility", "")), {})
+			var module_id := str(requirement.get("id", ""))
+			return module_id in facility.get("installed_process_modules", []) or module_id in facility.get("installed_plugins", [])
 		"facility_level":
 			return int(state.facilities.get(str(requirement.get("id", "")), {}).get("level", 0)) >= int(requirement.get("level", 1))
 		"infrastructure_site":

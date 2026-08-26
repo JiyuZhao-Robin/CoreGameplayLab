@@ -633,6 +633,7 @@ func start_research_project(project_id: String) -> bool:
 			"consumed":{},
 			"reserved_costs":_cost_commitment(project.get("costs", [])),
 			"blocked_reason":"",
+			"blocker":{},
 			"location_id":SpaceGameState.MAIN_BASE_LOCATION_ID
 		}
 	last_notice = I18n.t("notice.research_started", "Research started: %s") % I18n.content(project)
@@ -1230,6 +1231,11 @@ func requirement_text(requirement: Dictionary) -> String:
 			return I18n.t("requirement.ship", "%s Ship: %s") % [marker, I18n.content(content.ships.get(str(requirement.get("id", "")), requirement))]
 		"own_facility", "facility_level":
 			return I18n.t("requirement.facility", "%s Facility: %s Lv.%d") % [marker, I18n.content(content.facilities.get(str(requirement.get("id", "")), requirement)), int(requirement.get("level", 1))]
+		"manufacturing_module_installed":
+			var module_id := str(requirement.get("id", ""))
+			var module: Dictionary = content.process_modules.get(module_id, content.universal_industry_plugins.get(module_id, requirement))
+			var facility_id := str(requirement.get("facility", ""))
+			return "%s 制造模块：%s → %s" % [marker, I18n.content(module), I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))]
 		"infrastructure_site":
 			return I18n.t("requirement.site", "%s Infrastructure Site: %s") % [marker, str(requirement.get("id", "")).replace("_", " ").capitalize()]
 		"boss_defeated":
@@ -1427,9 +1433,9 @@ func _enrich_offline_report(report: Dictionary, elapsed_ms: int, before_inventor
 	var problems: Array = []
 	for operation in state.industrial_operations:
 		if str(operation.get("status", "")) == "BLOCKED":
-			problems.append({"domain":"industry", "slot":int(operation.get("slot", 0)), "reason":"NO_INPUT", "activity_id":str(operation.get("activity_id", ""))})
+			problems.append(simulation.blocker_diagnostic(state, "industry", operation))
 	if str(state.research.get("status", "")) == "BLOCKED":
-		problems.append({"domain":"research", "reason":str(state.research.get("blocked_reason", "BLOCKED")), "project_id":str(state.research.get("project_id", ""))})
+		problems.append(simulation.blocker_diagnostic(state, "research", state.research))
 	if str(state.active_expedition.get("status", "")) == "FAILED":
 		problems.append({"domain":"expedition", "reason":"FAILED"})
 	report["problems"] = problems

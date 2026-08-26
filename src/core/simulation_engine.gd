@@ -5,6 +5,13 @@ const CombatResolverScript = preload("res://src/core/combat_resolver.gd")
 const LogisticsEngineScript = preload("res://src/core/logistics_engine.gd")
 const MAX_OPERATIONS := 350000
 const MAX_OFFLINE_MS := 24 * 60 * 60 * 1000
+const BLOCKER_REASON_CODES := [
+	"MISSING_TECH", "MISSING_FACILITY", "MISSING_SCALE_STAGE", "MISSING_CAPITAL_GOOD",
+	"INPUT_SHORTAGE", "INPUT_IN_TRANSIT", "ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE",
+	"ROUTE_CONGESTED", "HANDLING_CONGESTED", "POWER_SHORTAGE", "COOLING_SHORTAGE",
+	"STORAGE_FULL", "MAINTENANCE_SHORTAGE", "CONSTRUCTION_CAPACITY_FULL",
+	"PROJECT_SLOT_FULL", "MANUALLY_PAUSED"
+]
 
 var content: ContentDatabase
 var rng := DomainRng.new()
@@ -13,10 +20,12 @@ var requirements: RequirementEngine
 var combat: RefCounted
 var logistics: RefCounted
 var emitted_events: Array[Dictionary] = []
+var simulation_profile_id := ""
 
 
 func _init(database: ContentDatabase) -> void:
 	content = database
+	simulation_profile_id = str(content.simulation_profiles.get("default_profile", "TEST_PROFILE"))
 	requirements = RequirementEngine.new(content, capability_value)
 	combat = CombatResolverScript.new(content, rng)
 	logistics = LogisticsEngineScript.new(content)
@@ -62,6 +71,7 @@ func advance(state: SpaceGameState, elapsed_ms: float) -> Dictionary:
 		elif step + 0.001 >= boundary:
 			break
 	refresh_location_summaries(state)
+	_refresh_blocker_diagnostics(state)
 	return {
 		"simulated_ms":requested - remaining,
 		"unprocessed_ms":remaining,
@@ -179,6 +189,12 @@ func ensure_frontier_state(state: SpaceGameState) -> void:
 				"state":"AVAILABLE" if initially_discovered or auto_discovered else "UNDISCOVERED"
 			}
 		var runtime: Dictionary = state.mining_site_states[site_id]
+		# Non-Lunar routes unlock their region as a whole. These runtime records are
+		# created on a new save before that happens, so they must also transition
+		# when the route later grants the region instead of remaining undiscovered.
+		if not bool(runtime.get("discovered", false)) and region_id != "lunar_space" and bool(state.regions.get(region_id, false)):
+			runtime["discovered"] = true
+			runtime["state"] = "DEFERRED" if bool(definition.get("deferred", false)) else "AVAILABLE"
 		if bool(runtime.get("discovered", false)) and bool(definition.get("deferred", false)):
 			var eligible := true
 			for requirement in definition.get("requirements", []):
@@ -315,7 +331,7 @@ func system_production_overview(state: SpaceGameState, system_id: String) -> Dic
 		var network: Dictionary = content.extraction_networks.get(network_id, {})
 		if str(runtime.get("status", "")) != "RUNNING" or network.is_empty():
 			continue
-		var cycles_per_hour := 3600000.0 / maxf(1.0, float(network.get("cycle_time_ms", 1.0)))
+		var cycles_per_hour := 3600000.0 / extraction_network_cycle_duration_ms(network)
 		for site_value in runtime.get("integrated_site_ids", []):
 			var site: Dictionary = content.mining_sites.get(str(site_value), {})
 			var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
@@ -516,7 +532,7 @@ func effective_duration_ms(state: SpaceGameState, domain_id: String, activity: D
 		runtime["effective_mining_power"] = installed_extraction * method_efficiency
 		if power <= 0.0:
 			return INF
-		return maxf(100.0, float(activity.get("extraction_cost", 10.0)) / (installed_extraction * grade * method_efficiency * level_rate * uptime) * 1000.0)
+		return maxf(10.0, float(activity.get("extraction_cost", 10.0)) / (installed_extraction * grade * method_efficiency * level_rate * uptime * simulation_speed_multiplier("mining")) * 1000.0)
 	if domain_id == "industry":
 		var facility_id := str(runtime.get("facility_id", activity.get("facility", "")))
 		var inventory_location_id := _runtime_inventory_location_id(state, domain_id, runtime)
@@ -528,13 +544,13 @@ func effective_duration_ms(state: SpaceGameState, domain_id: String, activity: D
 		if local_utilization <= 0.0 or constraint_utilization <= 0.0:
 			return INF
 		var mastery_speed := float(industry_mastery_profile(state, inventory_location_id, facility_id, str(activity.get("id", ""))).get("speed_multiplier", 1.0))
-		return maxf(10.0, float(activity.get("work_required", 1.0)) / (throughput * facility_cycle_speed_multiplier(state, facility_id) * local_utilization * constraint_utilization * mastery_speed * production_speed_multiplier()) * 1000.0)
+		return maxf(10.0, float(activity.get("work_required", 1.0)) / (throughput * facility_cycle_speed_multiplier(state, facility_id) * local_utilization * constraint_utilization * mastery_speed * simulation_speed_multiplier("manufacturing")) * 1000.0)
 	if domain_id == "construction":
 		var allocated := construction_allocated_capacity(state)
 		if allocated <= 0.0:
 			return INF
 		# Every finite capital project is exactly 100 visible Construction Cycles.
-		return maxf(2.5, float(activity.get("work_required", 1.0)) / (allocated * facility_cycle_speed_multiplier(state, "orbital_construction_yard") * production_speed_multiplier()) * 10.0)
+		return maxf(2.5, float(activity.get("work_required", 1.0)) / (allocated * facility_cycle_speed_multiplier(state, "orbital_construction_yard") * simulation_speed_multiplier("construction")) * 10.0)
 	var ship_ids: Array = runtime.get("assigned_ship_ids", [])
 	var loadout_rate := 1.0 + loadout_efficiency(state, domain_id, ship_ids) / 100.0
 	return maxf(100.0, float(activity.get("duration_ms", 1000.0)) / (level_rate * loadout_rate))
@@ -559,7 +575,24 @@ func mining_power(state: SpaceGameState, ship_ids: Array) -> float:
 
 
 func production_speed_multiplier() -> float:
-	return maxf(0.01, float(content.industry_rules.get("production_speed_multiplier", 1.0)))
+	return simulation_speed_multiplier("manufacturing")
+
+
+func set_simulation_profile(profile_id: String) -> bool:
+	if not content.simulation_profiles.get("profiles", {}).has(profile_id):
+		return false
+	simulation_profile_id = profile_id
+	return true
+
+
+func simulation_speed_multiplier(system_id: String) -> float:
+	var profiles: Dictionary = content.simulation_profiles.get("profiles", {})
+	var profile: Dictionary = profiles.get(simulation_profile_id, {})
+	return maxf(0.01, float(profile.get(system_id, 1.0)))
+
+
+func extraction_network_cycle_duration_ms(network: Dictionary) -> float:
+	return maxf(0.1, float(network.get("cycle_time_ms", 1.0)) / simulation_speed_multiplier("mining"))
 
 
 func mining_method_efficiency(state: SpaceGameState, ship_ids: Array) -> float:
@@ -837,7 +870,7 @@ func local_logistics_profile(state: SpaceGameState, location_id: String) -> Dict
 		if activity.is_empty() or facility_id != str(activity.get("facility", "")):
 			continue
 		var work_required := maxf(0.001, float(activity.get("work_required", 1.0)))
-		var cycles_per_second := facility_manufacturing_throughput(state, facility_id, location_id) * facility_cycle_speed_multiplier(state, facility_id) * production_speed_multiplier() / work_required
+		var cycles_per_second := facility_manufacturing_throughput(state, facility_id, location_id) * facility_cycle_speed_multiplier(state, facility_id) * simulation_speed_multiplier("manufacturing") / work_required
 		var movement_per_cycle := 0.0
 		for cost in activity.get("costs", []):
 			movement_per_cycle += maxf(0.0, float(cost.get("quantity", 0)))
@@ -1014,7 +1047,7 @@ func shipyard_cycle_duration_ms(state: SpaceGameState, plan: Dictionary) -> floa
 	var capacity := maxf(0.01, float(content.facilities.get("orbital_starport", {}).get("shipbuilding_capacity", 1.0)))
 	var speed := facility_cycle_speed_multiplier(state, "orbital_starport")
 	var power := facility_output_multiplier(state, "orbital_starport")
-	return maxf(2.5, float(plan.get("cycle_time_ms", 1000.0)) / (capacity * speed * power * production_speed_multiplier()))
+	return maxf(2.5, float(plan.get("cycle_time_ms", 1000.0)) / (capacity * speed * power * simulation_speed_multiplier("shipyard")))
 
 
 func shipyard_active_power_demand(state: SpaceGameState) -> float:
@@ -1814,7 +1847,7 @@ func _next_boundary_ms(state: SpaceGameState) -> float:
 			continue
 		var network: Dictionary = content.extraction_networks.get(str(network_id), {})
 		if not network.is_empty() and not network_runtime.get("integrated_site_ids", []).is_empty():
-			result = minf(result, maxf(0.001, (1.0 - float(network_runtime.get("cycle_progress", 0.0))) * float(network.get("cycle_time_ms", 1.0))))
+			result = minf(result, maxf(0.001, (1.0 - float(network_runtime.get("cycle_progress", 0.0))) * extraction_network_cycle_duration_ms(network)))
 	for shipyard_runtime in state.shipyard_queue:
 		if shipyard_runtime.get("status", "") == "RUNNING":
 			var shipyard_plan: Dictionary = content.ship_construction_projects.get(str(shipyard_runtime.get("plan_id", "")), {})
@@ -1936,7 +1969,7 @@ func _progress_runtime(state: SpaceGameState, elapsed_ms: float) -> void:
 			continue
 		var network: Dictionary = content.extraction_networks.get(str(network_id), {})
 		if not network.is_empty() and not network_runtime.get("integrated_site_ids", []).is_empty():
-			network_runtime["cycle_progress"] = float(network_runtime.get("cycle_progress", 0.0)) + elapsed_ms / maxf(1.0, float(network.get("cycle_time_ms", 1.0)))
+			network_runtime["cycle_progress"] = float(network_runtime.get("cycle_progress", 0.0)) + elapsed_ms / extraction_network_cycle_duration_ms(network)
 	for shipyard_runtime in state.shipyard_queue:
 		if shipyard_runtime.get("status", "") == "RUNNING":
 			var shipyard_plan: Dictionary = content.ship_construction_projects.get(str(shipyard_runtime.get("plan_id", "")), {})
@@ -2126,7 +2159,7 @@ func _settle_ship_service_project(state: SpaceGameState, runtime: Dictionary) ->
 
 
 func refit_cycle_duration_ms(state: SpaceGameState, runtime: Dictionary) -> float:
-	return maxf(2.5, float(runtime.get("cycle_time_ms", 100.0)) / (facility_cycle_speed_multiplier(state, "orbital_starport") * production_speed_multiplier()))
+	return maxf(2.5, float(runtime.get("cycle_time_ms", 100.0)) / (facility_cycle_speed_multiplier(state, "orbital_starport") * simulation_speed_multiplier("shipyard")))
 
 
 func _settle_refit_cycle(state: SpaceGameState, runtime: Dictionary) -> bool:
@@ -2767,6 +2800,8 @@ func _apply_effect(state: SpaceGameState, effect: Dictionary) -> void:
 			var network_runtime: Dictionary = state.extraction_network_states.get(network_id, {})
 			network_runtime["level"] = maxi(1, int(network_runtime.get("level", 1))) + int(effect.get("levels", 1))
 			state.extraction_network_states[network_id] = network_runtime
+		"upgrade_extraction_command":
+			state.extraction_command["capacity"] = maxi(state.extraction_command_capacity(), int(effect.get("capacity", state.extraction_command_capacity())))
 		"grant_special_equipment":
 			var equipment_id := state.create_equipment_instance(str(effect.get("id", "")), "MISSION_REWARD")
 			emitted_events.append({"type":"SpecialEquipmentRecovered", "equipment_id":equipment_id, "definition_id":effect.get("id", "")})
@@ -2849,7 +2884,7 @@ func _apply_effect(state: SpaceGameState, effect: Dictionary) -> void:
 
 
 func _progress_location_industrial_automation(state: SpaceGameState, elapsed_ms: float) -> void:
-	var interval := maxf(100.0, float(content.industry_rules.get("automation_expansion_interval_ms", 60000.0)) / production_speed_multiplier())
+	var interval := maxf(100.0, float(content.industry_rules.get("automation_expansion_interval_ms", 60000.0)) / simulation_speed_multiplier("automation"))
 	for location_value in state.locations.values():
 		var location := location_value as Dictionary
 		var automation: Dictionary = location.get("automation", {})
@@ -2889,7 +2924,7 @@ func _progress_location_industrial_automation(state: SpaceGameState, elapsed_ms:
 func _progress_automation(state: SpaceGameState, elapsed_ms: float) -> void:
 	var fractions: Dictionary = state.automation.get("fractional", {})
 	for item_id in state.automation.get("rates", {}):
-		var total := float(fractions.get(item_id, 0.0)) + float(state.automation.rates[item_id]) * production_speed_multiplier() * elapsed_ms / 1000.0
+		var total := float(fractions.get(item_id, 0.0)) + float(state.automation.rates[item_id]) * simulation_speed_multiplier("automation") * elapsed_ms / 1000.0
 		var produced := int(floor(total))
 		if produced > 0:
 			state.add_item(str(item_id), produced)
@@ -3005,7 +3040,7 @@ func _progress_background_economy(state: SpaceGameState, elapsed_ms: float) -> v
 		var source_facility_id := str(source.get("facility_id", ""))
 		var source_multiplier := facility_output_multiplier(state, source_facility_id)
 		var fraction_key := "mining:%s" % item_id
-		var total := float(fractions.get(fraction_key, 0.0)) + float(source.get("per_second", 0.0)) * source_multiplier * elapsed_ms / 1000.0
+		var total := float(fractions.get(fraction_key, 0.0)) + float(source.get("per_second", 0.0)) * source_multiplier * simulation_speed_multiplier("mining") * elapsed_ms / 1000.0
 		var potential := int(floor(total))
 		if potential > 0:
 			state.location_inventory()[item_id] = state.item_quantity(str(item_id)) + potential
@@ -3023,7 +3058,7 @@ func _progress_background_economy(state: SpaceGameState, elapsed_ms: float) -> v
 		if not bool(network.get("enabled", true)):
 			continue
 		var network_facility_id := str(network.get("facility_id", ""))
-		var capacity := maxf(0.0, float(network.get("capacity_per_second", 0.0))) * facility_output_multiplier(state, network_facility_id) * production_speed_multiplier()
+		var capacity := maxf(0.0, float(network.get("capacity_per_second", 0.0))) * facility_output_multiplier(state, network_facility_id) * simulation_speed_multiplier("automation")
 		if capacity <= 0.0:
 			continue
 		var work_key := "industry:%s" % family
@@ -3102,9 +3137,9 @@ func background_economy_snapshot(state: SpaceGameState) -> Array:
 		var source: Dictionary = background["mining_sources"][item_id]
 		var source_facility_id := str(source.get("facility_id", ""))
 		if bool(source.get("enabled", true)):
-			_add_flow(rows, str(item_id), float(source.get("per_second", 0.0)) * facility_output_multiplier(state, source_facility_id) * 3600.0, 0.0)
+			_add_flow(rows, str(item_id), float(source.get("per_second", 0.0)) * facility_output_multiplier(state, source_facility_id) * simulation_speed_multiplier("mining") * 3600.0, 0.0)
 	for item_id in state.automation.get("rates", {}):
-		_add_flow(rows, str(item_id), float(state.automation.rates[item_id]) * production_speed_multiplier() * 3600.0, 0.0)
+		_add_flow(rows, str(item_id), float(state.automation.rates[item_id]) * simulation_speed_multiplier("automation") * 3600.0, 0.0)
 	for maintenance in _energy_maintenance_snapshot(state):
 		_add_flow(rows, str(maintenance.get("item_id", "")), 0.0, float(maintenance.get("demand_per_hour", 0.0)))
 	for family in background.get("industry_networks", {}):
@@ -3116,7 +3151,7 @@ func background_economy_snapshot(state: SpaceGameState) -> Array:
 		if selected.is_empty():
 			continue
 		var work_required := maxf(0.001, float(selected.get("work_required", 1.0)))
-		var runs_per_hour := float(network.get("capacity_per_second", 0.0)) * facility_output_multiplier(state, network_facility_id) * production_speed_multiplier() * 3600.0 / work_required
+		var runs_per_hour := float(network.get("capacity_per_second", 0.0)) * facility_output_multiplier(state, network_facility_id) * simulation_speed_multiplier("automation") * 3600.0 / work_required
 		for reward in selected.get("rewards", []):
 			_add_flow(rows, str(reward.get("item", "")), float(reward.get("quantity", 0)) * runs_per_hour, 0.0)
 		for cost in selected.get("costs", []):
@@ -3331,7 +3366,7 @@ func _settle_research(state: SpaceGameState) -> bool:
 	for effect in project.get("effects", []):
 		_apply_effect(state, effect)
 	state.statistics["research_completed"] = int(state.statistics.get("research_completed", 0)) + 1
-	state.research = {"status":"COMPLETE", "project_id":"", "progress_ms":0.0, "productivity_progress":0.0, "consumed":{}, "reserved_costs":{}, "blocked_reason":"", "location_id":SpaceGameState.MAIN_BASE_LOCATION_ID}
+	state.research = {"status":"COMPLETE", "project_id":"", "progress_ms":0.0, "productivity_progress":0.0, "consumed":{}, "reserved_costs":{}, "blocked_reason":"", "blocker":{}, "location_id":SpaceGameState.MAIN_BASE_LOCATION_ID}
 	emitted_events.append({"type":"ResearchCompleted", "project_id":project_id, "technology_id":technology_id, "ship_plan_id":ship_plan_id})
 	return true
 
@@ -3362,6 +3397,165 @@ func _refresh_resource_commitments(state: SpaceGameState) -> void:
 	_ensure_industry_reservations(state)
 	_validate_construction_commitments(state)
 	_validate_industry_commitments(state)
+
+
+func _refresh_blocker_diagnostics(state: SpaceGameState) -> void:
+	for runtime_value in state.mining_operations:
+		var runtime := runtime_value as Dictionary
+		runtime["blocker"] = blocker_diagnostic(state, "mining", runtime)
+	for runtime_value in state.industrial_operations:
+		var runtime := runtime_value as Dictionary
+		runtime["blocker"] = blocker_diagnostic(state, "industry", runtime)
+	for runtime_value in state.construction_operations:
+		var runtime := runtime_value as Dictionary
+		runtime["blocker"] = blocker_diagnostic(state, "construction", runtime)
+	for runtime_value in state.shipyard_queue:
+		var runtime := runtime_value as Dictionary
+		runtime["blocker"] = blocker_diagnostic(state, "shipyard", runtime)
+	state.research["blocker"] = blocker_diagnostic(state, "research", state.research)
+	for location_id_value in state.locations.keys():
+		var location_id := str(location_id_value)
+		var location: Dictionary = state.locations[location_id]
+		var automation: Dictionary = location.get("automation", {})
+		var legacy_reason := str(automation.get("last_blocked_reason", ""))
+		automation["blocker"] = _legacy_blocker("automation", location_id, legacy_reason) if not legacy_reason.is_empty() else {}
+	for project_id_value in state.megastructure_projects.keys():
+		var project_id := str(project_id_value)
+		var project: Dictionary = state.megastructure_projects[project_id]
+		var matching_runtime: Dictionary = {}
+		for runtime_value in state.construction_operations:
+			var runtime := runtime_value as Dictionary
+			if str(runtime.get("megastructure_id", "")) == project_id:
+				matching_runtime = runtime
+				break
+		project["blocker"] = matching_runtime.get("blocker", {}).duplicate(true) if not matching_runtime.is_empty() else {}
+
+
+func blocker_diagnostic(state: SpaceGameState, domain_id: String, runtime: Dictionary) -> Dictionary:
+	var status := str(runtime.get("status", "IDLE"))
+	if status == "PAUSED":
+		return _make_blocker("MANUALLY_PAUSED", domain_id, str(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
+	if status != "BLOCKED":
+		return {}
+	var location_id := str(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	var activity: Dictionary = content.activities.get(str(runtime.get("activity_id", "")), {})
+	if domain_id == "research":
+		var project: Dictionary = content.research_projects.get(str(runtime.get("project_id", "")), {})
+		if project.is_empty():
+			return _make_blocker("MISSING_TECH", domain_id, location_id, {"project_id":runtime.get("project_id", "")})
+		var requirement_blocker := _first_requirement_blocker(state, project.get("requirements", []), domain_id, location_id)
+		if not requirement_blocker.is_empty():
+			return requirement_blocker
+		if str(runtime.get("blocked_reason", "")) == "INSUFFICIENT_POWER":
+			return _make_blocker("POWER_SHORTAGE", domain_id, location_id, {"project_id":project.get("id", "")})
+		var remaining_costs: Array = []
+		for cost_value in project.get("costs", []):
+			var cost := cost_value as Dictionary
+			var remaining := maxi(0, int(cost.get("quantity", 0)) - int(runtime.get("consumed", {}).get(str(cost.get("item", "")), 0)))
+			if remaining > 0:
+				remaining_costs.append({"item":str(cost.get("item", "")), "quantity":remaining})
+		return _first_missing_input_blocker(state, domain_id, runtime, remaining_costs, location_id, {"project_id":project.get("id", "")})
+	if domain_id == "shipyard":
+		var plan: Dictionary = content.ship_construction_projects.get(str(runtime.get("plan_id", "")), {})
+		if str(runtime.get("blocked_reason", "")) == "ENGINEERING":
+			return _make_blocker("MISSING_SCALE_STAGE", domain_id, location_id, {"project_id":runtime.get("project_id", ""), "required":int(plan.get("engineering_required", 1)), "available":shipyard_engineering_level(state)})
+		return _first_missing_input_blocker(state, domain_id, runtime, _dictionary_to_item_entries(_shipyard_next_cycle_costs(runtime, plan)), location_id, {"project_id":runtime.get("project_id", ""), "plan_id":plan.get("id", "")})
+	if not activity.is_empty():
+		var requirement_blocker := _first_requirement_blocker(state, activity.get("requirements", []), domain_id, location_id)
+		if not requirement_blocker.is_empty():
+			return requirement_blocker
+		var facility_id := str(activity.get("facility", ""))
+		if not facility_id.is_empty() and not facility_available(state, facility_id):
+			return _make_blocker("MISSING_FACILITY", domain_id, location_id, {"facility_id":facility_id, "activity_id":activity.get("id", "")})
+		if domain_id == "industry":
+			var constraints := location_industry_constraint_profile(state, location_id)
+			if float(constraints.get("power_demand", 0.0)) > float(constraints.get("power_capacity", 0.0)) + 0.000001:
+				return _make_blocker("POWER_SHORTAGE", domain_id, location_id, {"required":constraints.get("power_demand", 0.0), "available":constraints.get("power_capacity", 0.0), "activity_id":activity.get("id", "")})
+			if float(constraints.get("cooling_demand", 0.0)) > float(constraints.get("cooling_capacity", 0.0)) + 0.000001:
+				return _make_blocker("COOLING_SHORTAGE", domain_id, location_id, {"required":constraints.get("cooling_demand", 0.0), "available":constraints.get("cooling_capacity", 0.0), "activity_id":activity.get("id", "")})
+			var cycle_costs := industry_cycle_costs(state, runtime, activity, false)
+			var input_blocker := _first_missing_input_blocker(state, domain_id, runtime, _dictionary_to_item_entries(cycle_costs), location_id, {"activity_id":activity.get("id", "")})
+			if not input_blocker.is_empty():
+				return input_blocker
+			if not _industry_storage_available(state, runtime, activity, cycle_costs):
+				return _make_blocker("STORAGE_FULL", domain_id, location_id, {"activity_id":activity.get("id", "")})
+		if domain_id == "construction":
+			var due := _construction_next_cycle_costs(runtime, activity)
+			var input_blocker := _first_missing_input_blocker(state, domain_id, runtime, _dictionary_to_item_entries(due), location_id, {"activity_id":activity.get("id", "")})
+			if not input_blocker.is_empty():
+				return input_blocker
+	return _legacy_blocker(domain_id, location_id, str(runtime.get("blocked_reason", "")))
+
+
+func _first_requirement_blocker(state: SpaceGameState, requirement_values: Array, domain_id: String, location_id: String) -> Dictionary:
+	for requirement_value in requirement_values:
+		var requirement := requirement_value as Dictionary
+		if requirement_met(state, requirement):
+			continue
+		match str(requirement.get("type", "")):
+			"technology", "project_complete":
+				return _make_blocker("MISSING_TECH", domain_id, location_id, {"technology_id":requirement.get("id", "")})
+			"own_facility", "facility_level", "manufacturing_module_installed":
+				return _make_blocker("MISSING_FACILITY", domain_id, location_id, {"facility_id":requirement.get("facility", requirement.get("id", "")), "requirement":requirement.duplicate(true)})
+	return {}
+
+
+func _first_missing_input_blocker(state: SpaceGameState, domain_id: String, runtime: Dictionary, cost_values: Array, location_id: String, extra: Dictionary = {}) -> Dictionary:
+	for cost_value in cost_values:
+		var cost := cost_value as Dictionary
+		var item_id := str(cost.get("item", ""))
+		var required := int(cost.get("quantity", 0))
+		var available := _runtime_available_item_quantity(state, "construction" if domain_id == "construction" else ("industry" if domain_id == "industry" else domain_id), runtime, item_id) if domain_id in ["industry", "construction"] else state.available_item_quantity(item_id, location_id)
+		if domain_id == "research":
+			available = state.available_item_quantity_for_research(item_id, location_id)
+		elif domain_id == "shipyard":
+			available = state.available_item_quantity_for_shipyard(item_id, str(runtime.get("project_id", "")), location_id)
+		if available >= required:
+			continue
+		var incoming := _incoming_item_quantity(state, location_id, item_id)
+		var fields := extra.duplicate(true)
+		fields.merge({"item_id":item_id, "required":required, "available":available, "incoming":incoming}, true)
+		return _make_blocker("INPUT_IN_TRANSIT" if incoming > 0 else "INPUT_SHORTAGE", domain_id, location_id, fields)
+	return {}
+
+
+func _incoming_item_quantity(state: SpaceGameState, location_id: String, item_id: String) -> int:
+	var total := 0
+	for shipment_value in state.logistics_network.get("shipments", []):
+		var shipment := shipment_value as Dictionary
+		if str(shipment.get("destination", "")) == location_id:
+			total += int(shipment.get("cargo", {}).get(item_id, 0))
+	return total
+
+
+func _dictionary_to_item_entries(values: Dictionary) -> Array:
+	var result: Array = []
+	for item_id_value in values.keys():
+		result.append({"item":str(item_id_value), "quantity":int(values[item_id_value])})
+	return result
+
+
+func _make_blocker(primary_reason: String, domain_id: String, location_id: String, fields: Dictionary = {}) -> Dictionary:
+	assert(primary_reason in BLOCKER_REASON_CODES, "Unknown blocker reason code: %s" % primary_reason)
+	var result := {"status":"BLOCKED", "primary_reason":primary_reason, "domain":domain_id, "location_id":location_id}
+	result.merge(fields, true)
+	return result
+
+
+func _legacy_blocker(domain_id: String, location_id: String, legacy_reason: String) -> Dictionary:
+	var reason := "INPUT_SHORTAGE"
+	if legacy_reason in ["INSUFFICIENT_POWER"]:
+		reason = "POWER_SHORTAGE"
+	elif legacy_reason in ["ENGINEERING"]:
+		reason = "MISSING_SCALE_STAGE"
+	elif legacy_reason in ["FACILITY_LOCKED"]:
+		reason = "MISSING_FACILITY"
+	elif legacy_reason in ["RESOURCES_OR_CAPACITY"]:
+		reason = "CONSTRUCTION_CAPACITY_FULL"
+	var fields := {"legacy_reason":legacy_reason}
+	if legacy_reason.begins_with("RESOURCES:") or legacy_reason.begins_with("RESERVE:"):
+		fields["item_id"] = legacy_reason.get_slice(":", 1)
+	return _make_blocker(reason, domain_id, location_id, fields)
 
 
 func _ensure_research_reservations(state: SpaceGameState) -> void:

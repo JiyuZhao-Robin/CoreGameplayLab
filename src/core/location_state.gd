@@ -26,7 +26,7 @@ static func create(location_id: String, location_type: String, system_id: String
 			"structural_capacity":100.0 if location_type == ARTIFICIAL else 0.0
 		},
 		"industry_summary":{"status":"NOT_AVAILABLE"},
-		"automation":{"industrial_template_id":"", "managed_policy_items":[], "status":"MANUAL", "auto_expand_enabled":false, "target_industry_level":1, "expansion_progress_ms":0.0, "last_blocked_reason":""},
+		"automation":{"industrial_template_id":"", "managed_policy_items":[], "status":"MANUAL", "auto_expand_enabled":false, "target_industry_level":1, "expansion_progress_ms":0.0, "last_blocked_reason":"", "blocker":{}},
 		"logistics":{"policies":{}, "storage_capacity":1000000, "hub_throughput":100, "local_throughput_capacity":100.0},
 		"logistics_summary":{"status":"NOT_CONNECTED"},
 		"projects_summary":{"active_count":0},
@@ -48,7 +48,7 @@ static func normalize(source: Dictionary, location_id: String, location_type: St
 	result["industry"].merge({"industries":{}, "power_capacity":100.0, "cooling_capacity":100.0 if str(result.get("type", location_type)) == ARTIFICIAL else 0.0, "structural_capacity":100.0 if str(result.get("type", location_type)) == ARTIFICIAL else 0.0}, false)
 	result["industry"]["industries"] = result["industry"].get("industries", {}).duplicate(true)
 	result["automation"] = result.get("automation", {}).duplicate(true)
-	result["automation"].merge({"industrial_template_id":"", "managed_policy_items":[], "status":"MANUAL", "auto_expand_enabled":false, "target_industry_level":1, "expansion_progress_ms":0.0, "last_blocked_reason":""}, false)
+	result["automation"].merge({"industrial_template_id":"", "managed_policy_items":[], "status":"MANUAL", "auto_expand_enabled":false, "target_industry_level":1, "expansion_progress_ms":0.0, "last_blocked_reason":"", "blocker":{}}, false)
 	result["automation"]["managed_policy_items"] = result["automation"].get("managed_policy_items", []).duplicate()
 	result["automation"]["target_industry_level"] = maxi(1, int(result["automation"].get("target_industry_level", 1)))
 	result["automation"]["expansion_progress_ms"] = maxf(0.0, float(result["automation"].get("expansion_progress_ms", 0.0)))

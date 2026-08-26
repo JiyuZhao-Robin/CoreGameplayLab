@@ -3,6 +3,7 @@ extends RefCounted
 
 var version := ""
 var pack_metadata := {}
+var simulation_profiles := {}
 var industry_rules := {}
 var fleet_rules := {}
 var definitions_by_canonical_id := {}
@@ -51,6 +52,7 @@ func load_from_file(path: String) -> bool:
 	if version != GameVersion.PRODUCT_VERSION:
 		errors.append("Content version %s does not match product version %s" % [version, GameVersion.PRODUCT_VERSION])
 	pack_metadata = parsed.get("content_pack", {"id":"base", "version":version, "namespace":"base"}).duplicate(true)
+	simulation_profiles = parsed.get("simulation_profiles", {}).duplicate(true)
 	industry_rules = parsed.get("industry_rules", {}).duplicate(true)
 	fleet_rules = parsed.get("fleet_rules", {}).duplicate(true)
 	construction_engineering_requirements = parsed.get("construction_engineering_requirements", {}).duplicate(true)
@@ -123,6 +125,7 @@ func clear() -> void:
 	progression_edges.clear()
 	graph_validation_errors.clear()
 	pack_metadata.clear()
+	simulation_profiles.clear()
 	industry_rules.clear()
 	fleet_rules.clear()
 	definitions_by_canonical_id.clear()
@@ -133,6 +136,7 @@ func validate() -> void:
 	var produced_items := {}
 	var consumed_items := {}
 	var unique_ship_grants := {}
+	_validate_simulation_profiles()
 	if float(industry_rules.get("economy_of_scale_per_level", 0.0)) < 0.0 or float(industry_rules.get("economy_of_scale_cap", 0.0)) < 0.0:
 		errors.append("industry_rules must define non-negative Economy of Scale values")
 	if float(industry_rules.get("production_speed_multiplier", 0.0)) <= 0.0:
@@ -329,7 +333,7 @@ func validate() -> void:
 			if step_id.is_empty() or step_ids.has(step_id):
 				errors.append("goal '%s' has an empty or duplicate tutorial step id" % goal.get("id", "?"))
 			step_ids[step_id] = true
-			if str(step.get("view", "")) not in ["overview", "mining", "industry", "expedition", "infrastructure", "research", "ships", "warehouse", "regions", "completion"]:
+			if str(step.get("view", "")) not in ["overview", "mining", "industry", "expedition", "infrastructure", "research", "ships", "warehouse", "regions", "megastructure", "completion"]:
 				errors.append("goal '%s' tutorial step '%s' has an invalid view" % [goal.get("id", "?"), step_id])
 			if step.get("requirements", []).is_empty():
 				errors.append("goal '%s' tutorial step '%s' has no requirements" % [goal.get("id", "?"), step_id])
@@ -585,6 +589,111 @@ func validate() -> void:
 	# Gameplay Lab ships no visual profiles, but keep the validator active so a
 	# future optional presentation pack cannot introduce broken resource paths.
 	_validate_planet_visual_profiles()
+	_validate_progression_supply_gates()
+	_validate_first_phase_progression_contract()
+
+
+func _validate_simulation_profiles() -> void:
+	var profiles: Dictionary = simulation_profiles.get("profiles", {})
+	var default_profile := str(simulation_profiles.get("default_profile", ""))
+	if default_profile.is_empty() or not profiles.has(default_profile):
+		errors.append("simulation_profiles must reference an existing default_profile")
+	for required_profile in ["TEST_PROFILE", "NORMAL_PROFILE"]:
+		if not profiles.has(required_profile):
+			errors.append("simulation_profiles is missing %s" % required_profile)
+	for profile_id_value in profiles.keys():
+		var profile_id := str(profile_id_value)
+		var profile: Dictionary = profiles.get(profile_id, {})
+		for system_id in ["mining", "manufacturing", "construction", "shipyard", "automation"]:
+			if float(profile.get(system_id, 0.0)) <= 0.0:
+				errors.append("simulation profile '%s' must define a positive %s multiplier" % [profile_id, system_id])
+
+
+func _validate_progression_supply_gates() -> void:
+	for project_value in research_projects.values():
+		var project := project_value as Dictionary
+		var granted_technology := str(project.get("grants_technology", ""))
+		if granted_technology.is_empty():
+			continue
+		for cost_value in project.get("costs", []):
+			var cost := cost_value as Dictionary
+			var item_id := str(cost.get("item", ""))
+			var finite_route_supply := 0
+			for route_value in expedition_routes.values():
+				for node_value in (route_value as Dictionary).get("nodes", []):
+					for reward_value in (node_value as Dictionary).get("rewards", []):
+						var reward := reward_value as Dictionary
+						if str(reward.get("item", "")) == item_id:
+							finite_route_supply += int(reward.get("quantity", 0))
+			if finite_route_supply >= int(cost.get("quantity", 0)):
+				continue
+			var deterministic_producers: Array[Dictionary] = []
+			for activity_value in activities.values():
+				var activity := activity_value as Dictionary
+				if not bool(activity.get("repeat", true)):
+					continue
+				if activity.get("rewards", []).any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id):
+					deterministic_producers.append(activity)
+			if deterministic_producers.is_empty():
+				continue
+			var all_self_gated := true
+			for producer in deterministic_producers:
+				var self_gated := false
+				for requirement_value in producer.get("requirements", []) + producer.get("reveal_requirements", []):
+					for leaf in _requirement_leaves(requirement_value as Dictionary):
+						if str(leaf.get("type", "")) == "technology" and str(leaf.get("id", "")) == granted_technology:
+							self_gated = true
+				if not self_gated:
+					all_self_gated = false
+					break
+			if all_self_gated:
+				errors.append("Progression deadlock: research project '%s' consumes '%s', but every deterministic producer requires the technology it grants" % [project.get("id", "?"), item_id])
+
+
+func _validate_first_phase_progression_contract() -> void:
+	# The Guide is the executable progression contract for phase one. A main goal
+	# without steps can be technically completable while leaving the player with
+	# no actionable route to reach it.
+	for goal_value in goals.values():
+		var goal := goal_value as Dictionary
+		var steps: Array = goal.get("steps", [])
+		if steps.is_empty():
+			errors.append("Phase-one Guide goal '%s' must define at least one actionable step" % goal.get("id", "?"))
+			continue
+		var step_ids := {}
+		for step_value in steps:
+			var step := step_value as Dictionary
+			var step_id := str(step.get("id", ""))
+			if step_id.is_empty() or step_ids.has(step_id):
+				errors.append("Phase-one Guide goal '%s' contains a missing or duplicate step id '%s'" % [goal.get("id", "?"), step_id])
+			step_ids[step_id] = true
+			for requirement_value in step.get("requirements", []):
+				for leaf in _requirement_leaves(requirement_value as Dictionary):
+					var activity_id := str(leaf.get("id", ""))
+					if str(leaf.get("type", "")) == "activity_complete" and activities.has(activity_id) and is_module_bom_activity(activities[activity_id]):
+						errors.append("Phase-one Guide step '%s' cannot require module BOM activity '%s'; ordinary modules are built by Starport refit" % [step_id, activity_id])
+
+	# Every manufacturing runtime exists from a new game, but only the founding
+	# workshop starts active. Every later facility therefore needs an ordinary
+	# construction activity that grants ownership; otherwise a valid recipe can
+	# still be permanently unreachable.
+	var starting_facilities := {"makeshift_workshop":true}
+	for facility_id_value in SpaceGameState.MANUFACTURING_FACILITY_IDS:
+		var facility_id := str(facility_id_value)
+		if starting_facilities.has(facility_id):
+			continue
+		var unlock_activity_found := false
+		for activity_value in activities.values():
+			var activity := activity_value as Dictionary
+			for effect_value in activity.get("effects", []):
+				var effect := effect_value as Dictionary
+				if str(effect.get("type", "")) == "unlock_facility" and str(effect.get("facility", "")) == facility_id:
+					unlock_activity_found = true
+					break
+			if unlock_activity_found:
+				break
+		if not unlock_activity_found:
+			errors.append("Phase-one manufacturing facility '%s' has no construction activity that unlocks it" % facility_id)
 
 
 func _validate_closed_economy() -> void:
@@ -962,6 +1071,9 @@ func _validate_effect(effect: Dictionary, owner: String) -> void:
 		"upgrade_extraction_network":
 			if not extraction_networks.has(str(effect.get("id", ""))) or int(effect.get("levels", 0)) <= 0:
 				errors.append("%s upgrades an invalid extraction network" % owner)
+		"upgrade_extraction_command":
+			if int(effect.get("capacity", 0)) <= 0:
+				errors.append("%s has an invalid extraction command capacity" % owner)
 		"set_region_state":
 			if not regions.has(str(effect.get("region", ""))) or str(effect.get("field", "")) not in ["exploration_state", "strategic_state", "development_state"]:
 				errors.append("%s has an invalid regional-state effect" % owner)
@@ -1027,6 +1139,12 @@ func _validate_requirement(requirement: Dictionary, owner: String) -> void:
 		"own_facility", "facility_level":
 			if not facilities.has(str(requirement.get("id", ""))):
 				errors.append("%s requires a missing facility" % owner)
+		"manufacturing_module_installed":
+			var module_id := str(requirement.get("id", ""))
+			if not facilities.has(str(requirement.get("facility", ""))):
+				errors.append("%s requires a manufacturing module in a missing facility" % owner)
+			if not process_modules.has(module_id) and not universal_industry_plugins.has(module_id):
+				errors.append("%s requires a missing manufacturing module" % owner)
 		"infrastructure_site", "boss_defeated":
 			if str(requirement.get("id", "")).is_empty():
 				errors.append("%s has an empty progression requirement" % owner)

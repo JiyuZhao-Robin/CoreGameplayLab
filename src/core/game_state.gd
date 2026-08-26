@@ -137,7 +137,7 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 		state.construction_operations.append(_empty_operation(index, "construction"))
 	state.active_expedition = _empty_operation(0, "expedition")
 	state.active_expedition.merge({"phase":"IDLE", "route_id":"", "node_index":0, "node_progress_ms":0.0, "safe_node_index":0, "combat_state":{}}, true)
-	state.research = {"status":"IDLE", "project_id":"", "progress_ms":0.0, "productivity_progress":0.0, "consumed":{}, "reserved_costs":{}, "blocked_reason":"", "location_id":MAIN_BASE_LOCATION_ID}
+	state.research = {"status":"IDLE", "project_id":"", "progress_ms":0.0, "productivity_progress":0.0, "consumed":{}, "reserved_costs":{}, "blocked_reason":"", "blocker":{}, "location_id":MAIN_BASE_LOCATION_ID}
 	state.facilities = {
 		"makeshift_workshop":{"level":1, "status":"ACTIVE"},
 		"fission_reactor":{"level":1, "status":"ACTIVE"},
@@ -200,6 +200,7 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.research = data.get("research", state.research).duplicate(true)
 	state.research["productivity_progress"] = 0.0
 	state.research["location_id"] = str(state.research.get("location_id", MAIN_BASE_LOCATION_ID))
+	state.research["blocker"] = state.research.get("blocker", {}).duplicate(true) if state.research.get("blocker", null) is Dictionary else {}
 	state.technologies = data.get("technologies", {}).duplicate(true)
 	state.completed_projects = data.get("completed_projects", {}).duplicate(true)
 	state.unlocked_ship_plans = data.get("unlocked_ship_plans", {}).duplicate(true)
@@ -561,6 +562,7 @@ func enqueue_ship_plan(plan_id: String, quantity: int = 1) -> bool:
 		"reserved_costs":{},
 		"status":"RUNNING",
 		"blocked_reason":"",
+		"blocker":{},
 		"location_id":MAIN_BASE_LOCATION_ID,
 		"enqueued_at_ms":int(total_elapsed_ms)
 	})
@@ -886,6 +888,7 @@ static func _empty_operation(index: int, domain_id: String) -> Dictionary:
 		"project_cycles_completed":0,
 		"paid_cycles":0,
 		"status":"IDLE",
+		"blocker":{},
 		"assigned_ship_ids":[],
 		"reserved_costs":{},
 		"allocated_capacity":1.0,
@@ -981,6 +984,7 @@ static func _normalized_shipyard_queue(source: Array) -> Array:
 		if runtime["status"] == "QUEUED":
 			runtime["status"] = "RUNNING"
 		runtime["blocked_reason"] = str(runtime.get("blocked_reason", ""))
+		runtime["blocker"] = runtime.get("blocker", {}).duplicate(true) if runtime.get("blocker", null) is Dictionary else {}
 		runtime["location_id"] = str(runtime.get("location_id", MAIN_BASE_LOCATION_ID))
 		if str(runtime["location_id"]).is_empty():
 			runtime["location_id"] = MAIN_BASE_LOCATION_ID
