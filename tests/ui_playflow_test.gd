@@ -58,6 +58,14 @@ func _run() -> void:
 	Game.state_changed.emit()
 	await _redraw()
 	_check(Game.state.item_quantity("mixed_raw_ore", SpaceGameState.MAIN_BASE_LOCATION_ID) >= 2, "UI-started mining produces real inventory")
+	for operation_value in Game.state.mining_operations:
+		var operation := operation_value as Dictionary
+		if String(operation.get("site_id", "")) == "earth_resource_cluster_prospect":
+			operation["status"] = "INTEGRATED"
+	Game.state.extraction_network_states["earth_extraction_network"].merge({"unlocked":true, "status":"RUNNING", "integrated_site_ids":["earth_resource_cluster_prospect"]}, true)
+	_check(bool(main.call("_has_active_mining")), "Guide recognizes an integrated extraction network as active production")
+	_check("启动近地永久采集点" not in String(main.call("_next_flow_step")), "Guide never regresses to the starter mining instruction after the first completed extraction cycle")
+	Game.state.extraction_network_states["earth_extraction_network"]["status"] = "IDLE"
 
 	var industry_nav := main.find_child("Navigation_industry", true, false) as Button
 	_press(industry_nav)
@@ -67,6 +75,12 @@ func _run() -> void:
 	_press(start_separation)
 	await _redraw()
 	_check(String(Game.runtime_for_domain("industry").get("activity_id", "")) == "separate_iron_ore", "Industry UI starts the real production runtime")
+	var remaining_feedstock := Game.state.item_quantity("mixed_raw_ore", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	Game.state.remove_item("mixed_raw_ore", remaining_feedstock, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	Game.simulation.advance(Game.state, 1000.0)
+	Game.state_changed.emit()
+	await _redraw()
+	_check(_has_text_fragment(main, "首要阻塞") and _has_text_fragment(main, "混合粗矿不足"), "Industry UI renders the core structured blocker instead of an unrelated free-form error")
 
 	var workshop_runtime: Dictionary = Game.runtime_for_domain("industry")
 	if not workshop_runtime.is_empty():

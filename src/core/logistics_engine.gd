@@ -448,7 +448,9 @@ func _path_costs(state: SpaceGameState, path: Dictionary) -> Dictionary:
 
 func _costs_available(state: SpaceGameState, origin: String, costs: Dictionary) -> bool:
 	for item_id in costs:
-		if state.available_item_quantity(str(item_id), origin) < int(costs[item_id]):
+		var policy: Dictionary = state.location_state(origin).get("logistics", {}).get("policies", {}).get(str(item_id), {})
+		var protected_reserve := int(policy.get("reserve", 0)) if str(policy.get("mode", MODE_STORAGE)) == MODE_SUPPLY else 0
+		if state.available_item_quantity(str(item_id), origin) - protected_reserve < int(costs[item_id]):
 			return false
 	return true
 

@@ -4,6 +4,13 @@
 
 当前 Save Schema 为 27。旧 Lab schema 24 的全局库存会在读取时一次性迁移到 `earth_orbit` Main Base；schema 25–26 的 Location、物流与在途 Shipment 会保留，并迁移到普通模块 BOM / 稀有装备实体和舰船生命周期语义。
 
+## 设计文档
+
+- [正式设计方向](docs/Design_Direction_zh_CN.md)：已确认的产品定位、工业深化目标、系统边界和下一阶段范围。
+- [核心玩法实现审计](docs/Core_Gameplay_Implementation_Review_zh_CN.md)：当前实际实现、测试覆盖、缺口和扩展价值评审。
+
+设计方向描述“接下来要成为怎样的游戏”，实现审计描述“当前实际上已经做到什么”。两者发生差异时，不应把目标方向误报为现有功能。
+
 ## 直接启动
 
 1. 打开 Godot 项目管理器，点击“导入”。
@@ -38,6 +45,7 @@ godot --path .
 godot --headless --editor --path . --quit
 godot --headless --path . --script res://tests/headless_test.gd -- --no-persistence
 godot --headless --path . res://tests/playflow_test.tscn -- --no-persistence
+godot --headless --path . res://tests/golden_path_test.tscn -- --no-persistence
 godot --headless --path . --script res://tests/location_inventory_test.gd -- --no-persistence
 godot --headless --path . res://tests/location_ui_smoke_test.tscn -- --no-persistence
 godot --headless --path . res://tests/ui_playflow_test.tscn -- --no-persistence
