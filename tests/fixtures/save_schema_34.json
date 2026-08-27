@@ -1,0 +1,225 @@
+{
+  "save_version": 34,
+  "game_version": "1.28.0-phase-eight",
+  "save_id": "fixture-schema-34-core-assets",
+  "revision": 17,
+  "parent_revision": 16,
+  "device_id": "fixture-device",
+  "saved_at_ms": 1700000000000,
+  "total_elapsed_ms": 4321000.0,
+  "locations": {
+    "earth_orbit": {
+      "id": "earth_orbit",
+      "type": "ARTIFICIAL",
+      "system_id": "sol",
+      "discovery_state": "DISCOVERED",
+      "survey_state": "SURVEYED",
+      "inventory": {
+        "iron_ore": 120,
+        "electronics": 30,
+        "repair_material": 40,
+        "industrial_machine_tools": 8,
+        "heavy_structural_section": 6
+      },
+      "reserves": {
+        "iron_ore": 11,
+        "electronics": 4
+      },
+      "logistics": {
+        "policies": {},
+        "storage_capacity": 1000000,
+        "storage_capacities": {
+          "BULK": 400000,
+          "COMPONENT": 300000,
+          "FLUID": 200000,
+          "SPECIAL": 100000
+        },
+        "hub_throughput": 100,
+        "local_throughput_capacity": 100.0
+      }
+    },
+    "lunar_space": {
+      "id": "lunar_space",
+      "type": "NATURAL",
+      "system_id": "sol",
+      "discovery_state": "DISCOVERED",
+      "survey_state": "SURVEYED",
+      "inventory": {
+        "iron_ore": 7
+      },
+      "reserves": {},
+      "logistics": {
+        "policies": {},
+        "storage_capacity": 1000000,
+        "storage_capacities": {
+          "BULK": 400000,
+          "COMPONENT": 300000,
+          "FLUID": 200000,
+          "SPECIAL": 100000
+        },
+        "hub_throughput": 100,
+        "local_throughput_capacity": 100.0
+      }
+    }
+  },
+  "construction_operations": [
+    {
+      "slot": 0,
+      "domain": "construction",
+      "activity_id": "build_orbital_foundry",
+      "project_id": "CONSTRUCTION-000041",
+      "project_type": "FACILITY_BUILD",
+      "target_id": "orbital_foundry",
+      "location_id": "earth_orbit",
+      "priority": 75,
+      "status": "BLOCKED",
+      "blocked_reason": "RESOURCES",
+      "total_work": 40.0,
+      "completed_work": 12.0,
+      "progress_ms": 0.0,
+      "material_plan": {
+        "iron_ingot": 6,
+        "electronics": 4
+      },
+      "delivered_materials": {
+        "iron_ingot": 2,
+        "electronics": 1
+      },
+      "in_transit_materials": {
+        "electronics": 2
+      },
+      "consumed": {
+        "iron_ingot": 2
+      },
+      "reserved_costs": {
+        "electronics": 1
+      },
+      "blocker": {
+        "primary_reason": "INPUT_SHORTAGE"
+      }
+    }
+  ],
+  "next_construction_project_serial": 42,
+  "research": {
+    "research_model_version": 2,
+    "status": "RUNNING",
+    "project_id": "research_industrial_coordination",
+    "route_id": "",
+    "supplemental_route": false,
+    "stage_index": 1,
+    "stage_id": "engineering",
+    "stage_kind": "ENGINEERING",
+    "stage_progress_ms": 3500.0,
+    "progress_ms": 3500.0,
+    "productivity_progress": 0.25,
+    "consumed": {
+      "electronics": 3
+    },
+    "stage_consumed": {
+      "electronics": 1
+    },
+    "reserved_costs": {
+      "electronics": 2,
+      "data_core": 1
+    },
+    "applied_stage_effects": [],
+    "blocked_reason": "",
+    "blocker": {},
+    "location_id": "earth_orbit"
+  },
+  "ships": [
+    {
+      "instance_id": "SHIP-034",
+      "name": "ISS Fixture",
+      "blueprint_id": "patchwork_prospector",
+      "status": "DOCKED",
+      "condition": "OPERATIONAL",
+      "maintenance_state": "READY_RESERVE",
+      "assignment": {},
+      "repair_remaining_ms": 0.0,
+      "modules": [
+        "light_autocannon",
+        "civilian_shield",
+        "basic_drive",
+        "mining_laser",
+        "civilian_reactor_core"
+      ],
+      "location_id": "earth_orbit",
+      "built_at_ms": 1000,
+      "commissioned_at_ms": 2000
+    }
+  ],
+  "next_ship_serial": 35,
+  "logistics_network": {
+    "dispatch_interval_ms": 5000.0,
+    "dispatch_progress_ms": 1250.0,
+    "next_shipment_serial": 92,
+    "shipments": [
+      {
+        "id": "SHIPMENT-000091",
+        "origin": "earth_orbit",
+        "destination": "lunar_space",
+        "cargo": {
+          "electronics": 5
+        },
+        "remaining_ms": 17500.0,
+        "total_ms": 25000.0,
+        "handling_time_ms": 5000.0,
+        "status": "IN_TRANSIT",
+        "service_path": [
+          "SERVICE-EARTH_LUNAR_FREIGHT"
+        ],
+        "transport_modes": [
+          "general_cargo"
+        ],
+        "route_freight_units": {
+          "earth_lunar_freight": 1.75
+        }
+      }
+    ],
+    "services": {},
+    "route_statistics": {},
+    "item_statistics": {}
+  },
+  "megastructures": {
+    "stellar_energy": false,
+    "matter_extractor": true,
+    "deep_space_array": false
+  },
+  "megastructure_projects": {
+    "stellar_energy": {
+      "id": "stellar_energy",
+      "status": "BUILDING",
+      "progress_percent": 37,
+      "site_location_id": "earth_orbit",
+      "delivered_materials": {
+        "heavy_structural_section": 9
+      }
+    },
+    "matter_extractor": {
+      "id": "matter_extractor",
+      "status": "COMPLETE",
+      "progress_percent": 100,
+      "delivered_materials": {
+        "industrial_machine_tools": 12
+      }
+    },
+    "autonomous_industry": {
+      "id": "autonomous_industry",
+      "status": "BUILDING",
+      "progress_percent": 48,
+      "delivered_materials": {
+        "electronics": 20
+      }
+    }
+  },
+  "retired_megastructure_archive": {
+    "preexisting_legacy_record": {
+      "completed": true,
+      "project": {
+        "note": "must survive migration"
+      },
+      "retired_in_schema": 34
+    }
+  }
+}

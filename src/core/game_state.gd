@@ -43,7 +43,7 @@ var domains := {}
 var ships: Array = []
 var regions := {"earth_orbit": true}
 var completed_activities := {}
-var statistics := {"items_produced": 0, "items_consumed":0, "cycles_completed": 0, "enemies_defeated": 0, "bosses_defeated":0, "expeditions_failed": 0, "research_completed":0, "ships_developed":0}
+var statistics := {"items_produced": 0, "items_consumed":0, "item_consumed_totals":{}, "cycles_completed": 0, "enemies_defeated": 0, "bosses_defeated":0, "expeditions_failed": 0, "research_completed":0, "ships_developed":0}
 var rng := {"algorithm_version":1, "master_seed":730201, "streams":{}}
 
 var extraction_assets := {"ship_ids":[]}
@@ -286,6 +286,9 @@ static func _migrate_33_34(data: Dictionary) -> Dictionary:
 static func _migrate_34_35(data: Dictionary) -> Dictionary:
 	var migrated := _stamp_schema(data, 35)
 	migrated["offline_time_debt_ms"] = maxf(0.0, float(migrated.get("offline_time_debt_ms", 0.0)))
+	var statistics: Dictionary = migrated.get("statistics", {}).duplicate(true)
+	statistics["item_consumed_totals"] = statistics.get("item_consumed_totals", {}).duplicate(true) if statistics.get("item_consumed_totals", null) is Dictionary else {}
+	migrated["statistics"] = statistics
 	var completed: Dictionary = migrated.get("megastructures", {}).duplicate(true)
 	var old_projects: Dictionary = migrated.get("megastructure_projects", {}).duplicate(true)
 	var archive: Dictionary = migrated.get("retired_megastructure_archive", {}).duplicate(true)
@@ -342,6 +345,7 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.regions = data.get("regions", state.regions).duplicate(true)
 	state.completed_activities = data.get("completed_activities", {}).duplicate(true)
 	state.statistics = data.get("statistics", state.statistics).duplicate(true)
+	state.statistics["item_consumed_totals"] = state.statistics.get("item_consumed_totals", {}).duplicate(true) if state.statistics.get("item_consumed_totals", null) is Dictionary else {}
 	state.rng = data.get("rng", state.rng).duplicate(true)
 	state.extraction_assets = data.get("extraction_assets", state.extraction_assets).duplicate(true)
 	state.extraction_command = data.get("extraction_command", state.extraction_command).duplicate(true)
@@ -713,6 +717,136 @@ func aggregate_inventory() -> Dictionary:
 	return result
 
 
+## Read-only ownership view used by integrity tests, diagnostics and completion
+## statistics. Reservations remain claims on Inventory rather than duplicated
+## assets; ProjectStaging is an explicitly bounded subset of Reserved.
+func asset_ledger_snapshot() -> Dictionary:
+	var inventory_on_hand := {}
+	var inventory_available := {}
+	var inventory_reserved := {}
+	var inventory_reserved_requested := {}
+	var inventory_by_location := {}
+	var project_staging_items := {}
+	var project_staging_requested := {}
+	var projects := {}
+	for location_id_value in locations.keys():
+		var location_id := str(location_id_value)
+		var item_ids: Array = location_inventory(location_id).keys()
+		for item_id_value in location_reserves(location_id).keys():
+			if not item_ids.has(item_id_value):
+				item_ids.append(item_id_value)
+		for collection in [industrial_operations, construction_operations, shipyard_queue]:
+			for runtime_value in collection:
+				var runtime := runtime_value as Dictionary
+				if str(runtime.get("location_id", MAIN_BASE_LOCATION_ID)) != location_id:
+					continue
+				for item_id_value in runtime.get("reserved_costs", {}).keys():
+					if not item_ids.has(item_id_value):
+						item_ids.append(item_id_value)
+		if str(research.get("location_id", MAIN_BASE_LOCATION_ID)) == location_id:
+			for item_id_value in research.get("reserved_costs", {}).keys():
+				if not item_ids.has(item_id_value):
+					item_ids.append(item_id_value)
+		var location_on_hand := {}
+		var location_available := {}
+		var location_reserved := {}
+		var location_requested := {}
+		for item_id_value in item_ids:
+			var item_id := str(item_id_value)
+			var on_hand := maxi(0, item_quantity(item_id, location_id))
+			var available := mini(on_hand, available_item_quantity(item_id, location_id))
+			var requested := maxi(0, int(location_reserves(location_id).get(item_id, 0)) + research_committed_quantity(item_id, location_id) + industrial_committed_quantity(item_id, -1, location_id) + construction_committed_quantity(item_id, -1, location_id) + shipyard_committed_quantity(item_id, "", location_id))
+			var reserved := on_hand - available
+			_ledger_add(location_on_hand, item_id, on_hand)
+			_ledger_add(location_available, item_id, available)
+			_ledger_add(location_reserved, item_id, reserved)
+			_ledger_add(location_requested, item_id, requested)
+			_ledger_add(inventory_on_hand, item_id, on_hand)
+			_ledger_add(inventory_available, item_id, available)
+			_ledger_add(inventory_reserved, item_id, reserved)
+			_ledger_add(inventory_reserved_requested, item_id, requested)
+		inventory_by_location[location_id] = {
+			"OnHand":location_on_hand,
+			"Available":location_available,
+			"Reserved":location_reserved,
+			"ReservedRequested":location_requested
+		}
+	for runtime_value in construction_operations:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "IDLE")) not in ["RUNNING", "BLOCKED", "QUEUED"] or str(runtime.get("project_id", "")).is_empty():
+			continue
+		var location_id := str(runtime.get("location_id", MAIN_BASE_LOCATION_ID))
+		var staged := {}
+		var requested := {}
+		for item_id_value in runtime.get("reserved_costs", {}).keys():
+			var item_id := str(item_id_value)
+			var raw_quantity := maxi(0, int(runtime.get("reserved_costs", {}).get(item_id, 0)))
+			# Construction reservations have already been disjointly assigned by the
+			# normal reservation allocator. Do not borrow strategic, Research,
+			# Industry or Shipyard claims merely because they share Reserved stock.
+			_ledger_add(staged, item_id, raw_quantity)
+			_ledger_add(requested, item_id, raw_quantity)
+			_ledger_add(project_staging_items, item_id, raw_quantity)
+			_ledger_add(project_staging_requested, item_id, raw_quantity)
+		projects[str(runtime.get("project_id", ""))] = {"LocationId":location_id, "Items":staged, "Requested":requested}
+	var in_transit_items := {}
+	var shipments := {}
+	for shipment_value in logistics_network.get("shipments", []):
+		var shipment := shipment_value as Dictionary
+		var cargo: Dictionary = shipment.get("cargo", {}).duplicate(true) if shipment.get("cargo", null) is Dictionary else {}
+		shipments[str(shipment.get("id", ""))] = {
+			"Origin":str(shipment.get("origin", "")),
+			"Destination":str(shipment.get("destination", "")),
+			"Items":cargo
+		}
+		for item_id_value in cargo.keys():
+			_ledger_add(in_transit_items, str(item_id_value), maxi(0, int(cargo.get(item_id_value, 0))))
+	var installed_modules := {}
+	for location_value in locations.values():
+		var location := location_value as Dictionary
+		for industry_value in location.get("industry", {}).get("industries", {}).values():
+			var industry := industry_value as Dictionary
+			for field in ["installed_process_modules", "installed_plugins"]:
+				for module_id_value in industry.get(field, []):
+					_ledger_add(installed_modules, str(module_id_value), 1)
+	var special_equipment := {}
+	for equipment_value in equipment_instances.values():
+		var equipment := equipment_value as Dictionary
+		if str(equipment.get("status", "STORAGE")) not in ["INSTALLED", "RESERVED_REFIT"]:
+			continue
+		_ledger_add(special_equipment, str(equipment.get("definition_id", "")), 1)
+	var assigned_ships := {}
+	for ship_value in ships:
+		var ship := ship_value as Dictionary
+		if ship.get("assignment", {}).is_empty() and str(ship.get("status", "DOCKED")) == "DOCKED":
+			continue
+		_ledger_add(assigned_ships, str(ship.get("blueprint_id", "")), 1)
+	var lost_items := {}
+	var lost_projects := {}
+	for history_value in construction_history:
+		var history := history_value as Dictionary
+		var lost: Dictionary = history.get("cancellation_result", {}).get("consumed_lost", {}).duplicate(true) if history.get("cancellation_result", {}).get("consumed_lost", null) is Dictionary else {}
+		if lost.is_empty():
+			continue
+		lost_projects[str(history.get("project_id", ""))] = lost
+		for item_id_value in lost.keys():
+			_ledger_add(lost_items, str(item_id_value), maxi(0, int(lost.get(item_id_value, 0))))
+	return {
+		"Inventory":{"OnHand":inventory_on_hand, "Available":inventory_available, "Reserved":inventory_reserved, "ReservedRequested":inventory_reserved_requested, "ByLocation":inventory_by_location},
+		"InTransit":{"Items":in_transit_items, "Shipments":shipments},
+		"ProjectStaging":{"Items":project_staging_items, "Requested":project_staging_requested, "Projects":projects, "ReservationSubset":true},
+		"InstalledAssigned":{"ManufacturingModules":installed_modules, "SpecialEquipment":special_equipment, "Ships":assigned_ships},
+		"Consumed":{"Items":statistics.get("item_consumed_totals", {}).duplicate(true), "Total":maxi(0, int(statistics.get("items_consumed", 0)))},
+		"Lost":{"Items":lost_items, "Projects":lost_projects}
+	}
+
+
+static func _ledger_add(target: Dictionary, item_id: String, quantity: int) -> void:
+	if item_id.is_empty() or quantity <= 0:
+		return
+	target[item_id] = int(target.get(item_id, 0)) + quantity
+
+
 func aggregate_reserved_quantity(item_id: String) -> int:
 	var total := 0
 	for location_id in locations:
@@ -930,6 +1064,9 @@ func remove_item(item_id: String, quantity: int, location_id: String = MAIN_BASE
 		return false
 	location_inventory(location_id)[item_id] = item_quantity(item_id, location_id) - quantity
 	statistics["items_consumed"] = int(statistics.get("items_consumed", 0)) + quantity
+	var consumed_totals: Dictionary = statistics.get("item_consumed_totals", {})
+	consumed_totals[item_id] = int(consumed_totals.get(item_id, 0)) + quantity
+	statistics["item_consumed_totals"] = consumed_totals
 	return true
 
 
