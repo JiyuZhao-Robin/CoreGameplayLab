@@ -690,6 +690,7 @@ func validate() -> void:
 	_validate_fourth_phase_freight_contract()
 	_validate_seventh_phase_inventory_contract()
 	_validate_eighth_phase_geography_contract()
+	_validate_core_content_contract()
 
 
 func _validate_simulation_profiles() -> void:
@@ -800,20 +801,21 @@ func _validate_second_phase_capital_contract() -> void:
 			errors.append("Phase-two capital good '%s' is missing or has the wrong category" % item_id)
 			continue
 		var repeatable_producers := 0
-		var construction_consumers := 0
 		for activity_value in activities.values():
 			var activity := activity_value as Dictionary
 			if bool(activity.get("repeat", true)) and activity.get("rewards", []).any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id):
 				repeatable_producers += 1
-			if _is_construction_definition(activity) and activity.get("costs", []).any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id):
-				construction_consumers += 1
 		if repeatable_producers <= 0:
 			errors.append("Phase-two capital good '%s' has no repeatable producer" % item_id)
-		if construction_consumers < 2:
-			errors.append("Phase-two capital good '%s' must be consumed by at least two construction projects" % item_id)
+		var scenarios := capital_good_usage_scenarios(item_id)
+		if scenarios.size() < 2:
+			errors.append("Core capital good '%s' must serve at least two ordinary long-term usage scenarios outside the Megastructure" % item_id)
 	var basic_machine_tools: Dictionary = activities.get("fabricate_basic_machine_tools", {})
 	if basic_machine_tools.is_empty() or str(basic_machine_tools.get("facility", "")) != "makeshift_workshop" or basic_machine_tools.get("requirements", []).any(func(requirement): return str((requirement as Dictionary).get("type", "")) == "facility_level"):
 		errors.append("Phase-two must retain a low-technology machine-tool recovery recipe outside facility expansion")
+	var steel_machine_tools: Dictionary = activities.get("fabricate_industrial_machine_tools_steel", {})
+	if steel_machine_tools.is_empty() or not _entries_contain_item(steel_machine_tools.get("costs", []), "steel_composite") or not _entries_contain_item(steel_machine_tools.get("rewards", []), "industrial_machine_tools"):
+		errors.append("Core industry must define a repeatable Steel-to-Industrial-Machine-Tools production method")
 	for project_type_value in industry_rules.get("capacity_upgrade_projects", {}).keys():
 		var project_type := str(project_type_value)
 		var definition: Dictionary = industry_rules["capacity_upgrade_projects"].get(project_type, {})
@@ -840,16 +842,8 @@ func _validate_third_phase_industry_contract() -> void:
 		previous_max = int(stage.get("max_level", previous_max))
 		if stage_id != "WORKSHOP":
 			_validate_item_entries(stage.get("upgrade_costs", []), "Industry Scale Stage '%s'" % stage_id)
-	var specializations: Dictionary = industry_rules.get("location_specializations", {})
-	if specializations.size() < 4:
-		errors.append("Phase-three must define the first four Location specializations")
-	for specialization_value in specializations.keys():
-		var specialization_id := str(specialization_value)
-		var specialization: Dictionary = specializations[specialization_id]
-		var multipliers: Dictionary = specialization.get("facility_multipliers", {})
-		if not multipliers.values().any(func(value): return float(value) > 1.0) or not multipliers.values().any(func(value): return float(value) < 1.0):
-			errors.append("Location specialization '%s' must create a facility-specific layout tradeoff" % specialization_id)
-		_validate_item_entries(specialization.get("upgrade_costs", []), "Location specialization '%s'" % specialization_id)
+	if not industry_rules.get("location_specializations", {}).is_empty():
+		errors.append("Core content forbids hard-coded Location specializations; industrial geography must emerge from resources, environment and logistics")
 	for group_id in ["steelmaking", "large_structure_fabrication"]:
 		var methods: Array = activities.values().filter(func(value): return str((value as Dictionary).get("production_method_group", "")) == group_id)
 		if methods.size() < 2:
@@ -1033,6 +1027,13 @@ func _validate_fourth_phase_freight_contract() -> void:
 			infrastructure_modes += 1
 		else:
 			ship_modes += 1
+			if str(mode.get("id", "")) != "general_cargo" and bool(mode.get("public_base_capacity", false)):
+				errors.append("Specialist Transport Mode '%s' cannot create public or free freight capacity" % mode.get("id", "?"))
+			if not bool(mode.get("public_base_capacity", false)) and float(mode.get("ship_capacity_multiplier", 0.0)) <= 0.0:
+				errors.append("Physical Transport Mode '%s' must derive positive capacity from assigned ships" % mode.get("id", "?"))
+	var general_cargo: Dictionary = transport_modes.get("general_cargo", {})
+	if not bool(general_cargo.get("public_base_capacity", false)) or bool(general_cargo.get("infrastructure_service", false)):
+		errors.append("General Cargo must retain its limited single-system public corridor bootstrap until enough physical freighters can cover every route")
 	if ship_modes < 2 or infrastructure_modes < 1:
 		errors.append("Phase-four requires two ship modes and one infrastructure Transport Mode")
 	if float(items.get("mixed_raw_ore", {}).get("freight_units", 0.0)) <= float(items.get("iron_ore", {}).get("freight_units", 0.0)) or float(items.get("iron_ore", {}).get("freight_units", 0.0)) <= float(items.get("iron_ingot", {}).get("freight_units", 0.0)):
@@ -1045,6 +1046,222 @@ func _is_construction_definition(activity: Dictionary) -> bool:
 	if bool(activity.get("repeat", true)):
 		return false
 	return activity.get("effects", []).any(func(effect): return str((effect as Dictionary).get("type", "")) in ["unlock_facility", "upgrade_facility", "complete_megastructure"])
+
+
+func capital_good_usage_scenarios(item_id: String) -> Array:
+	var scenarios: Array = []
+	var megastructure_activity_ids := {}
+	for megastructure_value in megastructures.values():
+		for phase_value in (megastructure_value as Dictionary).get("phases", []):
+			var activity_id := str((phase_value as Dictionary).get("activity_id", ""))
+			if not activity_id.is_empty():
+				megastructure_activity_ids[activity_id] = true
+	for activity_value in activities.values():
+		var activity := activity_value as Dictionary
+		var activity_id := str(activity.get("id", ""))
+		if _is_construction_definition(activity) and not megastructure_activity_ids.has(activity_id) and _entries_contain_item(activity.get("costs", []), item_id):
+			scenarios.append({"kind":"CONSTRUCTION", "id":activity_id})
+	for stage_id_value in industry_rules.get("scale_stages", {}).keys():
+		var stage_id := str(stage_id_value)
+		if _entries_contain_item(industry_rules.get("scale_stages", {}).get(stage_id, {}).get("upgrade_costs", []), item_id):
+			scenarios.append({"kind":"INDUSTRY_SCALE_UPGRADE", "id":stage_id})
+	for project_id_value in industry_rules.get("capacity_upgrade_projects", {}).keys():
+		var project_id := str(project_id_value)
+		if _entries_contain_item(industry_rules.get("capacity_upgrade_projects", {}).get(project_id, {}).get("costs", []), item_id):
+			scenarios.append({"kind":"CAPACITY_UPGRADE", "id":project_id})
+	for transformation_id_value in industry_rules.get("industrial_transformations", {}).keys():
+		var transformation_id := str(transformation_id_value)
+		if _entries_contain_item(industry_rules.get("industrial_transformations", {}).get(transformation_id, {}).get("costs", []), item_id):
+			scenarios.append({"kind":"INDUSTRIAL_TRANSFORMATION", "id":transformation_id})
+	for plan_value in ship_construction_projects.values():
+		var plan := plan_value as Dictionary
+		if _entries_contain_item(plan.get("costs", []), item_id) or _entries_contain_item(plan.get("fixed_costs", []), item_id):
+			scenarios.append({"kind":"SHIPBUILDING", "id":str(plan.get("id", ""))})
+	for project_value in research_projects.values():
+		var project := project_value as Dictionary
+		if _entries_contain_item(project.get("costs", []), item_id):
+			scenarios.append({"kind":"RESEARCH_PROGRAM", "id":str(project.get("id", ""))})
+		for stage_value in project.get("stages", []):
+			var stage := stage_value as Dictionary
+			if _entries_contain_item(stage.get("costs", []), item_id):
+				scenarios.append({"kind":"RESEARCH_PHASE", "id":"%s:%s" % [project.get("id", ""), stage.get("id", "")]})
+	scenarios.sort_custom(func(a, b): return "%s:%s" % [a.get("kind", ""), a.get("id", "")] < "%s:%s" % [b.get("kind", ""), b.get("id", "")])
+	return scenarios
+
+
+func _entries_contain_item(entries: Array, item_id: String) -> bool:
+	return entries.any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id and int((entry as Dictionary).get("quantity", 0)) > 0)
+
+
+func bootstrap_reachability_snapshot(mode: String = "BOOTSTRAP") -> Dictionary:
+	var normalized_mode := mode.to_upper()
+	var contract: Dictionary = industry_rules.get("bootstrap_contract", {})
+	var reachable_items := {}
+	var reachable_facilities := {}
+	var facility_capabilities := {}
+	var allowed_technologies := {}
+	var allowed_regions := {}
+	for item_id_value in contract.get("starting_item_ids", []):
+		reachable_items[str(item_id_value)] = true
+	var extractable_field := "bootstrap_extractable_item_ids" if normalized_mode == "BOOTSTRAP" else "progression_extractable_item_ids"
+	for item_id_value in contract.get(extractable_field, []):
+		reachable_items[str(item_id_value)] = true
+	for facility_id_value in contract.get("starting_facility_ids", []):
+		_add_reachable_facility(str(facility_id_value), reachable_facilities, facility_capabilities)
+	if normalized_mode == "BOOTSTRAP":
+		for technology_id_value in contract.get("bootstrap_technology_ids", []):
+			allowed_technologies[str(technology_id_value)] = true
+		for region_id_value in contract.get("bootstrap_region_ids", []):
+			allowed_regions[str(region_id_value)] = true
+	else:
+		for technology_id_value in technologies.keys():
+			allowed_technologies[str(technology_id_value)] = true
+		for region_id_value in regions.keys():
+			allowed_regions[str(region_id_value)] = true
+	var changed := true
+	var passes := 0
+	while changed and passes < items.size() + activities.size() + facilities.size() + process_modules.size():
+		changed = false
+		passes += 1
+		for module_value in process_modules.values():
+			var module := module_value as Dictionary
+			if not _bootstrap_costs_reachable(module.get("costs", []), reachable_items) or not _bootstrap_requirements_reachable(module.get("requirements", []), allowed_technologies, allowed_regions, reachable_facilities):
+				continue
+			for facility_id_value in module.get("compatible_facilities", []):
+				var facility_id := str(facility_id_value)
+				if not reachable_facilities.has(facility_id):
+					continue
+				var capabilities: Dictionary = facility_capabilities.get(facility_id, {})
+				for capability_id_value in module.get("grants_capabilities", {}).keys():
+					var capability_id := str(capability_id_value)
+					if not capabilities.has(capability_id):
+						capabilities[capability_id] = true
+						changed = true
+				facility_capabilities[facility_id] = capabilities
+		for activity_value in activities.values():
+			var activity := activity_value as Dictionary
+			if str(activity.get("domain", "")) != "industry":
+				continue
+			var facility_id := str(activity.get("facility", ""))
+			if not reachable_facilities.has(facility_id) or not _bootstrap_requirements_reachable(activity.get("requirements", []), allowed_technologies, allowed_regions, reachable_facilities) or not _bootstrap_costs_reachable(activity.get("costs", []), reachable_items):
+				continue
+			var capabilities: Dictionary = facility_capabilities.get(facility_id, {})
+			if activity.get("required_facility_capabilities", []).any(func(value): return not capabilities.has(str(value))):
+				continue
+			if bool(activity.get("repeat", true)):
+				for field in ["rewards", "waste"]:
+					for entry_value in activity.get(field, []):
+						var item_id := str((entry_value as Dictionary).get("item", ""))
+						if not item_id.is_empty() and not reachable_items.has(item_id):
+							reachable_items[item_id] = true
+							changed = true
+			else:
+				for effect_value in activity.get("effects", []):
+					var effect := effect_value as Dictionary
+					if str(effect.get("type", "")) == "unlock_facility":
+						var unlocked_id := str(effect.get("facility", ""))
+						if not reachable_facilities.has(unlocked_id):
+							_add_reachable_facility(unlocked_id, reachable_facilities, facility_capabilities)
+							changed = true
+	var reachable_item_ids: Array = reachable_items.keys()
+	var reachable_facility_ids: Array = reachable_facilities.keys()
+	reachable_item_ids.sort()
+	reachable_facility_ids.sort()
+	return {"mode":normalized_mode, "reachable_items":reachable_item_ids, "reachable_facilities":reachable_facility_ids, "passes":passes}
+
+
+func _add_reachable_facility(facility_id: String, reachable_facilities: Dictionary, facility_capabilities: Dictionary) -> void:
+	if not facilities.has(facility_id):
+		return
+	reachable_facilities[facility_id] = true
+	var capabilities := {}
+	var facility: Dictionary = facilities[facility_id]
+	for capability_id_value in facility.get("base_capabilities", facility.get("capabilities", {})).keys():
+		capabilities[str(capability_id_value)] = true
+	facility_capabilities[facility_id] = capabilities
+
+
+func _bootstrap_costs_reachable(costs: Array, reachable_items: Dictionary) -> bool:
+	return costs.all(func(entry): return reachable_items.has(str((entry as Dictionary).get("item", ""))))
+
+
+func _bootstrap_requirements_reachable(requirements: Array, allowed_technologies: Dictionary, allowed_regions: Dictionary, reachable_facilities: Dictionary) -> bool:
+	for requirement_value in requirements:
+		for leaf_value in _requirement_leaves(requirement_value):
+			var leaf := leaf_value as Dictionary
+			match str(leaf.get("type", "")):
+				"technology":
+					if not allowed_technologies.has(str(leaf.get("id", ""))):
+						return false
+				"region":
+					if not allowed_regions.has(str(leaf.get("id", ""))):
+						return false
+				"own_facility", "facility_level":
+					if not reachable_facilities.has(str(leaf.get("id", ""))):
+						return false
+	return true
+
+
+func _validate_core_content_contract() -> void:
+	if str(pack_metadata.get("version", "")) != "1.29.0":
+		errors.append("Core content pack version must be 1.29.0")
+	for legacy_activity_id in ["build_automated_metallurgy_network", "upgrade_automated_metallurgy_network", "build_automated_electronics_network", "build_automated_assembly_network"]:
+		if activities.has(legacy_activity_id):
+			errors.append("Core content still exposes retired background-capacity activity '%s'" % legacy_activity_id)
+	for activity_value in activities.values():
+		var activity := activity_value as Dictionary
+		for effect_value in activity.get("effects", []):
+			var effect_type := str((effect_value as Dictionary).get("type", ""))
+			if effect_type in ["set_automation_rate", "configure_background_mining", "configure_industry_network", "enable_background_recipe"]:
+				errors.append("Core activity '%s' exposes forbidden background production effect '%s'" % [activity.get("id", "?"), effect_type])
+	for facility_value in facilities.values():
+		var facility := facility_value as Dictionary
+		for capability_id_value in facility.get("capabilities", {}).keys():
+			if str(capability_id_value).begins_with("background_"):
+				errors.append("Core facility '%s' exposes forbidden background production capability" % facility.get("id", "?"))
+	var contract: Dictionary = industry_rules.get("bootstrap_contract", {})
+	for item_field in ["starting_item_ids", "bootstrap_extractable_item_ids", "progression_extractable_item_ids", "required_bootstrap_items", "required_progression_items"]:
+		for item_id_value in contract.get(item_field, []):
+			if not items.has(str(item_id_value)):
+				errors.append("Bootstrap contract field '%s' references missing item '%s'" % [item_field, item_id_value])
+	for facility_id_value in contract.get("starting_facility_ids", []):
+		if not facilities.has(str(facility_id_value)):
+			errors.append("Bootstrap contract references missing facility '%s'" % facility_id_value)
+	for ship_id_value in contract.get("starting_ship_ids", []):
+		if not ships.has(str(ship_id_value)) or int(ships.get(str(ship_id_value), {}).get("cargo_capacity", 0)) <= 0:
+			errors.append("Bootstrap contract requires a missing or cargo-incapable starting ship '%s'" % ship_id_value)
+	var bootstrap_snapshot := bootstrap_reachability_snapshot("BOOTSTRAP")
+	var bootstrap_items := {}
+	var bootstrap_facilities := {}
+	var bootstrap_technologies := {}
+	var bootstrap_regions := {}
+	for item_id_value in bootstrap_snapshot.get("reachable_items", []):
+		bootstrap_items[str(item_id_value)] = true
+	for facility_id_value in bootstrap_snapshot.get("reachable_facilities", []):
+		bootstrap_facilities[str(facility_id_value)] = true
+	for technology_id_value in contract.get("bootstrap_technology_ids", []):
+		bootstrap_technologies[str(technology_id_value)] = true
+	for region_id_value in contract.get("bootstrap_region_ids", []):
+		bootstrap_regions[str(region_id_value)] = true
+	for technology_id_value in contract.get("bootstrap_technology_ids", []):
+		var technology_id := str(technology_id_value)
+		var granting_projects: Array = research_projects.values().filter(func(value): return str((value as Dictionary).get("grants_technology", "")) == technology_id)
+		if granting_projects.is_empty():
+			errors.append("Bootstrap milestone Technology '%s' has no R&D Program source" % technology_id)
+			continue
+		var project_reachable := granting_projects.any(func(value):
+			var project := value as Dictionary
+			return _bootstrap_costs_reachable(project.get("costs", []), bootstrap_items) and _bootstrap_requirements_reachable(project.get("requirements", []), bootstrap_technologies, bootstrap_regions, bootstrap_facilities)
+		)
+		if not project_reachable:
+			errors.append("New-save bootstrap cannot fund or host the R&D Program for Technology '%s'" % technology_id)
+	for item_id_value in contract.get("required_bootstrap_items", []):
+		if not bootstrap_snapshot.get("reachable_items", []).has(str(item_id_value)):
+			errors.append("New-save bootstrap cannot reach required product '%s'" % item_id_value)
+	var progression_snapshot := bootstrap_reachability_snapshot("PROGRESSION")
+	for item_id_value in contract.get("required_progression_items", []):
+		if not progression_snapshot.get("reachable_items", []).has(str(item_id_value)):
+			errors.append("Core production graph cannot reach capital good '%s' from new-save sources" % item_id_value)
 
 
 func _validate_closed_economy() -> void:
