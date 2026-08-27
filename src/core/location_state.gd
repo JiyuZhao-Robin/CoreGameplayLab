@@ -14,6 +14,22 @@ const DEFAULT_STORAGE_CAPACITIES := {"BULK":400000, "COMPONENT":300000, "FLUID":
 const EMPTY_STORAGE_CAPACITIES := {"BULK":0, "COMPONENT":0, "FLUID":0, "SPECIAL":0}
 
 
+static func environment_condition_met(environment: Dictionary, condition: Dictionary) -> bool:
+	var field := str(condition.get("field", ""))
+	if field.is_empty() or not environment.has(field):
+		return false
+	var actual: Variant = environment.get(field)
+	var expected: Variant = condition.get("value")
+	match str(condition.get("operator", "EQ")):
+		"EQ": return actual == expected
+		"LT": return float(actual) < float(expected)
+		"LTE": return float(actual) <= float(expected)
+		"GT": return float(actual) > float(expected)
+		"GTE": return float(actual) >= float(expected)
+		"IN": return expected is Array and expected.has(actual)
+	return false
+
+
 static func create(location_id: String, location_type: String, system_id: String, known: bool) -> Dictionary:
 	var is_founding_base := location_id == "earth_orbit"
 	var storage_capacities := DEFAULT_STORAGE_CAPACITIES.duplicate(true) if is_founding_base else EMPTY_STORAGE_CAPACITIES.duplicate(true)

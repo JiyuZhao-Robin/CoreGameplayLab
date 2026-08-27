@@ -1300,28 +1300,6 @@ func _detach_template_policy(working_state: SpaceGameState, location_id: String,
 		automation["status"] = "CUSTOMIZED"
 
 
-func set_background_target(item_id: String, quantity: int) -> bool:
-	if not content.items.has(item_id):
-		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	transaction.working_state.set_background_target(item_id, quantity)
-	last_notice = I18n.t("notice.background_target", "Background target updated: %s → %d") % [I18n.content(content.items[item_id]), maxi(0, quantity)]
-	transaction.record({"type":"BackgroundTargetChanged", "item_id":item_id, "quantity":maxi(0, quantity)})
-	_commit_transaction(transaction)
-	return true
-
-
-func set_background_priority(item_id: String, priority: int) -> bool:
-	if not content.items.has(item_id):
-		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	transaction.working_state.set_background_priority(item_id, priority)
-	last_notice = I18n.t("notice.background_priority", "Background priority updated: %s → %d") % [I18n.content(content.items[item_id]), clampi(priority, 0, 100)]
-	transaction.record({"type":"BackgroundPriorityChanged", "item_id":item_id, "priority":clampi(priority, 0, 100)})
-	_commit_transaction(transaction)
-	return true
-
-
 func set_advanced_power_priority(facility_id: String, priority: String) -> bool:
 	if not content.facilities.has(facility_id):
 		return _reject(I18n.t("notice.facility_missing", "Unknown infrastructure facility"))
@@ -1775,6 +1753,113 @@ func reset_game() -> void:
 	state_changed.emit()
 
 
+func guidance_snapshot() -> Dictionary:
+	for goal_value in content.goals.values():
+		var goal := goal_value as Dictionary
+		if not simulation.definition_revealed(state, goal) or _requirements_met(goal.get("requirements", [])):
+			continue
+		for step_value in goal.get("steps", []):
+			var step := step_value as Dictionary
+			if _requirements_met(step.get("requirements", [])):
+				continue
+			var requirement := _first_actionable_requirement(step.get("requirements", []))
+			var page := str(step.get("view", "overview"))
+			if page == "infrastructure":
+				page = "industry"
+			var location_id := SpaceGameState.MAIN_BASE_LOCATION_ID
+			if str(requirement.get("type", "")) in ["region", "survey_state"] and content.regions.has(str(requirement.get("id", ""))):
+				location_id = str(requirement.get("id", ""))
+			return {
+				"goal_id":str(goal.get("id", "")),
+				"step_id":str(step.get("id", "")),
+				"page":page,
+				"section":_guidance_section(page, requirement),
+				"location_id":location_id,
+				"focus_entity_id":str(requirement.get("id", step.get("id", ""))),
+				"reason":requirement_text(requirement),
+				"requirement":requirement.duplicate(true),
+				"acquisition_path":_guidance_acquisition_path(requirement)
+			}
+	return {
+		"goal_id":"core_complete",
+		"step_id":"economy_review",
+		"page":"industry",
+		"section":"diagnostics",
+		"location_id":SpaceGameState.MAIN_BASE_LOCATION_ID,
+		"focus_entity_id":"current_economy_analysis",
+		"reason":I18n.t("guidance.core_complete", "Core progression is complete; review diagnostics and the industrial ledger."),
+		"requirement":{},
+		"acquisition_path":[]
+	}
+
+
+func _requirements_met(requirements: Array) -> bool:
+	return requirements.all(func(requirement): return simulation.requirement_met(state, requirement as Dictionary))
+
+
+func _first_actionable_requirement(requirements: Array) -> Dictionary:
+	for requirement_value in requirements:
+		var requirement := requirement_value as Dictionary
+		if simulation.requirement_met(state, requirement):
+			continue
+		if str(requirement.get("op", "")) in ["OR", "AND"]:
+			var nested := _first_actionable_requirement(requirement.get("children", []))
+			if not nested.is_empty():
+				return nested
+		return requirement
+	return {}
+
+
+func _guidance_section(page: String, requirement: Dictionary) -> String:
+	if page == "location":
+		return "overview"
+	if page != "industry":
+		return ""
+	match str(requirement.get("type", "")):
+		"own_facility", "facility_level", "infrastructure_site": return "construction"
+		"manufacturing_module_installed": return "facilities"
+		"activity_complete":
+			var activity: Dictionary = content.activities.get(str(requirement.get("id", "")), {})
+			return "construction" if simulation.is_construction_activity(activity) else "production"
+	return "diagnostics"
+
+
+func _guidance_acquisition_path(requirement: Dictionary) -> Array:
+	var requirement_type := str(requirement.get("type", ""))
+	var focus_item_id := ""
+	var path_prefix: Array = []
+	if requirement_type == "item":
+		focus_item_id = str(requirement.get("id", ""))
+	elif requirement_type == "activity_complete":
+		var activity_id := str(requirement.get("id", ""))
+		var activity: Dictionary = content.activities.get(activity_id, {})
+		path_prefix.append({"kind":"ACTIVITY", "id":activity_id})
+		for cost_value in activity.get("costs", []):
+			var cost := cost_value as Dictionary
+			var item_id := str(cost.get("item", ""))
+			if state.available_item_quantity(item_id) < int(cost.get("quantity", 0)):
+				focus_item_id = item_id
+				break
+	elif requirement_type in ["own_facility", "facility_level"]:
+		var facility_id := str(requirement.get("id", ""))
+		for activity_value in content.activities.values():
+			var activity := activity_value as Dictionary
+			if activity.get("effects", []).any(func(effect): return str((effect as Dictionary).get("type", "")) == "unlock_facility" and str((effect as Dictionary).get("facility", "")) == facility_id):
+				path_prefix.append({"kind":"ACTIVITY", "id":str(activity.get("id", ""))})
+				for cost_value in activity.get("costs", []):
+					var cost := cost_value as Dictionary
+					var item_id := str(cost.get("item", ""))
+					if state.available_item_quantity(item_id) < int(cost.get("quantity", 0)):
+						focus_item_id = item_id
+						break
+				break
+	if focus_item_id.is_empty():
+		return path_prefix
+	var trace: Dictionary = simulation.shortest_bottleneck_chain(state, focus_item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	path_prefix.append_array(trace.get("shortest_chain", []))
+	return path_prefix
+
+
 func requirement_text(requirement: Dictionary) -> String:
 	var met := simulation.requirement_met(state, requirement)
 	var marker := "✓" if met else "○"
@@ -1828,12 +1913,33 @@ func requirement_text(requirement: Dictionary) -> String:
 			var module: Dictionary = content.process_modules.get(module_id, content.universal_industry_plugins.get(module_id, requirement))
 			var facility_id := str(requirement.get("facility", ""))
 			return I18n.t("requirement.manufacturing_module", "%s Manufacturing module: %s → %s") % [marker, I18n.content(module), I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))]
+		"survey_state":
+			var location_id := str(requirement.get("id", ""))
+			var current_state := str(state.location_state(location_id).get("survey_state", LocationState.UNKNOWN))
+			var target_state := str(requirement.get("state", LocationState.SURVEYED))
+			var location_name := I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id}))
+			return I18n.t("requirement.survey_state", "%s Survey state: %s (%s / %s)") % [marker, location_name, I18n.status(current_state), I18n.status(target_state)]
+		"mining_site_available":
+			var site_id := str(requirement.get("id", ""))
+			return I18n.t("requirement.mining_site_available", "%s Permanent extraction site available: %s") % [marker, I18n.content(content.mining_sites.get(site_id, {"id":site_id, "name":site_id}))]
+		"mining_sites_mastered":
+			var region_id := str(requirement.get("region", ""))
+			var target_count := int(requirement.get("count", 1))
+			var target_level := int(requirement.get("level", 1))
+			var current_count := state.mastered_mining_site_count(region_id, target_level)
+			var region_name := I18n.content(content.regions.get(region_id, {"id":region_id, "name":region_id}))
+			return I18n.t("requirement.mining_sites_mastered", "%s Mastered extraction sites in %s at Lv.%d: %d / %d") % [marker, region_name, target_level, current_count, target_count]
 		"infrastructure_site":
 			return I18n.t("requirement.site", "%s Infrastructure Site: %s") % [marker, str(requirement.get("id", "")).replace("_", " ").capitalize()]
 		"boss_defeated":
 			return I18n.t("requirement.boss", "%s Boss defeated: %s") % [marker, I18n.content(content.enemies.get(str(requirement.get("id", "")), requirement))]
 		"megastructure":
 			return I18n.t("requirement.megastructure", "%s Megastructure: %s") % [marker, I18n.content(content.megastructures.get(str(requirement.get("id", "")), requirement))]
+		"megastructure_phase":
+			var megastructure_id := str(requirement.get("id", ""))
+			var current_phase := int(state.megastructure_projects.get(megastructure_id, {}).get("phase_index", 0))
+			var target_phase := int(requirement.get("phase", 0))
+			return I18n.t("requirement.megastructure_phase", "%s Megastructure phase: %s %d / %d") % [marker, I18n.content(content.megastructures.get(megastructure_id, {"id":megastructure_id, "name":megastructure_id})), current_phase, target_phase]
 		"game_complete":
 			return I18n.t("requirement.game_complete", "%s Commission the Stellar Energy Megastructure") % marker
 	return I18n.t("requirement.unknown", "%s Unknown requirement") % marker

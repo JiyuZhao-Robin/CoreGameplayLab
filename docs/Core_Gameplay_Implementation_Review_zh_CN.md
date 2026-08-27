@@ -1,11 +1,13 @@
 # 《Helios / Space Idle》核心玩法实现审计与扩展评审稿
 
+> 历史审计归档：本文记录 `1.21.0 / schema 27` 基线，不再代表当前实现。当前 `1.29.0 / schema 35` 的权威状态见[实现状态](./implementation-status.md)、[当前架构](./current-architecture.md)与[剩余工作 Ledger](./remaining-work.md)。
+
 > 审计时间：2026-08-26  
 > 审计对象：当前工作区代码、`data/content.json`、中文本地化、自动化测试，以及 `designFile/Space_Idle_Design_Mindmap_v02.xmind`  
 > 项目版本：`1.21.0-core-rules`，存档结构版本 `27`  
 > 文档目的：准确记录玩家当前实际上能使用的核心玩法，区分“已经实现”“底层存在但体验未完成”“尚未实现”，并据此评审后续最有价值的扩展。
 
-> 已确认的后续目标请以[正式设计方向](./Design_Direction_zh_CN.md)为准。本文件继续作为当前实现审计，不把尚未落地的目标写成现有功能。
+> 本文件只用于追溯旧架构和迁移背景，不应用于判断当前功能是否完成。
 
 ## 快速导航
 

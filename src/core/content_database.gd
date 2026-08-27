@@ -362,8 +362,6 @@ func validate() -> void:
 				errors.append("%s references missing region" % label)
 			if effect_type == "unlock_facility" and not facilities.has(str(effect.get("facility", ""))):
 				errors.append("%s references missing facility" % label)
-			if effect_type == "set_automation_rate" and not items.has(str(effect.get("item", ""))):
-				errors.append("%s automates a missing item" % label)
 	for activity_id in construction_engineering_requirements:
 		if not activities.has(str(activity_id)):
 			errors.append("construction engineering map references missing activity '%s'" % activity_id)
@@ -867,15 +865,23 @@ func _apply_freight_profiles() -> void:
 			profile["freight_class"] = item.get("freight_class")
 		if item.has("freight_units"):
 			profile["freight_units"] = item.get("freight_units")
+		if item.has("cargo_mass"):
+			profile["cargo_mass"] = item.get("cargo_mass")
+		if item.has("cargo_volume"):
+			profile["cargo_volume"] = item.get("cargo_volume")
 		item["freight_class"] = str(profile.get("freight_class", ""))
 		item["freight_units"] = float(profile.get("freight_units", 0.0))
+		item["cargo_mass"] = float(profile.get("cargo_mass", 0.0))
+		item["cargo_volume"] = float(profile.get("cargo_volume", 0.0))
 
 
 func item_freight_profile(item_id: String) -> Dictionary:
 	var item: Dictionary = items.get(item_id, {})
 	return {
 		"freight_class":str(item.get("freight_class", "STANDARD")),
-		"freight_units":maxf(0.001, float(item.get("freight_units", 1.0)))
+		"freight_units":maxf(0.001, float(item.get("freight_units", 1.0))),
+		"cargo_mass":maxf(0.001, float(item.get("cargo_mass", item.get("freight_units", 1.0)))),
+		"cargo_volume":maxf(0.001, float(item.get("cargo_volume", item.get("freight_units", 1.0))))
 	}
 
 
@@ -981,8 +987,8 @@ func _validate_fourth_phase_freight_contract() -> void:
 		errors.append("Phase-four Freight Classes must define the approved six-class order")
 	for item_value in items.values():
 		var item := item_value as Dictionary
-		if str(item.get("freight_class", "")) not in required_classes or float(item.get("freight_units", 0.0)) <= 0.0:
-			errors.append("Item '%s' must resolve to a valid positive Freight profile" % item.get("id", "?"))
+		if str(item.get("freight_class", "")) not in required_classes or float(item.get("freight_units", 0.0)) <= 0.0 or float(item.get("cargo_mass", 0.0)) <= 0.0 or float(item.get("cargo_volume", 0.0)) <= 0.0:
+			errors.append("Item '%s' must resolve to a valid positive Freight, mass and volume profile" % item.get("id", "?"))
 	for required_mode_id in ["general_cargo", "bulk_tug", "mass_driver", "cryogenic_carrier", "express_courier"]:
 		if not transport_modes.has(required_mode_id):
 			errors.append("Phase-four is missing required Transport Mode '%s'" % required_mode_id)
@@ -1023,6 +1029,10 @@ func _validate_fourth_phase_freight_contract() -> void:
 		for key in ["capacity_multiplier", "transit_time_multiplier", "handling_time_multiplier", "propellant_multiplier", "energy_per_freight_unit", "maintenance_multiplier"]:
 			if float(mode.get(key, -1.0)) < 0.0:
 				errors.append("Transport Mode '%s' has invalid %s" % [mode.get("id", "?"), key])
+		for condition_value in mode.get("environment_requirements", []):
+			var condition := condition_value as Dictionary
+			if str(condition.get("field", "")) not in ["gravity", "vacuum", "atmosphere", "solar_flux", "thermal_environment", "radiation", "radiation_level", "transport_distance", "construction_difficulty"] or str(condition.get("operator", "EQ")) not in ["EQ", "LT", "LTE", "GT", "GTE", "IN"]:
+				errors.append("Transport Mode '%s' has an invalid environment condition" % mode.get("id", "?"))
 		if bool(mode.get("infrastructure_service", false)):
 			infrastructure_modes += 1
 		else:

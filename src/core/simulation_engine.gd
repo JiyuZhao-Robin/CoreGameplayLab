@@ -384,19 +384,7 @@ func _difficulty_band(value: float) -> String:
 
 
 func environment_condition_met(environment: Dictionary, condition: Dictionary) -> bool:
-	var field := str(condition.get("field", ""))
-	if field.is_empty() or not environment.has(field):
-		return false
-	var actual: Variant = environment.get(field)
-	var expected: Variant = condition.get("value")
-	match str(condition.get("operator", "EQ")):
-		"EQ": return actual == expected
-		"LT": return float(actual) < float(expected)
-		"LTE": return float(actual) <= float(expected)
-		"GT": return float(actual) > float(expected)
-		"GTE": return float(actual) >= float(expected)
-		"IN": return expected is Array and expected.has(actual)
-	return false
+	return LocationState.environment_condition_met(environment, condition)
 
 
 func environment_requirements_met(state: SpaceGameState, location_id: String, requirements: Array) -> bool:
@@ -1185,6 +1173,18 @@ func current_economy_analysis(state: SpaceGameState, location_id: String = Space
 
 func target_throughput_plan(state: SpaceGameState, targets: Dictionary, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
 	return economy_planner.plan_targets(state, targets, location_id)
+
+
+func ship_per_month_plan(state: SpaceGameState, ship_plan_id: String, ships_per_month: float, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
+	return economy_planner.plan_ship_per_month(state, ship_plan_id, ships_per_month, location_id)
+
+
+func research_phase_plan(state: SpaceGameState, project_id: String, phase_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
+	return economy_planner.plan_research_phase(state, project_id, phase_id, location_id)
+
+
+func megastructure_phase_plan(state: SpaceGameState, megastructure_id: String, phase_id: String, location_id: String = "") -> Dictionary:
+	return economy_planner.plan_megastructure_phase(state, megastructure_id, phase_id, location_id)
 
 
 func shortest_bottleneck_chain(state: SpaceGameState, product_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID, target_rate: float = 0.0) -> Dictionary:
@@ -4582,220 +4582,6 @@ func _energy_maintenance_snapshot(state: SpaceGameState) -> Array:
 	return rows
 
 
-func _background_automation_enabled_for_item(state: SpaceGameState, item_id: String) -> bool:
-	for family_value in state.background_economy.get("industry_networks", {}).keys():
-		var family := str(family_value)
-		var network: Dictionary = state.background_economy["industry_networks"].get(family, {})
-		if not bool(network.get("enabled", true)):
-			continue
-		for recipe_value in network.get("recipes", {}).keys():
-			var recipe_id := str(recipe_value)
-			if not bool(network.get("recipes", {}).get(recipe_id, {}).get("enabled", true)):
-				continue
-			var recipe: Dictionary = content.activities.get(recipe_id, {})
-			if _primary_reward_item(recipe) != item_id or not _background_recipe_eligible(state, family, recipe):
-				continue
-			var inputs_ready := true
-			for cost in recipe.get("costs", []):
-				if state.available_item_quantity(str(cost.get("item", ""))) < int(cost.get("quantity", 0)):
-					inputs_ready = false
-					break
-			if inputs_ready:
-				return true
-	return false
-
-
-func _progress_background_economy(state: SpaceGameState, elapsed_ms: float) -> void:
-	if elapsed_ms <= 0.0:
-		return
-	var background: Dictionary = state.background_economy
-	var fractions: Dictionary = background.get("fractional", {})
-	var produced_totals: Dictionary = background.get("production_totals", {})
-	var consumed_totals: Dictionary = background.get("consumption_totals", {})
-	var mining_potential := {}
-
-	# Mature mining infrastructure is a stable source and does not occupy an
-	# Active Frontier Mining slot or a ship. Potential output is made available
-	# to background consumers for the whole batch, then unused excess above the
-	# stock target is discarded. This preserves continuous offline flow without
-	# replaying seconds or banking idle capacity.
-	for item_id in background.get("mining_sources", {}):
-		var source: Dictionary = background["mining_sources"][item_id]
-		if not bool(source.get("enabled", true)):
-			continue
-		var source_facility_id := str(source.get("facility_id", ""))
-		var source_multiplier := facility_output_multiplier(state, source_facility_id)
-		var fraction_key := "mining:%s" % item_id
-		var total := float(fractions.get(fraction_key, 0.0)) + float(source.get("per_second", 0.0)) * source_multiplier * simulation_speed_multiplier("mining") * elapsed_ms / 1000.0
-		var potential := int(floor(total))
-		if potential > 0:
-			state.location_inventory()[item_id] = state.item_quantity(str(item_id)) + potential
-			mining_potential[item_id] = potential
-			total -= float(potential)
-		fractions[fraction_key] = total
-
-	# Background industry owns separate capacity. Priority only chooses which
-	# under-target mature recipe receives that capacity first.
-	var family_ids: Array = background.get("industry_networks", {}).keys()
-	family_ids.sort()
-	for family_value in family_ids:
-		var family := str(family_value)
-		var network: Dictionary = background["industry_networks"][family]
-		if not bool(network.get("enabled", true)):
-			continue
-		var network_facility_id := str(network.get("facility_id", ""))
-		var capacity := maxf(0.0, float(network.get("capacity_per_second", 0.0))) * facility_output_multiplier(state, network_facility_id) * simulation_speed_multiplier("automation")
-		if capacity <= 0.0:
-			continue
-		var work_key := "industry:%s" % family
-		var available_work := float(fractions.get(work_key, 0.0)) + capacity * elapsed_ms / 1000.0
-		var recipe_ids: Array = network.get("recipes", {}).keys()
-		recipe_ids.sort_custom(func(a, b):
-			var a_item := _primary_reward_item(content.activities.get(str(a), {}))
-			var b_item := _primary_reward_item(content.activities.get(str(b), {}))
-			var a_priority := int(background.get("priorities", {}).get(a_item, 50))
-			var b_priority := int(background.get("priorities", {}).get(b_item, 50))
-			return a_priority > b_priority if a_priority != b_priority else str(a) < str(b)
-		)
-		var smallest_work := INF
-		for recipe_value in recipe_ids:
-			var recipe_id := str(recipe_value)
-			var recipe_config: Dictionary = network.get("recipes", {}).get(recipe_id, {})
-			if not bool(recipe_config.get("enabled", true)):
-				continue
-			var recipe: Dictionary = content.activities.get(recipe_id, {})
-			if recipe.is_empty() or str(recipe.get("domain", "")) != "industry":
-				continue
-			if not _background_recipe_eligible(state, family, recipe):
-				continue
-			var work_required := maxf(0.001, float(recipe.get("work_required", 1.0)))
-			smallest_work = minf(smallest_work, work_required)
-			var reward_item := _primary_reward_item(recipe)
-			var reward_quantity := _primary_reward_quantity(recipe)
-			if reward_item.is_empty() or reward_quantity <= 0:
-				continue
-			var target := int(background.get("targets", {}).get(reward_item, 0))
-			if target <= 0:
-				continue
-			var deficit := maxi(0, target - state.item_quantity(reward_item))
-			var runs := mini(int(floor(available_work / work_required)), int(ceil(float(deficit) / float(reward_quantity))))
-			for cost in recipe.get("costs", []):
-				var cost_quantity := int(cost.get("quantity", 0))
-				if cost_quantity > 0:
-					runs = mini(runs, state.available_item_quantity(str(cost.get("item", ""))) / cost_quantity)
-			if runs <= 0:
-				continue
-			for cost in recipe.get("costs", []):
-				var cost_item := str(cost.get("item", ""))
-				var consumed := int(cost.get("quantity", 0)) * runs
-				state.remove_item(cost_item, consumed)
-				consumed_totals[cost_item] = int(consumed_totals.get(cost_item, 0)) + consumed
-			var produced := mini(deficit, reward_quantity * runs)
-			state.add_item(reward_item, produced)
-			produced_totals[reward_item] = int(produced_totals.get(reward_item, 0)) + produced
-			available_work -= work_required * float(runs)
-			if available_work < 0.001:
-				break
-		# Idle capacity is not banked. Only sub-cycle fractional work survives.
-		fractions[work_key] = available_work if smallest_work == INF else fmod(maxf(0.0, available_work), smallest_work)
-	for item_id in mining_potential:
-		var potential := int(mining_potential[item_id])
-		var target := int(background.get("targets", {}).get(item_id, 0))
-		var discarded := 0
-		if target > 0:
-			discarded = mini(potential, maxi(0, state.item_quantity(str(item_id)) - target))
-			if discarded > 0:
-				state.location_inventory()[item_id] = state.item_quantity(str(item_id)) - discarded
-		var actual := potential - discarded
-		if actual > 0:
-			state.statistics["items_produced"] = int(state.statistics.get("items_produced", 0)) + actual
-			produced_totals[item_id] = int(produced_totals.get(item_id, 0)) + actual
-	background["fractional"] = fractions
-	background["production_totals"] = produced_totals
-	background["consumption_totals"] = consumed_totals
-	state.background_economy = background
-
-
-func background_economy_snapshot(state: SpaceGameState) -> Array:
-	var rows := {}
-	var background: Dictionary = state.background_economy
-	for item_id in background.get("mining_sources", {}):
-		var source: Dictionary = background["mining_sources"][item_id]
-		var source_facility_id := str(source.get("facility_id", ""))
-		if bool(source.get("enabled", true)):
-			_add_flow(rows, str(item_id), float(source.get("per_second", 0.0)) * facility_output_multiplier(state, source_facility_id) * simulation_speed_multiplier("mining") * 3600.0, 0.0)
-	for item_id in state.automation.get("rates", {}):
-		_add_flow(rows, str(item_id), float(state.automation.rates[item_id]) * simulation_speed_multiplier("automation") * 3600.0, 0.0)
-	for maintenance in _energy_maintenance_snapshot(state):
-		_add_flow(rows, str(maintenance.get("item_id", "")), 0.0, float(maintenance.get("demand_per_hour", 0.0)))
-	for family in background.get("industry_networks", {}):
-		var network: Dictionary = background["industry_networks"][family]
-		if not bool(network.get("enabled", true)):
-			continue
-		var network_facility_id := str(network.get("facility_id", ""))
-		var selected := _selected_background_recipe(state, str(family), network)
-		if selected.is_empty():
-			continue
-		var work_required := maxf(0.001, float(selected.get("work_required", 1.0)))
-		var runs_per_hour := float(network.get("capacity_per_second", 0.0)) * facility_output_multiplier(state, network_facility_id) * simulation_speed_multiplier("automation") * 3600.0 / work_required
-		for reward in selected.get("rewards", []):
-			_add_flow(rows, str(reward.get("item", "")), float(reward.get("quantity", 0)) * runs_per_hour, 0.0)
-		for cost in selected.get("costs", []):
-			_add_flow(rows, str(cost.get("item", "")), 0.0, float(cost.get("quantity", 0)) * runs_per_hour)
-	for item_id in background.get("targets", {}):
-		if not rows.has(item_id):
-			rows[item_id] = {"production_per_hour":0.0, "demand_per_hour":0.0}
-	var result: Array = []
-	for item_id in rows:
-		var row: Dictionary = rows[item_id]
-		row["item_id"] = str(item_id)
-		row["net_per_hour"] = float(row.get("production_per_hour", 0.0)) - float(row.get("demand_per_hour", 0.0))
-		row["stock"] = state.item_quantity(str(item_id))
-		row["target"] = int(background.get("targets", {}).get(item_id, 0))
-		row["priority"] = int(background.get("priorities", {}).get(item_id, 50))
-		row["maturity"] = state.resource_maturity_state(str(item_id))
-		row["attention"] = int(row["target"]) > 0 and int(row["stock"]) < int(row["target"]) and float(row["net_per_hour"]) <= 0.0
-		result.append(row)
-	result.sort_custom(func(a, b): return str(a.get("item_id", "")) < str(b.get("item_id", "")))
-	return result
-
-
-func _selected_background_recipe(state: SpaceGameState, family: String, network: Dictionary) -> Dictionary:
-	var candidates: Array = []
-	for recipe_id in network.get("recipes", {}):
-		if not bool(network.get("recipes", {}).get(recipe_id, {}).get("enabled", true)):
-			continue
-		var recipe: Dictionary = content.activities.get(str(recipe_id), {})
-		if not _background_recipe_eligible(state, family, recipe):
-			continue
-		var item_id := _primary_reward_item(recipe)
-		var target := int(state.background_economy.get("targets", {}).get(item_id, 0))
-		if target > state.item_quantity(item_id):
-			candidates.append(recipe)
-	if candidates.is_empty():
-		return {}
-	candidates.sort_custom(func(a, b):
-		var a_item := _primary_reward_item(a)
-		var b_item := _primary_reward_item(b)
-		var a_priority := int(state.background_economy.get("priorities", {}).get(a_item, 50))
-		var b_priority := int(state.background_economy.get("priorities", {}).get(b_item, 50))
-		return a_priority > b_priority if a_priority != b_priority else str(a.get("id", "")) < str(b.get("id", ""))
-	)
-	return candidates[0]
-
-
-func _background_recipe_eligible(state: SpaceGameState, family: String, recipe: Dictionary) -> bool:
-	if recipe.is_empty() or not bool(recipe.get("automation_eligible", false)):
-		return false
-	if str(recipe.get("automation_category", recipe.get("production_family", ""))) != family:
-		return false
-	var unlock := str(recipe.get("automation_unlock", ""))
-	if not unlock.is_empty() and not bool(state.technologies.get(unlock, false)):
-		return false
-	var reward_item := _primary_reward_item(recipe)
-	return not reward_item.is_empty() and state.resource_maturity_state(reward_item) in ["MANAGED", "BACKGROUND"]
-
-
 func _add_flow(rows: Dictionary, item_id: String, production: float, demand: float) -> void:
 	if item_id.is_empty():
 		return
@@ -4803,16 +4589,6 @@ func _add_flow(rows: Dictionary, item_id: String, production: float, demand: flo
 	row["production_per_hour"] = float(row.get("production_per_hour", 0.0)) + production
 	row["demand_per_hour"] = float(row.get("demand_per_hour", 0.0)) + demand
 	rows[item_id] = row
-
-
-func _primary_reward_item(activity: Dictionary) -> String:
-	var rewards: Array = activity.get("rewards", [])
-	return str(rewards[0].get("item", "")) if not rewards.is_empty() else ""
-
-
-func _primary_reward_quantity(activity: Dictionary) -> int:
-	var rewards: Array = activity.get("rewards", [])
-	return int(rewards[0].get("quantity", 0)) if not rewards.is_empty() else 0
 
 
 func initialize_research_program(state: SpaceGameState, project: Dictionary, route_id: String = "", supplemental_route: bool = false) -> void:

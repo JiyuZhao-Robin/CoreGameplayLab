@@ -32,6 +32,7 @@ var _logistics_item_selection := {}
 var _planner_product_id := ""
 var _planner_target_rate := 1.0
 var _planner_result: Dictionary = {}
+var _planner_target_label := ""
 
 
 func _ready() -> void:
@@ -784,7 +785,7 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 		for item_value in shipment.get("cargo", {}).keys():
 			var item_id := String(item_value)
 			cargo_lines.append("%s × %d" % [_content_name(Game.content.items.get(item_id, {}), item_id), int(shipment.get("cargo", {}).get(item_id, 0))])
-		box.add_child(_card_text("%s · %s → %s · 剩余 %.1f 秒（装卸 %.1f 秒）· %s · %s %.1f 货运体积 · 能耗 %.1f\n%s" % [shipment.get("id", "运输批次"), _location_name(String(shipment.get("origin", ""))), _location_name(String(shipment.get("destination", ""))), float(shipment.get("remaining_ms", 0.0)) / 1000.0, float(shipment.get("handling_time_ms", 0.0)) / 1000.0, _status_text(String(shipment.get("logistics_technology_id", "chemical_cargo"))), String(shipment.get("freight_class", "STANDARD")), float(shipment.get("freight_units", 0.0)), float(shipment.get("energy_units", 0.0)), "、".join(cargo_lines)], COLOR_ACCENT))
+		box.add_child(_card_text("%s · %s → %s · 剩余 %.1f 秒（装卸 %.1f 秒）· %s · %s · 质量 %.1f / 体积 %.1f · 能耗 %.1f\n%s" % [shipment.get("id", "运输批次"), _location_name(String(shipment.get("origin", ""))), _location_name(String(shipment.get("destination", ""))), float(shipment.get("remaining_ms", 0.0)) / 1000.0, float(shipment.get("handling_time_ms", 0.0)) / 1000.0, _status_text(String(shipment.get("logistics_technology_id", "chemical_cargo"))), String(shipment.get("freight_class", "STANDARD")), float(shipment.get("cargo_mass", shipment.get("freight_units", 0.0))), float(shipment.get("cargo_volume", shipment.get("freight_units", 0.0))), float(shipment.get("energy_units", 0.0)), "、".join(cargo_lines)], COLOR_ACCENT))
 	if not shipment_found:
 		box.add_child(_card_text("当前没有在途运输", COLOR_MUTED))
 
@@ -1335,6 +1336,53 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 	planner_controls.add_child(_labeled_control("单位/小时", target_input))
 	planner_controls.add_child(_button("计算（只读）", _run_read_only_plan.bind(selector, product_ids, target_input), product_ids.is_empty(), COLOR_ACCENT))
 	box.add_child(planner_controls)
+
+	var ship_plan_ids: Array = Game.content.ship_construction_projects.keys()
+	ship_plan_ids.sort()
+	var ship_selector := OptionButton.new()
+	for ship_plan_id_value in ship_plan_ids:
+		var ship_plan_id := String(ship_plan_id_value)
+		ship_selector.add_item(_content_name(Game.content.ship_construction_projects.get(ship_plan_id, {}), ship_plan_id))
+	var ship_rate := _number_input(1, 1, 1000, 1)
+	var ship_controls := HFlowContainer.new()
+	ship_controls.add_theme_constant_override("h_separation", 6)
+	ship_controls.add_child(_labeled_control("舰船型号", ship_selector))
+	ship_controls.add_child(_labeled_control("艘/月", ship_rate))
+	ship_controls.add_child(_button("规划舰船产率", _run_ship_read_only_plan.bind(ship_selector, ship_plan_ids, ship_rate), ship_plan_ids.is_empty(), COLOR_ACCENT))
+	box.add_child(ship_controls)
+
+	var research_targets: Array = []
+	var research_project_ids: Array = Game.content.research_projects.keys()
+	research_project_ids.sort()
+	var research_selector := OptionButton.new()
+	for project_id_value in research_project_ids:
+		var project_id := String(project_id_value)
+		var project: Dictionary = Game.content.research_projects.get(project_id, {})
+		if not Game.simulation.definition_revealed(Game.state, project):
+			continue
+		for stage_value in Game.simulation.research_stages(project):
+			var stage := stage_value as Dictionary
+			research_targets.append({"project_id":project_id, "phase_id":String(stage.get("id", ""))})
+			research_selector.add_item("%s · %s" % [_content_name(project, project_id), _content_name(stage, String(stage.get("id", "")))])
+	var research_controls := HFlowContainer.new()
+	research_controls.add_theme_constant_override("h_separation", 6)
+	research_controls.add_child(_labeled_control("研发阶段", research_selector))
+	research_controls.add_child(_button("规划阶段物资", _run_research_read_only_plan.bind(research_selector, research_targets), research_targets.is_empty(), COLOR_ACCENT))
+	box.add_child(research_controls)
+
+	var mega_targets: Array = []
+	var mega_selector := OptionButton.new()
+	for megastructure_value in Game.content.megastructures.values():
+		var megastructure := megastructure_value as Dictionary
+		for phase_value in megastructure.get("phases", []):
+			var phase := phase_value as Dictionary
+			mega_targets.append({"megastructure_id":String(megastructure.get("id", "")), "phase_id":String(phase.get("id", ""))})
+			mega_selector.add_item("%s · %s" % [_content_name(megastructure, String(megastructure.get("id", ""))), _content_name(phase, String(phase.get("id", "")))])
+	var mega_controls := HFlowContainer.new()
+	mega_controls.add_theme_constant_override("h_separation", 6)
+	mega_controls.add_child(_labeled_control("巨构阶段", mega_selector))
+	mega_controls.add_child(_button("规划终局阶段", _run_mega_read_only_plan.bind(mega_selector, mega_targets), mega_targets.is_empty(), COLOR_ACCENT))
+	box.add_child(mega_controls)
 	if not _planner_result.is_empty():
 		_build_read_only_plan_result(box, _planner_result)
 
@@ -1381,24 +1429,61 @@ func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_inpu
 	_planner_product_id = String(product_ids[selector.selected])
 	_planner_target_rate = float(target_input.value)
 	_planner_result = Game.simulation.target_throughput_plan(Game.state, {_planner_product_id:_planner_target_rate}, _selected_location_id)
+	_planner_result["target_type"] = "PRODUCT_RATE"
+	_planner_target_label = "%s %.1f/h" % [_content_name(Game.content.items.get(_planner_product_id, {}), _planner_product_id), _planner_target_rate]
+	_dirty = true
+
+
+func _run_ship_read_only_plan(selector: OptionButton, ship_plan_ids: Array, target_input: SpinBox) -> void:
+	if selector.selected < 0 or selector.selected >= ship_plan_ids.size():
+		return
+	var ship_plan_id := String(ship_plan_ids[selector.selected])
+	_planner_target_label = "%s %.1f/月" % [_content_name(Game.content.ship_construction_projects.get(ship_plan_id, {}), ship_plan_id), float(target_input.value)]
+	_planner_result = Game.simulation.ship_per_month_plan(Game.state, ship_plan_id, float(target_input.value), _selected_location_id)
+	_dirty = true
+
+
+func _run_research_read_only_plan(selector: OptionButton, research_targets: Array) -> void:
+	if selector.selected < 0 or selector.selected >= research_targets.size():
+		return
+	var target := research_targets[selector.selected] as Dictionary
+	var project_id := String(target.get("project_id", ""))
+	var phase_id := String(target.get("phase_id", ""))
+	_planner_target_label = "%s · %s" % [_content_name(Game.content.research_projects.get(project_id, {}), project_id), phase_id]
+	_planner_result = Game.simulation.research_phase_plan(Game.state, project_id, phase_id, _selected_location_id)
+	_dirty = true
+
+
+func _run_mega_read_only_plan(selector: OptionButton, mega_targets: Array) -> void:
+	if selector.selected < 0 or selector.selected >= mega_targets.size():
+		return
+	var target := mega_targets[selector.selected] as Dictionary
+	var megastructure_id := String(target.get("megastructure_id", ""))
+	var phase_id := String(target.get("phase_id", ""))
+	_planner_target_label = "%s · %s" % [_content_name(Game.content.megastructures.get(megastructure_id, {}), megastructure_id), phase_id]
+	_planner_result = Game.simulation.megastructure_phase_plan(Game.state, megastructure_id, phase_id)
 	_dirty = true
 
 
 func _build_read_only_plan_result(box: VBoxContainer, plan: Dictionary) -> void:
 	var card := _card()
-	card.add_child(_label("方案 · %s %.1f/h · 只读" % [_content_name(Game.content.items.get(_planner_product_id, {}), _planner_product_id), _planner_target_rate], 15, COLOR_ACCENT))
+	var production_plan: Dictionary = plan.get("production_plan", plan)
+	card.add_child(_label("方案 · %s · 只读" % (_planner_target_label if not _planner_target_label.is_empty() else String(plan.get("target_id", "目标"))), 15, COLOR_ACCENT))
 	var requirement_parts: Array[String] = []
-	for item_id_value in plan.get("product_requirements", {}).keys():
+	for item_id_value in production_plan.get("product_requirements", {}).keys():
 		var item_id := String(item_id_value)
-		requirement_parts.append("%s %.2f/h" % [_content_name(Game.content.items.get(item_id, {}), item_id), float(plan.get("product_requirements", {}).get(item_id, 0.0))])
+		requirement_parts.append("%s %.2f/h" % [_content_name(Game.content.items.get(item_id, {}), item_id), float(production_plan.get("product_requirements", {}).get(item_id, 0.0))])
 	card.add_child(_label("产品需求 · " + (" · ".join(requirement_parts) if not requirement_parts.is_empty() else "无"), 12, COLOR_MUTED))
-	for factory_value in plan.get("factory_requirements", []):
+	for factory_value in production_plan.get("factory_requirements", []):
 		var factory := factory_value as Dictionary
 		var facility_id := String(factory.get("facility_id", ""))
 		card.add_child(_label("%s · 当前 %d / 建议 %d / 缺口 %d · 装置能力 %s · 利用率 %.0f%%" % [_content_name(Game.content.facilities.get(facility_id, {}), facility_id), int(factory.get("current", 0)), int(factory.get("recommended", 0)), int(factory.get("shortage", 0)), ", ".join(factory.get("production_device_requirements", [])), float(factory.get("utilization", 0.0)) * 100.0], 12, COLOR_TEXT))
-	var infrastructure: Dictionary = plan.get("infrastructure_requirements", {})
+	var infrastructure: Dictionary = production_plan.get("infrastructure_requirements", {})
 	card.add_child(_label("基础设施 · 电力 %.1f · 冷却 %.1f · 仓储 %s · 资本品 %s" % [float(infrastructure.get("power", 0.0)), float(infrastructure.get("cooling", 0.0)), str(infrastructure.get("storage", {})), str(infrastructure.get("capital_goods", {}))], 12, COLOR_MUTED))
-	for bottleneck_value in plan.get("bottlenecks", []):
+	for logistics_value in production_plan.get("logistics", []):
+		var logistics := logistics_value as Dictionary
+		card.add_child(_label("物流 · %s → %s · %.2f 质量/h · %.2f 体积/h · 路线 %s · 周期 %.1fs" % [_location_name(String(logistics.get("origin", ""))), _location_name(String(logistics.get("destination", ""))), float(logistics.get("cargo_mass_per_hour", 0.0)), float(logistics.get("cargo_volume_per_hour", 0.0)), " → ".join(logistics.get("route_ids", [])), float(logistics.get("lead_time_ms", 0.0)) / 1000.0], 12, COLOR_MUTED))
+	for bottleneck_value in production_plan.get("bottlenecks", []):
 		var bottleneck := bottleneck_value as Dictionary
 		card.add_child(_label("首要瓶颈 · %s\n最短链 · %s" % [_status_text(String(bottleneck.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(bottleneck.get("shortest_chain", []))], 12, COLOR_WARN))
 	box.add_child(_wrap_card(card))
@@ -1413,6 +1498,9 @@ func _planner_chain_text(chain: Array) -> String:
 			"PRODUCT": parts.append(_content_name(Game.content.items.get(node_id, {}), node_id))
 			"METHOD": parts.append(_content_name(Game.content.activities.get(node_id, {}), node_id))
 			"FACTORY": parts.append(_content_name(Game.content.facilities.get(node_id, {}), node_id))
+			"SITE": parts.append(_content_name(Game.content.mining_sites.get(node_id, {}), node_id))
+			"ROUTE": parts.append(_content_name(Game.content.logistics_routes.get(node_id, {}), node_id))
+			"HUB", "DESTINATION": parts.append(_location_name(node_id))
 			_: parts.append(_status_text(node_id))
 	return " → ".join(parts)
 
@@ -2142,7 +2230,15 @@ func _open_next_flow_target() -> void:
 	var page := _next_flow_page()
 	if page.is_empty():
 		return
+	var guidance: Dictionary = Game.guidance_snapshot()
+	if str(guidance.get("page", "")) == page:
+		var location_id := str(guidance.get("location_id", ""))
+		if not location_id.is_empty() and Game.state.has_location(location_id):
+			_selected_location_id = location_id
 	if page == "industry":
+		# The bootstrap guide has finer material-aware routing than the broad goal
+		# contract, while the structured snapshot still supplies target location and
+		# machine-readable focus/acquisition data to diagnostics and external UI.
 		_industry_section = _next_flow_industry_section()
 	_switch_page(page)
 	if page == "industry":

@@ -25,7 +25,9 @@ func _ready() -> void:
 		"technology_domain.anomaly_science", "requirement.technology_domain",
 		"requirement.research_capacity", "requirement.operating_condition",
 		"requirement.experimental_maturity", "requirement.spillover",
-		"requirement.manufacturing_module", "operating_condition.computing_capacity",
+		"requirement.manufacturing_module", "requirement.survey_state",
+		"requirement.mining_site_available", "requirement.mining_sites_mastered",
+		"requirement.megastructure_phase", "operating_condition.computing_capacity",
 		"operating_condition.power_capacity", "operating_condition.advanced_power_capacity",
 		"operating_condition.cooling_capacity", "operating_condition.logistics_throughput",
 		"operating_condition.precision_manufacturing"

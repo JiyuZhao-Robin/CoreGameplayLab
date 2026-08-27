@@ -97,7 +97,7 @@ func configure_service(state: SpaceGameState, route_id: String, mode_id: String,
 	if not content.logistics_routes.has(route_id) or not content.transport_modes.has(mode_id) or priority_strategy not in ["DEMAND_PRIORITY", "PRECISION_FIRST", "MAINTENANCE_FIRST", "BULK_FIRST"]:
 		return false
 	var mode: Dictionary = content.transport_modes[mode_id]
-	if not _mode_available(state, mode) or not _mode_available_for_route(mode, route_id):
+	if not _mode_available(state, mode) or not _mode_available_for_route(state, mode, route_id):
 		return false
 	var normalized_ship_ids: Array = []
 	if bool(mode.get("infrastructure_service", false)) and not ship_ids.is_empty():
@@ -167,7 +167,7 @@ func service_for_route(state: SpaceGameState, route_id: String) -> Dictionary:
 func service_capacity(state: SpaceGameState, route_id: String) -> float:
 	var service := service_for_route(state, route_id)
 	var mode: Dictionary = content.transport_modes.get(str(service.get("transport_mode_id", "")), {})
-	if str(service.get("status", "ACTIVE")) != "ACTIVE" or mode.is_empty() or not _mode_available(state, mode) or not _mode_available_for_route(mode, route_id):
+	if str(service.get("status", "ACTIVE")) != "ACTIVE" or mode.is_empty() or not _mode_available(state, mode) or not _mode_available_for_route(state, mode, route_id):
 		return 0.0
 	var corridor_capacity := float(effective_route_capacity(state, route_id))
 	var result := corridor_capacity * float(mode.get("capacity_multiplier", 1.0)) if bool(mode.get("public_base_capacity", false)) or bool(mode.get("infrastructure_service", false)) else 0.0
@@ -214,9 +214,19 @@ func _mode_available(state: SpaceGameState, mode: Dictionary) -> bool:
 	return facility_id.is_empty() or str(state.facilities.get(facility_id, {}).get("status", "INACTIVE")) == "ACTIVE"
 
 
-func _mode_available_for_route(mode: Dictionary, route_id: String) -> bool:
+func _mode_available_for_route(state: SpaceGameState, mode: Dictionary, route_id: String) -> bool:
 	var route_ids: Array = mode.get("route_ids", ["*"])
-	return route_ids.has("*") or route_ids.has(route_id)
+	if not route_ids.has("*") and not route_ids.has(route_id):
+		return false
+	var requirements: Array = mode.get("environment_requirements", [])
+	if requirements.is_empty():
+		return true
+	var route: Dictionary = content.logistics_routes.get(route_id, {})
+	for endpoint_id in [str(route.get("from", "")), str(route.get("to", ""))]:
+		var environment: Dictionary = content.regions.get(endpoint_id, {}).get("environment", {})
+		if not requirements.all(func(condition): return LocationState.environment_condition_met(environment, condition as Dictionary)):
+			return false
+	return true
 
 
 func configure_policy(state: SpaceGameState, location_id: String, item_id: String, policy: Dictionary) -> bool:
@@ -645,6 +655,8 @@ func _create_shipment(state: SpaceGameState, origin: String, destination: String
 		"transport_modes":path.get("transport_mode_ids", []).duplicate(),
 		"freight_class":freight.get("freight_class", "STANDARD"),
 		"freight_units":float(quantity) * float(freight.get("freight_units", 1.0)),
+		"cargo_mass":float(quantity) * float(freight.get("cargo_mass", freight.get("freight_units", 1.0))),
+		"cargo_volume":float(quantity) * float(freight.get("cargo_volume", freight.get("freight_units", 1.0))),
 		"route_freight_units":path.get("route_freight_units_per_item", {}).duplicate(true),
 		"path_score":float(path.get("score", 0.0)),
 		"remaining_ms":total_time_ms,
@@ -658,10 +670,12 @@ func _create_shipment(state: SpaceGameState, origin: String, destination: String
 	}
 	state.logistics_network["shipments"].append(shipment)
 	for route_id in shipment.route_path:
-		var route_stats: Dictionary = state.logistics_network["route_statistics"].get(str(route_id), {"shipments":0, "units":0, "freight_units":0.0, "energy_units":0.0})
+		var route_stats: Dictionary = state.logistics_network["route_statistics"].get(str(route_id), {"shipments":0, "units":0, "freight_units":0.0, "cargo_mass":0.0, "cargo_volume":0.0, "energy_units":0.0})
 		route_stats["shipments"] = int(route_stats.get("shipments", 0)) + 1
 		route_stats["units"] = int(route_stats.get("units", 0)) + quantity
 		route_stats["freight_units"] = float(route_stats.get("freight_units", 0.0)) + float(quantity) * float(path.get("route_freight_units_per_item", {}).get(str(route_id), freight.get("freight_units", 1.0)))
+		route_stats["cargo_mass"] = float(route_stats.get("cargo_mass", 0.0)) + float(quantity) * float(freight.get("cargo_mass", freight.get("freight_units", 1.0)))
+		route_stats["cargo_volume"] = float(route_stats.get("cargo_volume", 0.0)) + float(quantity) * float(freight.get("cargo_volume", freight.get("freight_units", 1.0)))
 		route_stats["energy_units"] = float(route_stats.get("energy_units", 0.0)) + float(path.get("energy_per_item", 0.0)) * float(quantity)
 		state.logistics_network["route_statistics"][str(route_id)] = route_stats
 	return shipment
@@ -832,7 +846,7 @@ func _edges_from(state: SpaceGameState, location_id: String, item_id: String = "
 func _service_supports_item(state: SpaceGameState, route_id: String, item_id: String) -> bool:
 	var service := service_for_route(state, route_id)
 	var mode: Dictionary = content.transport_modes.get(str(service.get("transport_mode_id", "")), {})
-	if mode.is_empty() or not _mode_available(state, mode) or not _mode_available_for_route(mode, route_id) or service_capacity(state, route_id) <= 0.0:
+	if mode.is_empty() or not _mode_available(state, mode) or not _mode_available_for_route(state, mode, route_id) or service_capacity(state, route_id) <= 0.0:
 		return false
 	var freight_class := str(content.item_freight_profile(item_id).get("freight_class", "STANDARD"))
 	return mode.get("supported_freight_classes", []).has(freight_class)
@@ -846,7 +860,7 @@ func _service_supports_direction(state: SpaceGameState, route_id: String, forwar
 
 
 func _path_profile(state: SpaceGameState, route_ids: Array, nodes: Array, item_id: String, route_budget: Dictionary) -> Dictionary:
-	var freight := content.item_freight_profile(item_id) if not item_id.is_empty() else {"freight_class":"STANDARD", "freight_units":1.0}
+	var freight := content.item_freight_profile(item_id) if not item_id.is_empty() else {"freight_class":"STANDARD", "freight_units":1.0, "cargo_mass":1.0, "cargo_volume":1.0}
 	var freight_class := str(freight.get("freight_class", "STANDARD"))
 	var base_units := maxf(0.001, float(freight.get("freight_units", 1.0)))
 	var profile := technology_profile(state)
@@ -894,6 +908,8 @@ func _path_profile(state: SpaceGameState, route_ids: Array, nodes: Array, item_i
 		"route_freight_units_per_item":route_units,
 		"hub_freight_units_per_item":base_units,
 		"handling_freight_units_per_item":handling_units,
+		"cargo_mass_per_item":float(freight.get("cargo_mass", base_units)),
+		"cargo_volume_per_item":float(freight.get("cargo_volume", base_units)),
 		"energy_per_item":energy_per_item,
 		"special_cargo_risk":risk_score,
 		"score":transit_time + handling_time + congestion_score + operating_score + transfer_score + risk_score
@@ -927,6 +943,8 @@ func _normalize_shipments(state: SpaceGameState) -> void:
 		var cargo_quantity := int(shipment["cargo"].get(first_item, 0)) if not first_item.is_empty() else 0
 		shipment["freight_class"] = str(shipment.get("freight_class", freight.get("freight_class", "STANDARD")))
 		shipment["freight_units"] = maxf(0.0, float(shipment.get("freight_units", float(cargo_quantity) * float(freight.get("freight_units", 1.0)))))
+		shipment["cargo_mass"] = maxf(0.0, float(shipment.get("cargo_mass", float(cargo_quantity) * float(freight.get("cargo_mass", freight.get("freight_units", 1.0))))))
+		shipment["cargo_volume"] = maxf(0.0, float(shipment.get("cargo_volume", float(cargo_quantity) * float(freight.get("cargo_volume", freight.get("freight_units", 1.0))))))
 		shipment["service_path"] = shipment.get("service_path", []).duplicate() if shipment.get("service_path", null) is Array else []
 		shipment["transport_modes"] = shipment.get("transport_modes", []).duplicate() if shipment.get("transport_modes", null) is Array else []
 		shipment["route_freight_units"] = shipment.get("route_freight_units", {}).duplicate(true) if shipment.get("route_freight_units", null) is Dictionary else {}

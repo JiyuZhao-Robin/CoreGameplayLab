@@ -587,7 +587,7 @@ func _test_mature_extraction_network(database: ContentDatabase) -> void:
 
 func _test_phase_four_freight_services(database: ContentDatabase) -> void:
 	var required_classes := ["BULK", "STANDARD", "PRECISION", "CRYOGENIC", "HAZARDOUS", "OVERSIZED"]
-	_check(database.freight_rules.get("classes", []) == required_classes and database.items.values().all(func(value): return str((value as Dictionary).get("freight_class", "")) in required_classes and float((value as Dictionary).get("freight_units", 0.0)) > 0.0), "every transportable Item resolves to one of the six positive Freight profiles")
+	_check(database.freight_rules.get("classes", []) == required_classes and database.items.values().all(func(value): return str((value as Dictionary).get("freight_class", "")) in required_classes and float((value as Dictionary).get("freight_units", 0.0)) > 0.0 and float((value as Dictionary).get("cargo_mass", 0.0)) > 0.0 and float((value as Dictionary).get("cargo_volume", 0.0)) > 0.0), "every transportable Item resolves to positive Freight, mass and volume profiles")
 	_check(database.transport_modes.size() >= 5 and ["general_cargo", "bulk_tug", "mass_driver", "cryogenic_carrier", "express_courier"].all(func(mode_id): return database.transport_modes.has(mode_id)), "both phase-four rounds define five meaningfully different Transport Modes")
 	_check(float(database.items["mixed_raw_ore"].get("freight_units", 0.0)) > float(database.items["iron_ore"].get("freight_units", 0.0)) and float(database.items["iron_ore"].get("freight_units", 0.0)) > float(database.items["iron_ingot"].get("freight_units", 0.0)), "remote preprocessing progressively reduces Freight pressure")
 
@@ -621,6 +621,7 @@ func _test_phase_four_freight_services(database: ContentDatabase) -> void:
 	_check(simulation.logistics.configure_service(state, "earth_lunar_freight", "mass_driver", []), "Mass Driver provides an infrastructure Logistics Service without ships")
 	_check(state.ship_is_unassigned_docked(tug_id) and simulation.logistics.service_for_route(state, "earth_lunar_freight").get("assigned_ship_ids", []).is_empty(), "switching to infrastructure releases the previously assigned physical ship")
 	_check(simulation.logistics.service_capacity(state, "earth_lunar_freight") > float(simulation.logistics.effective_route_capacity(state, "earth_lunar_freight")), "Mass Driver changes available Freight capacity instead of only changing display metadata")
+	_check(not simulation.logistics.configure_service(state, "belt_jovian_freight", "mass_driver", []), "Mass Driver reads endpoint environments and rejects an atmospheric Jovian corridor")
 	var service_transaction := GameStateTransaction.new(state, database.domains.keys())
 	_check(simulation.logistics.configure_service(service_transaction.working_state, "earth_lunar_freight", "bulk_tug", [tug_id], "BULK_FIRST"), "the player-facing transactional command can assign a ship-backed Logistics Service")
 	var committed_service_state := service_transaction.commit()
@@ -673,6 +674,7 @@ func _test_phase_four_freight_services(database: ContentDatabase) -> void:
 	var events: Array[Dictionary] = simulation.logistics._dispatch(conservation)
 	_check(not events.is_empty() and conservation.aggregate_item_quantity("electronics") + simulation.logistics.incoming_quantity(conservation, "lunar_space", "electronics") == before_total, "Freight conservation covers source stock plus real in-transit cargo")
 	var in_flight: Dictionary = conservation.logistics_network.get("shipments", [])[0]
+	_check(float(in_flight.get("cargo_mass", 0.0)) > 0.0 and float(in_flight.get("cargo_volume", 0.0)) > 0.0, "Shipment transactions persist explicit cargo mass and cargo volume")
 	simulation.advance(conservation, float(in_flight.get("total_ms", 0.0)) + 1.0)
 	_check(conservation.aggregate_item_quantity("electronics") == before_total and conservation.item_quantity("electronics", "lunar_space") == 20, "Freight conservation survives arrival at the target Location")
 	simulation.logistics.configure_policy(conservation, "lunar_space", "electronics", {"mode":"DEMAND", "target":25, "route_lock":"lunar_belt_freight"})

@@ -30,12 +30,21 @@ func _run() -> void:
 	_press(earth_button)
 	await _redraw()
 	_scan_visible_page(main, "location overview")
-	_press(main.find_child("LocationTab_resources", true, false) as Button)
+	for location_tab in ["resources", "industry", "logistics", "projects"]:
+		_press(main.find_child("LocationTab_%s" % location_tab, true, false) as Button)
+		await _redraw()
+		_scan_visible_page(main, "location %s" % location_tab)
+
+	_press(main.find_child("Navigation_frontier", true, false) as Button)
 	await _redraw()
-	_scan_visible_page(main, "location resources")
+	_scan_visible_page(main, "frontier operations")
 
 	_press(main.find_child("Navigation_industry", true, false) as Button)
 	await _redraw()
+	for industry_section in ["production", "facilities", "construction"]:
+		_press(main.find_child("IndustrySection_%s" % industry_section, true, false) as Button)
+		await _redraw()
+		_scan_visible_page(main, "industry %s" % industry_section)
 	_press(main.find_child("IndustrySection_automation", true, false) as Button)
 	await _redraw()
 	_check(_has_text_fragment(main, "CURRENT ECONOMY ANALYSIS"), "English diagnostics are rendered")
@@ -46,6 +55,17 @@ func _run() -> void:
 	_press(main.find_child("Navigation_research", true, false) as Button)
 	await _redraw()
 	_scan_visible_page(main, "research")
+
+	_press(main.find_child("Navigation_fleet", true, false) as Button)
+	await _redraw()
+	for fleet_section in ["roster", "readiness", "shipyard", "archive"]:
+		_press(main.find_child("FleetSection_%s" % fleet_section, true, false) as Button)
+		await _redraw()
+		_scan_visible_page(main, "fleet %s" % fleet_section)
+
+	_press(main.find_child("Navigation_expedition", true, false) as Button)
+	await _redraw()
+	_scan_visible_page(main, "expedition")
 
 	_press(main.find_child("Navigation_megastructure", true, false) as Button)
 	await _redraw()

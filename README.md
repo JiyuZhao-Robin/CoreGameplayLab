@@ -1,8 +1,8 @@
 # Helios Core Gameplay Lab
 
-这是从主项目拆出的独立 Godot 项目，也是 Walking Skeleton 的实现目标。它只保留玩法规则、内容数据、存档逻辑和纯控件操作界面，不依赖主项目中的图片、模型、Shader 或 UI Art Pack。
+这是从主项目拆出的独立 Godot 单恒星系工业管理游戏核心版本。它保留完整玩法规则、内容数据、存档、离线模拟和纯控件操作界面，不依赖主项目中的图片、模型、Shader 或 UI Art Pack；核心完成后再进入正式美术制作。
 
-当前 Save Schema 为 34。旧 Lab schema 24 的全局库存会在读取时一次性迁移到 `earth_orbit` Main Base；schema 25–33 的 Location、物流、在途 Shipment、施工进度、生产线、舰船装配、研发项目和已开发采掘点会保留。旧聚合仓储会迁移为大宗、部件、流体和特殊四类容量；旧普通模块库存按 BOM 转回原料，进行中的造船、改装和研发项目保留已支付进度。
+当前 Save Schema 为 35，内容版本为 `1.29.0-single-system-core`。schema 24–35 采用显式逐版本迁移；旧全局库存迁入 `earth_orbit`，Location、物流、在途 Shipment、施工、生产线、舰船装配、研发和采掘点状态均保留。旧四巨构状态只进入历史归档，不会伪装成新终局进度；逐物品消费统计从 schema 35 开始累计。
 
 ## 设计文档
 
@@ -46,18 +46,18 @@ godot --path .
 
 第七阶段恢复了由真实 Storage Capacity 限制的四类星球库存。生产满仓会进入 `BLOCKED_OUTPUT`，有空间后自动恢复；O&M、建设、研发与造船都登记可追踪的 Demand Source。工业页的“经济诊断与规划”会显示库存、生产、消费、净变化、承诺需求、阻塞原因和最短瓶颈链，并提供与 Simulation 共用公式的只读吞吐规划器。第一版自动化只允许经授权的暂停/恢复、航线策略和项目优先级事务，不会自动扩建产业链。
 
-第八阶段限定在唯一 `sol` 恒星系。每个 Location 使用统一环境模型；资源点没有常规枯竭，而由 Sustainable Extraction Potential 限制可长期支撑的工业规模。勘测任务真实占用舰船、装配能力、燃料、维护品和航行时间；永久 Site Development 复用普通建设、地点库存、能源、仓储与物流。Planner 会比较目标吞吐与当前已勘测潜力，并给出追加勘测、深度勘测或升级开采方式等只读解法。旧四巨构与星际入口在本阶段冻结，不参与第八阶段可玩范围。
+第八阶段限定在唯一 `sol` 恒星系。每个 Location 使用统一环境模型；资源点没有常规枯竭，而由 Sustainable Extraction Potential 限制可长期支撑的工业规模。勘测任务真实占用舰船、装配能力、燃料、维护品和航行时间；永久 Site Development 复用普通建设、地点库存、能源、仓储与物流。Planner 会比较目标吞吐与当前已勘测潜力，并给出追加勘测、深度勘测或升级开采方式等只读解法。质量投射器等运输方式也读取相同地点环境条件。
+
+核心终局只有 `stellar_energy`。它从研发与候选地点深度勘测开始，依次建设前进基地、锚定基础、主体框架、能源骨架、主功能系统、系统集成和最终调试；每阶段使用真实工地库存、预留、物流、建设能力、能源、散热和维护，最终展示材料、资本品、运输、工期、峰值建设/功率和主要供应地点统计。
 
 左侧的“当前引导”会根据实时状态给出下一步。所有按钮都调用复制后的真实核心命令，不是伪流程。
 
 ## 验证
 
+完整发布门禁：
+
 ```bash
-godot --headless --editor --path . --quit
-godot --headless --path . --script res://tests/headless_test.gd -- --no-persistence
-godot --headless --path . res://tests/playflow_test.tscn -- --no-persistence
-godot --headless --path . res://tests/golden_path_test.tscn -- --no-persistence
-godot --headless --path . --script res://tests/location_inventory_test.gd -- --no-persistence
-godot --headless --path . res://tests/location_ui_smoke_test.tscn -- --no-persistence
-godot --headless --path . res://tests/ui_playflow_test.tscn -- --no-persistence
+./tests/run_core_complete.sh
 ```
+
+脚本依次验证三份 JSON、内容/规划器合同、schema 迁移与资产守恒、headless 领域回归、地点库存、双语目录、中文/英文全页 UI、核心 UI 流程，以及新存档无作弊完成唯一巨构的 Golden Path。

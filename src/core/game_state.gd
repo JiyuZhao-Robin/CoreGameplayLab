@@ -999,14 +999,6 @@ func set_resource_maturity(item_id: String, maturity: String) -> void:
 	resource_maturity[item_id] = normalized
 
 
-func set_background_target(item_id: String, quantity: int) -> void:
-	background_economy["targets"][item_id] = maxi(0, quantity)
-
-
-func set_background_priority(item_id: String, priority: int) -> void:
-	background_economy["priorities"][item_id] = clampi(priority, 0, 100)
-
-
 func set_advanced_power_priority(facility_id: String, priority: String) -> void:
 	if priority in ["CRITICAL", "HIGH", "NORMAL", "LOW"]:
 		energy_system["advanced_priorities"][facility_id] = priority

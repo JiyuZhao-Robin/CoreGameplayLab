@@ -15,6 +15,8 @@ func _run() -> void:
 	var main: Control = MainScene.instantiate()
 	add_child(main)
 	await _redraw()
+	var initial_guidance: Dictionary = Game.guidance_snapshot()
+	_check(["goal_id", "step_id", "page", "section", "location_id", "focus_entity_id", "reason", "acquisition_path"].all(func(key): return initial_guidance.has(key)) and not str(initial_guidance.get("page", "")).is_empty(), "Guidance exposes an actionable page, section, location, focus entity, reason and acquisition path")
 
 	_check(main.find_child("SystemMap2D", true, false) != null, "formal UI contains the interactive 2D System Map")
 	for page_id in ["overview", "system_map", "location", "frontier", "industry", "research", "fleet", "expedition"]:
