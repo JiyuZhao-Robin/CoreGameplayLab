@@ -1020,7 +1020,7 @@ func start_construction_project(activity_id: String, location_id: String = Space
 		return _reject(I18n.t("notice.construction_yard_missing", "The Orbital Construction Yard is not active"))
 	var sponsor_facility_id := str(activity.get("facility", ""))
 	if not sponsor_facility_id.is_empty() and not simulation.facility_available(state, sponsor_facility_id):
-		return _reject("需要先建成承建设施：%s" % I18n.content(content.facilities.get(sponsor_facility_id, {"id":sponsor_facility_id, "name":sponsor_facility_id})))
+		return _reject(I18n.t("notice.sponsor_facility", "Build the sponsoring facility first: %s") % I18n.content(content.facilities.get(sponsor_facility_id, {"id":sponsor_facility_id, "name":sponsor_facility_id})))
 	if not simulation.activity_available(state, activity):
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
 	if not state.has_location(location_id):
@@ -1792,19 +1792,19 @@ func requirement_text(requirement: Dictionary) -> String:
 		"technology_domain":
 			var domain_id := str(requirement.get("domain", ""))
 			var current := int(state.technology_domains.get(domain_id, {}).get("level", 0))
-			var domain_name: String = str({"materials_science":"材料科学", "manufacturing":"制造与加工", "energy":"能源工程", "propulsion":"推进技术", "automation_computing":"自动化与计算", "ship_engineering":"舰船工程", "logistics":"物流与运输", "anomaly_science":"异常现象研究"}.get(domain_id, domain_id))
-			return "%s 技术能力：%s Lv.%d（%d / %d）" % [marker, domain_name, int(requirement.get("level", 1)), current, int(requirement.get("level", 1))]
+			var domain_name := I18n.t("technology_domain.%s" % domain_id, domain_id.replace("_", " ").capitalize())
+			return I18n.t("requirement.technology_domain", "%s Technology domain: %s Lv.%d (%d / %d)") % [marker, domain_name, int(requirement.get("level", 1)), current, int(requirement.get("level", 1))]
 		"research_capacity":
-			return "%s 研究容量 %.1f / %.1f（持续流量，不可库存）" % [marker, simulation.research_capacity(state), float(requirement.get("value", 1.0))]
+			return I18n.t("requirement.research_capacity", "%s Research capacity %.1f / %.1f (continuous throughput, not inventory)") % [marker, simulation.research_capacity(state), float(requirement.get("value", 1.0))]
 		"operating_condition":
 			var condition_id := str(requirement.get("id", ""))
-			var condition_name: String = str({"computing_capacity":"计算能力", "power_capacity":"持续供电能力", "advanced_power_capacity":"峰值供电能力", "cooling_capacity":"冷却能力", "logistics_throughput":"轨道物流吞吐", "precision_manufacturing":"精密制造能力"}.get(condition_id, condition_id))
-			return "%s 运行条件：%s %.1f / %.1f" % [marker, condition_name, simulation.capability_value(state, condition_id), float(requirement.get("value", 1.0))]
+			var condition_name := I18n.t("operating_condition.%s" % condition_id, condition_id.replace("_", " ").capitalize())
+			return I18n.t("requirement.operating_condition", "%s Operating condition: %s %.1f / %.1f") % [marker, condition_name, simulation.capability_value(state, condition_id), float(requirement.get("value", 1.0))]
 		"experimental_maturity":
 			var item_id := str(requirement.get("id", ""))
-			return "%s 工业成熟度：%s（%s / %s）" % [marker, I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), state.experimental_maturity.get(item_id, "THEORY"), requirement.get("level", "EXPERIMENTAL")]
+			return I18n.t("requirement.experimental_maturity", "%s Industrial maturity: %s (%s / %s)") % [marker, I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), state.experimental_maturity.get(item_id, "THEORY"), requirement.get("level", "EXPERIMENTAL")]
 		"spillover":
-			return "%s 技术外溢：%s" % [marker, I18n.content(content.technologies.get(str(requirement.get("id", "")), requirement))]
+			return I18n.t("requirement.spillover", "%s Technology spillover: %s") % [marker, I18n.content(content.technologies.get(str(requirement.get("id", "")), requirement))]
 		"activity_complete":
 			var activity_id := str(requirement.get("id", ""))
 			return I18n.t("requirement.activity", "%s Complete: %s") % [marker, I18n.content(content.activities.get(activity_id, {"id":activity_id, "name":activity_id}))]
@@ -1827,7 +1827,7 @@ func requirement_text(requirement: Dictionary) -> String:
 			var module_id := str(requirement.get("id", ""))
 			var module: Dictionary = content.process_modules.get(module_id, content.universal_industry_plugins.get(module_id, requirement))
 			var facility_id := str(requirement.get("facility", ""))
-			return "%s 制造模块：%s → %s" % [marker, I18n.content(module), I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))]
+			return I18n.t("requirement.manufacturing_module", "%s Manufacturing module: %s → %s") % [marker, I18n.content(module), I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))]
 		"infrastructure_site":
 			return I18n.t("requirement.site", "%s Infrastructure Site: %s") % [marker, str(requirement.get("id", "")).replace("_", " ").capitalize()]
 		"boss_defeated":
