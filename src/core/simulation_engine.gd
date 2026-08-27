@@ -4505,67 +4505,16 @@ func _apply_effect(state: SpaceGameState, effect: Dictionary) -> void:
 			state.game_complete = true
 			state.completed_at_ms = int(state.total_elapsed_ms)
 			emitted_events.append({"type":"GameCompleted", "completed_at_ms":state.completed_at_ms})
-		"set_automation_rate":
-			state.automation["rates"][str(effect.get("item", ""))] = float(effect.get("per_second", 0.0))
 		"set_progression_tier":
 			state.progression_tier = maxi(state.progression_tier, int(effect.get("tier", 1)))
 		"set_resource_maturity":
 			state.set_resource_maturity(str(effect.get("item", "")), str(effect.get("maturity", "FRONTIER")))
-		"configure_background_mining":
-			var mining_item := str(effect.get("item", ""))
-			state.background_economy["mining_sources"][mining_item] = {
-				"source_id":str(effect.get("source_id", "infrastructure")),
-				"facility_id":str(effect.get("facility_id", "")),
-				"per_second":maxf(0.0, float(effect.get("per_second", 0.0))),
-				"enabled":bool(effect.get("enabled", true))
-			}
-			if effect.has("target"):
-				state.set_background_target(mining_item, int(effect.get("target", 0)))
-			if effect.has("priority"):
-				state.set_background_priority(mining_item, int(effect.get("priority", 50)))
-		"configure_industry_network":
-			var family := str(effect.get("family", ""))
-			var existing: Dictionary = state.background_economy["industry_networks"].get(family, {})
-			existing["level"] = maxi(int(existing.get("level", 0)), int(effect.get("level", 1)))
-			existing["capacity_per_second"] = maxf(float(existing.get("capacity_per_second", 0.0)), float(effect.get("capacity_per_second", 0.0)))
-			existing["enabled"] = bool(effect.get("enabled", true))
-			if effect.has("facility_id"):
-				existing["facility_id"] = str(effect.get("facility_id", ""))
-			existing["recipes"] = existing.get("recipes", {}).duplicate(true)
-			state.background_economy["industry_networks"][family] = existing
-		"enable_background_recipe":
-			var recipe_id := str(effect.get("activity", ""))
-			var recipe: Dictionary = content.activities.get(recipe_id, {})
-			var recipe_family := str(effect.get("family", recipe.get("production_family", "")))
-			var network: Dictionary = state.background_economy["industry_networks"].get(recipe_family, {
-				"level":1, "capacity_per_second":0.0, "enabled":true, "recipes":{}
-			})
-			var recipes: Dictionary = network.get("recipes", {}).duplicate(true)
-			recipes[recipe_id] = {"enabled":bool(effect.get("enabled", true))}
-			network["recipes"] = recipes
-			state.background_economy["industry_networks"][recipe_family] = network
-			var reward_item := _primary_reward_item(recipe)
-			if not reward_item.is_empty():
-				state.set_background_target(reward_item, int(effect.get("target", state.background_economy["targets"].get(reward_item, 0))))
-				state.set_background_priority(reward_item, int(effect.get("priority", state.background_economy["priorities"].get(reward_item, 50))))
 
 
 func _progress_location_industrial_automation(state: SpaceGameState, elapsed_ms: float) -> void:
 	# Retained as a no-op migration entry point. Automatic expansion is outside
 	# the first phase-seven automation scope.
 	return
-
-
-func _progress_automation(state: SpaceGameState, elapsed_ms: float) -> void:
-	var fractions: Dictionary = state.automation.get("fractional", {})
-	for item_id in state.automation.get("rates", {}):
-		var total := float(fractions.get(item_id, 0.0)) + float(state.automation.rates[item_id]) * simulation_speed_multiplier("automation") * elapsed_ms / 1000.0
-		var produced := int(floor(total))
-		if produced > 0:
-			state.add_item(str(item_id), produced)
-			total -= float(produced)
-		fractions[item_id] = total
-	state.automation["fractional"] = fractions
 
 
 func _progress_energy_maintenance(state: SpaceGameState, elapsed_ms: float) -> void:
@@ -4612,7 +4561,9 @@ func _energy_maintenance_snapshot(state: SpaceGameState) -> Array:
 		var coverage := clampf(float(state.energy_system.get("maintenance_coverage", {}).get(facility_id, 1.0)), 0.0, 1.0)
 		var status := "HEALTHY" if coverage >= 0.999 else ("STRAINED" if coverage >= 0.75 else ("DEGRADED" if coverage >= 0.25 else "CRITICAL"))
 		var available := state.available_item_quantity(item_id)
-		var automated := _background_automation_enabled_for_item(state, item_id)
+		# Schema <=32 background-output networks are migration data only. Current
+		# maintenance coverage can be restored solely by a real Production Line.
+		var automated := false
 		var runway_hours := float(available) / demand
 		rows.append({
 			"facility_id":facility_id,
@@ -4623,7 +4574,7 @@ func _energy_maintenance_snapshot(state: SpaceGameState) -> Array:
 			"stock":state.item_quantity(item_id),
 			"available":available,
 			"reserve":int(state.location_reserves().get(item_id, 0)),
-			"target":int(state.background_economy.get("targets", {}).get(item_id, 0)),
+			"target":0,
 			"runway_hours":runway_hours,
 			"automated":automated,
 			"attention":coverage < 0.999 or (runway_hours < 6.0 and not automated)
