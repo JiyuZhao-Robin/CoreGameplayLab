@@ -30,7 +30,7 @@ func _test_location_creation(database: ContentDatabase) -> void:
 	_check(state.locations.size() == database.regions.size(), "one Location exists for every Lab system-map region")
 	var main_base := state.location_state(SpaceGameState.MAIN_BASE_LOCATION_ID)
 	_check(str(main_base.get("type", "")) == LocationState.ARTIFICIAL and str(main_base.get("system_id", "")) == "sol", "Main Base is an Artificial Location in Sol")
-	for field in ["id", "type", "system_id", "discovery_state", "survey_state", "inventory", "power", "industry_summary", "logistics_summary", "projects_summary", "fleet_presence"]:
+	for field in ["id", "type", "system_id", "discovery_state", "survey_state", "inventory", "power", "construction", "industry_summary", "logistics_summary", "projects_summary", "fleet_presence"]:
 		_check(main_base.has(field), "Location exposes required field '%s'" % field)
 
 

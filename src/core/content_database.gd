@@ -6,6 +6,8 @@ var pack_metadata := {}
 var simulation_profiles := {}
 var industry_rules := {}
 var fleet_rules := {}
+var freight_rules := {}
+var survey_rules := {}
 var definitions_by_canonical_id := {}
 var domains := {}
 var items := {}
@@ -20,7 +22,9 @@ var resource_regions := {}
 var mining_sites := {}
 var combat_areas := {}
 var extraction_networks := {}
+var extraction_methods := {}
 var logistics_routes := {}
+var transport_modes := {}
 var industrial_templates := {}
 var activities := {}
 var regions := {}
@@ -55,9 +59,13 @@ func load_from_file(path: String) -> bool:
 	simulation_profiles = parsed.get("simulation_profiles", {}).duplicate(true)
 	industry_rules = parsed.get("industry_rules", {}).duplicate(true)
 	fleet_rules = parsed.get("fleet_rules", {}).duplicate(true)
+	freight_rules = parsed.get("freight_rules", {}).duplicate(true)
+	survey_rules = parsed.get("survey_rules", {}).duplicate(true)
 	construction_engineering_requirements = parsed.get("construction_engineering_requirements", {}).duplicate(true)
 	_index_definitions(parsed.get("domains", []), domains, "domain")
 	_index_definitions(parsed.get("items", []), items, "item")
+	_apply_freight_profiles()
+	_apply_storage_profiles()
 	_index_definitions(parsed.get("ships", []), ships, "ship")
 	_index_definitions(parsed.get("modules", []), modules, "module")
 	_index_definitions(parsed.get("process_modules", []), process_modules, "process_module")
@@ -69,7 +77,9 @@ func load_from_file(path: String) -> bool:
 	_index_definitions(parsed.get("mining_sites", []), mining_sites, "mining_site")
 	_index_definitions(parsed.get("combat_areas", []), combat_areas, "combat_area")
 	_index_definitions(parsed.get("extraction_networks", []), extraction_networks, "extraction_network")
+	_index_definitions(parsed.get("extraction_methods", []), extraction_methods, "extraction_method")
 	_index_definitions(parsed.get("logistics_routes", []), logistics_routes, "logistics_route")
+	_index_definitions(parsed.get("transport_modes", []), transport_modes, "transport_mode")
 	_index_definitions(parsed.get("industrial_templates", []), industrial_templates, "industrial_template")
 	_index_definitions(parsed.get("activities", []), activities, "activity")
 	_index_definitions(parsed.get("regions", []), regions, "region")
@@ -108,7 +118,9 @@ func clear() -> void:
 	mining_sites.clear()
 	combat_areas.clear()
 	extraction_networks.clear()
+	extraction_methods.clear()
 	logistics_routes.clear()
+	transport_modes.clear()
 	industrial_templates.clear()
 	activities.clear()
 	regions.clear()
@@ -128,6 +140,8 @@ func clear() -> void:
 	simulation_profiles.clear()
 	industry_rules.clear()
 	fleet_rules.clear()
+	freight_rules.clear()
+	survey_rules.clear()
 	definitions_by_canonical_id.clear()
 	errors.clear()
 
@@ -144,6 +158,12 @@ func validate() -> void:
 	if float(industry_rules.get("expansion_cost_growth", 0.0)) < 0.0:
 		errors.append("industry_rules expansion_cost_growth must be non-negative")
 	_validate_item_entries(industry_rules.get("expansion_base_costs", []), "industry_rules")
+	for transformation_id_value in industry_rules.get("industrial_transformations", {}).keys():
+		var transformation_id := str(transformation_id_value)
+		var transformation: Dictionary = industry_rules.get("industrial_transformations", {}).get(transformation_id, {})
+		if float(transformation.get("work_required", 0.0)) <= 0.0 or float(transformation.get("downtime_multiplier", -1.0)) < 0.0 or float(transformation.get("downtime_multiplier", 2.0)) > 1.0:
+			errors.append("Industrial Transformation '%s' has invalid work or downtime" % transformation_id)
+		_validate_item_entries(transformation.get("costs", []), "Industrial Transformation '%s'" % transformation_id)
 	if not items.has(str(fleet_rules.get("maintenance_item", ""))):
 		errors.append("fleet_rules references a missing maintenance item")
 	for maintenance_state in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
@@ -157,8 +177,10 @@ func validate() -> void:
 		_validate_item_entries(industry_rules.get("module_bom_defaults", {}).get(slot_value, []), "industry_rules module BOM '%s'" % slot_value)
 	for module_value in modules.values():
 		var module := module_value as Dictionary
-		if not bool(module.get("special_equipment", false)) and module_bom(str(module.get("id", ""))).is_empty():
-			errors.append("ordinary module '%s' must resolve to a manufacturing BOM" % module.get("id", "?"))
+		if not bool(module.get("special_equipment", false)):
+			var module_id := str(module.get("id", ""))
+			if module_bom(module_id).is_empty():
+				errors.append("ordinary module '%s' must resolve to a manufacturing BOM" % module.get("id", "?"))
 		var weapon_kind := str(module.get("weapon_kind", module.get("combat_stats", {}).get("weapon_kind", "DIRECT"))).to_upper()
 		if weapon_kind not in ["DIRECT", "MISSILE", "STRIKE_CRAFT", "PENETRATION"]:
 			errors.append("module '%s' has invalid weapon_kind '%s'" % [module.get("id", "?"), weapon_kind])
@@ -210,6 +232,8 @@ func validate() -> void:
 			errors.append("%s must define positive transit_time_ms" % route_label)
 		if int(route.get("freight_capacity", 0)) <= 0:
 			errors.append("%s must define positive freight_capacity" % route_label)
+		if not transport_modes.has(str(route.get("default_transport_mode", ""))):
+			errors.append("%s must reference a valid default Transport Mode" % route_label)
 		_validate_item_entries(route.get("dispatch_costs", []), route_label)
 	for megastructure in megastructures.values():
 		var megastructure_label := "megastructure '%s'" % megastructure.get("id", "?")
@@ -359,6 +383,49 @@ func validate() -> void:
 			errors.append("%s grants missing ship construction plan '%s'" % [project_label, plan_id])
 		for effect in project.get("effects", []):
 			_validate_effect(effect, project_label)
+		for spillover_id_value in project.get("spillover_work_reductions", {}).keys():
+			var spillover_id := str(spillover_id_value)
+			var reduction := float(project.get("spillover_work_reductions", {}).get(spillover_id, 0.0))
+			if not technologies.has(spillover_id) or str(technologies.get(spillover_id, {}).get("result_kind", "")) != "SPILLOVER":
+				errors.append("%s references missing Spillover work reduction '%s'" % [project_label, spillover_id])
+			if reduction <= 0.0 or reduction > 0.45:
+				errors.append("%s has invalid Spillover work reduction for '%s'" % [project_label, spillover_id])
+		var effect_tags: Array = project.get("effect_tags", [])
+		if effect_tags.any(func(tag): return str(tag) not in ["UNLOCK", "METHOD", "SYSTEM"]):
+			errors.append("%s has an invalid R&D effect tag" % project_label)
+		var stages: Array = project.get("stages", [])
+		if bool(project.get("major_program", false)) and (stages.size() < 3 or stages.size() > 5):
+			errors.append("%s must contain 3-5 meaningful stages" % project_label)
+		var stage_ids := {}
+		for stage_value in stages:
+			var stage := stage_value as Dictionary
+			var stage_id := str(stage.get("id", ""))
+			var stage_label := "%s stage '%s'" % [project_label, stage_id]
+			if stage_id.is_empty() or stage_ids.has(stage_id):
+				errors.append("%s has an empty or duplicate stage id" % project_label)
+			stage_ids[stage_id] = true
+			if str(stage.get("kind", "")) not in ["THEORY", "EXPERIMENT", "ENGINEERING", "PROTOTYPE", "FIELD_TEST", "INDUSTRIALIZATION"]:
+				errors.append("%s has an invalid stage kind" % stage_label)
+			if str(stage.get("kind", "")) != "FIELD_TEST" and float(stage.get("work_required", 0.0)) <= 0.0:
+				errors.append("%s must define positive work" % stage_label)
+			_validate_item_entries(stage.get("costs", []), stage_label)
+			for requirement in stage.get("requirements", []) + stage.get("operating_conditions", []):
+				_validate_requirement(requirement, stage_label)
+			for effect in stage.get("completion_effects", []):
+				_validate_effect(effect, stage_label)
+		var route_ids := {}
+		for route_value in project.get("routes", []):
+			var route := route_value as Dictionary
+			var route_id := str(route.get("id", ""))
+			if route_id.is_empty() or route_ids.has(route_id) or float(route.get("work_multiplier", 1.0)) <= 0.0:
+				errors.append("%s has an invalid or duplicate engineering route" % project_label)
+			route_ids[route_id] = true
+			for effect in route.get("completion_effects", []):
+				_validate_effect(effect, "%s route '%s'" % [project_label, route_id])
+		for reward_value in project.get("domain_rewards", []):
+			var reward := reward_value as Dictionary
+			if str(reward.get("domain", "")) not in SpaceGameState.TECHNOLOGY_DOMAIN_IDS or float(reward.get("xp", 0.0)) <= 0.0:
+				errors.append("%s has an invalid Technology Domain reward" % project_label)
 	for plan in ship_construction_projects.values():
 		var plan_label := "ship construction project '%s'" % plan.get("id", "?")
 		var ship_id := str(plan.get("ship_id", ""))
@@ -366,6 +433,10 @@ func validate() -> void:
 			errors.append("%s references missing ship '%s'" % [plan_label, ship_id])
 		elif not ship_loadout_valid(ship_id, plan.get("starting_modules", [])):
 			errors.append("%s has an invalid starting loadout: %s" % [plan_label, ship_loadout_error(ship_id, plan.get("starting_modules", []))])
+		for module_id_value in plan.get("starting_modules", []):
+			var module_id := str(module_id_value)
+			if bool(modules.get(module_id, {}).get("special_equipment", false)):
+				errors.append("%s cannot create UUID special equipment from a starting-module definition" % plan_label)
 		if unique_ship_grants.has(ship_id):
 			errors.append("Unique ship '%s' has multiple construction plans" % ship_id)
 		unique_ship_grants[ship_id] = plan.get("id", "")
@@ -452,7 +523,7 @@ func validate() -> void:
 		if str(module.get("slot", "")) not in ["weapon", "shield", "drive", "utility", "core"]:
 			errors.append("module '%s' has an invalid slot type" % module.get("id", "?"))
 		if not items.has(str(module.get("id", ""))):
-			errors.append("module '%s' requires a matching inventory item" % module.get("id", "?"))
+			errors.append("module '%s' requires matching recipe-catalog metadata" % module.get("id", "?"))
 		var module_skill_ids: Dictionary = {}
 		for skill in module.get("combat_skills", []):
 			var skill_id := str(skill.get("id", ""))
@@ -577,6 +648,8 @@ func validate() -> void:
 	for ship in ships.values():
 		if int(ship.get("module_slots", -1)) < 0:
 			errors.append("ship '%s' has invalid module slots" % ship.get("id", "?"))
+		if not ship.get("capabilities", {}).is_empty():
+			errors.append("ship '%s' grants mission capabilities from its hull; roles must come from its Loadout" % ship.get("id", "?"))
 		var slot_total := 0
 		for count in ship.get("slot_layout", {}).values():
 			slot_total += int(count)
@@ -591,6 +664,11 @@ func validate() -> void:
 	_validate_planet_visual_profiles()
 	_validate_progression_supply_gates()
 	_validate_first_phase_progression_contract()
+	_validate_second_phase_capital_contract()
+	_validate_third_phase_industry_contract()
+	_validate_fourth_phase_freight_contract()
+	_validate_seventh_phase_inventory_contract()
+	_validate_eighth_phase_geography_contract()
 
 
 func _validate_simulation_profiles() -> void:
@@ -667,11 +745,6 @@ func _validate_first_phase_progression_contract() -> void:
 			if step_id.is_empty() or step_ids.has(step_id):
 				errors.append("Phase-one Guide goal '%s' contains a missing or duplicate step id '%s'" % [goal.get("id", "?"), step_id])
 			step_ids[step_id] = true
-			for requirement_value in step.get("requirements", []):
-				for leaf in _requirement_leaves(requirement_value as Dictionary):
-					var activity_id := str(leaf.get("id", ""))
-					if str(leaf.get("type", "")) == "activity_complete" and activities.has(activity_id) and is_module_bom_activity(activities[activity_id]):
-						errors.append("Phase-one Guide step '%s' cannot require module BOM activity '%s'; ordinary modules are built by Starport refit" % [step_id, activity_id])
 
 	# Every manufacturing runtime exists from a new game, but only the founding
 	# workshop starts active. Every later facility therefore needs an ordinary
@@ -696,6 +769,263 @@ func _validate_first_phase_progression_contract() -> void:
 			errors.append("Phase-one manufacturing facility '%s' has no construction activity that unlocks it" % facility_id)
 
 
+func _validate_second_phase_capital_contract() -> void:
+	var capital_goods: Array = industry_rules.get("capital_goods", [])
+	if capital_goods.size() < 4:
+		errors.append("Phase-two capital slice must define at least four capital goods")
+	for item_id_value in capital_goods:
+		var item_id := str(item_id_value)
+		if not items.has(item_id) or str(items[item_id].get("category", "")) != "Capital Good":
+			errors.append("Phase-two capital good '%s' is missing or has the wrong category" % item_id)
+			continue
+		var repeatable_producers := 0
+		var construction_consumers := 0
+		for activity_value in activities.values():
+			var activity := activity_value as Dictionary
+			if bool(activity.get("repeat", true)) and activity.get("rewards", []).any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id):
+				repeatable_producers += 1
+			if _is_construction_definition(activity) and activity.get("costs", []).any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id):
+				construction_consumers += 1
+		if repeatable_producers <= 0:
+			errors.append("Phase-two capital good '%s' has no repeatable producer" % item_id)
+		if construction_consumers < 2:
+			errors.append("Phase-two capital good '%s' must be consumed by at least two construction projects" % item_id)
+	var basic_machine_tools: Dictionary = activities.get("fabricate_basic_machine_tools", {})
+	if basic_machine_tools.is_empty() or str(basic_machine_tools.get("facility", "")) != "makeshift_workshop" or basic_machine_tools.get("requirements", []).any(func(requirement): return str((requirement as Dictionary).get("type", "")) == "facility_level"):
+		errors.append("Phase-two must retain a low-technology machine-tool recovery recipe outside facility expansion")
+	for project_type_value in industry_rules.get("capacity_upgrade_projects", {}).keys():
+		var project_type := str(project_type_value)
+		var definition: Dictionary = industry_rules["capacity_upgrade_projects"].get(project_type, {})
+		if project_type not in ["POWER_UPGRADE", "COOLING_UPGRADE", "STRUCTURE_UPGRADE", "STORAGE_UPGRADE", "BULK_STORAGE_UPGRADE", "COMPONENT_STORAGE_UPGRADE", "FLUID_STORAGE_UPGRADE", "SPECIAL_STORAGE_UPGRADE", "LOGISTICS_HUB_UPGRADE"]:
+			errors.append("Unknown phase-two capacity project type '%s'" % project_type)
+		if int(definition.get("increment", 0)) <= 0 or float(definition.get("work_required", 0.0)) <= 0.0:
+			errors.append("Capacity project '%s' must define positive increment and work" % project_type)
+		for cost_value in definition.get("costs", []):
+			var cost := cost_value as Dictionary
+			if not items.has(str(cost.get("item", ""))) or int(cost.get("quantity", 0)) <= 0:
+				errors.append("Capacity project '%s' has an invalid capital cost" % project_type)
+
+
+func _validate_third_phase_industry_contract() -> void:
+	var stage_order: Array = industry_rules.get("scale_stage_order", [])
+	if stage_order != ["WORKSHOP", "FACTORY", "INDUSTRIAL_COMPLEX", "AUTOMATED_DISTRICT"]:
+		errors.append("Phase-three Industry Scale Stages must define the approved four-stage order")
+	var previous_max := 0
+	for stage_value in stage_order:
+		var stage_id := str(stage_value)
+		var stage: Dictionary = industry_rules.get("scale_stages", {}).get(stage_id, {})
+		if int(stage.get("min_level", 0)) != previous_max + 1 or int(stage.get("max_level", 0)) < int(stage.get("min_level", 0)) or int(stage.get("max_production_lines", 0)) <= 0:
+			errors.append("Industry Scale Stage '%s' has an invalid level boundary or Production Line limit" % stage_id)
+		previous_max = int(stage.get("max_level", previous_max))
+		if stage_id != "WORKSHOP":
+			_validate_item_entries(stage.get("upgrade_costs", []), "Industry Scale Stage '%s'" % stage_id)
+	var specializations: Dictionary = industry_rules.get("location_specializations", {})
+	if specializations.size() < 4:
+		errors.append("Phase-three must define the first four Location specializations")
+	for specialization_value in specializations.keys():
+		var specialization_id := str(specialization_value)
+		var specialization: Dictionary = specializations[specialization_id]
+		var multipliers: Dictionary = specialization.get("facility_multipliers", {})
+		if not multipliers.values().any(func(value): return float(value) > 1.0) or not multipliers.values().any(func(value): return float(value) < 1.0):
+			errors.append("Location specialization '%s' must create a facility-specific layout tradeoff" % specialization_id)
+		_validate_item_entries(specialization.get("upgrade_costs", []), "Location specialization '%s'" % specialization_id)
+	for group_id in ["steelmaking", "large_structure_fabrication"]:
+		var methods: Array = activities.values().filter(func(value): return str((value as Dictionary).get("production_method_group", "")) == group_id)
+		if methods.size() < 2:
+			errors.append("Phase-three production family '%s' must define at least two methods" % group_id)
+			continue
+		for method_value in methods:
+			var method := method_value as Dictionary
+			if str(method.get("product_family_id", "")).is_empty() or str(method.get("minimum_scale_stage", "")) not in stage_order or float(method.get("production_energy_multiplier", 0.0)) <= 0.0 or float(method.get("production_cooling_multiplier", 0.0)) <= 0.0:
+				errors.append("Production Method '%s' is missing family, Scale Stage, Power or Cooling constraints" % method.get("id", "?"))
+
+
+func _apply_freight_profiles() -> void:
+	var category_defaults: Dictionary = freight_rules.get("category_defaults", {})
+	var item_overrides: Dictionary = freight_rules.get("item_overrides", {})
+	for item_id_value in items.keys():
+		var item_id := str(item_id_value)
+		var item: Dictionary = items[item_id]
+		var profile: Dictionary = category_defaults.get(str(item.get("category", "")), {}).duplicate(true)
+		profile.merge(item_overrides.get(item_id, {}), true)
+		if item.has("freight_class"):
+			profile["freight_class"] = item.get("freight_class")
+		if item.has("freight_units"):
+			profile["freight_units"] = item.get("freight_units")
+		item["freight_class"] = str(profile.get("freight_class", ""))
+		item["freight_units"] = float(profile.get("freight_units", 0.0))
+
+
+func item_freight_profile(item_id: String) -> Dictionary:
+	var item: Dictionary = items.get(item_id, {})
+	return {
+		"freight_class":str(item.get("freight_class", "STANDARD")),
+		"freight_units":maxf(0.001, float(item.get("freight_units", 1.0)))
+	}
+
+
+func _apply_storage_profiles() -> void:
+	var rules: Dictionary = industry_rules.get("storage_classes", {})
+	var category_defaults: Dictionary = rules.get("category_defaults", {})
+	var item_overrides: Dictionary = rules.get("item_overrides", {})
+	for item_id_value in items.keys():
+		var item_id := str(item_id_value)
+		var item: Dictionary = items[item_id]
+		var profile: Dictionary = category_defaults.get(str(item.get("category", "")), {}).duplicate(true)
+		profile.merge(item_overrides.get(item_id, {}), true)
+		if item.has("storage_class"):
+			profile["storage_class"] = item.get("storage_class")
+		if item.has("storage_units"):
+			profile["storage_units"] = item.get("storage_units")
+		item["storage_class"] = str(profile.get("storage_class", "SPECIAL"))
+		item["storage_units"] = maxf(0.001, float(profile.get("storage_units", 1.0)))
+
+
+func item_storage_profile(item_id: String) -> Dictionary:
+	var item: Dictionary = items.get(item_id, {})
+	return {
+		"storage_class":str(item.get("storage_class", "SPECIAL")),
+		"storage_units":maxf(0.001, float(item.get("storage_units", 1.0)))
+	}
+
+
+func _validate_seventh_phase_inventory_contract() -> void:
+	var storage_rules: Dictionary = industry_rules.get("storage_classes", {})
+	var required_classes := ["BULK", "COMPONENT", "FLUID", "SPECIAL"]
+	if storage_rules.get("classes", []) != required_classes:
+		errors.append("Phase-seven Storage Classes must define BULK, COMPONENT, FLUID and SPECIAL")
+	for storage_class in required_classes:
+		if int(storage_rules.get("default_capacities", {}).get(storage_class, 0)) <= 0:
+			errors.append("Phase-seven Storage Class '%s' must define positive default capacity" % storage_class)
+	for item_value in items.values():
+		var item := item_value as Dictionary
+		if str(item.get("storage_class", "")) not in required_classes or float(item.get("storage_units", 0.0)) <= 0.0:
+			errors.append("Item '%s' must resolve to a valid positive Storage profile" % item.get("id", "?"))
+	var maintenance: Dictionary = industry_rules.get("operations_maintenance", {})
+	if float(maintenance.get("base_preservation_per_level_per_hour", -1.0)) < 0.0 or float(maintenance.get("operating_wear_per_level_per_hour", -1.0)) < 0.0:
+		errors.append("Phase-seven O&M rules must define non-negative preservation and wear")
+	for profile_value in [maintenance.get("default_items", {})] + maintenance.get("category_profiles", {}).values():
+		for item_id_value in (profile_value as Dictionary).keys():
+			if not items.has(str(item_id_value)) or float((profile_value as Dictionary).get(item_id_value, 0.0)) < 0.0:
+				errors.append("Phase-seven O&M profile references invalid product '%s'" % item_id_value)
+	for activity_value in activities.values():
+		var activity := activity_value as Dictionary
+		if str(activity.get("domain", "")) != "industry" or not bool(activity.get("repeat", true)):
+			continue
+		var facility: Dictionary = facilities.get(str(activity.get("facility", "")), {})
+		for capability_value in activity.get("required_facility_capabilities", []):
+			var capability_id := str(capability_value)
+			var has_device := float(facility.get("base_capabilities", facility.get("capabilities", {})).get(capability_id, 0.0)) >= 1.0
+			for module_value in process_modules.values():
+				var process_module := module_value as Dictionary
+				if process_module.get("compatible_facilities", []).has(str(activity.get("facility", ""))) and float(process_module.get("grants_capabilities", {}).get(capability_id, 0.0)) >= 1.0:
+					has_device = true
+			if not has_device:
+				errors.append("Production Method '%s' cannot resolve capability '%s' to a real Production Device" % [activity.get("id", "?"), capability_id])
+
+
+func _validate_eighth_phase_geography_contract() -> void:
+	if survey_rules.get("state_order", []) != ["UNKNOWN", "DETECTED", "SURVEYED", "DEEP_SURVEYED"]:
+		errors.append("Phase-eight Survey State order is invalid")
+	for survey_state in ["DETECTED", "SURVEYED", "DEEP_SURVEYED"]:
+		if float(survey_rules.get("mission_work_ms", {}).get(survey_state, 0.0)) <= 0.0 or str(survey_rules.get("required_capabilities", {}).get(survey_state, "")).is_empty():
+			errors.append("Survey mission '%s' must define work and a ship capability" % survey_state)
+		_validate_item_entries(survey_rules.get("base_costs", {}).get(survey_state, []), "Survey mission '%s'" % survey_state)
+	_validate_item_entries(survey_rules.get("site_development", {}).get("costs", []), "Site Development")
+	if float(survey_rules.get("site_development", {}).get("work_required", 0.0)) <= 0.0:
+		errors.append("Site Development must define positive work")
+	for region_value in regions.values():
+		var region := region_value as Dictionary
+		if str(region.get("system_id", SpaceGameState.SYSTEM_ID)) != SpaceGameState.SYSTEM_ID:
+			errors.append("Current product scope permits only the single '%s' stellar system" % SpaceGameState.SYSTEM_ID)
+		var environment: Dictionary = region.get("environment", {})
+		for field in ["gravity", "vacuum", "atmosphere", "solar_flux", "thermal_environment", "radiation", "transport_distance", "construction_difficulty", "maintenance_severity"]:
+			if not environment.has(field):
+				errors.append("Location '%s' is missing environment field '%s'" % [region.get("id", "?"), field])
+		if float(environment.get("gravity", -1.0)) < 0.0 or float(environment.get("solar_flux", -1.0)) < 0.0 or float(environment.get("transport_distance", -1.0)) < 0.0 or float(environment.get("construction_difficulty", 0.0)) <= 0.0:
+			errors.append("Location '%s' has invalid environment magnitudes" % region.get("id", "?"))
+	for method_value in extraction_methods.values():
+		var method := method_value as Dictionary
+		if float(method.get("potential_multiplier", 0.0)) <= 0.0 or str(method.get("survey_required", "")) not in survey_rules.get("state_order", []):
+			errors.append("Extraction Method '%s' has invalid Potential or Survey requirements" % method.get("id", "?"))
+	for location_value in mining_locations.values():
+		var mining_location := location_value as Dictionary
+		if not regions.has(str(mining_location.get("region", ""))) or float(mining_location.get("extraction_potential", 0.0)) <= 0.0 or mining_location.get("resource_profile", null) is not Dictionary:
+			errors.append("Resource Profile '%s' must reference a Location and positive Sustainable Extraction Potential" % mining_location.get("id", "?"))
+		var profile: Dictionary = mining_location.get("resource_profile", {})
+		if str(profile.get("resource_type", "")).is_empty() or not items.has(str(profile.get("resource_type", ""))):
+			errors.append("Resource Profile '%s' has an invalid resource type" % mining_location.get("id", "?"))
+		for method_id_value in profile.get("allowed_methods", []):
+			if not extraction_methods.has(str(method_id_value)):
+				errors.append("Resource Profile '%s' references unknown Extraction Method '%s'" % [mining_location.get("id", "?"), method_id_value])
+
+
+func _validate_fourth_phase_freight_contract() -> void:
+	var required_classes := ["BULK", "STANDARD", "PRECISION", "CRYOGENIC", "HAZARDOUS", "OVERSIZED"]
+	if freight_rules.get("classes", []) != required_classes:
+		errors.append("Phase-four Freight Classes must define the approved six-class order")
+	for item_value in items.values():
+		var item := item_value as Dictionary
+		if str(item.get("freight_class", "")) not in required_classes or float(item.get("freight_units", 0.0)) <= 0.0:
+			errors.append("Item '%s' must resolve to a valid positive Freight profile" % item.get("id", "?"))
+	for required_mode_id in ["general_cargo", "bulk_tug", "mass_driver", "cryogenic_carrier", "express_courier"]:
+		if not transport_modes.has(required_mode_id):
+			errors.append("Phase-four is missing required Transport Mode '%s'" % required_mode_id)
+	if transport_modes.size() < 5:
+		errors.append("Phase-four second round must define at least five Transport Modes")
+	var ship_modes := 0
+	var infrastructure_modes := 0
+	var available_ship_capabilities := {}
+	for ship_value in ships.values():
+		for capability_id_value in (ship_value as Dictionary).get("capabilities", {}).keys():
+			available_ship_capabilities[str(capability_id_value)] = true
+	for module_value in modules.values():
+		for capability_id_value in (module_value as Dictionary).get("capabilities", {}).keys():
+			available_ship_capabilities[str(capability_id_value)] = true
+	for mode_value in transport_modes.values():
+		var mode := mode_value as Dictionary
+		var supported: Array = mode.get("supported_freight_classes", [])
+		if supported.is_empty() or supported.any(func(value): return str(value) not in required_classes):
+			errors.append("Transport Mode '%s' has invalid Freight Class compatibility" % mode.get("id", "?"))
+		if str(mode.get("directions", "")) not in ["BOTH", "FORWARD", "REVERSE"] or mode.get("route_ids", []).is_empty():
+			errors.append("Transport Mode '%s' must define valid routes and directions" % mode.get("id", "?"))
+		for route_id_value in mode.get("route_ids", []):
+			if str(route_id_value) != "*" and not logistics_routes.has(str(route_id_value)):
+				errors.append("Transport Mode '%s' references missing route '%s'" % [mode.get("id", "?"), route_id_value])
+		var required_technology := str(mode.get("required_technology", ""))
+		var required_facility := str(mode.get("required_facility", ""))
+		if not required_technology.is_empty() and not technologies.has(required_technology):
+			errors.append("Transport Mode '%s' references missing technology '%s'" % [mode.get("id", "?"), required_technology])
+		if not required_facility.is_empty() and not facilities.has(required_facility):
+			errors.append("Transport Mode '%s' references missing facility '%s'" % [mode.get("id", "?"), required_facility])
+		var minimum_ship_capacity := int(mode.get("minimum_ship_cargo_capacity", 0))
+		var maximum_ship_capacity := int(mode.get("maximum_ship_cargo_capacity", 0))
+		if minimum_ship_capacity < 0 or maximum_ship_capacity > 0 and maximum_ship_capacity < minimum_ship_capacity:
+			errors.append("Transport Mode '%s' has invalid ship cargo-capacity bounds" % mode.get("id", "?"))
+		for capability_id_value in mode.get("required_ship_capabilities", []):
+			if not available_ship_capabilities.has(str(capability_id_value)):
+				errors.append("Transport Mode '%s' requires unavailable ship capability '%s'" % [mode.get("id", "?"), capability_id_value])
+		for key in ["capacity_multiplier", "transit_time_multiplier", "handling_time_multiplier", "propellant_multiplier", "energy_per_freight_unit", "maintenance_multiplier"]:
+			if float(mode.get(key, -1.0)) < 0.0:
+				errors.append("Transport Mode '%s' has invalid %s" % [mode.get("id", "?"), key])
+		if bool(mode.get("infrastructure_service", false)):
+			infrastructure_modes += 1
+		else:
+			ship_modes += 1
+	if ship_modes < 2 or infrastructure_modes < 1:
+		errors.append("Phase-four requires two ship modes and one infrastructure Transport Mode")
+	if float(items.get("mixed_raw_ore", {}).get("freight_units", 0.0)) <= float(items.get("iron_ore", {}).get("freight_units", 0.0)) or float(items.get("iron_ore", {}).get("freight_units", 0.0)) <= float(items.get("iron_ingot", {}).get("freight_units", 0.0)):
+		errors.append("Phase-four preprocessing must reduce bulk Freight pressure from raw feedstock to ore to alloy")
+
+
+func _is_construction_definition(activity: Dictionary) -> bool:
+	if bool(activity.get("construction_project", false)):
+		return true
+	if bool(activity.get("repeat", true)):
+		return false
+	return activity.get("effects", []).any(func(effect): return str((effect as Dictionary).get("type", "")) in ["unlock_facility", "upgrade_facility", "complete_megastructure"])
+
+
 func _validate_closed_economy() -> void:
 	var stable_sources := {}
 	var consumers := {}
@@ -711,6 +1041,9 @@ func _validate_closed_economy() -> void:
 		var project := project_value as Dictionary
 		for cost_value in project.get("costs", []):
 			consumers[str((cost_value as Dictionary).get("item", ""))] = "research project '%s'" % project.get("id", "?")
+		for stage_value in project.get("stages", []):
+			for cost_value in (stage_value as Dictionary).get("costs", []):
+				consumers[str((cost_value as Dictionary).get("item", ""))] = "research project '%s' stage '%s'" % [project.get("id", "?"), (stage_value as Dictionary).get("id", "?")]
 	for plan_value in ship_construction_projects.values():
 		var plan := plan_value as Dictionary
 		for field in ["costs", "fixed_costs"]:
@@ -718,6 +1051,9 @@ func _validate_closed_economy() -> void:
 				consumers[str((cost_value as Dictionary).get("item", ""))] = "ship construction project '%s'" % plan.get("id", "?")
 	for cost_value in industry_rules.get("expansion_base_costs", []):
 		consumers[str((cost_value as Dictionary).get("item", ""))] = "Industry expansion"
+	for transformation_value in industry_rules.get("industrial_transformations", {}).values():
+		for cost_value in (transformation_value as Dictionary).get("costs", []):
+			consumers[str((cost_value as Dictionary).get("item", ""))] = "Industrial Transformation"
 	for bom_value in industry_rules.get("module_bom_defaults", {}).values():
 		for cost_value in bom_value as Array:
 			consumers[str((cost_value as Dictionary).get("item", ""))] = "ordinary module BOM"
@@ -1025,6 +1361,15 @@ func _validate_item_entries(entries: Array, owner: String) -> void:
 
 func _validate_effect(effect: Dictionary, owner: String) -> void:
 	match str(effect.get("type", "")):
+		"grant_spillover":
+			if not technologies.has(str(effect.get("id", ""))):
+				errors.append("%s grants a missing Spillover Technology" % owner)
+		"set_experimental_maturity":
+			if not items.has(str(effect.get("item", ""))) or str(effect.get("maturity", "")) not in ["LAB_SAMPLE", "EXPERIMENTAL", "PILOT", "INDUSTRIAL"]:
+				errors.append("%s sets an invalid Experimental Technology maturity" % owner)
+		"unlock_industrial_transformation":
+			if str(effect.get("id", "")).is_empty():
+				errors.append("%s unlocks an empty Industrial Transformation" % owner)
 		"unlock_ship_plan":
 			if not ship_construction_projects.has(str(effect.get("id", ""))):
 				errors.append("%s unlocks a missing ship construction plan" % owner)
@@ -1118,6 +1463,21 @@ func _validate_requirement(requirement: Dictionary, owner: String) -> void:
 		"domain_level":
 			if not domains.has(str(requirement.get("domain", ""))):
 				errors.append("%s requires a missing domain" % owner)
+		"technology_domain":
+			if str(requirement.get("domain", "")) not in SpaceGameState.TECHNOLOGY_DOMAIN_IDS or int(requirement.get("level", 0)) <= 0:
+				errors.append("%s has an invalid Technology Domain gate" % owner)
+		"research_capacity":
+			if float(requirement.get("value", 0.0)) <= 0.0:
+				errors.append("%s has an invalid Research Capacity gate" % owner)
+		"operating_condition":
+			if str(requirement.get("id", "")) not in ["computing_capacity", "power_capacity", "advanced_power_capacity", "cooling_capacity", "logistics_throughput", "precision_manufacturing"] or float(requirement.get("value", 0.0)) <= 0.0:
+				errors.append("%s has an invalid Operating Condition gate" % owner)
+		"experimental_maturity":
+			if not items.has(str(requirement.get("id", ""))) or str(requirement.get("level", "")) not in ["LAB_SAMPLE", "EXPERIMENTAL", "PILOT", "INDUSTRIAL"]:
+				errors.append("%s has an invalid Experimental Maturity gate" % owner)
+		"spillover":
+			if not technologies.has(str(requirement.get("id", ""))):
+				errors.append("%s requires a missing Spillover Technology" % owner)
 		"activity_complete":
 			if not activities.has(str(requirement.get("id", ""))):
 				errors.append("%s requires a missing activity" % owner)

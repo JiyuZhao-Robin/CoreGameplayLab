@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Helios Core Gameplay Lab"
 config/description="A UI-light standalone project for validating the complete Helios gameplay loop."
-config/version="1.21.0-core-rules"
+config/version="1.28.0-industrial-geography"
 run/main_scene="res://src/ui/main.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 

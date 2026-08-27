@@ -119,6 +119,30 @@ func _run() -> void:
 	await _redraw()
 	_check(main.find_child("StartRoute_lunar_route", true, false) != null, "Expedition route has a formal UI action")
 	_check(_has_text_fragment(main, "指挥容量") and _has_text_fragment(main, "货舱"), "Expedition UI exposes translated readiness and fleet capacity")
+
+	# A blocked R&D Field Test must override the broad goal list with one exact,
+	# executable Guide instruction and route the CTA to the Expedition workspace.
+	Game.state.facilities["research_complex"] = {"status":"ACTIVE", "level":1}
+	Game.state.research = SpaceGameState.empty_research_program()
+	Game.state.research.merge({
+		"project_id":"research_advanced_propulsion",
+		"status":"BLOCKED",
+		"stage_id":"field_test",
+		"blocker":{
+			"primary_reason":"FIELD_TEST_REQUIRED",
+			"domain":"research",
+			"requirement":{"type":"route_complete", "id":"propulsion_proving_route"}
+		}
+	}, true)
+	var research_guide := String(main.call("_next_flow_step"))
+	_check("原型推进实测航线" in research_guide and "倒计时不能替代" in research_guide, "Guide names the exact real R&D Field Test instead of suggesting more waiting")
+	_check(String(main.call("_next_flow_page")) == "expedition", "Guide routes a blocked R&D Field Test directly to Expedition")
+	var prototype_guidance := String(main.call("_research_blocker_guidance", {"primary_reason":"OPERATING_CONDITION", "requirement":{"type":"activity_complete", "id":"fabricate_propulsion_test_article"}}))
+	_check("制造原型推进室" in prototype_guidance and "真实工业产线" in prototype_guidance, "Guide names the exact industrial prototype recipe at an R&D Material/Component Gate")
+	Game.state.research["blocker"] = {"primary_reason":"OPERATING_CONDITION", "domain":"research", "requirement":{"type":"activity_complete", "id":"fabricate_propulsion_test_article"}}
+	_check(String(main.call("_next_flow_page")) == "industry", "Guide routes an R&D prototype manufacturing gate directly to Industry")
+	var roadmap := String(main.call("_research_roadmap_text", Game.content.research_projects["research_advanced_propulsion"], -1))
+	_check("钛合金" in roadmap and "制造原型推进室" in roadmap and "原型推进实测航线" in roadmap, "R&D roadmap reveals concrete future supply, prototype and Field Test demands before program start")
 	_finish()
 
 

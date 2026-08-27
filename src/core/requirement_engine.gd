@@ -30,6 +30,18 @@ func evaluate(state: SpaceGameState, requirement: Dictionary) -> bool:
 		"domain_level":
 			var domain: Dictionary = state.domains.get(str(requirement.get("domain", "")), {})
 			return int(domain.get("level", 0)) >= int(requirement.get("level", 1))
+		"technology_domain":
+			var technology_domain: Dictionary = state.technology_domains.get(str(requirement.get("domain", "")), {})
+			return int(technology_domain.get("level", 0)) >= int(requirement.get("level", 1))
+		"research_capacity":
+			return float(capability_provider.call(state, "research_capacity")) >= float(requirement.get("value", 1.0))
+		"operating_condition":
+			return float(capability_provider.call(state, str(requirement.get("id", "")))) >= float(requirement.get("value", 1.0))
+		"experimental_maturity":
+			var maturity_rank := {"THEORY":0, "LAB_SAMPLE":1, "EXPERIMENTAL":2, "PILOT":3, "INDUSTRIAL":4}
+			return int(maturity_rank.get(str(state.experimental_maturity.get(str(requirement.get("id", "")), "THEORY")), 0)) >= int(maturity_rank.get(str(requirement.get("level", "EXPERIMENTAL")), 2))
+		"spillover":
+			return bool(state.technology_spillovers.get(str(requirement.get("id", "")), false))
 		"activity_complete":
 			return int(state.completed_activities.get(str(requirement.get("id", "")), 0)) > 0
 		"route_complete":

@@ -29,6 +29,9 @@ var _location_section := "overview"
 var _industry_section := "production"
 var _fleet_section := "roster"
 var _logistics_item_selection := {}
+var _planner_product_id := ""
+var _planner_target_rate := 1.0
+var _planner_result: Dictionary = {}
 
 
 func _ready() -> void:
@@ -462,36 +465,7 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 	box.add_child(_card_text("本地物流 · %s · 需求 %.2f / 容量 %.2f 单位/秒 · 利用率 %.0f%%" % [_status_text(String(local_logistics.get("status", "NOT_AVAILABLE"))), float(local_logistics.get("required", 0.0)), float(local_logistics.get("capacity", 0.0)), float(local_logistics.get("utilization", 0.0)) * 100.0], COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
 	var constraints: Dictionary = summary.get("constraints", {})
 	box.add_child(_card_text("能源 %.1f / %.1f · 冷却%s %.1f / %.1f · 结构 %.1f / %.1f · 吞吐率 %.0f%%" % [float(constraints.get("power_demand", 0.0)), float(constraints.get("power_capacity", 0.0)), "需求" if bool(constraints.get("cooling_required", false)) else "（无需）", float(constraints.get("cooling_demand", 0.0)), float(constraints.get("cooling_capacity", 0.0)), float(constraints.get("structural_used", 0.0)), float(constraints.get("structural_capacity", 0.0)), float(constraints.get("throughput_multiplier", 0.0)) * 100.0], COLOR_WARN if str(constraints.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
-	box.add_child(_section_title("工业模板"))
-	var automation: Dictionary = location.get("automation", {})
-	var current_template_id := String(automation.get("industrial_template_id", ""))
-	var current_template: Dictionary = Game.content.industrial_templates.get(current_template_id, {})
-	var template_card := _card()
-	template_card.add_child(_label("当前 · %s · %s" % [_content_name(current_template, "手动模式"), _status_text(String(automation.get("status", "MANUAL")))], 16, COLOR_ACCENT if not current_template_id.is_empty() else COLOR_MUTED))
-	var template_ids: Array = Game.content.industrial_templates.keys()
-	template_ids.sort()
-	var template_selector := OptionButton.new()
-	for index in template_ids.size():
-		var template_id := String(template_ids[index])
-		template_selector.add_item(_content_name(Game.content.industrial_templates.get(template_id, {}), template_id))
-		if template_id == current_template_id:
-			template_selector.select(index)
-	template_card.add_child(_labeled_control("模板", template_selector))
-	var template_actions := HBoxContainer.new()
-	template_actions.add_theme_constant_override("separation", 6)
-	template_actions.add_child(_button("应用模板", _apply_selected_industrial_template.bind(template_selector, template_ids), template_ids.is_empty()))
-	template_actions.add_child(_button("恢复手动模式", _command.bind("清除工业模板", Game.clear_location_industrial_template.bind(_selected_location_id)), current_template_id.is_empty(), COLOR_WARN))
-	template_card.add_child(template_actions)
-	if not current_template_id.is_empty() and not current_template.get("managed_facilities", []).is_empty():
-		template_card.add_child(_label("自动扩建 · %s · 目标等级 %d · %s" % ["已开启" if bool(automation.get("auto_expand_enabled", false)) else "已暂停", int(automation.get("target_industry_level", 5)), _status_text(String(automation.get("last_blocked_reason", "READY"))) if not String(automation.get("last_blocked_reason", "")).is_empty() else "就绪"], 13, COLOR_MUTED))
-		_add_blocker_label(template_card, automation)
-		var expansion_actions := HBoxContainer.new()
-		expansion_actions.add_theme_constant_override("separation", 6)
-		for target_level in [5, 10, 20]:
-			expansion_actions.add_child(_button("自动扩至 %d 级" % target_level, _command.bind("配置自动扩建", Game.configure_location_industrial_automation.bind(_selected_location_id, true, target_level)), bool(automation.get("auto_expand_enabled", false)) and int(automation.get("target_industry_level", 5)) == target_level, COLOR_ACCENT))
-		expansion_actions.add_child(_button("暂停扩建", _command.bind("暂停自动扩建", Game.configure_location_industrial_automation.bind(_selected_location_id, false, int(automation.get("target_industry_level", 5)))), not bool(automation.get("auto_expand_enabled", false)), COLOR_WARN))
-		template_card.add_child(expansion_actions)
-	box.add_child(_wrap_card(template_card))
+	box.add_child(_card_text("生产由已建 Factory、已安装 Production Device 与已选择 Production Method 真实执行。系统只诊断问题，不会擅自扩厂、改配方或重做物流。", COLOR_MUTED))
 	box.add_child(_section_title("本地工业"))
 	for facility_value in SpaceGameState.MANUFACTURING_FACILITY_IDS:
 		var facility_id := String(facility_value)
@@ -499,30 +473,101 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 			continue
 		var facility: Dictionary = Game.content.facilities.get(facility_id, {})
 		var local_industry: Dictionary = Game.state.location_industry(_selected_location_id, facility_id)
-		var runtime: Dictionary = Game.state.industrial_operation_for(_selected_location_id, facility_id)
 		var level := int(local_industry.get("level", 0))
+		var scale_stage := String(local_industry.get("scale_stage", "WORKSHOP"))
+		var scale_names := {"WORKSHOP":"工坊", "FACTORY":"工厂", "INDUSTRIAL_COMPLEX":"工业综合体", "AUTOMATED_DISTRICT":"自动化工业区"}
+		var lines := Game.state.production_lines_for(_selected_location_id, facility_id)
 		var card := _card()
-		card.add_child(_label("%s · 工业等级 %d" % [_content_name(facility, facility_id), level], 16, COLOR_TEXT))
+		card.add_child(_label("%s · 工业等级 %d · %s · 总产能 %.1f · 产线 %d/%d" % [_content_name(facility, facility_id), level, scale_names.get(scale_stage, scale_stage), Game.simulation.facility_manufacturing_throughput(Game.state, facility_id, _selected_location_id), lines.size(), Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id)], 16, COLOR_TEXT))
 		if level > 0:
-			var current_activity_id := String(runtime.get("activity_id", local_industry.get("production_method_id", "")))
-			var mastery := Game.simulation.industry_mastery_profile(Game.state, _selected_location_id, facility_id, current_activity_id)
-			card.add_child(_label("工艺 %s · 产品熟练度 %d · 工业经验 %d · 规模加成 +%.0f%%" % [_content_name(Game.content.activities.get(current_activity_id, {}), "空闲"), int(mastery.get("mastery_level", 0)), int(mastery.get("expertise_level", 0)), minf(0.30, float(maxi(0, level - 1)) * 0.02) * 100.0], 13, COLOR_MUTED))
-			for activity_value in Game.content.activities.values():
-				var activity := activity_value as Dictionary
-				var activity_id := String(activity.get("id", ""))
-				if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
-					continue
-				if current_activity_id == activity_id and String(runtime.get("status", "")) in ["RUNNING", "BLOCKED"]:
-					card.add_child(_button("停止 · %s" % _content_name(activity, activity_id), _command.bind("停止本地工业", Game.stop_industry_operation.bind(int(runtime.get("slot", -1)))), false, COLOR_WARN))
-				else:
-					var busy := String(runtime.get("status", "")) in ["RUNNING", "BLOCKED"]
-					card.add_child(_button("采用工艺 · %s" % _content_name(activity, activity_id), _command.bind("设置生产工艺", Game.start_industry_operation.bind(int(runtime.get("slot", -1)), activity_id)), busy or not Game.simulation.activity_available(Game.state, activity)))
+			for runtime_value in lines:
+				var runtime := runtime_value as Dictionary
+				var current_activity_id := String(runtime.get("activity_id", ""))
+				if current_activity_id.is_empty():
+					current_activity_id = String(runtime.get("method_id", ""))
+				var mastery := Game.simulation.industry_mastery_profile(Game.state, _selected_location_id, facility_id, current_activity_id)
+				var device_id := String(runtime.get("production_device_id", ""))
+				var method_name := _content_name(Game.content.activities.get(current_activity_id, {}), "未配置")
+				var status_id := String(runtime.get("status", "IDLE"))
+				card.add_child(_label("%s · %s · %s\n装置 %s · 控制 %s · 优先级 %d · 理论/实际 %.3f/%.3f Cycle/s · 熟练度 %d" % [String(runtime.get("line_id", "LINE")), _status_text(status_id), method_name, device_id if not device_id.is_empty() else "未安装", _status_text(String(runtime.get("control_mode", "PINNED"))), int(runtime.get("priority", 50)), float(runtime.get("theoretical_rate", 0.0)), float(runtime.get("actual_rate", 0.0)), int(mastery.get("mastery_level", 0))], 13, COLOR_WARN if status_id.begins_with("BLOCKED") or status_id.ends_with("LIMITED") else COLOR_MUTED))
+				var control_row := HFlowContainer.new()
+				control_row.add_theme_constant_override("h_separation", 6)
+				var slot := int(runtime.get("slot", -1))
+				var mode := String(runtime.get("control_mode", "PINNED"))
+				var manual_lock := bool(runtime.get("manual_lock", true))
+				control_row.add_child(_button("固定工艺运行", _command.bind("固定生产工艺", Game.set_production_line_control.bind(slot, "PINNED", manual_lock)), mode == "PINNED", COLOR_ACCENT))
+				control_row.add_child(_button("关闭", _command.bind("关闭生产线", Game.set_production_line_control.bind(slot, "OFF", manual_lock)), mode == "OFF", COLOR_WARN))
+				control_row.add_child(_button("手动锁定：%s" % ("是" if manual_lock else "否"), _command.bind("切换手动锁定", Game.set_production_line_control.bind(slot, mode, not manual_lock)), false, COLOR_GOOD if manual_lock else COLOR_MUTED))
+				control_row.add_child(_button("高优先", _command.bind("提高产线优先级", Game.configure_production_line.bind(slot, 100, 100)), int(runtime.get("priority", 50)) == 100, COLOR_ACCENT))
+				control_row.add_child(_button("常规", _command.bind("恢复产线优先级", Game.configure_production_line.bind(slot, 100, 50)), int(runtime.get("priority", 50)) == 50))
+				card.add_child(control_row)
+				if status_id == "IDLE" or current_activity_id.is_empty():
+					for activity_value in Game.content.activities.values():
+						var activity := activity_value as Dictionary
+						var activity_id := String(activity.get("id", ""))
+						if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
+							continue
+						var scale_blocked := not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)
+						card.add_child(_button("采用工艺 · %s%s" % [_content_name(activity, activity_id), "（需更高规模阶段）" if scale_blocked else ""], _command.bind("设置生产工艺", Game.start_industry_operation.bind(slot, activity_id)), scale_blocked or not Game.simulation.activity_available(Game.state, activity)))
+			if lines.size() < Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id):
+				card.add_child(_label("新增生产线（同一工厂的运行产线自动均分真实设备吞吐）", 13, COLOR_ACCENT))
+				for activity_value in Game.content.activities.values():
+					var activity := activity_value as Dictionary
+					var activity_id := String(activity.get("id", ""))
+					if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
+						continue
+					card.add_child(_button("新增产线 · %s" % _content_name(activity, activity_id), _command.bind("新增生产线", Game.add_production_line.bind(_selected_location_id, facility_id, activity_id, 50, 50)), not Game.simulation.activity_available(Game.state, activity) or not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)))
 		var expansion_row := HBoxContainer.new()
 		expansion_row.add_theme_constant_override("separation", 6)
+		var stage_definition: Dictionary = Game.simulation.industry_scale_stage_definition(scale_stage)
+		var stage_max_level := int(stage_definition.get("max_level", 4))
 		for amount in [1, 5, 10]:
-			expansion_row.add_child(_button("扩建 +%d" % amount, _command.bind("扩建本地工业", Game.expand_location_industry.bind(_selected_location_id, facility_id, amount))))
+			expansion_row.add_child(_button("排队扩建 +%d" % amount, _command.bind("扩建本地工业", Game.expand_location_industry.bind(_selected_location_id, facility_id, amount)), level + amount > stage_max_level))
+		var next_stage := String(stage_definition.get("next_stage", ""))
+		if level >= stage_max_level and not next_stage.is_empty():
+			expansion_row.add_child(_button("建设跃迁 · %s" % scale_names.get(next_stage, next_stage), _command.bind("规模阶段跃迁", Game.queue_scale_stage_upgrade.bind(_selected_location_id, facility_id, 70)), Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state), COLOR_ACCENT))
 		card.add_child(expansion_row)
 		box.add_child(_wrap_card(card))
+	var mastered_transformations: Array[String] = []
+	for transformation_id_value in Game.content.industry_rules.get("industrial_transformations", {}).keys():
+		var transformation_id := String(transformation_id_value)
+		if bool(Game.state.unlocked_industrial_transformations.get(transformation_id, false)):
+			mastered_transformations.append(transformation_id)
+	if not mastered_transformations.is_empty():
+		box.add_child(_section_title("工业体系改造项目"))
+		for transformation_id in mastered_transformations:
+			var transformation: Dictionary = Game.content.industry_rules.get("industrial_transformations", {}).get(transformation_id, {})
+			var transformation_card := _card()
+			var adopted := bool(Game.state.adopted_industrial_transformations.get(transformation_id, false))
+			transformation_card.add_child(_label("%s · %s" % [transformation.get("name", transformation_id), "已采用" if adopted else "已掌握，尚未采用"], 15, COLOR_GOOD if adopted else COLOR_ACCENT))
+			transformation_card.add_child(_label("%s\n资本品：%s · 改造期间工业吞吐降至 %.0f%%" % [transformation.get("description", ""), _resource_list(transformation.get("costs", [])), float(transformation.get("downtime_multiplier", 0.5)) * 100.0], 12, COLOR_MUTED))
+			transformation_card.add_child(_button("启动工业改造项目", _command.bind("工业体系改造", Game.queue_industrial_transformation.bind(transformation_id, 70)), adopted, COLOR_ACCENT))
+			box.add_child(_wrap_card(transformation_card))
+	box.add_child(_section_title("地点容量工程"))
+	var capacity_card := _card()
+	capacity_card.add_child(_label("所有容量扩建都会进入统一建设队列；四类仓储互不转换。", 13, COLOR_MUTED))
+	var storage_snapshot: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
+	var storage_classes: Dictionary = storage_snapshot.get("classes", {})
+	var capacity_values := {
+		"POWER_UPGRADE":int(location.get("industry", {}).get("power_capacity", 0)),
+		"COOLING_UPGRADE":int(location.get("industry", {}).get("cooling_capacity", 0)),
+		"STRUCTURE_UPGRADE":int(location.get("industry", {}).get("structural_capacity", 0)),
+		"BULK_STORAGE_UPGRADE":int(storage_classes.get("BULK", {}).get("capacity", 0)),
+		"COMPONENT_STORAGE_UPGRADE":int(storage_classes.get("COMPONENT", {}).get("capacity", 0)),
+		"FLUID_STORAGE_UPGRADE":int(storage_classes.get("FLUID", {}).get("capacity", 0)),
+		"SPECIAL_STORAGE_UPGRADE":int(storage_classes.get("SPECIAL", {}).get("capacity", 0)),
+		"LOGISTICS_HUB_UPGRADE":int(location.get("logistics", {}).get("hub_throughput", 0))
+	}
+	var capacity_names := {"POWER_UPGRADE":"电力", "COOLING_UPGRADE":"冷却", "STRUCTURE_UPGRADE":"结构", "BULK_STORAGE_UPGRADE":"大宗仓储", "COMPONENT_STORAGE_UPGRADE":"部件仓储", "FLUID_STORAGE_UPGRADE":"流体仓储", "SPECIAL_STORAGE_UPGRADE":"特殊仓储", "LOGISTICS_HUB_UPGRADE":"物流枢纽"}
+	var capacity_actions := HFlowContainer.new()
+	capacity_actions.add_theme_constant_override("h_separation", 6)
+	for project_type_value in capacity_values.keys():
+		var project_type := String(project_type_value)
+		var rules: Dictionary = Game.content.industry_rules.get("capacity_upgrade_projects", {}).get(project_type, {})
+		var target := int(capacity_values[project_type]) + int(rules.get("increment", 1))
+		capacity_actions.add_child(_button("%s → %d" % [capacity_names.get(project_type, project_type), target], _command.bind("排队容量工程", Game.queue_location_capacity_upgrade.bind(_selected_location_id, project_type, target, 50)), Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state)))
+	capacity_card.add_child(capacity_actions)
+	box.add_child(_wrap_card(capacity_card))
 
 
 func _apply_selected_industrial_template(selector: OptionButton, template_ids: Array) -> void:
@@ -535,13 +580,14 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 	var summary: Dictionary = location.get("logistics_summary", {})
 	var logistics: Dictionary = location.get("logistics", {})
 	var logistics_technology: Dictionary = summary.get("technology_profile", Game.simulation.logistics.technology_profile(Game.state))
-	box.add_child(_card_text("%s · 航线 %d · 入站 %d · 出站 %d\n库存 %d / %d · 枢纽单次吞吐 %d\n运输技术 %s · 运量 ×%.2f · 耗时 ×%.2f · 燃料 ×%.2f · 能耗 %.2f/单位/航线 · 装卸 %.0f 毫秒/单位/端点" % [
+	var storage_snapshot: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
+	box.add_child(_card_text("%s · 航线 %d · 入站 %d · 出站 %d\n加权仓储 %.0f / %.0f · 枢纽单次吞吐 %d\n运输技术 %s · 运量 ×%.2f · 耗时 ×%.2f · 燃料 ×%.2f · 能耗 %.2f/单位/航线 · 装卸 %.0f 毫秒/单位/端点" % [
 		_status_text(String(summary.get("status", "NOT_CONNECTED"))),
 		int(summary.get("route_count", 0)),
 		int(summary.get("inbound_shipments", 0)),
 		int(summary.get("outbound_shipments", 0)),
-		Game.state.total_inventory_units(_selected_location_id),
-		int(logistics.get("storage_capacity", 0)),
+		float(storage_snapshot.get("used", 0.0)),
+		float(storage_snapshot.get("capacity", 0.0)),
 		int(logistics.get("hub_throughput", 0)),
 		_status_text(String(logistics_technology.get("name", "CHEMICAL_CARGO"))),
 		float(logistics_technology.get("freight_capacity_multiplier", 1.0)),
@@ -550,16 +596,62 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 		float(logistics_technology.get("energy_per_route_unit", 0.0)),
 		float(logistics_technology.get("loading_time_ms_per_unit", 40.0))
 	], COLOR_TEXT))
-	var limits_card := _card()
-	limits_card.add_child(_label("地点物流容量", 16, COLOR_ACCENT))
-	var storage_input := _number_input(int(logistics.get("storage_capacity", 0)), 1, 1000000, 10)
-	var throughput_input := _number_input(int(logistics.get("hub_throughput", 0)), 1, 1000000, 1)
-	limits_card.add_child(_labeled_control("库存容量", storage_input))
-	limits_card.add_child(_labeled_control("枢纽单次吞吐", throughput_input))
-	var save_limits := _button("应用容量限制", _save_logistics_limits.bind(storage_input, throughput_input))
-	save_limits.name = "SaveLogisticsLimits"
-	limits_card.add_child(save_limits)
-	box.add_child(_wrap_card(limits_card))
+	for storage_class in ["BULK", "COMPONENT", "FLUID", "SPECIAL"]:
+		var class_row: Dictionary = storage_snapshot.get("classes", {}).get(storage_class, {})
+		box.add_child(_label("%s：%.0f / %.0f（%.0f%%）" % [_status_text(storage_class), float(class_row.get("used", 0.0)), float(class_row.get("capacity", 0.0)), float(class_row.get("utilization", 0.0)) * 100.0], 12, COLOR_WARN if float(class_row.get("utilization", 0.0)) >= 0.9 else COLOR_MUTED))
+	box.add_child(_card_text("库存和枢纽容量不再免费即时修改；请在本地点“工业”页的地点容量工程中排队升级。", COLOR_MUTED))
+
+	box.add_child(_section_title("航线物流服务"))
+	var connected_routes := _connected_logistics_routes(_selected_location_id)
+	if connected_routes.is_empty():
+		box.add_child(_card_text("尚未发现与本地点连通的货运航线。", COLOR_MUTED))
+	for route_value in connected_routes:
+		var route := route_value as Dictionary
+		var route_id := String(route.get("id", ""))
+		var service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, route_id)
+		var service_snapshot: Dictionary = Game.simulation.logistics.service_snapshot(Game.state, route_id)
+		var current_mode: Dictionary = Game.content.transport_modes.get(String(service.get("transport_mode_id", "")), {})
+		var service_card := _card()
+		service_card.add_child(_label("%s · %s" % [_content_name(route, route_id), _content_name(current_mode, String(service.get("transport_mode_id", "")))], 16, COLOR_TEXT))
+		service_card.add_child(_label("运力 %.1f 货运体积/批次 · %.1f/分钟 · 利用率 %.0f%% · 分配舰船 %d · %s · 策略 %s" % [float(service_snapshot.get("capacity_per_dispatch", 0.0)), float(service_snapshot.get("capacity_per_minute", 0.0)), float(service_snapshot.get("utilization", 0.0)) * 100.0, int(service_snapshot.get("allocated_ships", 0)), "基础设施" if bool(current_mode.get("infrastructure_service", false)) else "舰船/公共运力", String(service.get("priority_strategy", "DEMAND_PRIORITY"))], 13, COLOR_MUTED))
+		var supported_names: Array[String] = []
+		for freight_class_value in current_mode.get("supported_freight_classes", []):
+			supported_names.append(String(freight_class_value))
+		service_card.add_child(_label("支持：%s" % " / ".join(supported_names), 12, COLOR_MUTED))
+		var mode_actions := HFlowContainer.new()
+		mode_actions.add_theme_constant_override("h_separation", 6)
+		for mode_value in Game.content.transport_modes.values():
+			var candidate_mode := mode_value as Dictionary
+			var mode_id := String(candidate_mode.get("id", ""))
+			var required_technology := String(candidate_mode.get("required_technology", ""))
+			var unavailable := not required_technology.is_empty() and not bool(Game.state.technologies.get(required_technology, false))
+			if not bool(candidate_mode.get("infrastructure_service", false)) and not bool(candidate_mode.get("public_base_capacity", false)):
+				unavailable = unavailable or _eligible_logistics_ship_ids(candidate_mode, service).is_empty()
+			var mode_button: Button = _button(_content_name(candidate_mode, mode_id), _configure_route_transport_mode.bind(route_id, mode_id), unavailable, COLOR_ACCENT if mode_id == String(service.get("transport_mode_id", "")) else COLOR_MUTED)
+			mode_button.tooltip_text = _transport_mode_requirement_text(candidate_mode)
+			mode_actions.add_child(mode_button)
+		service_card.add_child(mode_actions)
+		if not bool(current_mode.get("infrastructure_service", false)):
+			var eligible_current_ships := _eligible_logistics_ship_ids(current_mode, service)
+			if eligible_current_ships.is_empty():
+				service_card.add_child(_label("没有满足当前运输方式货舱、模块与停泊状态要求的舰船。将鼠标停在运输方式按钮上可查看条件。", 12, COLOR_WARN))
+			else:
+				var ship_actions := HFlowContainer.new()
+				ship_actions.add_theme_constant_override("h_separation", 6)
+				for ship_id_value in eligible_current_ships:
+					var ship_id := String(ship_id_value)
+					var ship: Dictionary = Game.state.ship_by_id(ship_id)
+					var is_assigned: bool = service.get("assigned_ship_ids", []).has(ship_id)
+					var cannot_remove_last: bool = is_assigned and service.get("assigned_ship_ids", []).size() <= 1 and not bool(current_mode.get("public_base_capacity", false))
+					var action_text := "移除 %s" % String(ship.get("name", ship_id)) if is_assigned else "分配 %s" % String(ship.get("name", ship_id))
+					ship_actions.add_child(_button(action_text, _toggle_logistics_service_ship.bind(route_id, ship_id), cannot_remove_last, COLOR_WARN if is_assigned else COLOR_ACCENT))
+				service_card.add_child(ship_actions)
+		var priority_actions := HFlowContainer.new()
+		priority_actions.add_theme_constant_override("h_separation", 6)
+		for strategy in ["DEMAND_PRIORITY", "PRECISION_FIRST", "MAINTENANCE_FIRST", "BULK_FIRST"]:
+			priority_actions.add_child(_button(String(strategy), _configure_route_priority.bind(route_id, String(strategy)), false, COLOR_ACCENT if String(strategy) == String(service.get("priority_strategy", "DEMAND_PRIORITY")) else COLOR_MUTED))
+		service_card.add_child(priority_actions)
+		box.add_child(_wrap_card(service_card))
 
 	box.add_child(_section_title("供给 / 需求策略"))
 	var policy_ids: Array = logistics.get("policies", {}).keys()
@@ -604,7 +696,7 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 		for item_value in shipment.get("cargo", {}).keys():
 			var item_id := String(item_value)
 			cargo_lines.append("%s × %d" % [_content_name(Game.content.items.get(item_id, {}), item_id), int(shipment.get("cargo", {}).get(item_id, 0))])
-		box.add_child(_card_text("%s · %s → %s · 剩余 %.1f 秒（装卸 %.1f 秒）· %s · 能耗 %.1f\n%s" % [shipment.get("id", "运输批次"), _location_name(String(shipment.get("origin", ""))), _location_name(String(shipment.get("destination", ""))), float(shipment.get("remaining_ms", 0.0)) / 1000.0, float(shipment.get("handling_time_ms", 0.0)) / 1000.0, _status_text(String(shipment.get("logistics_technology_id", "chemical_cargo"))), float(shipment.get("energy_units", 0.0)), "、".join(cargo_lines)], COLOR_ACCENT))
+		box.add_child(_card_text("%s · %s → %s · 剩余 %.1f 秒（装卸 %.1f 秒）· %s · %s %.1f 货运体积 · 能耗 %.1f\n%s" % [shipment.get("id", "运输批次"), _location_name(String(shipment.get("origin", ""))), _location_name(String(shipment.get("destination", ""))), float(shipment.get("remaining_ms", 0.0)) / 1000.0, float(shipment.get("handling_time_ms", 0.0)) / 1000.0, _status_text(String(shipment.get("logistics_technology_id", "chemical_cargo"))), String(shipment.get("freight_class", "STANDARD")), float(shipment.get("freight_units", 0.0)), float(shipment.get("energy_units", 0.0)), "、".join(cargo_lines)], COLOR_ACCENT))
 	if not shipment_found:
 		box.add_child(_card_text("当前没有在途运输", COLOR_MUTED))
 
@@ -643,9 +735,23 @@ func _logistics_policy_editor(item_id: String, policy: Dictionary) -> VBoxContai
 		if source_id == String(policy.get("source_lock", "")):
 			source_selector.select(source_ids.size() - 1)
 	card.add_child(_labeled_control("来源", source_selector))
+	var route_ids: Array[String] = [""]
+	var route_selector := OptionButton.new()
+	route_selector.add_item("自动选择航线")
+	for route_value in Game.content.logistics_routes.values():
+		var route := route_value as Dictionary
+		var route_id := String(route.get("id", ""))
+		route_ids.append(route_id)
+		route_selector.add_item(_content_name(route, route_id))
+		if route_id == String(policy.get("route_lock", "")):
+			route_selector.select(route_ids.size() - 1)
+	card.add_child(_labeled_control("航线锁定", route_selector))
+	var blocker: Dictionary = policy.get("blocker", {})
+	if not blocker.is_empty():
+		card.add_child(_label("阻塞 %s：%s" % [blocker.get("code", "LOGISTICS_BLOCKED"), blocker.get("message", "")], 12, COLOR_WARN))
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 6)
-	actions.add_child(_button("保存策略", _save_logistics_policy.bind(item_id, mode_selector, modes, reserve_input, target_input, priority_input, threshold_input, source_selector, source_ids)))
+	actions.add_child(_button("保存策略", _save_logistics_policy.bind(item_id, mode_selector, modes, reserve_input, target_input, priority_input, threshold_input, source_selector, source_ids, route_selector, route_ids)))
 	actions.add_child(_button("清除", _command.bind("清除物流策略", Game.clear_location_logistics_policy.bind(_selected_location_id, item_id)), false, COLOR_WARN))
 	card.add_child(actions)
 	return card
@@ -667,9 +773,10 @@ func _add_selected_logistics_policy(mode: String, selector: OptionButton, item_i
 	_command("新增物流策略", Game.set_location_logistics_policy.bind(_selected_location_id, item_id, mode, 0, target, 50, 1, ""))
 
 
-func _save_logistics_policy(item_id: String, mode_selector: OptionButton, modes: Array, reserve_input: SpinBox, target_input: SpinBox, priority_input: SpinBox, threshold_input: SpinBox, source_selector: OptionButton, source_ids: Array[String]) -> void:
+func _save_logistics_policy(item_id: String, mode_selector: OptionButton, modes: Array, reserve_input: SpinBox, target_input: SpinBox, priority_input: SpinBox, threshold_input: SpinBox, source_selector: OptionButton, source_ids: Array[String], route_selector: OptionButton, route_ids: Array[String]) -> void:
 	var mode_index := clampi(mode_selector.selected, 0, modes.size() - 1)
 	var source_index := clampi(source_selector.selected, 0, source_ids.size() - 1)
+	var route_index := clampi(route_selector.selected, 0, route_ids.size() - 1)
 	_command("保存物流策略", Game.set_location_logistics_policy.bind(
 		_selected_location_id,
 		item_id,
@@ -678,12 +785,80 @@ func _save_logistics_policy(item_id: String, mode_selector: OptionButton, modes:
 		int(target_input.value),
 		int(priority_input.value),
 		int(threshold_input.value),
-		String(source_ids[source_index])
+		String(source_ids[source_index]),
+		String(route_ids[route_index])
 	))
 
 
-func _save_logistics_limits(storage_input: SpinBox, throughput_input: SpinBox) -> void:
-	_command("保存物流容量", Game.set_location_logistics_limits.bind(_selected_location_id, int(storage_input.value), int(throughput_input.value)))
+func _connected_logistics_routes(location_id: String) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for route_value in Game.content.logistics_routes.values():
+		var route := route_value as Dictionary
+		var from_id := String(route.get("from", ""))
+		var to_id := String(route.get("to", ""))
+		var peer_id := to_id if from_id == location_id else (from_id if to_id == location_id else "")
+		if peer_id.is_empty() or not Game.state.has_location(peer_id) or String(Game.state.location_state(peer_id).get("discovery_state", "UNDISCOVERED")) != LocationState.DISCOVERED:
+			continue
+		result.append(route)
+	result.sort_custom(func(a, b): return String(a.get("id", "")) < String(b.get("id", "")))
+	return result
+
+
+func _eligible_logistics_ship_ids(mode: Dictionary, service: Dictionary) -> Array[String]:
+	var result: Array[String] = []
+	for ship_value in Game.state.ships:
+		var ship := ship_value as Dictionary
+		var ship_id := String(ship.get("instance_id", ""))
+		var assignment: Dictionary = ship.get("assignment", {})
+		var belongs_here := String(assignment.get("domain", "")) == "logistics" and String(assignment.get("service_id", "")) == String(service.get("id", ""))
+		if (Game.state.ship_is_unassigned_docked(ship_id) or belongs_here) and Game.simulation.logistics.ship_eligible_for_mode(Game.state, ship_id, String(mode.get("id", ""))):
+			result.append(ship_id)
+	return result
+
+
+func _transport_mode_requirement_text(mode: Dictionary) -> String:
+	var lines: Array[String] = [I18n.content(mode, "description")]
+	var technology_id := String(mode.get("required_technology", ""))
+	if not technology_id.is_empty():
+		lines.append("科技：%s" % _content_name(Game.content.technologies.get(technology_id, {}), technology_id))
+	var facility_id := String(mode.get("required_facility", ""))
+	if not facility_id.is_empty():
+		lines.append("设施：%s" % _content_name(Game.content.facilities.get(facility_id, {}), facility_id))
+	var capability_names := {"bulk_freight":"大宗货运阵列", "insulated_cargo":"低温货舱系统", "high_speed_freight":"高速货运推进（高级推进器）"}
+	for capability_id_value in mode.get("required_ship_capabilities", []):
+		var capability_id := String(capability_id_value)
+		lines.append("舰船能力：%s" % capability_names.get(capability_id, capability_id))
+	var minimum_capacity := int(mode.get("minimum_ship_cargo_capacity", 0))
+	var maximum_capacity := int(mode.get("maximum_ship_cargo_capacity", 0))
+	if minimum_capacity > 0:
+		lines.append("装配后货舱：%d%s" % [minimum_capacity, "–%d" % maximum_capacity if maximum_capacity > 0 else " 以上"])
+	return "\n".join(lines)
+
+
+func _configure_route_transport_mode(route_id: String, mode_id: String) -> void:
+	var mode: Dictionary = Game.content.transport_modes.get(mode_id, {})
+	var service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, route_id)
+	var ship_ids: Array = []
+	if not bool(mode.get("infrastructure_service", false)) and not bool(mode.get("public_base_capacity", false)):
+		var eligible := _eligible_logistics_ship_ids(mode, service)
+		if not eligible.is_empty():
+			ship_ids.append(eligible[0])
+	_command("配置航线物流服务", Game.configure_logistics_service.bind(route_id, mode_id, ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
+
+
+func _configure_route_priority(route_id: String, priority_strategy: String) -> void:
+	var service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, route_id)
+	_command("调整航线优先策略", Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), service.get("assigned_ship_ids", []).duplicate(), priority_strategy))
+
+
+func _toggle_logistics_service_ship(route_id: String, ship_id: String) -> void:
+	var service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, route_id)
+	var ship_ids: Array = service.get("assigned_ship_ids", []).duplicate()
+	if ship_ids.has(ship_id):
+		ship_ids.erase(ship_id)
+	else:
+		ship_ids.append(ship_id)
+	_command("调整物流舰船分配", Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
 
 
 func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void:
@@ -693,10 +868,10 @@ func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void
 		if String(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id or String(operation.get("activity_id", "")).is_empty():
 			continue
 		found = true
-		var activity: Dictionary = Game.content.activities.get(String(operation.get("activity_id", "")), {})
+		var activity: Dictionary = Game.simulation.construction_activity_for_runtime(operation)
 		var project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
 		var stage_line := "\n文明工程 %d%% · %s · 物资流 %s" % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "RECEIVING")))] if not project.is_empty() else ""
-		box.add_child(_card_text("建造 · %s · %s%s" % [_content_name(activity, String(operation.get("activity_id", ""))), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
+		box.add_child(_card_text("建造 · %s · %s%s" % [_construction_project_name(operation, activity), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
 	for order_value in Game.state.shipyard_queue:
 		var order := order_value as Dictionary
 		if String(order.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id:
@@ -843,7 +1018,7 @@ func _rebuild_industry() -> void:
 	var section_tabs := HFlowContainer.new()
 	section_tabs.add_theme_constant_override("h_separation", 6)
 	section_tabs.add_theme_constant_override("v_separation", 6)
-	for entry in [["production", "生产配方"], ["facilities", "设施与工艺"], ["construction", "设施建设"], ["automation", "后台自动化"]]:
+	for entry in [["production", "生产配方"], ["facilities", "设施与工艺"], ["construction", "设施建设"], ["automation", "经济诊断与规划"]]:
 		var section_id := String(entry[0])
 		var section_button := _button(String(entry[1]), _select_industry_section.bind(section_id), section_id == _industry_section, COLOR_ACCENT)
 		section_button.name = "IndustrySection_%s" % section_id
@@ -872,8 +1047,6 @@ func _build_industry_production(box: VBoxContainer) -> void:
 		if String(activity.get("domain", "")) != "industry":
 			continue
 		if Game.simulation.is_construction_activity(activity):
-			continue
-		if Game.content.is_module_bom_activity(activity):
 			continue
 		if not Game.simulation.definition_revealed(Game.state, activity):
 			continue
@@ -907,11 +1080,18 @@ func _build_industry_construction(box: VBoxContainer) -> void:
 		var operation := operation_value as Dictionary
 		if String(operation.get("activity_id", "")).is_empty():
 			continue
-		var definition := Game.content.activities.get(String(operation.get("activity_id", "")), {}) as Dictionary
+		var definition := Game.simulation.construction_activity_for_runtime(operation)
 		var active_card := _card()
-		active_card.add_child(_label(_content_name(definition, "建造项目"), 16, COLOR_TEXT))
+		active_card.add_child(_label(_construction_project_name(operation, definition), 16, COLOR_TEXT))
+		active_card.add_child(_label("%s · %s · %s · 优先级 %d" % [String(operation.get("project_id", "PROJECT")), _construction_project_type_name(String(operation.get("project_type", "FACILITY_BUILD"))), _content_name(Game.content.regions.get(String(operation.get("location_id", "")), {"name":operation.get("location_id", "")}), String(operation.get("location_id", ""))), int(operation.get("priority", 50))], 13, COLOR_MUTED))
 		active_card.add_child(_operation_progress(operation, "状态：" + _status_text(String(operation.get("status", "QUEUED")))))
 		_add_blocker_label(active_card, operation)
+		active_card.add_child(_label("材料计划 %s\n已投入 %s · 已交付/预留 %s · 在途 %s" % [_resource_dictionary(operation.get("material_plan", {})), _resource_dictionary(operation.get("consumed", {})), _resource_dictionary(operation.get("delivered_materials", {})), _resource_dictionary(operation.get("in_transit_materials", {}))], 12, COLOR_MUTED))
+		var priority_actions := HBoxContainer.new()
+		priority_actions.add_theme_constant_override("separation", 6)
+		for priority in [100, 50, 10]:
+			priority_actions.add_child(_button("优先级 %d" % priority, _command.bind("调整建设优先级", Game.set_construction_project_priority.bind(String(operation.get("project_id", "")), priority)), int(operation.get("priority", 50)) == priority, COLOR_ACCENT))
+		active_card.add_child(priority_actions)
 		var megastructure_project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
 		if not megastructure_project.is_empty():
 			active_card.add_child(_label("阶段 %d%% · %s · 物资流 %s" % [int(megastructure_project.get("progress_percent", 0)), _status_text(String(megastructure_project.get("stage_name", "PLANNED"))), _status_text(String(megastructure_project.get("material_flow_status", "RECEIVING")))], 14, COLOR_ACCENT))
@@ -948,7 +1128,7 @@ func _build_facility_management(box: VBoxContainer) -> void:
 		if definition.is_empty():
 			continue
 		var runtime: Dictionary = Game.simulation.industry_runtime_for_facility(Game.state, facility_id)
-		var runtime_busy := not runtime.is_empty() and String(runtime.get("status", "IDLE")) in ["RUNNING", "BLOCKED"]
+		var runtime_busy := Game.simulation.industry_facility_busy(Game.state, facility_id)
 		var state_entry: Dictionary = Game.state.facilities.get(facility_id, {})
 		var card := _card()
 		card.add_child(_label("%s · %d 级" % [_content_name(definition, facility_id), int(state_entry.get("level", 1))], 17, COLOR_TEXT))
@@ -1013,35 +1193,106 @@ func _add_manufacturing_module_controls(card: VBoxContainer, facility_id: String
 
 
 func _build_background_economy_controls(box: VBoxContainer) -> void:
-	var managed_items: Array[String] = []
-	for item_id_value in Game.state.resource_maturity.keys():
+	box.add_child(_section_title("当前经济诊断"))
+	box.add_child(_card_text("库存状态由实际生产、持续需求、项目承诺、运输与分级仓储自动计算；无需逐商品设置目标库存或生产百分比。", COLOR_MUTED))
+	var analysis: Dictionary = Game.simulation.current_economy_analysis(Game.state, _selected_location_id)
+	var storage: Dictionary = analysis.get("storage", {})
+	var constraints: Dictionary = Game.simulation.location_industry_constraint_profile(Game.state, _selected_location_id)
+	var local_logistics: Dictionary = Game.simulation.local_logistics_profile(Game.state, _selected_location_id)
+	var summary := HBoxContainer.new()
+	summary.add_theme_constant_override("separation", 8)
+	summary.add_child(_stat_card("仓储利用率", "%.0f%%" % (float(storage.get("utilization", 0.0)) * 100.0), COLOR_WARN if float(storage.get("utilization", 0.0)) >= 0.9 else COLOR_TEXT))
+	summary.add_child(_stat_card("电力余量", "%.1f" % maxf(0.0, float(constraints.get("power_capacity", 0.0)) - float(constraints.get("power_demand", 0.0))), COLOR_WARN if float(constraints.get("power_coverage", 1.0)) < 1.0 else COLOR_TEXT))
+	summary.add_child(_stat_card("本地物流", "%.0f%%" % (float(local_logistics.get("utilization", 0.0)) * 100.0), COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_TEXT))
+	box.add_child(summary)
+	var products: Array = analysis.get("products", [])
+	if products.is_empty():
+		box.add_child(_card_text("当前地点尚无库存流或登记需求。", COLOR_MUTED))
+	for product_value in products:
+		var product := product_value as Dictionary
+		var product_id := String(product.get("product_id", ""))
+		var card := _card()
+		var status := String(product.get("status", "STABLE"))
+		var status_color := COLOR_BAD if status == "CRITICAL" else (COLOR_WARN if status in ["TIGHT", "STORAGE_FULL"] else (COLOR_GOOD if status == "STABLE" else COLOR_ACCENT))
+		card.add_child(_label("%s · %s · %s" % [_content_name(Game.content.items.get(product_id, {}), product_id), _status_text(status), _status_text(String(product.get("storage_class", "BULK")))], 15, status_color))
+		card.add_child(_label("库存 %d / %.0f · 生产 +%.2f/h · 消费 -%.2f/h · 进/出口 +%.2f/-%.2f/h · 净变化 %+.2f/h · 已承诺 %.0f" % [int(product.get("stock", 0)), float(product.get("storage_capacity", 0.0)), float(product.get("production_rate", 0.0)), float(product.get("consumption_rate", 0.0)), float(product.get("import_rate", 0.0)), float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0)), float(product.get("committed_demand", 0.0))], 12, COLOR_MUTED))
+		var demand_parts: Array[String] = []
+		for demand_value in product.get("demand_sources", []):
+			var demand := demand_value as Dictionary
+			var amount := "%.2f/h" % float(demand.get("rate_per_hour", 0.0)) if String(demand.get("demand_kind", "")) == "CONTINUOUS" else "%.0f" % float(demand.get("quantity", 0.0))
+			demand_parts.append("%s:%s" % [_demand_source_text(String(demand.get("source_type", ""))), amount])
+		if not demand_parts.is_empty():
+			card.add_child(_label("需求来源 · " + " · ".join(demand_parts), 12, COLOR_MUTED))
+		if not product.get("blocked_sources", []).is_empty() or status == "CRITICAL":
+			var trace: Dictionary = Game.simulation.shortest_bottleneck_chain(Game.state, product_id, _selected_location_id)
+			card.add_child(_label("首要瓶颈 · %s\n最短链 · %s" % [_status_text(String(trace.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(trace.get("shortest_chain", []))], 12, COLOR_WARN))
+		box.add_child(_wrap_card(card))
+
+	box.add_child(_section_title("只读目标产能规划器"))
+	box.add_child(_card_text("输入目标产品吞吐（单位/小时）。规划器只做 BOM 展开、Factory/Device/能源/仓储/物流与瓶颈计算，不会执行建设或改动生产线。", COLOR_MUTED))
+	var product_ids: Array = Game.content.items.keys()
+	product_ids.sort()
+	var selector := OptionButton.new()
+	for index in product_ids.size():
+		var item_id := String(product_ids[index])
+		selector.add_item(_content_name(Game.content.items.get(item_id, {}), item_id))
+		if item_id == _planner_product_id:
+			selector.select(index)
+	var target_input := _number_input(int(maxf(1.0, _planner_target_rate)), 1, 1000000, 1)
+	var planner_controls := HFlowContainer.new()
+	planner_controls.add_theme_constant_override("h_separation", 6)
+	planner_controls.add_child(_labeled_control("目标产品", selector))
+	planner_controls.add_child(_labeled_control("单位/小时", target_input))
+	planner_controls.add_child(_button("计算（只读）", _run_read_only_plan.bind(selector, product_ids, target_input), product_ids.is_empty(), COLOR_ACCENT))
+	box.add_child(planner_controls)
+	if not _planner_result.is_empty():
+		_build_read_only_plan_result(box, _planner_result)
+
+
+func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_input: SpinBox) -> void:
+	if selector.selected < 0 or selector.selected >= product_ids.size():
+		return
+	_planner_product_id = String(product_ids[selector.selected])
+	_planner_target_rate = float(target_input.value)
+	_planner_result = Game.simulation.target_throughput_plan(Game.state, {_planner_product_id:_planner_target_rate}, _selected_location_id)
+	_dirty = true
+
+
+func _build_read_only_plan_result(box: VBoxContainer, plan: Dictionary) -> void:
+	var card := _card()
+	card.add_child(_label("方案 · %s %.1f/h · 只读" % [_content_name(Game.content.items.get(_planner_product_id, {}), _planner_product_id), _planner_target_rate], 15, COLOR_ACCENT))
+	var requirement_parts: Array[String] = []
+	for item_id_value in plan.get("product_requirements", {}).keys():
 		var item_id := String(item_id_value)
-		if Game.state.resource_maturity_state(item_id) in ["MANAGED", "BACKGROUND"]:
-			managed_items.append(item_id)
-	if managed_items.is_empty():
-		return
-	managed_items.sort()
-	box.add_child(_section_title("后台工业目标"))
-	for item_id in managed_items:
-		var item := Game.content.items.get(item_id, {}) as Dictionary
-		var target_input := _number_input(int(Game.state.background_economy.get("targets", {}).get(item_id, 0)), 0, 1000000, 1)
-		var priority_input := _number_input(int(Game.state.background_economy.get("priorities", {}).get(item_id, 50)), 0, 100, 5)
-		var row := HFlowContainer.new()
-		row.add_theme_constant_override("h_separation", 6)
-		var caption := _label("%s · %s" % [_content_name(item, item_id), _status_text(Game.state.resource_maturity_state(item_id))], 13, COLOR_TEXT)
-		caption.custom_minimum_size.x = 210
-		row.add_child(caption)
-		row.add_child(_labeled_control("目标库存", target_input))
-		row.add_child(_labeled_control("优先级", priority_input))
-		row.add_child(_button("保存", _save_background_policy.bind(item_id, target_input, priority_input)))
-		box.add_child(row)
+		requirement_parts.append("%s %.2f/h" % [_content_name(Game.content.items.get(item_id, {}), item_id), float(plan.get("product_requirements", {}).get(item_id, 0.0))])
+	card.add_child(_label("产品需求 · " + (" · ".join(requirement_parts) if not requirement_parts.is_empty() else "无"), 12, COLOR_MUTED))
+	for factory_value in plan.get("factory_requirements", []):
+		var factory := factory_value as Dictionary
+		var facility_id := String(factory.get("facility_id", ""))
+		card.add_child(_label("%s · 当前 %d / 建议 %d / 缺口 %d · 装置能力 %s · 利用率 %.0f%%" % [_content_name(Game.content.facilities.get(facility_id, {}), facility_id), int(factory.get("current", 0)), int(factory.get("recommended", 0)), int(factory.get("shortage", 0)), ", ".join(factory.get("production_device_requirements", [])), float(factory.get("utilization", 0.0)) * 100.0], 12, COLOR_TEXT))
+	var infrastructure: Dictionary = plan.get("infrastructure_requirements", {})
+	card.add_child(_label("基础设施 · 电力 %.1f · 冷却 %.1f · 仓储 %s · 资本品 %s" % [float(infrastructure.get("power", 0.0)), float(infrastructure.get("cooling", 0.0)), str(infrastructure.get("storage", {})), str(infrastructure.get("capital_goods", {}))], 12, COLOR_MUTED))
+	for bottleneck_value in plan.get("bottlenecks", []):
+		var bottleneck := bottleneck_value as Dictionary
+		card.add_child(_label("首要瓶颈 · %s\n最短链 · %s" % [_status_text(String(bottleneck.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(bottleneck.get("shortest_chain", []))], 12, COLOR_WARN))
+	box.add_child(_wrap_card(card))
 
 
-func _save_background_policy(item_id: String, target_input: SpinBox, priority_input: SpinBox) -> void:
-	if not Game.set_background_target(item_id, int(target_input.value)):
-		return
-	Game.set_background_priority(item_id, int(priority_input.value))
-	_append_log("后台工业策略已保存 · %s" % item_id)
+func _planner_chain_text(chain: Array) -> String:
+	var parts: Array[String] = []
+	for node_value in chain:
+		var node := node_value as Dictionary
+		var node_id := String(node.get("id", ""))
+		match String(node.get("kind", "")):
+			"PRODUCT": parts.append(_content_name(Game.content.items.get(node_id, {}), node_id))
+			"METHOD": parts.append(_content_name(Game.content.activities.get(node_id, {}), node_id))
+			"FACTORY": parts.append(_content_name(Game.content.facilities.get(node_id, {}), node_id))
+			_: parts.append(_status_text(node_id))
+	return " → ".join(parts)
+
+
+func _demand_source_text(source_type: String) -> String:
+	return {"maintenance":"维护", "construction":"建设", "research_project":"研发", "shipbuilding":"造船", "fleet_operation":"舰队运营", "logistics_export":"出口", "manual_order":"手动订单"}.get(source_type, source_type)
 
 
 func _rebuild_megastructure() -> void:
@@ -1148,24 +1399,44 @@ func _construction_runtime_for_activity(activity_id: String) -> Dictionary:
 func _rebuild_research() -> void:
 	var box: VBoxContainer = _pages["research"]
 	_clear(box)
-	box.add_child(_page_title("科研", "建成研究设施并积累数据后，研究项目才会解锁。"))
+	box.add_child(_page_title("技术网络与研发项目", "研究容量是持续流量；项目阶段直接占用材料、制造、能源、设施、物流与真实舰船测试。"))
 	var research_summary := HBoxContainer.new()
 	research_summary.add_theme_constant_override("separation", 8)
 	research_summary.add_child(_stat_card("已完成项目", str(Game.state.completed_projects.size()), COLOR_GOOD))
-	research_summary.add_child(_stat_card("已解锁技术", str(Game.state.technologies.size()), COLOR_ACCENT))
-	research_summary.add_child(_stat_card("研究设施", "在线" if "research_complex" in Game.state.facilities else "离线", COLOR_GOOD if "research_complex" in Game.state.facilities else COLOR_WARN))
+	research_summary.add_child(_stat_card("技术/外溢成果", "%d / %d" % [Game.state.technologies.size(), Game.state.technology_spillovers.size()], COLOR_ACCENT))
+	research_summary.add_child(_stat_card("研究容量（流量）", "%.1f" % Game.simulation.research_capacity(Game.state), COLOR_GOOD if Game.simulation.research_capacity(Game.state) >= 1.0 else COLOR_WARN))
 	box.add_child(research_summary)
+	box.add_child(_section_title("长期技术能力域"))
+	var domains_row := HFlowContainer.new()
+	domains_row.add_theme_constant_override("h_separation", 8)
+	domains_row.add_theme_constant_override("v_separation", 8)
+	for domain_id_value in SpaceGameState.TECHNOLOGY_DOMAIN_IDS:
+		var domain_id := String(domain_id_value)
+		var domain: Dictionary = Game.state.technology_domains.get(domain_id, {"level":1, "xp":0.0})
+		domains_row.add_child(_stat_card(_technology_domain_name(domain_id), "Lv.%d · %.0f XP" % [int(domain.get("level", 1)), float(domain.get("xp", 0.0))], COLOR_TEXT))
+	box.add_child(domains_row)
 	var current_id := String(Game.state.research.get("project_id", ""))
 	if not current_id.is_empty():
 		var current := Game.content.research_projects.get(current_id, {}) as Dictionary
+		var current_stage := Game.simulation.research_stage_definition(Game.state, current, int(Game.state.research.get("stage_index", 0)), String(Game.state.research.get("route_id", "")))
 		var card := _card()
 		card.add_child(_label("当前项目 · " + _content_name(current, current_id), 17, COLOR_ACCENT))
+		card.add_child(_label("阶段 %d / %d · %s · %s%s" % [int(Game.state.research.get("stage_index", 0)) + 1, Game.simulation.research_stages(current).size(), _research_stage_kind_name(String(current_stage.get("kind", "THEORY"))), current_stage.get("name", current_stage.get("id", "")), " · 路线 " + String(Game.state.research.get("route_id", "")) if not String(Game.state.research.get("route_id", "")).is_empty() else ""], 14, COLOR_TEXT))
 		card.add_child(_operation_progress(Game.state.research, String(Game.state.research.get("status", "RUNNING"))))
 		_add_blocker_label(card, Game.state.research)
+		var blocker_guidance := _research_blocker_guidance(Game.state.research.get("blocker", {}))
+		if not blocker_guidance.is_empty():
+			card.add_child(_label("处理建议：" + blocker_guidance, 13, COLOR_GOOD))
+		if not current_stage.get("costs", []).is_empty():
+			card.add_child(_label("本阶段工业供给：" + _research_stage_cost_progress(current_stage, Game.state.research), 13, COLOR_MUTED))
+		var stage_requirements: Array = current_stage.get("requirements", []) + current_stage.get("operating_conditions", [])
+		if not stage_requirements.is_empty():
+			card.add_child(_requirements_label(stage_requirements))
+		card.add_child(_label(_research_roadmap_text(current, int(Game.state.research.get("stage_index", 0))), 12, COLOR_MUTED))
 		card.add_child(_button("停止研究", _command.bind("停止研究", Game.stop_research), false, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title("可见研究与舰体开发"))
+	box.add_child(_section_title("可见研发项目（路线与主要瓶颈预览）"))
 	for project_value in Game.content.research_projects.values():
 		var project := project_value as Dictionary
 		var project_id := String(project.get("id", ""))
@@ -1176,23 +1447,45 @@ func _rebuild_research() -> void:
 		var card := _card()
 		card.add_child(_label(_content_name(project, project_id), 16, COLOR_TEXT))
 		card.add_child(_label(_project_summary(project), 13, COLOR_MUTED))
+		if not project.get("effect_tags", []).is_empty():
+			card.add_child(_label("成果标签：" + " + ".join(project.get("effect_tags", [])), 12, COLOR_ACCENT))
+		card.add_child(_label(_research_roadmap_text(project, -1), 12, COLOR_MUTED))
 		var available := Game.simulation.research_project_available(Game.state, project)
 		var busy := not current_id.is_empty() and current_id != project_id
-		var start_button := _button("开始研究", _command.bind("开始研究", Game.start_research_project.bind(project_id)), not available or busy)
-		start_button.name = "StartResearch_%s" % project_id
-		card.add_child(start_button)
+		var routes: Array = project.get("routes", [])
+		if routes.is_empty():
+			var start_button := _button("启动研发项目", _command.bind("开始研究", Game.start_research_project.bind(project_id)), not available or busy)
+			start_button.name = "StartResearch_%s" % project_id
+			card.add_child(start_button)
+		else:
+			var route_actions := HFlowContainer.new()
+			for route_value in routes:
+				var route := route_value as Dictionary
+				var route_id := String(route.get("id", ""))
+				var route_button := _button("选择：%s" % route.get("name", route_id), _command.bind("开始研发路线", Game.start_research_project.bind(project_id, route_id)), not available or busy, COLOR_ACCENT)
+				route_button.tooltip_text = String(route.get("description", ""))
+				route_actions.add_child(route_button)
+			card.add_child(route_actions)
 		if not available:
 			card.add_child(_requirements_label(project.get("requirements", [])))
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title("已解锁科技"))
+	box.add_child(_section_title("实验技术成熟度"))
+	var maturity_lines: Array[String] = []
+	for item_id_value in Game.state.experimental_maturity.keys():
+		var item_id := String(item_id_value)
+		maturity_lines.append("%s · %s" % [_content_name(Game.content.items.get(item_id, {}), item_id), Game.state.experimental_maturity.get(item_id, "THEORY")])
+	maturity_lines.sort()
+	box.add_child(_card_text("\n".join(maturity_lines) if not maturity_lines.is_empty() else "尚无实验材料进入工程成熟流程。", COLOR_TEXT if not maturity_lines.is_empty() else COLOR_MUTED))
+
+	box.add_child(_section_title("已掌握成果与可补研路线"))
 	var technology_lines: Array[String] = []
 	for technology_id_value in Game.state.technologies.keys():
 		if not bool(Game.state.technologies.get(technology_id_value, false)):
 			continue
 		var technology_id := String(technology_id_value)
 		var technology := Game.content.technologies.get(technology_id, {}) as Dictionary
-		technology_lines.append("✓ %s" % _content_name(technology, technology_id))
+		technology_lines.append("✓ %s%s" % [_content_name(technology, technology_id), "（技术外溢）" if bool(Game.state.technology_spillovers.get(technology_id, false)) else ""])
 	technology_lines.sort()
 	box.add_child(_card_text("\n".join(technology_lines) if not technology_lines.is_empty() else "尚未解锁技术。", COLOR_GOOD if not technology_lines.is_empty() else COLOR_MUTED))
 
@@ -1203,9 +1496,82 @@ func _rebuild_research() -> void:
 			continue
 		var completed_id := String(completed_id_value)
 		var completed_project := Game.content.research_projects.get(completed_id, {}) as Dictionary
-		completed_lines.append("✓ %s" % _content_name(completed_project, completed_id))
+		var route_names: Array[String] = []
+		for route_value in completed_project.get("routes", []):
+			var route := route_value as Dictionary
+			var route_id := String(route.get("id", ""))
+			if bool(Game.state.completed_research_routes.get(completed_id, {}).get(route_id, false)):
+				route_names.append(String(route.get("name", route_id)))
+			elif current_id.is_empty():
+				var supplemental := _button("补研路线：%s" % route.get("name", route_id), _command.bind("补研工程路线", Game.start_research_project.bind(completed_id, route_id)), not Game.simulation.research_project_available(Game.state, completed_project, route_id), COLOR_ACCENT)
+				box.add_child(supplemental)
+		completed_lines.append("✓ %s%s" % [_content_name(completed_project, completed_id), " · 已完成路线 " + " / ".join(route_names) if not route_names.is_empty() else ""])
 	completed_lines.sort()
 	box.add_child(_card_text("\n".join(completed_lines) if not completed_lines.is_empty() else "尚未完成研究项目。", COLOR_GOOD if not completed_lines.is_empty() else COLOR_MUTED))
+
+
+func _technology_domain_name(domain_id: String) -> String:
+	return {"materials_science":"材料科学", "manufacturing":"制造与加工", "energy":"能源工程", "propulsion":"推进技术", "automation_computing":"自动化与计算", "ship_engineering":"舰船工程", "logistics":"物流与运输", "anomaly_science":"异常现象研究"}.get(domain_id, domain_id)
+
+
+func _research_stage_kind_name(kind: String) -> String:
+	return {"THEORY":"理论研究", "EXPERIMENT":"实验验证", "ENGINEERING":"工程开发", "PROTOTYPE":"原型制造", "FIELD_TEST":"实地测试", "INDUSTRIALIZATION":"工业化"}.get(kind, kind)
+
+
+func _research_roadmap_text(project: Dictionary, active_stage_index: int) -> String:
+	var lines: Array[String] = ["研发路线（启动前可见主要需求）："]
+	for index in Game.simulation.research_stages(project).size():
+		var stage := Game.simulation.research_stages(project)[index] as Dictionary
+		var demands: Array[String] = []
+		if not stage.get("costs", []).is_empty():
+			demands.append("工业供给 " + _resource_list(stage.get("costs", [])))
+		for requirement_value in stage.get("requirements", []):
+			demands.append(Game.requirement_text(requirement_value as Dictionary))
+		for requirement_value in stage.get("operating_conditions", []):
+			demands.append(Game.requirement_text(requirement_value as Dictionary))
+		var marker := "▶" if index == active_stage_index else ("✓" if active_stage_index >= 0 and index < active_stage_index else "○")
+		lines.append("%s %s · %s%s" % [marker, _research_stage_kind_name(String(stage.get("kind", "THEORY"))), stage.get("name", stage.get("id", "")), " · " + "；".join(demands) if not demands.is_empty() else ""])
+	return "\n".join(lines)
+
+
+func _research_stage_cost_progress(stage: Dictionary, runtime: Dictionary) -> String:
+	var parts: Array[String] = []
+	for cost_value in stage.get("costs", []):
+		var cost := cost_value as Dictionary
+		var item_id := String(cost.get("item", ""))
+		var paid := int(runtime.get("stage_consumed", {}).get(item_id, 0))
+		var available := Game.state.item_quantity(item_id, String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
+		parts.append("%s 已投入 %d / %d · 本地库存 %d" % [_content_name(Game.content.items.get(item_id, {}), item_id), paid, int(cost.get("quantity", 0)), available])
+	return "；".join(parts)
+
+
+func _research_blocker_guidance(blocker: Dictionary) -> String:
+	if blocker.is_empty():
+		return ""
+	var requirement: Dictionary = blocker.get("requirement", {})
+	match String(requirement.get("type", "")):
+		"activity_complete":
+			var activity_id := String(requirement.get("id", ""))
+			return "到生产配方执行 %s；原型必须由真实工业产线制造。" % _content_name(Game.content.activities.get(activity_id, {}), activity_id)
+		"manufacturing_module_installed":
+			var module_id := String(requirement.get("id", ""))
+			var module: Dictionary = Game.content.process_modules.get(module_id, Game.content.universal_industry_plugins.get(module_id, {}))
+			return "到设施工艺页为指定设施安装 %s。" % _content_name(module, module_id)
+	match String(blocker.get("primary_reason", "")):
+		"INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD":
+			var item_id := String(blocker.get("item_id", ""))
+			return "到生产配方制造 %s；它是项目的真实工业供给。" % _content_name(Game.content.items.get(item_id, {}), item_id)
+		"FIELD_TEST_REQUIRED":
+			if String(requirement.get("type", "")) == "route_complete":
+				var route_id := String(requirement.get("id", ""))
+				return "到远征页执行 %s，倒计时不能替代这次测试。" % _content_name(Game.content.expedition_routes.get(route_id, {}), route_id)
+			if String(requirement.get("type", "")) == "own_facility":
+				return "到设施建设完成 %s，并让它真实投入运行。" % _content_name(Game.content.facilities.get(String(requirement.get("id", "")), {}), String(requirement.get("id", "")))
+		"MISSING_FACILITY":
+			return "到设施工艺页安装项目要求的实验/测试模块。"
+		"OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE":
+			return "扩建研究设施、电网、冷却或地点物流后，项目会自动继续。"
+	return "完成本阶段显示的唯一首要门槛后，项目会自动继续。"
 
 
 func _rebuild_fleet() -> void:
@@ -1315,6 +1681,7 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		var service_record: Dictionary = ship.get("service_record", {})
 		card.add_child(_label("服役记录：战斗 %d · %d胜/%d负 · 经验 %.1f · 伤害 %.1f" % [int(service_record.get("combat_deployments", 0)), int(service_record.get("victories", 0)), int(service_record.get("defeats", 0)), float(service_record.get("combat_experience", 0.0)), float(service_record.get("damage_dealt", 0.0))], 13, COLOR_MUTED))
 		card.add_child(_label("模块：" + _ship_modules_text(ship), 13, COLOR_MUTED))
+		card.add_child(_label("当前职责（由装配决定）：" + _ship_loadout_roles_text(ship), 13, COLOR_ACCENT))
 		card.add_child(_label("生命周期", 14, COLOR_ACCENT))
 		var maintenance_row := HFlowContainer.new()
 		maintenance_row.add_theme_constant_override("h_separation", 6)
@@ -1366,9 +1733,9 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 			loadout_row.add_child(_button("删除", _command.bind("删除舰船配置", Game.delete_ship_loadout.bind(loadout_id)), false, COLOR_WARN))
 			card.add_child(loadout_row)
 
-		var module_choices := _compatible_inventory_modules(ship)
+		var module_choices := _compatible_loadout_modules(ship)
 		if not module_choices.is_empty():
-			card.add_child(_label("可用改装", 14, COLOR_ACCENT))
+			card.add_child(_label("可用装配方案（应用时制造并安装整套插件）", 14, COLOR_ACCENT))
 			for choice_value in module_choices:
 				var choice := choice_value as Dictionary
 				var new_id := String(choice.get("new_id", ""))
@@ -1384,7 +1751,33 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		box.add_child(_card_text("当前没有舰船实体。前往“造船与改装”下达建造订单。", COLOR_WARN))
 
 
+func _ship_loadout_roles_text(ship: Dictionary) -> String:
+	var roles: Array[String] = []
+	var role_capabilities := {
+		"bulk_freight":"大宗货运",
+		"cryogenic_freight":"低温货运",
+		"repair_support":"维修支援",
+		"construction_support":"建设支援",
+		"survey_support":"深空勘测",
+		"mining":"采掘",
+		"armed":"战斗"
+	}
+	for capability_id_value in role_capabilities.keys():
+		var capability_id := String(capability_id_value)
+		if Game.simulation.ship_loadout_capability_value(Game.state, ship, capability_id) > 0.0:
+			roles.append(String(role_capabilities[capability_id]))
+	return "、".join(roles) if not roles.is_empty() else "通用 / 未配置"
+
+
 func _build_fleet_archive(box: VBoxContainer) -> void:
+	if not Game.state.refit_projects.is_empty():
+		box.add_child(_section_title("装配制造与安装工程"))
+		for project_value in Game.state.refit_projects:
+			var project := project_value as Dictionary
+			var project_card := _card()
+			project_card.add_child(_label("%s · %.0f%% · 制造＋安装合并计时 · 已投入 %s" % [String(project.get("ship_id", "")), float(project.get("completed_segments", 0)), _resource_dictionary(project.get("consumed_bom", {}))], 13, COLOR_MUTED))
+			project_card.add_child(_button("取消并恢复原装配（材料不返还）", _command.bind("取消舰船改装", Game.cancel_ship_refit.bind(String(project.get("project_id", "")))), false, COLOR_WARN))
+			box.add_child(_wrap_card(project_card))
 	if not Game.state.ship_service_projects.is_empty():
 		box.add_child(_section_title("维修、改装与再服役工程"))
 		for project_value in Game.state.ship_service_projects:
@@ -1414,6 +1807,7 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 		queue_actions.add_theme_constant_override("h_separation", 6)
 		queue_actions.add_child(_button("上移", _command.bind("调整造船顺序", Game.move_shipyard_project.bind(String(order.get("plan_id", "")), order_index - 1)), order_index <= 0))
 		queue_actions.add_child(_button("下移", _command.bind("调整造船顺序", Game.move_shipyard_project.bind(String(order.get("plan_id", "")), order_index + 1)), order_index >= Game.state.shipyard_queue.size() - 1))
+		queue_actions.add_child(_button("取消订单（已投入材料不返还）", _command.bind("取消造船订单", Game.cancel_shipyard_project.bind(String(order.get("project_id", "")))), false, COLOR_WARN))
 		order_card.add_child(queue_actions)
 		box.add_child(_wrap_card(order_card))
 	if Game.state.shipyard_queue.is_empty():
@@ -1427,6 +1821,11 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 		var card := _card()
 		card.add_child(_label(_content_name(plan, plan_id), 16, COLOR_TEXT))
 		card.add_child(_label(_project_summary(plan), 13, COLOR_MUTED))
+		var starting_loadout: Array[String] = []
+		for module_id_value in plan.get("starting_modules", []):
+			var module_id := String(module_id_value)
+			starting_loadout.append(_content_name(Game.content.modules.get(module_id, {}), module_id))
+		card.add_child(_label("初始装配：%s（制造资源已计入整舰 BOM）" % " / ".join(starting_loadout), 13, COLOR_MUTED))
 		var batch_row := HFlowContainer.new()
 		batch_row.add_theme_constant_override("h_separation", 6)
 		batch_row.add_theme_constant_override("v_separation", 6)
@@ -1657,6 +2056,13 @@ func _next_flow_step() -> String:
 		return "5. 轨道铸造厂物料已齐：%s。点击“前往下一步”，将在“设施建设”中直接看到建造按钮。" % foundry_progress
 	if "research_complex" not in Game.state.facilities:
 		return "6. 建设电子设施和研究中心，开启科研链路。"
+	if not String(Game.state.research.get("project_id", "")).is_empty() and String(Game.state.research.get("status", "")) == "BLOCKED":
+		var project_id := String(Game.state.research.get("project_id", ""))
+		var project: Dictionary = Game.content.research_projects.get(project_id, {})
+		var blocker: Dictionary = Game.state.research.get("blocker", {})
+		if blocker.is_empty():
+			blocker = Game.simulation.blocker_diagnostic(Game.state, "research", Game.state.research)
+		return "%s · %s\n下一步：%s" % [_content_name(project, project_id), _blocker_text(blocker), _research_blocker_guidance(blocker)]
 	for goal_value in Game.content.goals.values():
 		var goal := goal_value as Dictionary
 		if not Game.simulation.definition_revealed(Game.state, goal) or _requirements_complete(goal.get("requirements", [])):
@@ -1667,7 +2073,7 @@ func _next_flow_step() -> String:
 				var step_id := String(step.get("id", "continue"))
 				return "%s\n下一步：%s" % [_content_name(goal, String(goal.get("id", "目标"))), I18n.goal_step(step_id, step_id.replace("_", " ").capitalize())]
 		return "%s\n需求：%s" % [_content_name(goal, String(goal.get("id", "目标"))), _unmet_requirements(goal.get("requirements", []))]
-	return "主流程目标均已完成。可以继续优化自动化、舰队配置与物流策略。"
+	return "主流程目标均已完成。建议打开“工业建设 → 经济诊断与规划”，沿最短瓶颈链检查库存、维护、项目承诺与物流，再决定扩厂、扩能源、扩仓储或调整路线。"
 
 
 func _next_flow_page() -> String:
@@ -1676,10 +2082,22 @@ func _next_flow_page() -> String:
 			return "fleet"
 		if not _has_active_mining():
 			return "frontier"
-	if Game.state.item_quantity("iron_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID) <= 0 or Game.state.item_quantity("copper_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID) <= 0 or int(Game.state.completed_activities.get("assemble_frame", 0)) <= 0:
+	# Bootstrap milestones are permanent. Later consumption of the first iron or
+	# copper stock must not send the Guide back to an already completed opening step.
+	if int(Game.state.completed_activities.get("assemble_frame", 0)) <= 0:
 		return "industry"
 	if "orbital_foundry" not in Game.state.facilities or "research_complex" not in Game.state.facilities:
 		return "industry"
+	if not String(Game.state.research.get("project_id", "")).is_empty() and String(Game.state.research.get("status", "")) == "BLOCKED":
+		var blocker: Dictionary = Game.state.research.get("blocker", {})
+		if blocker.is_empty():
+			blocker = Game.simulation.blocker_diagnostic(Game.state, "research", Game.state.research)
+		var requirement: Dictionary = blocker.get("requirement", {})
+		if String(blocker.get("primary_reason", "")) == "FIELD_TEST_REQUIRED" and String(requirement.get("type", "")) == "route_complete":
+			return "expedition"
+		if String(blocker.get("primary_reason", "")) in ["INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD", "MISSING_FACILITY", "OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE"] or String(requirement.get("type", "")) in ["activity_complete", "own_facility", "manufacturing_module_installed"]:
+			return "industry"
+		return "research"
 	for goal_value in Game.content.goals.values():
 		var goal := goal_value as Dictionary
 		if not Game.simulation.definition_revealed(Game.state, goal) or _requirements_complete(goal.get("requirements", [])):
@@ -1744,7 +2162,7 @@ func _active_operation_lines() -> Array[String]:
 	return lines
 
 
-func _compatible_inventory_modules(ship: Dictionary) -> Array[Dictionary]:
+func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var installed: Array = Game.state.ship_module_definition_ids(ship)
 	for new_id_value in Game.content.modules.keys():
@@ -1905,11 +2323,16 @@ func _activity_summary(activity: Dictionary) -> String:
 
 func _project_summary(definition: Dictionary) -> String:
 	var description := I18n.content(definition, "description")
-	var costs := _resource_list(definition.get("costs", []))
+	# Major programs pay their exact materials stage by stage; their legacy
+	# top-level cost summary is not an additional up-front charge.
+	var costs := "" if bool(definition.get("major_program", false)) else _resource_list(definition.get("costs", []))
 	if costs.is_empty():
 		costs = _resource_list(definition.get("cost", []))
 	if not costs.is_empty():
 		description += ("  ·  " if not description.is_empty() else "") + "消耗 " + costs
+	var work_reduction := 1.0 - Game.simulation.research_knowledge_work_multiplier(Game.state, definition)
+	if work_reduction > 0.001:
+		description += ("  ·  " if not description.is_empty() else "") + "已有技术积累降低工程量 %.0f%%" % (work_reduction * 100.0)
 	return description if not description.is_empty() else "等待更多数据"
 
 
@@ -1924,12 +2347,51 @@ func _resource_list(entries: Array) -> String:
 	return "、".join(parts)
 
 
+func _resource_dictionary(values: Dictionary) -> String:
+	if values.is_empty():
+		return "无"
+	var entries: Array = []
+	var item_ids: Array = values.keys()
+	item_ids.sort()
+	for item_id_value in item_ids:
+		entries.append({"item":str(item_id_value), "quantity":int(values[item_id_value])})
+	return _resource_list(entries)
+
+
+func _construction_project_type_name(project_type: String) -> String:
+	return {
+		"FACILITY_BUILD":"设施建造", "FACILITY_EXPANSION":"设施扩建", "SCALE_STAGE_UPGRADE":"工程规模升级",
+		"POWER_UPGRADE":"电力升级", "COOLING_UPGRADE":"冷却升级", "STRUCTURE_UPGRADE":"结构升级",
+		"STORAGE_UPGRADE":"仓储升级", "LOGISTICS_HUB_UPGRADE":"物流枢纽升级", "TRANSPORT_INFRASTRUCTURE":"运输基础设施",
+		"EXTRACTION_NETWORK":"采掘网络", "MEGASTRUCTURE":"巨型工程",
+		"INDUSTRIAL_TRANSFORMATION":"工业体系改造"
+	}.get(project_type, project_type.replace("_", " "))
+
+
+func _construction_project_name(operation: Dictionary, definition: Dictionary) -> String:
+	if operation.get("project_definition", {}).is_empty():
+		return _content_name(definition, String(operation.get("activity_id", "建造项目")))
+	var project_type := String(operation.get("project_type", ""))
+	var target_id := String(operation.get("target_id", ""))
+	if project_type == "FACILITY_EXPANSION":
+		return "%s扩建至工业等级 %d" % [_content_name(Game.content.facilities.get(target_id, {}), target_id), int(operation.get("target_level", 0))]
+	return "%s至 %d" % [_construction_project_type_name(project_type), int(operation.get("target_level", 0))]
+
+
 func _operation_progress(operation: Dictionary, caption: String) -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
-	var duration := maxf(float(operation.get("duration_ms", operation.get("cycle_duration_ms", 1.0))), 1.0)
-	var elapsed := float(operation.get("progress_ms", operation.get("cycle_progress_ms", operation.get("elapsed_ms", 0.0))))
-	var progress := clampf(elapsed / duration, 0.0, 1.0)
+	var progress := 0.0
+	if String(operation.get("domain", "")) == "construction":
+		var total_work := maxf(1.0, float(operation.get("total_work", 100.0)))
+		var partial_work := float(operation.get("cycle_progress", 0.0)) * total_work / 100.0
+		progress = clampf((float(operation.get("completed_work", 0.0)) + partial_work) / total_work, 0.0, 1.0)
+	else:
+		var duration := maxf(float(operation.get("duration_ms", operation.get("cycle_duration_ms", 1.0))), 1.0)
+		# Multi-stage R&D keeps cumulative program progress for history, while the
+		# active progress bar must display only the current stage's work.
+		var elapsed := float(operation.get("stage_progress_ms", operation.get("progress_ms", operation.get("cycle_progress_ms", operation.get("elapsed_ms", 0.0)))))
+		progress = clampf(elapsed / duration, 0.0, 1.0)
 	box.add_child(_label("%s · %.0f%%" % [caption, progress * 100.0], 13, COLOR_ACCENT))
 	var bar := ProgressBar.new()
 	bar.max_value = 1.0
@@ -1993,11 +2455,31 @@ func _status_text(status: String) -> String:
 		"IDLE": return "空闲"
 		"RUNNING": return "运行中"
 		"BLOCKED": return "受阻"
+		"BLOCKED_INPUT": return "输入受阻"
+		"BLOCKED_OUTPUT": return "满仓停机"
+		"POWER_LIMITED": return "能源限制"
+		"LOGISTICS_LIMITED": return "物流限制"
 		"QUEUED": return "队列中"
 		"COMPLETE", "COMPLETED": return "已完成"
 		"READY": return "就绪"
 		"PAUSED": return "已暂停"
 		"MANUAL": return "手动模式"
+		"PINNED": return "固定工艺"
+		"AUTO": return "授权自动切换"
+		"OFF": return "关闭"
+		"BULK": return "大宗仓储"
+		"COMPONENT": return "部件仓储"
+		"FLUID": return "流体仓储"
+		"SPECIAL": return "特殊仓储"
+		"STABLE": return "稳定"
+		"TIGHT": return "趋紧"
+		"SURPLUS": return "盈余"
+		"STORAGE_FULL": return "仓储已满"
+		"INPUT_SHORTAGE": return "输入短缺"
+		"NO_PRODUCTION_METHOD": return "无可用生产方式"
+		"MISSING_FACTORY": return "缺少工厂"
+		"FACTORY_SATURATED": return "工厂已饱和"
+		"CAPACITY_SHORTAGE": return "产能不足"
 		"CONSTRAINED": return "受限"
 		"RECEIVING": return "接收物资中"
 		"AWAITING_SHIPMENT": return "等待运输"
@@ -2052,10 +2534,17 @@ func _add_blocker_label(parent: Control, runtime: Dictionary) -> void:
 
 func _blocker_text(blocker: Dictionary) -> String:
 	var reason := String(blocker.get("primary_reason", "BLOCKED"))
+	var requirement: Dictionary = blocker.get("requirement", {})
 	var item_id := String(blocker.get("item_id", ""))
 	var item_name := _content_name(Game.content.items.get(item_id, {}), item_id) if not item_id.is_empty() else ""
 	var shortage_name := item_name if not item_name.is_empty() else "所需原料"
+	if String(requirement.get("type", "")) == "activity_complete":
+		return "需要完成真实原型制造：%s" % Game.requirement_text(requirement)
 	match reason:
+		"KNOWLEDGE_GATE": return "技术能力域不足：%s" % Game.requirement_text(blocker.get("requirement", {}))
+		"RESEARCH_CAPACITY_SHORTAGE": return "研究容量不足（%.1f / %.1f，容量是持续流量）" % [float(blocker.get("available", 0.0)), float(blocker.get("required", 1.0))]
+		"OPERATING_CONDITION": return "工程运行条件不足：%s" % Game.requirement_text(blocker.get("requirement", {}))
+		"FIELD_TEST_REQUIRED": return "必须完成真实原型实测：%s" % Game.requirement_text(blocker.get("requirement", {}))
 		"MISSING_TECH": return "缺少科技或研究前置"
 		"MISSING_FACILITY": return "缺少设施或制造工艺模块"
 		"MISSING_SCALE_STAGE": return "工程等级不足（%s / %s）" % [blocker.get("available", 0), blocker.get("required", 0)]

@@ -6,7 +6,12 @@ const GAME_VERSION := GameVersion.PRODUCT_VERSION
 const MAIN_BASE_LOCATION_ID := "earth_orbit"
 const SYSTEM_ID := "sol"
 const MAX_INDUSTRIAL_OPERATIONS := 6
+const MAX_PRODUCTION_LINES := 24
 const MAX_CONSTRUCTION_OPERATIONS := 6
+const TECHNOLOGY_DOMAIN_IDS := [
+	"materials_science", "manufacturing", "energy", "propulsion",
+	"automation_computing", "ship_engineering", "logistics", "anomaly_science"
+]
 const MANUFACTURING_FACILITY_IDS := [
 	"makeshift_workshop",
 	"orbital_foundry",
@@ -43,13 +48,23 @@ var extraction_command := {"capacity":40}
 var expedition_fleet := {"ship_ids":[]}
 var mining_operations: Array = []
 var industrial_operations: Array = []
+var next_production_line_serial := 1
 var construction_operations: Array = []
+var construction_history: Array = []
+var next_construction_project_serial := 1
 var active_expedition := {}
 var facilities := {}
 var expedition_reports: Array = []
 var research := {}
 var technologies := {}
 var completed_projects := {}
+var technology_domains := {}
+var completed_research_routes := {}
+var research_program_history: Array = []
+var technology_spillovers := {}
+var experimental_maturity := {}
+var unlocked_industrial_transformations := {}
+var adopted_industrial_transformations := {}
 var unlocked_ship_plans := {}
 var shipyard_queue: Array = []
 var inventory_reserves: Dictionary:
@@ -93,9 +108,10 @@ var combat_area_states := {}
 var extraction_network_states := {}
 var equipment_instances := {}
 var next_equipment_serial := 1
-## v2 stores ordinary modules directly as Loadout definition ids. Only recovered,
-## prototype and Boss equipment retains an EQUIP instance and ownership record.
-var asset_semantics_version := 2
+## v4 makes ordinary ship modules Loadout definitions rather than inventory
+## assets. Applying a Loadout fabricates its complete ordinary-module BOM inside
+## the refit project. Recovered, prototype and Boss equipment remains unique.
+var asset_semantics_version := 4
 var next_ship_serial := 1
 var refit_projects: Array = []
 var ship_service_projects: Array = []
@@ -116,9 +132,34 @@ var logistics_network := {
 	"dispatch_progress_ms":0.0,
 	"shipments":[],
 	"next_shipment_serial":1,
+	"services":{},
 	"route_statistics":{},
 	"item_statistics":{}
 }
+## Phase seven keeps demand, measured flows, analysis scenarios and rule audits as
+## explicit save-owned state. None of these structures is an inventory authority.
+var demand_registry := {"sources":{}, "history":[]}
+var operations_maintenance := {"fractional":{}, "coverage":{}, "consumption_totals":{}}
+var economy_telemetry := {"window_started_at_ms":0, "elapsed_ms":0.0, "flows":{}}
+var planning_scenarios := {}
+var automation_rules: Array = []
+var automation_audit: Array = []
+var next_automation_rule_serial := 1
+## Phase-eight survey work is a real asset-backed mission, not a point pool.
+var survey_mission := {"status":"IDLE", "mission_id":"", "origin":"", "target":"", "target_state":"", "survey_capability":"", "duration_ms":0.0, "progress_ms":0.0, "costs":{}, "assigned_ship_ids":[]}
+var next_survey_mission_serial := 1
+
+
+static func empty_research_program() -> Dictionary:
+	return {
+		"research_model_version":2,
+		"status":"IDLE", "project_id":"", "route_id":"", "supplemental_route":false,
+		"stage_index":0, "stage_id":"", "stage_kind":"", "stage_progress_ms":0.0,
+		"progress_ms":0.0, "productivity_progress":0.0,
+		"consumed":{}, "stage_consumed":{}, "reserved_costs":{},
+		"applied_stage_effects":[], "blocked_reason":"", "blocker":{},
+		"location_id":MAIN_BASE_LOCATION_ID
+	}
 
 
 static func create_new(domain_ids: Array, location_definitions: Dictionary = {}) -> SpaceGameState:
@@ -133,11 +174,14 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	state.expedition_fleet = {"ship_ids":[]}
 	for index in MAX_INDUSTRIAL_OPERATIONS:
 		state.industrial_operations.append(_empty_industrial_operation(index, MANUFACTURING_FACILITY_IDS[index], MAIN_BASE_LOCATION_ID))
+	state.next_production_line_serial = MAX_INDUSTRIAL_OPERATIONS + 1
 	for index in MAX_CONSTRUCTION_OPERATIONS:
-		state.construction_operations.append(_empty_operation(index, "construction"))
+		state.construction_operations.append(_empty_construction_project(index))
 	state.active_expedition = _empty_operation(0, "expedition")
 	state.active_expedition.merge({"phase":"IDLE", "route_id":"", "node_index":0, "node_progress_ms":0.0, "safe_node_index":0, "combat_state":{}}, true)
-	state.research = {"status":"IDLE", "project_id":"", "progress_ms":0.0, "productivity_progress":0.0, "consumed":{}, "reserved_costs":{}, "blocked_reason":"", "blocker":{}, "location_id":MAIN_BASE_LOCATION_ID}
+	state.research = empty_research_program()
+	for technology_domain_id in TECHNOLOGY_DOMAIN_IDS:
+		state.technology_domains[technology_domain_id] = {"level":1, "xp":0.0}
 	state.facilities = {
 		"makeshift_workshop":{"level":1, "status":"ACTIVE"},
 		"fission_reactor":{"level":1, "status":"ACTIVE"},
@@ -180,7 +224,10 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.expedition_fleet = data.get("expedition_fleet", state.expedition_fleet).duplicate(true)
 	state.mining_operations = _normalized_operations(data.get("mining_operations", []), 0, "mining", true)
 	state.industrial_operations = _normalized_industrial_operations(data.get("industrial_operations", []))
-	state.construction_operations = _normalized_operations(data.get("construction_operations", []), MAX_CONSTRUCTION_OPERATIONS, "construction")
+	state.next_production_line_serial = _normalized_next_production_line_serial(int(data.get("next_production_line_serial", 1)), state.industrial_operations)
+	state.construction_operations = _normalized_construction_projects(data.get("construction_operations", []))
+	state.construction_history = data.get("construction_history", []).duplicate(true)
+	state.next_construction_project_serial = _normalized_next_construction_project_serial(int(data.get("next_construction_project_serial", 1)), state.construction_operations, state.construction_history)
 	for operation in state.construction_operations:
 		operation["productivity_progress"] = 0.0
 	state.active_expedition = data.get("active_expedition", state.active_expedition).duplicate(true)
@@ -201,8 +248,29 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.research["productivity_progress"] = 0.0
 	state.research["location_id"] = str(state.research.get("location_id", MAIN_BASE_LOCATION_ID))
 	state.research["blocker"] = state.research.get("blocker", {}).duplicate(true) if state.research.get("blocker", null) is Dictionary else {}
+	var loaded_research_model_version := int(state.research.get("research_model_version", 1))
+	state.research.merge(empty_research_program(), false)
+	# Schema 31 and earlier stored one linear project bar. Preserve that paid work
+	# as the first stage until SimulationEngine can map it against the project.
+	if loaded_research_model_version < 2:
+		state.research["legacy_project_progress_ms"] = float(state.research.get("progress_ms", 0.0))
+		state.research["stage_progress_ms"] = float(state.research.get("progress_ms", 0.0))
+		state.research["stage_consumed"] = state.research.get("consumed", {}).duplicate(true)
+		state.research["research_model_version"] = 2
 	state.technologies = data.get("technologies", {}).duplicate(true)
 	state.completed_projects = data.get("completed_projects", {}).duplicate(true)
+	state.technology_domains = data.get("technology_domains", state.technology_domains).duplicate(true)
+	for technology_domain_id in TECHNOLOGY_DOMAIN_IDS:
+		var technology_domain: Dictionary = state.technology_domains.get(technology_domain_id, {})
+		technology_domain["level"] = maxi(1, int(technology_domain.get("level", 1)))
+		technology_domain["xp"] = maxf(0.0, float(technology_domain.get("xp", 0.0)))
+		state.technology_domains[technology_domain_id] = technology_domain
+	state.completed_research_routes = data.get("completed_research_routes", {}).duplicate(true)
+	state.research_program_history = data.get("research_program_history", []).duplicate(true)
+	state.technology_spillovers = data.get("technology_spillovers", {}).duplicate(true)
+	state.experimental_maturity = data.get("experimental_maturity", {}).duplicate(true)
+	state.unlocked_industrial_transformations = data.get("unlocked_industrial_transformations", {}).duplicate(true)
+	state.adopted_industrial_transformations = data.get("adopted_industrial_transformations", {}).duplicate(true)
 	state.unlocked_ship_plans = data.get("unlocked_ship_plans", {}).duplicate(true)
 	state.shipyard_queue = _normalized_shipyard_queue(data.get("shipyard_queue", []))
 	state.infrastructure_sites = data.get("infrastructure_sites", state.infrastructure_sites).duplicate(true)
@@ -224,6 +292,12 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.next_loadout_serial = maxi(int(data.get("next_loadout_serial", state.saved_loadouts.size() + 1)), state.saved_loadouts.size() + 1)
 	state.region_states = data.get("region_states", {}).duplicate(true)
 	state.mining_site_states = data.get("mining_site_states", {}).duplicate(true)
+	if int(data.get("save_version", 0)) <= 33:
+		for site_runtime_value in state.mining_site_states.values():
+			var site_runtime := site_runtime_value as Dictionary
+			if bool(site_runtime.get("discovered", false)):
+				site_runtime["developed"] = true
+				site_runtime["extraction_method_id"] = str(site_runtime.get("extraction_method_id", "fixed_excavation"))
 	state.combat_area_states = data.get("combat_area_states", {}).duplicate(true)
 	state.extraction_network_states = data.get("extraction_network_states", {}).duplicate(true)
 	state.equipment_instances = data.get("equipment_instances", {}).duplicate(true)
@@ -236,6 +310,15 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.fleet_maintenance = _normalized_fleet_maintenance(data.get("fleet_maintenance", {}))
 	state.fleet_logistics = _normalized_fleet_logistics(data.get("fleet_logistics", {}))
 	state.logistics_network = _normalized_logistics_network(data.get("logistics_network", {}))
+	state.demand_registry = _normalized_demand_registry(data.get("demand_registry", {}))
+	state.operations_maintenance = _normalized_operations_maintenance(data.get("operations_maintenance", {}))
+	state.economy_telemetry = _normalized_economy_telemetry(data.get("economy_telemetry", {}))
+	state.planning_scenarios = data.get("planning_scenarios", {}).duplicate(true)
+	state.automation_rules = _normalized_automation_rules(data.get("automation_rules", []))
+	state.automation_audit = data.get("automation_audit", []).duplicate(true)
+	state.next_automation_rule_serial = maxi(1, int(data.get("next_automation_rule_serial", state.automation_rules.size() + 1)))
+	state.survey_mission = _normalized_survey_mission(data.get("survey_mission", {}))
+	state.next_survey_mission_serial = maxi(1, int(data.get("next_survey_mission_serial", 1)))
 	var loaded_domains: Dictionary = data.get("domains", {})
 	for domain_id in domain_ids:
 		if loaded_domains.has(domain_id):
@@ -274,13 +357,23 @@ func to_dictionary() -> Dictionary:
 		"expedition_fleet":expedition_fleet,
 		"mining_operations":mining_operations,
 		"industrial_operations":industrial_operations,
+		"next_production_line_serial":next_production_line_serial,
 		"construction_operations":construction_operations,
+		"construction_history":construction_history,
+		"next_construction_project_serial":next_construction_project_serial,
 		"active_expedition":active_expedition,
 		"facilities":facilities,
 		"expedition_reports":expedition_reports,
 		"research":research,
 		"technologies":technologies,
 		"completed_projects":completed_projects,
+		"technology_domains":technology_domains,
+		"completed_research_routes":completed_research_routes,
+		"research_program_history":research_program_history,
+		"technology_spillovers":technology_spillovers,
+		"experimental_maturity":experimental_maturity,
+		"unlocked_industrial_transformations":unlocked_industrial_transformations,
+		"adopted_industrial_transformations":adopted_industrial_transformations,
 		"unlocked_ship_plans":unlocked_ship_plans,
 		"shipyard_queue":shipyard_queue,
 		"infrastructure_sites":infrastructure_sites,
@@ -313,7 +406,16 @@ func to_dictionary() -> Dictionary:
 		"naval_archive":naval_archive,
 		"fleet_maintenance":fleet_maintenance,
 		"fleet_logistics":fleet_logistics,
-		"logistics_network":logistics_network
+		"logistics_network":logistics_network,
+		"demand_registry":demand_registry,
+		"operations_maintenance":operations_maintenance,
+		"economy_telemetry":economy_telemetry,
+		"planning_scenarios":planning_scenarios,
+		"automation_rules":automation_rules,
+		"automation_audit":automation_audit,
+		"next_automation_rule_serial":next_automation_rule_serial,
+		"survey_mission":survey_mission,
+		"next_survey_mission_serial":next_survey_mission_serial
 	}
 
 
@@ -378,6 +480,7 @@ func ensure_location_industry(location_id: String, facility_id: String, initial_
 		industries[facility_id] = {
 			"facility_id":facility_id,
 			"level":maxi(1, initial_level),
+			"scale_stage":scale_stage_for_level(maxi(1, initial_level)),
 			"production_method_id":"",
 			"expertise_cycles":0,
 			"expertise_level":0,
@@ -385,6 +488,9 @@ func ensure_location_industry(location_id: String, facility_id: String, initial_
 		}
 	var runtime: Dictionary = industries[facility_id]
 	runtime["level"] = maxi(1, int(runtime.get("level", initial_level)))
+	runtime["scale_stage"] = str(runtime.get("scale_stage", scale_stage_for_level(int(runtime["level"]))))
+	if runtime["scale_stage"] not in ["WORKSHOP", "FACTORY", "INDUSTRIAL_COMPLEX", "AUTOMATED_DISTRICT"]:
+		runtime["scale_stage"] = scale_stage_for_level(int(runtime["level"]))
 	runtime["production_method_id"] = str(runtime.get("production_method_id", ""))
 	runtime["expertise_cycles"] = maxi(0, int(runtime.get("expertise_cycles", 0)))
 	runtime["expertise_level"] = maxi(0, int(runtime.get("expertise_level", 0)))
@@ -407,6 +513,22 @@ func industrial_operation_for(location_id: String, facility_id: String) -> Dicti
 	return {}
 
 
+func production_lines_for(location_id: String, facility_id: String) -> Array:
+	var result: Array = []
+	for operation in industrial_operations:
+		if str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) == location_id and str(operation.get("facility_id", "")) == facility_id:
+			result.append(operation)
+	result.sort_custom(func(a, b): return int(a.get("slot", 0)) < int(b.get("slot", 0)))
+	return result
+
+
+func production_line_by_id(line_id: String) -> Dictionary:
+	for operation in industrial_operations:
+		if str(operation.get("line_id", "")) == line_id:
+			return operation
+	return {}
+
+
 func ensure_industrial_operation(location_id: String, facility_id: String) -> Dictionary:
 	var existing := industrial_operation_for(location_id, facility_id)
 	if not existing.is_empty():
@@ -414,6 +536,26 @@ func ensure_industrial_operation(location_id: String, facility_id: String) -> Di
 	var operation := _empty_industrial_operation(industrial_operations.size(), facility_id, location_id)
 	industrial_operations.append(operation)
 	return operation
+
+
+func create_production_line(location_id: String, facility_id: String) -> Dictionary:
+	if not has_location(location_id) or facility_id.is_empty() or industrial_operations.size() >= MAX_PRODUCTION_LINES:
+		return {}
+	var operation := _empty_industrial_operation(industrial_operations.size(), facility_id, location_id)
+	operation["line_id"] = "LINE-%06d" % next_production_line_serial
+	next_production_line_serial += 1
+	industrial_operations.append(operation)
+	return operation
+
+
+static func scale_stage_for_level(level: int) -> String:
+	if level >= 20:
+		return "AUTOMATED_DISTRICT"
+	if level >= 10:
+		return "INDUSTRIAL_COMPLEX"
+	if level >= 5:
+		return "FACTORY"
+	return "WORKSHOP"
 
 
 func item_quantity(item_id: String, location_id: String = MAIN_BASE_LOCATION_ID) -> int:
@@ -911,8 +1053,46 @@ static func _empty_industrial_operation(index: int, facility_id: String, locatio
 	operation["location_id"] = location_id
 	operation["material_savings_fractional"] = {}
 	operation["waste_fractional"] = {}
+	operation["line_id"] = "LINE-%06d" % (index + 1)
+	operation["product_family_id"] = ""
+	operation["method_id"] = ""
+	## Kept at 100 only so schema <=32 can round-trip. Runtime throughput ignores
+	## this field and automatically shares a real facility between active lines.
+	operation["capacity_allocation"] = 100.0
+	operation["priority"] = 50
+	operation["control_mode"] = "PINNED"
+	operation["manual_lock"] = true
+	operation["production_device_id"] = ""
+	operation["allowed_method_group"] = ""
+	operation["input_commitments"] = {}
+	operation["fractional_materials"] = {}
+	operation["theoretical_rate"] = 0.0
+	operation["actual_rate"] = 0.0
+	operation["blocked_reason"] = ""
 	operation.erase("allocated_capacity")
 	return operation
+
+
+static func _empty_construction_project(index: int) -> Dictionary:
+	var project := _empty_operation(index, "construction")
+	project.merge({
+		"project_id":"",
+		"project_type":"",
+		"target_id":"",
+		"priority":50,
+		"enqueued_at_ms":0,
+		"start_level":0,
+		"target_level":0,
+		"total_work":100.0,
+		"completed_work":0.0,
+		"material_plan":{},
+		"delivered_materials":{},
+		"in_transit_materials":{},
+		"consumed":{},
+		"project_definition":{},
+		"cancellation_result":{}
+	}, true)
+	return project
 
 
 static func _normalized_operations(source: Array, minimum: int, domain_id: String, preserve_extra: bool = false) -> Array:
@@ -929,6 +1109,40 @@ static func _normalized_operations(source: Array, minimum: int, domain_id: Strin
 		if str(normalized.get("location_id", "")).is_empty():
 			normalized["location_id"] = MAIN_BASE_LOCATION_ID
 		result.append(normalized)
+	return result
+
+
+static func _normalized_construction_projects(source: Array) -> Array:
+	var result: Array = []
+	for index in MAX_CONSTRUCTION_OPERATIONS:
+		var normalized := _empty_construction_project(index)
+		if index < source.size() and source[index] is Dictionary:
+			for key in (source[index] as Dictionary):
+				normalized[key] = (source[index] as Dictionary)[key]
+		normalized["slot"] = index
+		normalized["domain"] = "construction"
+		normalized["location_id"] = str(normalized.get("location_id", MAIN_BASE_LOCATION_ID))
+		if normalized["location_id"].is_empty():
+			normalized["location_id"] = MAIN_BASE_LOCATION_ID
+		normalized["priority"] = clampi(int(normalized.get("priority", 50)), 0, 100)
+		normalized["total_work"] = maxf(1.0, float(normalized.get("total_work", 100.0)))
+		normalized["completed_work"] = clampf(float(normalized.get("completed_work", normalized.get("project_cycles_completed", 0))), 0.0, normalized["total_work"])
+		for field in ["material_plan", "delivered_materials", "in_transit_materials", "consumed", "project_definition", "cancellation_result", "blocker"]:
+			normalized[field] = normalized.get(field, {}).duplicate(true) if normalized.get(field, null) is Dictionary else {}
+		result.append(normalized)
+	return result
+
+
+static func _normalized_next_construction_project_serial(requested: int, projects: Array, history: Array) -> int:
+	var result := maxi(1, requested)
+	for collection in [projects, history]:
+		for project_value in collection:
+			if project_value is not Dictionary:
+				continue
+			var project := project_value as Dictionary
+			var project_id := str(project.get("project_id", ""))
+			if project_id.begins_with("CONSTRUCTION-"):
+				result = maxi(result, int(project_id.trim_prefix("CONSTRUCTION-")) + 1)
 	return result
 
 
@@ -952,6 +1166,21 @@ static func _normalized_industrial_operations(source: Array) -> Array:
 			normalized["location_id"] = MAIN_BASE_LOCATION_ID
 		normalized["material_savings_fractional"] = normalized.get("material_savings_fractional", {}).duplicate(true)
 		normalized["waste_fractional"] = normalized.get("waste_fractional", {}).duplicate(true)
+		normalized["line_id"] = str(normalized.get("line_id", "LINE-%06d" % (result.size() + 1)))
+		normalized["method_id"] = str(normalized.get("method_id", normalized.get("activity_id", "")))
+		normalized["product_family_id"] = str(normalized.get("product_family_id", ""))
+		normalized["capacity_allocation"] = 100.0
+		normalized["priority"] = clampi(int(normalized.get("priority", 50)), 0, 100)
+		normalized["control_mode"] = str(normalized.get("control_mode", "PINNED"))
+		if normalized["control_mode"] not in ["PINNED", "AUTO", "OFF"]:
+			normalized["control_mode"] = "PINNED"
+		normalized["manual_lock"] = bool(normalized.get("manual_lock", true))
+		normalized["production_device_id"] = str(normalized.get("production_device_id", ""))
+		normalized["allowed_method_group"] = str(normalized.get("allowed_method_group", ""))
+		normalized["input_commitments"] = normalized.get("input_commitments", normalized.get("reserved_costs", {})).duplicate(true)
+		normalized["fractional_materials"] = normalized.get("fractional_materials", {}).duplicate(true)
+		normalized["theoretical_rate"] = maxf(0.0, float(normalized.get("theoretical_rate", 0.0)))
+		normalized["actual_rate"] = maxf(0.0, float(normalized.get("actual_rate", 0.0)))
 		result.append(normalized)
 	for facility_id in MANUFACTURING_FACILITY_IDS:
 		if result.any(func(operation): return str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) == MAIN_BASE_LOCATION_ID and str(operation.get("facility_id", "")) == facility_id):
@@ -959,6 +1188,15 @@ static func _normalized_industrial_operations(source: Array) -> Array:
 		result.append(_empty_industrial_operation(result.size(), facility_id, MAIN_BASE_LOCATION_ID))
 	for index in result.size():
 		result[index]["slot"] = index
+	return result
+
+
+static func _normalized_next_production_line_serial(requested: int, lines: Array) -> int:
+	var result := maxi(1, requested)
+	for line_value in lines:
+		var line_id := str((line_value as Dictionary).get("line_id", ""))
+		if line_id.begins_with("LINE-"):
+			result = maxi(result, int(line_id.trim_prefix("LINE-")) + 1)
 	return result
 
 
@@ -1076,6 +1314,72 @@ static func _normalized_background_economy(source: Dictionary) -> Dictionary:
 	return result
 
 
+static func _normalized_demand_registry(source: Dictionary) -> Dictionary:
+	var result := {"sources":{}, "history":[]}
+	if source.get("sources", null) is Dictionary:
+		for source_id_value in source.get("sources", {}).keys():
+			var source_id := str(source_id_value)
+			var demand: Dictionary = source["sources"][source_id].duplicate(true)
+			demand["demand_id"] = source_id
+			demand["product_id"] = str(demand.get("product_id", ""))
+			demand["location_id"] = str(demand.get("location_id", MAIN_BASE_LOCATION_ID))
+			demand["priority"] = clampi(int(demand.get("priority", 50)), 0, 100)
+			demand["rate_per_hour"] = maxf(0.0, float(demand.get("rate_per_hour", 0.0)))
+			demand["quantity"] = maxf(0.0, float(demand.get("quantity", 0.0)))
+			result["sources"][source_id] = demand
+	if source.get("history", null) is Array:
+		result["history"] = source.get("history", []).duplicate(true)
+	return result
+
+
+static func _normalized_operations_maintenance(source: Dictionary) -> Dictionary:
+	var result := {"fractional":{}, "coverage":{}, "consumption_totals":{}}
+	for key in result:
+		if source.get(key, null) is Dictionary:
+			result[key] = source[key].duplicate(true)
+	return result
+
+
+static func _normalized_economy_telemetry(source: Dictionary) -> Dictionary:
+	var result := {"window_started_at_ms":0, "elapsed_ms":0.0, "flows":{}}
+	result["window_started_at_ms"] = maxi(0, int(source.get("window_started_at_ms", 0)))
+	result["elapsed_ms"] = maxf(0.0, float(source.get("elapsed_ms", 0.0)))
+	if source.get("flows", null) is Dictionary:
+		result["flows"] = source.get("flows", {}).duplicate(true)
+	return result
+
+
+static func _normalized_automation_rules(source: Array) -> Array:
+	var result: Array = []
+	for value in source:
+		if value is not Dictionary:
+			continue
+		var rule: Dictionary = (value as Dictionary).duplicate(true)
+		rule["rule_id"] = str(rule.get("rule_id", "AUTOMATION-%06d" % (result.size() + 1)))
+		rule["enabled"] = bool(rule.get("enabled", true))
+		rule["paused"] = bool(rule.get("paused", false))
+		rule["condition"] = rule.get("condition", {}).duplicate(true) if rule.get("condition", null) is Dictionary else {}
+		rule["action"] = rule.get("action", {}).duplicate(true) if rule.get("action", null) is Dictionary else {}
+		rule["cooldown_ms"] = maxf(0.0, float(rule.get("cooldown_ms", 30000.0)))
+		rule["hysteresis"] = maxf(0.0, float(rule.get("hysteresis", 0.05)))
+		rule["last_triggered_at_ms"] = int(rule.get("last_triggered_at_ms", -1))
+		result.append(rule)
+	return result
+
+
+static func _normalized_survey_mission(source: Dictionary) -> Dictionary:
+	var result := {"status":"IDLE", "mission_id":"", "origin":"", "target":"", "target_state":"", "survey_capability":"", "duration_ms":0.0, "progress_ms":0.0, "costs":{}, "assigned_ship_ids":[]}
+	for key in result:
+		if source.has(key):
+			result[key] = source[key].duplicate(true) if source[key] is Dictionary or source[key] is Array else source[key]
+	result["status"] = str(result.get("status", "IDLE"))
+	result["duration_ms"] = maxf(0.0, float(result.get("duration_ms", 0.0)))
+	result["progress_ms"] = clampf(float(result.get("progress_ms", 0.0)), 0.0, result["duration_ms"])
+	result["costs"] = result.get("costs", {}).duplicate(true)
+	result["assigned_ship_ids"] = result.get("assigned_ship_ids", []).duplicate()
+	return result
+
+
 static func _normalized_energy_system(source: Dictionary) -> Dictionary:
 	var result := {
 		"advanced_priorities":{},
@@ -1124,6 +1428,7 @@ static func _normalized_logistics_network(source: Dictionary) -> Dictionary:
 		"dispatch_progress_ms":0.0,
 		"shipments":[],
 		"next_shipment_serial":1,
+		"services":{},
 		"route_statistics":{},
 		"item_statistics":{}
 	}
@@ -1218,6 +1523,21 @@ func _normalize_ship_assignments() -> void:
 
 func _normalize_activity_fleets() -> void:
 	var claimed: Array[String] = []
+	var logistics_assignments := {}
+	for service_value in logistics_network.get("services", {}).values():
+		if service_value is not Dictionary:
+			continue
+		var service := service_value as Dictionary
+		var normalized_service_ship_ids: Array = []
+		for ship_id_value in service.get("assigned_ship_ids", []):
+			var ship_id := str(ship_id_value)
+			var candidate := ship_by_id(ship_id)
+			if ship_id.is_empty() or claimed.has(ship_id) or candidate.is_empty() or str(candidate.get("maintenance_state", "ACTIVE")) != "ACTIVE":
+				continue
+			normalized_service_ship_ids.append(ship_id)
+			claimed.append(ship_id)
+			logistics_assignments[ship_id] = {"domain":"logistics", "service_id":str(service.get("id", "")), "route_id":str(service.get("route_id", ""))}
+		service["assigned_ship_ids"] = normalized_service_ship_ids
 	for domain_id in ["mining", "expedition"]:
 		var normalized_ids: Array = []
 		for ship_id in fleet_ship_ids(domain_id):
@@ -1231,6 +1551,10 @@ func _normalize_activity_fleets() -> void:
 		if ship.get("status", "") in ["REPAIRING", "DISABLED", "BUILDING", "REFITTING", "REACTIVATING"]:
 			continue
 		var ship_id := str(ship.get("instance_id", ""))
+		if logistics_assignments.has(ship_id):
+			ship["status"] = "LOGISTICS_SERVICE"
+			ship["assignment"] = logistics_assignments[ship_id].duplicate(true)
+			continue
 		var domain_id := ship_fleet_domain(ship_id)
 		ship["status"] = "DOCKED"
 		ship["assignment"] = {} if domain_id.is_empty() or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" else {"domain":domain_id, "fleet":"default"}

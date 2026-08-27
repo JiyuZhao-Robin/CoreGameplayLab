@@ -76,6 +76,7 @@ func _run_golden_path() -> void:
 	if _failed(): return
 
 	_route("jovian_route", [starter_id, pathfinder_id, cruiser_id])
+	_uninstall_process("electronics_facility", "cryogenic_process_unit")
 	_research("research_jovian_operations")
 	_snapshot("open_jovian")
 	_refit_add(cruiser_id, "gas_collector")
@@ -267,7 +268,7 @@ func _transfer_to_main(source_location: String, item_id: String, target_quantity
 	Game.clear_location_logistics_policy(MAIN_LOCATION, item_id)
 	var route_fuel := int({"lunar_space":1, "asteroid_belt":3, "gas_giant_region":5, "outer_system":8, "deep_system":12}.get(source_location, 0))
 	var route_maintenance := int({"lunar_space":1, "asteroid_belt":2, "gas_giant_region":3, "outer_system":4, "deep_system":5}.get(source_location, 0))
-	var route_capacity := int({"lunar_space":24, "asteroid_belt":18, "gas_giant_region":16, "outer_system":12, "deep_system":8}.get(source_location, 1))
+	var route_capacity := _freight_quantity_capacity(source_location, MAIN_LOCATION, item_id)
 	var strategic_fuel_reserve := 20 if int(Game.state.completed_activities.get("manufacture_chemical_propellant", 0)) > 0 else 0
 	if route_fuel <= 0:
 		_fail("no golden-path freight fuel profile for %s" % source_location)
@@ -279,7 +280,7 @@ func _transfer_to_main(source_location: String, item_id: String, target_quantity
 	if Game.state.item_quantity("chemical_propellant", source_location) < required_route_fuel:
 		var remote_fuel_target := maxi(required_route_fuel, route_fuel * 6)
 		var fuel_cargo := remote_fuel_target - Game.state.item_quantity("chemical_propellant", source_location)
-		var fuel_shipments := ceili(float(fuel_cargo) / float(route_capacity))
+		var fuel_shipments := ceili(float(fuel_cargo) / float(_freight_quantity_capacity(MAIN_LOCATION, source_location, "chemical_propellant")))
 		if "chemical_propellant" not in production_stack:
 			_ensure_costs({"chemical_propellant":fuel_cargo + route_fuel * fuel_shipments + strategic_fuel_reserve, "repair_material":route_maintenance * fuel_shipments + 20})
 		elif Game.state.item_quantity("chemical_propellant", MAIN_LOCATION) < fuel_cargo + route_fuel:
@@ -294,7 +295,7 @@ func _transfer_to_main(source_location: String, item_id: String, target_quantity
 	if Game.state.item_quantity("repair_material", source_location) < required_route_maintenance:
 		var remote_maintenance_target := maxi(required_route_maintenance, route_maintenance * 6)
 		var maintenance_cargo := remote_maintenance_target - Game.state.item_quantity("repair_material", source_location)
-		var maintenance_shipments := ceili(float(maintenance_cargo) / float(route_capacity))
+		var maintenance_shipments := ceili(float(maintenance_cargo) / float(_freight_quantity_capacity(MAIN_LOCATION, source_location, "repair_material")))
 		_ensure_costs({"repair_material":maintenance_cargo + route_maintenance * maintenance_shipments + 20, "chemical_propellant":route_fuel * maintenance_shipments + strategic_fuel_reserve})
 		if _failed(): return
 		_command(Game.set_location_logistics_policy(MAIN_LOCATION, "repair_material", "SUPPLY", 20, 0, 100, 1), "publish main freight maintenance supply")
@@ -314,6 +315,18 @@ func _transfer_to_main(source_location: String, item_id: String, target_quantity
 	Game.clear_location_logistics_policy(MAIN_LOCATION, "repair_material")
 	if Game.state.item_quantity(item_id, MAIN_LOCATION) < target_quantity:
 		_fail("freight did not deliver %s from %s; main=%d target=%d source=%d source_fuel=%d main_fuel=%d source_policy=%s main_policy=%s shipments=%s" % [item_id, source_location, Game.state.item_quantity(item_id, MAIN_LOCATION), target_quantity, Game.state.item_quantity(item_id, source_location), Game.state.item_quantity("chemical_propellant", source_location), Game.state.item_quantity("chemical_propellant", MAIN_LOCATION), str(Game.state.location_state(source_location).get("logistics", {}).get("policies", {})), str(Game.state.location_state(MAIN_LOCATION).get("logistics", {}).get("policies", {})), str(Game.state.logistics_network.get("shipments", []))])
+
+
+func _freight_quantity_capacity(origin: String, destination: String, item_id: String) -> int:
+	var path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, origin, destination, item_id)
+	if path.is_empty():
+		return 1
+	var result := 2147483647
+	for route_id_value in path.get("route_ids", []):
+		var route_id := str(route_id_value)
+		var freight_units := maxf(0.001, float(path.get("route_freight_units_per_item", {}).get(route_id, 1.0)))
+		result = mini(result, int(floor(Game.simulation.logistics.service_capacity(Game.state, route_id) / freight_units)))
+	return maxi(1, result if result != 2147483647 else 1)
 
 
 func _mining_selection(item_id: String, preferred_activity_id: String, preferred_ship_id: String) -> Dictionary:
@@ -352,9 +365,6 @@ func _research(project_id: String) -> void:
 		return
 	var project: Dictionary = Game.content.research_projects.get(project_id, {})
 	var committed_costs := {}
-	for cost_value in project.get("costs", []):
-		var cost := cost_value as Dictionary
-		committed_costs[str(cost.get("item", ""))] = int(committed_costs.get(str(cost.get("item", "")), 0)) + int(cost.get("quantity", 0))
 	var plan_id := str(project.get("grants_ship_plan", ""))
 	if not plan_id.is_empty():
 		var plan: Dictionary = Game.content.ship_construction_projects.get(plan_id, {})
@@ -368,8 +378,48 @@ func _research(project_id: String) -> void:
 	_ensure_costs(committed_costs)
 	if not _command(Game.start_research_project(project_id), "start Research %s" % project_id):
 		return
-	_advance(maxf(1000.0, float(project.get("duration_ms", 1000.0)) * 2.0))
-	_check(bool(Game.state.completed_projects.get(project_id, false)), "research completes with progressively consumed real materials: %s" % project_id)
+	for _attempt in 20:
+		if bool(Game.state.completed_projects.get(project_id, false)) or _failed():
+			break
+		var stage := Game.simulation.research_stage_definition(Game.state, project, int(Game.state.research.get("stage_index", 0)), str(Game.state.research.get("route_id", "")))
+		if stage.is_empty():
+			_advance(1.0)
+			continue
+		for requirement_value in stage.get("requirements", []):
+			var requirement := requirement_value as Dictionary
+			if Game.simulation.requirement_met(Game.state, requirement):
+				continue
+			match str(requirement.get("type", "")):
+				"activity_complete":
+					_run_activity_once(str(requirement.get("id", "")))
+				"route_complete":
+					var route_id := str(requirement.get("id", ""))
+					var candidates := _docked_route_candidates(route_id)
+					if candidates.is_empty():
+						_fail("no docked real ship can execute R&D Field Test route %s" % route_id)
+					else:
+						_route(route_id, candidates)
+				"manufacturing_module_installed":
+					_install_process(str(requirement.get("facility", "")), str(requirement.get("id", "")))
+				"own_facility":
+					var facility_id := str(requirement.get("id", ""))
+					for activity_value in Game.content.activities.values():
+						var activity := activity_value as Dictionary
+						if activity.get("effects", []).any(func(effect): return str((effect as Dictionary).get("type", "")) == "unlock_facility" and str((effect as Dictionary).get("facility", "")) == facility_id):
+							_build(str(activity.get("id", "")))
+							break
+				"item":
+					_ensure_item(str(requirement.get("id", "")), int(requirement.get("quantity", 1)))
+		if _failed(): return
+		_ensure_research_stage_costs(_cost_dictionary(stage.get("costs", [])))
+		if _failed(): return
+		for condition_value in stage.get("operating_conditions", []):
+			if not Game.simulation.requirement_met(Game.state, condition_value as Dictionary):
+				_fail("R&D Operating Condition is not met for %s / %s: %s" % [project_id, stage.get("id", ""), str(condition_value)])
+				return
+		var work := maxf(1.0, float(stage.get("work_required", 1.0)))
+		_advance(work / maxf(0.01, Game.simulation.research_capacity(Game.state)) * 2.0 + 1.0)
+	_check(bool(Game.state.completed_projects.get(project_id, false)), "R&D Program completes through real stage supplies, facilities and Field Tests: %s" % project_id)
 
 
 func _develop_ship(project_id: String) -> void:
@@ -379,6 +429,12 @@ func _develop_ship(project_id: String) -> void:
 	var plan_id := str(project.get("grants_ship_plan", ""))
 	var plan: Dictionary = Game.content.ship_construction_projects.get(plan_id, {})
 	var ship_model := str(plan.get("ship_id", ""))
+	var ship_costs: Dictionary = Game.simulation.ship_construction_material_totals(plan)
+	for fixed_value in plan.get("fixed_costs", []):
+		var fixed := fixed_value as Dictionary
+		var item_id := str(fixed.get("item", ""))
+		ship_costs[item_id] = int(ship_costs.get(item_id, 0)) + int(fixed.get("quantity", 0))
+	_ensure_costs(ship_costs)
 	if Game.simulation.shipyard_queue_index(Game.state, plan_id) > 0:
 		_command(Game.move_shipyard_project(plan_id, 0), "prioritize required Shipyard plan %s" % plan_id)
 	for _attempt in 5:
@@ -409,12 +465,30 @@ func _refit_add(ship_id: String, module_id: String) -> void:
 	if module_id in desired:
 		return
 	desired.append(module_id)
-	var bom: Dictionary = Game.simulation.refit_bom_delta(Game.state.ship_module_definition_ids(ship), desired)
-	_ensure_costs(bom)
+	_ensure_costs(Game.simulation.loadout_fabrication_costs(desired))
 	if not _command(Game.begin_ship_refit(ship_id, desired), "refit %s with %s" % [ship_id, module_id]):
 		return
 	_advance(250000.0)
 	_check(module_id in Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)), "real Starport refit installs capability module %s" % module_id)
+
+
+func _docked_route_candidates(route_id: String) -> Array:
+	var result: Array = []
+	var route: Dictionary = Game.content.expedition_routes.get(route_id, {})
+	for ship_value in Game.state.ships:
+		var ship := ship_value as Dictionary
+		var ship_id := str(ship.get("instance_id", ""))
+		if not Game.state.ship_is_docked(ship_id):
+			continue
+		var valid := true
+		for node_value in route.get("nodes", []):
+			if not Game.simulation.build_requirements_met(Game.state, node_value as Dictionary, [ship_id]):
+				valid = false
+				break
+		if valid:
+			result.append(ship_id)
+			break
+	return result
 
 
 func _route(route_id: String, ship_ids: Array) -> void:
@@ -503,6 +577,32 @@ func _ensure_costs(costs: Dictionary) -> void:
 		if complete:
 			return
 	_fail("could not assemble simultaneous committed costs: %s" % str(costs))
+
+
+func _ensure_research_stage_costs(costs: Dictionary) -> void:
+	if _failed(): return
+	for _attempt in 32:
+		var complete := true
+		for item_id_value in costs.keys():
+			var item_id := str(item_id_value)
+			var required := int(costs[item_id_value])
+			# The active stage's own reservation is usable by that stage. Only other
+			# queues and player reserves reduce the stock available to this R&D gate.
+			var usable := (
+				Game.state.item_quantity(item_id, MAIN_LOCATION)
+				- int(Game.state.location_reserves(MAIN_LOCATION).get(item_id, 0))
+				- Game.state.industrial_committed_quantity(item_id, -1, MAIN_LOCATION)
+				- Game.state.construction_committed_quantity(item_id, -1, MAIN_LOCATION)
+				- Game.state.shipyard_committed_quantity(item_id, "", MAIN_LOCATION)
+			)
+			if usable >= required:
+				continue
+			complete = false
+			_ensure_item(item_id, Game.state.item_quantity(item_id, MAIN_LOCATION) + required - usable)
+			if _failed(): return
+		if complete:
+			return
+	_fail("could not supply active R&D stage costs: %s" % str(costs))
 
 
 func _cost_dictionary(entries: Array) -> Dictionary:
