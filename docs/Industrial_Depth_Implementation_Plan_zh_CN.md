@@ -1156,74 +1156,98 @@ Content Database 生成 Product、Production Method、Factory、Production Devic
 
 ---
 
-## 10. 第八阶段：勘测、区域身份和巨构深化
+## 10. 第八阶段：勘测、区位条件与工业地理
 
-### 10.1 勘测状态
+> 实施状态：完成（1.28.0 / Save Schema 34）。当前范围严格为单一 `sol` 恒星系；旧四巨构和星际入口在本阶段冻结，未为未来跨恒星内容增加专用抽象。
 
-```text
-UNKNOWN
-→ DETECTED
-→ SURVEYED
-→ DEEP_SURVEYED
-```
+### 10.1 Location Environment
 
-逐步公开：
-
-- 资源类型。
-- 品位范围。
-- 开采潜力。
-- 环境危险。
-- 特殊副产物。
-- 固定采掘网络和特殊方法。
-
-勘测必须实际改变部署、建设、物流或生产方式选择。
-
-### 10.2 区域逻辑身份
-
-| 区域 | 逻辑身份 |
-| --- | --- |
-| 地球轨道 | 建设、精密工业、总装和物流；结构容量昂贵 |
-| 月球空间 | 真空冶炼、低重力制造、早期固定采掘 |
-| 小行星带 | 大宗采矿、粗加工、质量投射和高维护 |
-| 木星系统 | 气体、推进剂、聚变燃料、辐射和重力约束 |
-| 外太阳系 | 低温工业、长周期运输和自治设施 |
-| 深空 | 特殊物质、高风险、高维护和远端自治 |
-
-这些区别通过资源、允许方法、容量、运输和维护实现，不依赖纯粹的地点产量加成。
-
-### 10.3 资源枯竭顺序
-
-工业深化版本只做勘测和永久基础点。
-
-以后可以增加高品位有限矿区，但前置条件是：
-
-- 自动勘测。
-- 枯竭警报。
-- 舰队重新部署。
-- 物流重新规划。
-- 固定设施迁移或改造。
-
-### 10.4 巨构统一
-
-巨构使用通用建设项目，按阶段定义：
+所有可开发地点统一持有：
 
 ```text
-材料
-资本品
-建设能力
-能源
-物流要求
-阶段效果
+gravity / vacuum / atmosphere / solarFlux
+thermalEnvironment / radiation
+transportDistance / constructionDifficulty
+maintenanceSeverity
 ```
 
-中间阶段立即产生实际效果。多个巨构和普通工业扩建竞争同一批资源与建设能力。
+Production Method、Extraction Method、O&M、Construction、Logistics 和 Planner 读取同一份环境数据。区域没有 `Mining +20%` 之类无条件 Buff。
 
-### 10.5 完成条件
+### 10.2 Survey State 与信息访问
 
-- 每个区域带来新的工业问题，而不只是更高数值。
-- 勘测信息能改变实际选择。
-- 巨构中间阶段能改变能源、勘测、物流或自动化规则。
-- 玩家需要决定巨构与普通扩张的优先级。
+统一顺序为：
+
+```text
+UNKNOWN → DETECTED → SURVEYED → DEEP_SURVEYED
+```
+
+* `UNKNOWN`：只公开地点身份。
+* `DETECTED`：只公开资源类别、潜力区间、显著辐射、距离和建设难度区间。
+* `SURVEYED`：公开品位范围、可持续潜力、副产物、允许工法和完整环境，允许永久开发。
+* `DEEP_SURVEYED`：公开精确品位和当前技术可达到的高级潜力；不是强制步骤。
+
+UI 与领域接口均调用 `location_intelligence()`，低勘测状态不会读取并显示内容数据库中的隐藏精确值。
+
+### 10.3 真实 Survey Mission
+
+勘测任务保存并结算：
+
+```text
+origin / target / targetState
+assignedShipIds / surveyCapability
+duration / progress / real costs
+```
+
+它要求停泊、正常、装有相应传感器或深度勘测插件的实体舰船，并消耗正常库存中的推进剂、维修材料和电子元件。任务进入在线与离线模拟边界，不存在 Survey Point 货币。
+
+### 10.4 Resource Profile 与 Sustainable Extraction Potential
+
+每个资源地点数据驱动声明：
+
+```text
+resourceType / gradeRange / byproducts / allowedMethods
+base extractionPotential
+```
+
+移动采矿的已安装开采力会被地点潜力硬上限截断。固定和高级工法通过 multiplier 改变可长期支持的规模。状态中没有 Remaining Ore、枯竭计时器或自动迁移。
+
+### 10.5 Site Development
+
+永久开发流程为：
+
+```text
+SURVEYED
+→ 选择兼容 Extraction Method
+→ SITE_DEVELOPMENT Construction Project
+→ 使用地点库存渐进投入资本品
+→ 检查本地 Power / Bulk Storage / Logistics
+→ Permanent Extraction Site
+```
+
+开发项目复用普通建设队列、优先级、材料承诺、远端库存和存档；没有第二套建设资源。远端建设资源承诺已修正为读取项目自身 Location，而不是错误读取 Main Base。
+
+### 10.6 工法、维护与物流区位
+
+Production / Extraction Method 使用可扩展环境条件数组，不依赖大量地区 `if/else`。例如真空电弧炼钢在非真空木星环境会被真实阻塞；大气采集要求适合的大气类型。
+
+地点维护严重度会放大正常 O&M Demand Source：辐射主要增加电子维护，热循环和机械环境提高结构/机械维护。远端压力来自多段物流路线的真实 transit time、运输能力、燃料与维护，不存在抽象“自治加成”。
+
+### 10.7 Planner 集成
+
+只读 Planner 额外输出 `industrial_geography`：目标原料吞吐、已勘测地点潜力、当前工法、总可持续能力、短缺和候选解法。候选解法只提示追加勘测、深度勘测或研究/采用高级工法；不会自动创建舰队、开发地点或修改物流。生产方式选择也会过滤与目标地点环境不兼容的方法。
+
+### 10.8 完成验收
+
+* 所有 Location 属于同一 `sol` 系统并持有统一环境参数。
+* 四级 Survey State 真实限制情报，且任务占用实体舰船与正常物资。
+* 普通资源点永久存在，以 Sustainable Extraction Potential 限制规模。
+* Surveyed Site 通过正常 Construction、Inventory、Energy、Storage 和 Logistics 开发。
+* 环境改变工法可用性与实际 O&M，而不是提供纯百分比区域 Buff。
+* 多跳 transit time 让外层区域产生更长补给周期。
+* 新工法能提高已经开发过的旧地点价值。
+* Planner 能计算已勘测潜力短缺且保持只读。
+* 地点没有商品种类或职业硬限制；综合工业世界仍然合法。
+* 旧巨构入口在本阶段冻结，跨恒星内容未进入实现范围。
 
 ---
 

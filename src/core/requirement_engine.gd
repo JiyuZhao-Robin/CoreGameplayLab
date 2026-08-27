@@ -70,8 +70,13 @@ func evaluate(state: SpaceGameState, requirement: Dictionary) -> bool:
 			return state.mining_site_available(str(requirement.get("id", "")))
 		"mining_sites_mastered":
 			return state.mastered_mining_site_count(str(requirement.get("region", "")), int(requirement.get("level", 1))) >= int(requirement.get("count", 1))
+		"survey_state":
+			var location: Dictionary = state.location_state(str(requirement.get("id", "")))
+			return LocationState.SURVEY_STATE_ORDER.find(str(location.get("survey_state", LocationState.UNKNOWN))) >= LocationState.SURVEY_STATE_ORDER.find(str(requirement.get("state", LocationState.SURVEYED)))
 		"megastructure":
 			return bool(state.megastructures.get(str(requirement.get("id", "")), false))
+		"megastructure_phase":
+			return int(state.megastructure_projects.get(str(requirement.get("id", "")), {}).get("phase_index", 0)) >= int(requirement.get("phase", 0))
 		"game_complete":
 			return state.game_complete
 	return false

@@ -26,6 +26,9 @@ var revision := 0
 var parent_revision := 0
 var device_id := ""
 var saved_at_ms := 0
+## Offline simulation never discards elapsed time when a safety boundary is hit.
+## Any remainder is carried into the next load as an explicit time debt.
+var offline_time_debt_ms := 0.0
 var total_elapsed_ms := 0.0
 var locations := {}
 ## Compatibility views only. Both maps directly reference the Main Base
@@ -76,6 +79,7 @@ var inventory_reserves: Dictionary:
 var infrastructure_sites := {"earth_orbit":true}
 var megastructures := {}
 var megastructure_projects := {}
+var retired_megastructure_archive := {}
 var major_discoveries := {}
 var game_complete := false
 var completed_at_ms := 0
@@ -198,13 +202,134 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	return state
 
 
+## Save changes are intentionally applied one published schema at a time.  Each
+## step owns one contract and can be covered by a fixed fixture without hiding a
+## cross-version jump inside the runtime normalizers below.
+static func migrate_save_dictionary(source: Dictionary) -> Dictionary:
+	var migrated := source.duplicate(true)
+	var version := int(migrated.get("save_version", GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION))
+	while version < SAVE_VERSION:
+		match version:
+			24: migrated = _migrate_24_25(migrated)
+			25: migrated = _migrate_25_26(migrated)
+			26: migrated = _migrate_26_27(migrated)
+			27: migrated = _migrate_27_28(migrated)
+			28: migrated = _migrate_28_29(migrated)
+			29: migrated = _migrate_29_30(migrated)
+			30: migrated = _migrate_30_31(migrated)
+			31: migrated = _migrate_31_32(migrated)
+			32: migrated = _migrate_32_33(migrated)
+			33: migrated = _migrate_33_34(migrated)
+			34: migrated = _migrate_34_35(migrated)
+			_: break
+		var next_version := int(migrated.get("save_version", version))
+		if next_version <= version:
+			break
+		version = next_version
+	return migrated
+
+
+static func _stamp_schema(data: Dictionary, version: int) -> Dictionary:
+	var migrated := data.duplicate(true)
+	migrated["save_version"] = version
+	return migrated
+
+
+static func _migrate_24_25(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 25)
+
+
+static func _migrate_25_26(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 26)
+
+
+static func _migrate_26_27(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 27)
+
+
+static func _migrate_27_28(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 28)
+
+
+static func _migrate_28_29(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 29)
+
+
+static func _migrate_29_30(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 30)
+
+
+static func _migrate_30_31(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 31)
+
+
+static func _migrate_31_32(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 32)
+
+
+static func _migrate_32_33(data: Dictionary) -> Dictionary:
+	return _stamp_schema(data, 33)
+
+
+static func _migrate_33_34(data: Dictionary) -> Dictionary:
+	var migrated := _stamp_schema(data, 34)
+	var site_states: Dictionary = migrated.get("mining_site_states", {}).duplicate(true)
+	for site_id_value in site_states.keys():
+		var runtime := site_states[site_id_value] as Dictionary
+		if bool(runtime.get("discovered", false)):
+			runtime["developed"] = true
+			runtime["extraction_method_id"] = str(runtime.get("extraction_method_id", "fixed_excavation"))
+	migrated["mining_site_states"] = site_states
+	return migrated
+
+
+static func _migrate_34_35(data: Dictionary) -> Dictionary:
+	var migrated := _stamp_schema(data, 35)
+	migrated["offline_time_debt_ms"] = maxf(0.0, float(migrated.get("offline_time_debt_ms", 0.0)))
+	var completed: Dictionary = migrated.get("megastructures", {}).duplicate(true)
+	var old_projects: Dictionary = migrated.get("megastructure_projects", {}).duplicate(true)
+	var archive: Dictionary = migrated.get("retired_megastructure_archive", {}).duplicate(true)
+	for retired_id in ["matter_extractor", "autonomous_industry", "deep_space_array"]:
+		if completed.has(retired_id) or old_projects.has(retired_id):
+			archive[retired_id] = {
+				"completed":bool(completed.get(retired_id, false)),
+				"project":old_projects.get(retired_id, {}).duplicate(true),
+				"retired_in_schema":35
+			}
+		completed.erase(retired_id)
+		old_projects.erase(retired_id)
+	var stellar: Dictionary = old_projects.get("stellar_energy", {}).duplicate(true)
+	var legacy_percent := clampi(int(stellar.get("progress_percent", 100 if bool(completed.get("stellar_energy", false)) else 0)), 0, 100)
+	if not stellar.is_empty() or bool(completed.get("stellar_energy", false)):
+		stellar["id"] = "stellar_energy"
+		stellar["legacy_progress_percent"] = legacy_percent
+		stellar["legacy_contributed_materials"] = stellar.get("delivered_materials", {}).duplicate(true)
+		stellar["site_location_id"] = str(stellar.get("site_location_id", "earth_orbit"))
+		stellar["phase_index"] = 8 if bool(completed.get("stellar_energy", false)) else clampi(int(floor(float(legacy_percent) * 8.0 / 100.0)), 0, 7)
+		stellar["phase_history"] = stellar.get("phase_history", []).duplicate(true)
+		stellar["total_materials_consumed"] = stellar.get("total_materials_consumed", stellar.get("delivered_materials", {})).duplicate(true)
+		stellar["total_capital_goods"] = stellar.get("total_capital_goods", {}).duplicate(true)
+		stellar["supplier_locations"] = stellar.get("supplier_locations", {}).duplicate(true)
+		stellar["total_cargo_transported"] = maxf(0.0, float(stellar.get("total_cargo_transported", 0.0)))
+		stellar["peak_construction_throughput"] = maxf(0.0, float(stellar.get("peak_construction_throughput", 0.0)))
+		stellar["peak_power_demand"] = maxf(0.0, float(stellar.get("peak_power_demand", 0.0)))
+		stellar["status"] = "COMPLETE" if bool(completed.get("stellar_energy", false)) else str(stellar.get("status", "READY"))
+		old_projects["stellar_energy"] = stellar
+	migrated["megastructures"] = completed
+	migrated["megastructure_projects"] = old_projects
+	migrated["retired_megastructure_archive"] = archive
+	return migrated
+
+
 static func from_dictionary(data: Dictionary, domain_ids: Array, location_definitions: Dictionary = {}) -> SpaceGameState:
+	data = migrate_save_dictionary(data)
 	var state := create_new(domain_ids, location_definitions)
 	state.save_id = str(data.get("save_id", state.save_id))
 	state.revision = int(data.get("revision", 0))
 	state.parent_revision = int(data.get("parent_revision", maxi(0, state.revision - 1)))
 	state.device_id = str(data.get("device_id", state.device_id))
 	state.saved_at_ms = int(data.get("saved_at_ms", Time.get_unix_time_from_system() * 1000))
+	state.offline_time_debt_ms = maxf(0.0, float(data.get("offline_time_debt_ms", 0.0)))
 	state.total_elapsed_ms = float(data.get("total_elapsed_ms", 0.0))
 	if data.get("locations", null) is Dictionary and not data.get("locations", {}).is_empty():
 		state._load_locations(data.get("locations", {}), location_definitions)
@@ -276,6 +401,7 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.infrastructure_sites = data.get("infrastructure_sites", state.infrastructure_sites).duplicate(true)
 	state.megastructures = data.get("megastructures", {}).duplicate(true)
 	state.megastructure_projects = _normalized_megastructure_projects(data.get("megastructure_projects", {}), state.megastructures)
+	state.retired_megastructure_archive = data.get("retired_megastructure_archive", {}).duplicate(true)
 	state.major_discoveries = data.get("major_discoveries", {}).duplicate(true)
 	state.game_complete = bool(data.get("game_complete", false))
 	state.completed_at_ms = int(data.get("completed_at_ms", 0))
@@ -344,6 +470,7 @@ func to_dictionary() -> Dictionary:
 		"parent_revision":parent_revision,
 		"device_id":device_id,
 		"saved_at_ms":saved_at_ms,
+		"offline_time_debt_ms":offline_time_debt_ms,
 		"total_elapsed_ms":total_elapsed_ms,
 		"locations":locations,
 		"domains":domains,
@@ -379,6 +506,7 @@ func to_dictionary() -> Dictionary:
 		"infrastructure_sites":infrastructure_sites,
 		"megastructures":megastructures,
 		"megastructure_projects":megastructure_projects,
+		"retired_megastructure_archive":retired_megastructure_archive,
 		"major_discoveries":major_discoveries,
 		"game_complete":game_complete,
 		"completed_at_ms":completed_at_ms,
@@ -482,6 +610,8 @@ func ensure_location_industry(location_id: String, facility_id: String, initial_
 			"level":maxi(1, initial_level),
 			"scale_stage":scale_stage_for_level(maxi(1, initial_level)),
 			"production_method_id":"",
+			"installed_process_modules":[],
+			"installed_plugins":[],
 			"expertise_cycles":0,
 			"expertise_level":0,
 			"product_mastery":{}
@@ -492,6 +622,12 @@ func ensure_location_industry(location_id: String, facility_id: String, initial_
 	if runtime["scale_stage"] not in ["WORKSHOP", "FACTORY", "INDUSTRIAL_COMPLEX", "AUTOMATED_DISTRICT"]:
 		runtime["scale_stage"] = scale_stage_for_level(int(runtime["level"]))
 	runtime["production_method_id"] = str(runtime.get("production_method_id", ""))
+	runtime["installed_process_modules"] = runtime.get("installed_process_modules", []).duplicate()
+	runtime["installed_plugins"] = runtime.get("installed_plugins", []).duplicate()
+	if location_id == MAIN_BASE_LOCATION_ID and facilities.has(facility_id):
+		for field in ["installed_process_modules", "installed_plugins"]:
+			if (runtime[field] as Array).is_empty() and facilities[facility_id].get(field, null) is Array:
+				runtime[field] = facilities[facility_id].get(field, []).duplicate()
 	runtime["expertise_cycles"] = maxi(0, int(runtime.get("expertise_cycles", 0)))
 	runtime["expertise_level"] = maxi(0, int(runtime.get("expertise_level", 0)))
 	runtime["product_mastery"] = runtime.get("product_mastery", {}).duplicate(true)
@@ -614,6 +750,8 @@ func total_inventory_units(location_id: String = "") -> int:
 
 
 func add_item(item_id: String, quantity: int, location_id: String = MAIN_BASE_LOCATION_ID) -> void:
+	if item_id.is_empty() or quantity <= 0:
+		return
 	_ensure_location(location_id, LocationState.ARTIFICIAL if location_id == MAIN_BASE_LOCATION_ID else LocationState.NATURAL, true)
 	var owned_inventory := location_inventory(location_id)
 	owned_inventory[item_id] = item_quantity(item_id, location_id) + quantity
@@ -751,34 +889,43 @@ func install_facility_module(facility_id: String, module_id: String) -> bool:
 	return true
 
 
-func install_manufacturing_module(facility_id: String, module_id: String, module_kind: String) -> bool:
+func install_manufacturing_module(facility_id: String, module_id: String, module_kind: String, location_id: String = MAIN_BASE_LOCATION_ID) -> bool:
 	if not facilities.has(facility_id) or str(facilities[facility_id].get("status", "")) != "ACTIVE":
 		return false
 	var field := "installed_process_modules" if module_kind == "process" else "installed_plugins"
-	var installed: Array = facilities[facility_id].get(field, []).duplicate()
+	var local_industry := ensure_location_industry(location_id, facility_id, 1)
+	var installed: Array = local_industry.get(field, []).duplicate()
 	if installed.has(module_id):
 		return false
 	installed.append(module_id)
-	facilities[facility_id][field] = installed
+	local_industry[field] = installed
+	# Main-base mirrors preserve schema compatibility for old save/UI consumers.
+	if location_id == MAIN_BASE_LOCATION_ID:
+		facilities[facility_id][field] = installed.duplicate()
 	if int(manufacturing_module_inventory.get(module_id, 0)) > 0:
 		manufacturing_module_inventory[module_id] = int(manufacturing_module_inventory[module_id]) - 1
 	return true
 
 
-func uninstall_manufacturing_module(facility_id: String, module_id: String, module_kind: String) -> bool:
+func uninstall_manufacturing_module(facility_id: String, module_id: String, module_kind: String, location_id: String = MAIN_BASE_LOCATION_ID) -> bool:
 	if not facilities.has(facility_id):
 		return false
 	var field := "installed_process_modules" if module_kind == "process" else "installed_plugins"
-	var installed: Array = facilities[facility_id].get(field, []).duplicate()
+	var local_industry := ensure_location_industry(location_id, facility_id, 1)
+	var installed: Array = local_industry.get(field, []).duplicate()
 	if not installed.has(module_id):
 		return false
 	installed.erase(module_id)
-	facilities[facility_id][field] = installed
+	local_industry[field] = installed
+	if location_id == MAIN_BASE_LOCATION_ID:
+		facilities[facility_id][field] = installed.duplicate()
 	manufacturing_module_inventory[module_id] = int(manufacturing_module_inventory.get(module_id, 0)) + 1
 	return true
 
 
 func remove_item(item_id: String, quantity: int, location_id: String = MAIN_BASE_LOCATION_ID) -> bool:
+	if item_id.is_empty() or quantity <= 0:
+		return false
 	if item_quantity(item_id, location_id) < quantity:
 		return false
 	location_inventory(location_id)[item_id] = item_quantity(item_id, location_id) - quantity
@@ -964,6 +1111,7 @@ func mining_site_available(site_id: String) -> bool:
 	return (
 		bool(runtime.get("discovered", false))
 		and bool(runtime.get("unlocked", true))
+		and str(runtime.get("survey_state", LocationState.UNKNOWN)) in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]
 		and str(runtime.get("state", "AVAILABLE")) not in ["LOCKED", "INTEGRATED"]
 		and str(runtime.get("integrated_network_id", "")).is_empty()
 	)
@@ -1030,6 +1178,7 @@ static func _empty_operation(index: int, domain_id: String) -> Dictionary:
 		"project_cycles_completed":0,
 		"paid_cycles":0,
 		"status":"IDLE",
+		"operating_state":"PAUSED",
 		"blocker":{},
 		"assigned_ship_ids":[],
 		"reserved_costs":{},
@@ -1470,14 +1619,25 @@ static func _normalized_megastructure_projects(source: Dictionary, completed: Di
 		var runtime: Dictionary = source[project_id].duplicate(true)
 		runtime["id"] = str(runtime.get("id", project_id))
 		runtime["progress_percent"] = clampi(int(runtime.get("progress_percent", 0)), 0, 100)
-		runtime["stage_index"] = maxi(0, int(runtime.get("stage_index", 0)))
+		runtime["phase_index"] = maxi(0, int(runtime.get("phase_index", runtime.get("stage_index", 0))))
+		runtime["stage_index"] = int(runtime["phase_index"])
 		runtime["delivered_materials"] = runtime.get("delivered_materials", {}).duplicate(true)
+		runtime["phase_history"] = runtime.get("phase_history", []).duplicate(true)
+		runtime["total_materials_consumed"] = runtime.get("total_materials_consumed", {}).duplicate(true)
+		runtime["total_capital_goods"] = runtime.get("total_capital_goods", {}).duplicate(true)
+		runtime["supplier_locations"] = runtime.get("supplier_locations", {}).duplicate(true)
+		runtime["total_cargo_transported"] = maxf(0.0, float(runtime.get("total_cargo_transported", 0.0)))
+		runtime["peak_construction_throughput"] = maxf(0.0, float(runtime.get("peak_construction_throughput", 0.0)))
+		runtime["peak_power_demand"] = maxf(0.0, float(runtime.get("peak_power_demand", 0.0)))
+		runtime["started_at_ms"] = int(runtime.get("started_at_ms", 0))
+		runtime["completed_at_ms"] = int(runtime.get("completed_at_ms", 0))
+		runtime["site_location_id"] = str(runtime.get("site_location_id", runtime.get("location_id", MAIN_BASE_LOCATION_ID)))
 		runtime["status"] = str(runtime.get("status", "PLANNED"))
 		result[str(project_id)] = runtime
 	for project_id in completed:
 		if not bool(completed.get(project_id, false)) or result.has(project_id):
 			continue
-		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "stage_index":0, "stage_name":"COMPLETE", "delivered_materials":{}, "status":"COMPLETE"}
+		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "phase_index":8, "stage_index":8, "stage_name":"COMPLETE", "delivered_materials":{}, "phase_history":[], "total_materials_consumed":{}, "total_capital_goods":{}, "supplier_locations":{}, "total_cargo_transported":0.0, "peak_construction_throughput":0.0, "peak_power_demand":0.0, "started_at_ms":0, "completed_at_ms":0, "site_location_id":MAIN_BASE_LOCATION_ID, "status":"COMPLETE"}
 	return result
 
 

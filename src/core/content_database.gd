@@ -150,6 +150,10 @@ func validate() -> void:
 	var produced_items := {}
 	var consumed_items := {}
 	var unique_ship_grants := {}
+	for forbidden_collection in [technologies, research_projects, expedition_routes, megastructures, goals]:
+		for definition_id_value in (forbidden_collection as Dictionary).keys():
+			if "interstellar" in str(definition_id_value).to_lower():
+				errors.append("The single-system core cannot expose interstellar content: %s" % definition_id_value)
 	_validate_simulation_profiles()
 	if float(industry_rules.get("economy_of_scale_per_level", 0.0)) < 0.0 or float(industry_rules.get("economy_of_scale_cap", 0.0)) < 0.0:
 		errors.append("industry_rules must define non-negative Economy of Scale values")
@@ -235,21 +239,38 @@ func validate() -> void:
 		if not transport_modes.has(str(route.get("default_transport_mode", ""))):
 			errors.append("%s must reference a valid default Transport Mode" % route_label)
 		_validate_item_entries(route.get("dispatch_costs", []), route_label)
+	if megastructures.size() != 1:
+		errors.append("The single-system core must define exactly one Megastructure")
 	for megastructure in megastructures.values():
 		var megastructure_label := "megastructure '%s'" % megastructure.get("id", "?")
-		var construction_activity := str(megastructure.get("construction_activity", ""))
-		if construction_activity.is_empty() or not activities.has(construction_activity):
-			errors.append("%s references a missing construction activity" % megastructure_label)
-		var previous_percent := -1
-		for stage_value in megastructure.get("stages", []):
-			var stage := stage_value as Dictionary
-			var percent := int(stage.get("percent", -1))
-			if percent <= previous_percent or percent < 0 or percent > 100 or str(stage.get("name", "")).is_empty():
-				errors.append("%s has invalid ordered construction stages" % megastructure_label)
-				break
-			previous_percent = percent
-		if previous_percent != 100:
-			errors.append("%s construction stages must end at 100 percent" % megastructure_label)
+		var phases: Array = megastructure.get("phases", [])
+		if phases.size() < 6 or phases.size() > 8:
+			errors.append("%s must define six to eight meaningful phases" % megastructure_label)
+		var seen_phase_ids := {}
+		for phase_index in phases.size():
+			var phase := phases[phase_index] as Dictionary
+			var phase_id := str(phase.get("id", ""))
+			if phase_id.is_empty() or seen_phase_ids.has(phase_id) or str(phase.get("name", "")).is_empty():
+				errors.append("%s has an empty or duplicate phase" % megastructure_label)
+			seen_phase_ids[phase_id] = true
+			var activity_id := str(phase.get("activity_id", ""))
+			if phase_index == 0:
+				if str(phase.get("kind", "")) != "SITE_SELECTION" or not activity_id.is_empty():
+					errors.append("%s phase zero must be Research and Site Selection" % megastructure_label)
+			else:
+				if not activities.has(activity_id) or not bool(activities.get(activity_id, {}).get("construction_project", false)):
+					errors.append("%s phase '%s' must reference a real Construction Project" % [megastructure_label, phase_id])
+			for requirement in phase.get("requirements", []):
+				_validate_requirement(requirement, "%s phase '%s'" % [megastructure_label, phase_id])
+		for candidate_value in megastructure.get("site_candidates", []):
+			var candidate_id := str(candidate_value)
+			if not regions.has(candidate_id) or str(regions.get(candidate_id, {}).get("system_id", "")) != SpaceGameState.SYSTEM_ID:
+				errors.append("%s references an invalid single-system site candidate" % megastructure_label)
+		if not phases.is_empty():
+			var final_activity: Dictionary = activities.get(str((phases[-1] as Dictionary).get("activity_id", "")), {})
+			var final_effect_types: Array = final_activity.get("effects", []).map(func(effect): return str((effect as Dictionary).get("type", "")))
+			if not final_effect_types.has("complete_megastructure") or not final_effect_types.has("complete_game"):
+				errors.append("%s final phase must complete the Megastructure and the game" % megastructure_label)
 	for region in regions.values():
 		var region_label := "Location '%s'" % region.get("id", "?")
 		if str(region.get("system_id", "")).is_empty():
@@ -357,7 +378,7 @@ func validate() -> void:
 			if step_id.is_empty() or step_ids.has(step_id):
 				errors.append("goal '%s' has an empty or duplicate tutorial step id" % goal.get("id", "?"))
 			step_ids[step_id] = true
-			if str(step.get("view", "")) not in ["overview", "mining", "industry", "expedition", "infrastructure", "research", "ships", "warehouse", "regions", "megastructure", "completion"]:
+			if str(step.get("view", "")) not in ["overview", "mining", "industry", "expedition", "infrastructure", "research", "ships", "warehouse", "regions", "location", "megastructure", "completion"]:
 				errors.append("goal '%s' tutorial step '%s' has an invalid view" % [goal.get("id", "?"), step_id])
 			if step.get("requirements", []).is_empty():
 				errors.append("goal '%s' tutorial step '%s' has no requirements" % [goal.get("id", "?"), step_id])
@@ -771,8 +792,8 @@ func _validate_first_phase_progression_contract() -> void:
 
 func _validate_second_phase_capital_contract() -> void:
 	var capital_goods: Array = industry_rules.get("capital_goods", [])
-	if capital_goods.size() < 4:
-		errors.append("Phase-two capital slice must define at least four capital goods")
+	if capital_goods.size() < 8:
+		errors.append("Core capital system must define at least eight reusable capital goods")
 	for item_id_value in capital_goods:
 		var item_id := str(item_id_value)
 		if not items.has(item_id) or str(items[item_id].get("category", "")) != "Capital Good":
@@ -1514,9 +1535,15 @@ func _validate_requirement(requirement: Dictionary, owner: String) -> void:
 		"mining_sites_mastered":
 			if not regions.has(str(requirement.get("region", ""))) or int(requirement.get("count", 0)) <= 0:
 				errors.append("%s has an invalid mastered-site requirement" % owner)
+		"survey_state":
+			if not regions.has(str(requirement.get("id", ""))) or str(requirement.get("state", "")) not in LocationState.SURVEY_STATE_ORDER:
+				errors.append("%s has an invalid Survey State requirement" % owner)
 		"megastructure":
 			if not megastructures.has(str(requirement.get("id", ""))):
 				errors.append("%s requires a missing megastructure" % owner)
+		"megastructure_phase":
+			if not megastructures.has(str(requirement.get("id", ""))) or int(requirement.get("phase", -1)) < 0:
+				errors.append("%s requires an invalid megastructure phase" % owner)
 		"game_complete":
 			pass
 		_:

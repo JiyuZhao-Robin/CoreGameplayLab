@@ -29,22 +29,25 @@ func load_data() -> Dictionary:
 
 
 func save_state(state: SpaceGameState, content_version: String, enabled_content_packs: Array = []) -> bool:
-	state.parent_revision = state.revision
-	state.revision += 1
-	state.saved_at_ms = int(Time.get_unix_time_from_system() * 1000.0)
+	var next_parent_revision := state.revision
+	var next_revision := state.revision + 1
+	var next_saved_at_ms := int(Time.get_unix_time_from_system() * 1000.0)
 	var payload := state.to_dictionary()
+	payload["parent_revision"] = next_parent_revision
+	payload["revision"] = next_revision
+	payload["saved_at_ms"] = next_saved_at_ms
 	payload["content_version"] = content_version
 	payload["enabled_content_packs"] = enabled_content_packs
 	var wrapper := {
 		"save_id":state.save_id,
-		"revision":state.revision,
-		"parent_revision":state.parent_revision,
+		"revision":next_revision,
+		"parent_revision":next_parent_revision,
 		"device_id":state.device_id,
 		"save_version":SpaceGameState.SAVE_VERSION,
 		"content_version":content_version,
 		"game_version":SpaceGameState.GAME_VERSION,
 		"enabled_content_packs":enabled_content_packs,
-		"saved_at_ms":state.saved_at_ms,
+		"saved_at_ms":next_saved_at_ms,
 		"payload":payload,
 		"checksum":_checksum(payload),
 		"checksum_version":4
@@ -56,7 +59,12 @@ func save_state(state: SpaceGameState, content_version: String, enabled_content_
 	file.store_string(JSON.stringify(wrapper, "  "))
 	file.flush()
 	file = null
-	return _replace_atomically(process_temp_path)
+	if not _replace_atomically(process_temp_path):
+		return false
+	state.parent_revision = next_parent_revision
+	state.revision = next_revision
+	state.saved_at_ms = next_saved_at_ms
+	return true
 
 
 func delete_save() -> bool:

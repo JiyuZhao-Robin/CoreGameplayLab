@@ -33,6 +33,7 @@ func _init() -> void:
 	_test_phase_five_loadout_migration(database)
 	_test_phase_six_rd_programs(database)
 	_test_phase_seven_inventory_planning(database)
+	_test_phase_eight_industrial_geography(database)
 	_test_ship_lifecycle(database)
 	_test_industry_and_capital_cycles(database)
 	_test_location_industry_rules(database)
@@ -84,7 +85,7 @@ func _test_localization(database: ContentDatabase) -> void:
 				missing_goal_steps.append(step_id)
 	_check(missing_goal_steps.is_empty(), "every main-flow Guide step has an explicit Chinese instruction: %s" % str(missing_goal_steps))
 	_check(localization.goal_step("refine_first_copper", "Refine First Copper") == "精炼第一批铜锭", "goal steps use the same Chinese content layer")
-	_check(localization.megastructure_stage("stellar_energy", 50, "Power Routing Spine") == "能源路由主干", "Megastructure milestones are localized instead of mixing languages")
+	_check(localization.megastructure_stage("stellar_energy", 4, "Industrial and Energy Backbone") == "工业与能源骨架", "Megastructure phases are localized instead of mixing languages")
 	localization.free()
 
 
@@ -142,7 +143,7 @@ func _entry_amount(entries: Array, item_id: String) -> int:
 
 func _test_phase_one_progression_contract(database: ContentDatabase) -> void:
 	var profiles: Dictionary = database.simulation_profiles.get("profiles", {})
-	_check(str(database.simulation_profiles.get("default_profile", "")) == "TEST_PROFILE" and profiles.has("TEST_PROFILE") and profiles.has("NORMAL_PROFILE"), "phase one selects an explicit TEST profile and retains a separate NORMAL profile")
+	_check(str(database.simulation_profiles.get("default_profile", "")) == "NORMAL_PROFILE" and profiles.has("TEST_PROFILE") and profiles.has("NORMAL_PROFILE"), "normal play defaults to the NORMAL profile while deterministic tests can explicitly select TEST")
 	for system_id in ["mining", "manufacturing", "construction", "shipyard", "automation"]:
 		_check(is_equal_approx(float(profiles.get("TEST_PROFILE", {}).get(system_id, 0.0)), 10.0) and is_equal_approx(float(profiles.get("NORMAL_PROFILE", {}).get(system_id, 0.0)), 1.0), "test and normal speed profiles share rules but independently configure %s" % system_id)
 
@@ -173,7 +174,7 @@ func _test_phase_one_progression_contract(database: ContentDatabase) -> void:
 	var outer_steps: Array = database.goals.get("open_outer", {}).get("steps", [])
 	_check(_goal_step_index(outer_steps, "build_gas_collector") >= outer_steps.size() and _goal_step_index(outer_steps, "fit_gas_collector") < _goal_step_index(outer_steps, "extract_jovian_gas"), "outer-system Guide applies the Gas Collector loadout before extraction without creating a physical module inventory step")
 	_check(_goal_step_index(outer_steps, "install_fusion_test_rig") < _goal_step_index(outer_steps, "produce_fusion_service_components") and _goal_step_index(outer_steps, "produce_fusion_service_components") < _goal_step_index(outer_steps, "build_energy_array"), "outer-system Guide installs the Fusion process and produces service components before the Energy Array consumes them")
-	var megastructure_steps: Array = database.goals.get("build_megastructures", {}).get("steps", [])
+	var megastructure_steps: Array = database.goals.get("prepare_stellar_energy", {}).get("steps", [])
 	_check(_goal_step_index(megastructure_steps, "build_exotic_containment") >= megastructure_steps.size() and _goal_step_index(megastructure_steps, "fit_exotic_containment") < _goal_step_index(megastructure_steps, "extract_deep_gas"), "deep-system Guide applies the Exotic Containment loadout before extraction without creating a physical module inventory step")
 	var heavy_extraction: Dictionary = database.research_projects.get("research_heavy_extraction", {})
 	_check(_entry_amount(heavy_extraction.get("costs", []), "cobalt_ore") == 0 and _entry_amount(heavy_extraction.get("costs", []), "silicate_ore") > 0, "Heavy Extraction research cannot consume the cobalt ore that it uniquely unlocks")
@@ -186,7 +187,7 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 	var simulation := SimulationEngine.new(database)
 	_check(SimulationEngine.CONSTRUCTION_PROJECT_TYPES.size() >= 17 and "FACILITY_EXPANSION" in SimulationEngine.CONSTRUCTION_PROJECT_TYPES and "COMPONENT_STORAGE_UPGRADE" in SimulationEngine.CONSTRUCTION_PROJECT_TYPES and "INDUSTRIAL_TRANSFORMATION" in SimulationEngine.CONSTRUCTION_PROJECT_TYPES, "the generic ConstructionProject model retains earlier project types and supports class-specific Storage infrastructure")
 	var capital_goods: Array = database.industry_rules.get("capital_goods", [])
-	_check(capital_goods.size() == 4, "phase two introduces the first four Capital Goods")
+	_check(capital_goods.size() == 8, "the core capital system exposes eight reusable Capital Goods")
 	for item_id_value in capital_goods:
 		var item_id := str(item_id_value)
 		var repeat_producers := 0
@@ -203,9 +204,9 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 	var guide_localization = load("res://src/application/localization.gd").new()
 	guide_localization._load_translations()
 	guide_localization.current_locale = "zh_CN"
-	_check(guide_localization.goal_step("upgrade_construction_yard_ii", "").contains("工业机床") and guide_localization.goal_step("build_energy_array", "").contains("重型结构段") and guide_localization.goal_step("construct_stellar_energy", "").contains("电力总线组件"), "the Guide explicitly names the Capital Goods required before phase-two construction gates")
+	_check(guide_localization.goal_step("upgrade_construction_yard_ii", "").contains("工业机床") and guide_localization.goal_step("build_energy_array", "").contains("重型结构段") and guide_localization.goal_step("stellar_forward_base", "").contains("资本品"), "the Guide explicitly names the Capital Goods required before construction gates")
 	guide_localization.free()
-	_check(simulation.construction_project_type_for_activity(database.activities["build_lunar_extraction_network"]) == "EXTRACTION_NETWORK" and simulation.construction_project_type_for_activity(database.activities["construct_stellar_energy"]) == "MEGASTRUCTURE", "content-backed extraction networks and Megastructures map to their generic project types")
+	_check(simulation.construction_project_type_for_activity(database.activities["build_lunar_extraction_network"]) == "EXTRACTION_NETWORK" and simulation.construction_project_type_for_activity(database.activities["construct_stellar_forward_base"]) == "MEGASTRUCTURE", "content-backed extraction networks and Megastructure phases map to their generic project types")
 
 	var bootstrap_state := _new_state(database, simulation)
 	bootstrap_state.ensure_location("capital_bootstrap", LocationState.NATURAL, true, "sol")
@@ -258,9 +259,9 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 	megastructure_state.facilities["orbital_construction_yard"]["level"] = 3
 	megastructure_state.facilities["assembly_yard"] = {"level":1, "status":"ACTIVE", "installed_process_modules":[], "installed_plugins":[]}
 	megastructure_state.technologies["megastructure_engineering"] = true
-	var megastructure_activity: Dictionary = database.activities["construct_stellar_energy"]
+	var megastructure_activity: Dictionary = database.activities["construct_stellar_forward_base"]
 	var megastructure_runtime: Dictionary = megastructure_state.construction_operations[0]
-	megastructure_runtime.merge({"activity_id":"construct_stellar_energy", "status":"RUNNING"}, true)
+	megastructure_runtime.merge({"activity_id":"construct_stellar_forward_base", "status":"RUNNING"}, true)
 	simulation.initialize_construction_project(megastructure_state, megastructure_runtime, megastructure_activity, "earth_orbit", 80)
 	simulation.begin_megastructure_project(megastructure_state, megastructure_runtime, megastructure_activity)
 	_check(simulation.queue_facility_expansion(megastructure_state, "earth_orbit", "makeshift_workshop", 2, 40), "ordinary expansion can queue beside a live Megastructure")
@@ -269,6 +270,7 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 	_check(str(competing_megastructure.get("project_type", "")) == "MEGASTRUCTURE" and str(competing_expansion.get("project_type", "")) == "FACILITY_EXPANSION" and is_equal_approx(simulation.construction_project_allocated_capacity(megastructure_state, competing_megastructure), 0.5) and is_equal_approx(simulation.construction_project_allocated_capacity(megastructure_state, competing_expansion), 0.5), "Megastructures and ordinary expansion draw from the same core Construction capacity")
 	var local_capacity_state := _new_state(database, simulation)
 	local_capacity_state.ensure_location("remote_construction", LocationState.NATURAL, true, "sol")
+	simulation._install_survey_staging_package(local_capacity_state, "remote_construction")
 	local_capacity_state.facilities["orbital_construction_yard"]["level"] = 2
 	local_capacity_state.facilities["orbital_construction_yard"]["installed_modules"] = ["prefabrication_line"]
 	simulation.queue_facility_expansion(local_capacity_state, "remote_construction", "makeshift_workshop", 1, 60)
@@ -276,7 +278,13 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 	var local_capacity_total := simulation.construction_project_allocated_capacity(local_capacity_state, local_capacity_state.construction_operations[0]) + simulation.construction_project_allocated_capacity(local_capacity_state, local_capacity_state.construction_operations[1])
 	_check(is_equal_approx(local_capacity_total, 1.0), "projects at one Location divide rather than multiply that Location's finite Construction capacity")
 	var construction_demand_rows: Array = simulation.logistics._demand_rows(local_capacity_state).filter(func(row): return str(row.get("location_id", "")) == "remote_construction" and str(row.get("item_id", "")) == "electronics")
-	_check(construction_demand_rows.size() == 2 and int(construction_demand_rows[0].get("target", 0)) == 2 and int(construction_demand_rows[1].get("target", 0)) == 4, "same-item freight demand accumulates across prioritized Construction projects")
+	_check(construction_demand_rows.size() == 2 and int(construction_demand_rows[0].get("target", 0)) == 1 and int(construction_demand_rows[1].get("target", 0)) == 2, "same-item freight demand accumulates across prioritized Construction projects while requesting only the next balanced finite-storage tranche")
+	var first_project_demands: Array = simulation.logistics._demand_rows(local_capacity_state).filter(func(row): return str(row.get("project_id", "")) == str(local_capacity_state.construction_operations[0].get("project_id", "")))
+	var first_project_items := {}
+	for demand_value in first_project_demands:
+		var demand := demand_value as Dictionary
+		first_project_items[str(demand.get("item_id", ""))] = int(demand.get("target", 0))
+	_check(first_project_items.size() == local_capacity_state.construction_operations[0].get("material_plan", {}).size() and first_project_items.values().all(func(quantity): return int(quantity) >= 1), "finite remote staging requests a non-zero balanced tranche for every complementary Construction BOM item")
 	local_capacity_state.logistics_network["shipments"] = [{"id":"SHIPMENT-SHARED-INCOMING", "origin":"earth_orbit", "destination":"remote_construction", "cargo":{"electronics":3}, "remaining_ms":1000.0}]
 	simulation.refresh_location_summaries(local_capacity_state)
 	var allocated_incoming_total := int(local_capacity_state.construction_operations[0].get("in_transit_materials", {}).get("electronics", 0)) + int(local_capacity_state.construction_operations[1].get("in_transit_materials", {}).get("electronics", 0))
@@ -459,7 +467,11 @@ func _test_frontier_content(database: ContentDatabase) -> void:
 	_check(not frontier_state.mining_site_available("belt_cobalt_frontier"), "a future-region extraction site starts undiscovered")
 	frontier_state.regions["asteroid_belt"] = true
 	SimulationEngine.new(database).ensure_frontier_state(frontier_state)
-	_check(frontier_state.mining_site_available("belt_cobalt_frontier"), "unlocking a non-Lunar region refreshes its already-created permanent extraction sites")
+	_check(str(frontier_state.location_state("asteroid_belt").get("survey_state", "")) == LocationState.DETECTED and not frontier_state.mining_site_available("belt_cobalt_frontier"), "unlocking a non-Lunar region detects its sites without leaking Surveyed extraction data")
+	frontier_state.location_state("asteroid_belt")["survey_state"] = LocationState.SURVEYED
+	frontier_state.region_states["asteroid_belt"]["survey_state"] = LocationState.SURVEYED
+	SimulationEngine.new(database).ensure_frontier_state(frontier_state)
+	_check(frontier_state.mining_site_available("belt_cobalt_frontier"), "a normal Survey makes the detected permanent extraction site operational for mobile assets")
 
 
 func _test_physical_ship_assets(database: ContentDatabase) -> void:
@@ -523,7 +535,8 @@ func _test_permanent_extraction(database: ContentDatabase) -> void:
 	_check(simulation.extraction_command_usage(two_ship_state) > simulation.extraction_command_capacity(two_ship_state), "Extraction Command Capacity prevents unlimited ship stacking")
 
 	var deferred_state := _new_state(database, simulation)
-	deferred_state.mining_site_states["lunar_deep_helium_anomaly"]["discovered"] = true
+	deferred_state.region_states["lunar_space"].merge({"discovered":true, "survey_state":LocationState.SURVEYED, "exploration_state":LocationState.SURVEYED}, true)
+	deferred_state.mining_site_states["lunar_deep_helium_anomaly"].merge({"discovered":true, "survey_state":LocationState.SURVEYED}, true)
 	simulation.ensure_frontier_state(deferred_state)
 	_check(not deferred_state.mining_site_available("lunar_deep_helium_anomaly"), "a deferred permanent site remains visible but inaccessible without the required technology")
 	deferred_state.technologies["heavy_extraction"] = true
@@ -550,8 +563,10 @@ func _test_mature_extraction_network(database: ContentDatabase) -> void:
 	var baseline_network_duration := simulation.extraction_network_cycle_duration_ms(network)
 	simulation.set_simulation_profile("TEST_PROFILE")
 	_check(is_equal_approx(accelerated_network_duration * 10.0, baseline_network_duration), "automatic extraction networks use the configured tenfold mining speed")
-	simulation.advance(state, accelerated_network_duration * 2.0 + 1.0)
-	_check(state.item_quantity("mixed_raw_ore") == before + 2, "the automatic network produces the site's mixed raw material at a stable fixed rate")
+	var network_cycles := 20.0
+	simulation.advance(state, accelerated_network_duration * network_cycles + 1.0)
+	var sustainable_output := int(floor(simulation.extraction_site_sustainable_potential(state, "earth_resource_cluster_prospect") * simulation.simulation_speed_multiplier("mining") * accelerated_network_duration * network_cycles / 3600000.0))
+	_check(sustainable_output > 0 and state.item_quantity("mixed_raw_ore") == before + sustainable_output, "the automatic network obeys the site's sustainable extraction potential")
 	_check(state.item_quantity("iron_ore") == 0, "the automatic network never bypasses industrial refinement into specific minerals")
 	var background_state := _new_state(database, simulation)
 	background_state.background_economy["mining_sources"]["mixed_raw_gas"] = {"source_id":"test_source", "facility_id":"", "per_second":1.0, "enabled":true}
@@ -559,8 +574,11 @@ func _test_mature_extraction_network(database: ContentDatabase) -> void:
 	_check(background_state.item_quantity("mixed_raw_gas") == 0, "retired background capacity cannot create output outside a real extraction asset or Factory runtime")
 
 	var grade_state := _new_state(database, simulation)
-	grade_state.mining_site_states["lunar_kreep_rare_earths"].merge({"discovered":true, "unlocked":true, "state":"AVAILABLE", "mastery_level":2}, true)
+	grade_state.mining_site_states["lunar_kreep_rare_earths"].merge({"discovered":true, "unlocked":true, "state":"AVAILABLE", "survey_state":LocationState.DEEP_SURVEYED, "developed":true, "extraction_method_id":"fixed_excavation", "mastery_level":2}, true)
 	grade_state.extraction_network_states["lunar_extraction_network"].merge({"unlocked":true, "status":"IDLE"}, true)
+	grade_state.location_state("lunar_space")["industry"]["power_capacity"] = 20.0
+	grade_state.location_state("lunar_space")["logistics"]["storage_capacities"]["BULK"] = 500
+	grade_state.location_state("lunar_space")["logistics"]["local_throughput_capacity"] = 50.0
 	grade_state.technologies["industrial_coordination"] = true
 	_check(not bool(simulation.mining_site_network_eligibility(grade_state, "lunar_kreep_rare_earths", "lunar_extraction_network").get("eligible", false)), "material grade blocks integration when extraction-industry technology is too low")
 	grade_state.technologies["heavy_extraction"] = true
@@ -644,6 +662,10 @@ func _test_phase_four_freight_services(database: ContentDatabase) -> void:
 	conservation.regions["lunar_space"] = true
 	conservation.region_states["lunar_space"].merge({"discovered":true, "exploration_state":"SURVEYED"}, true)
 	simulation.ensure_frontier_state(conservation)
+	simulation._install_survey_staging_package(conservation, "lunar_space")
+	conservation.location_state("lunar_space")["logistics"]["storage_capacities"] = {"BULK":1000, "COMPONENT":1000, "FLUID":1000, "SPECIAL":1000}
+	conservation.location_state("lunar_space")["logistics"]["local_throughput_capacity"] = 100.0
+	conservation.location_state("lunar_space")["logistics"]["hub_throughput"] = 100.0
 	conservation.add_item("electronics", 30, "earth_orbit")
 	var before_total := conservation.aggregate_item_quantity("electronics")
 	simulation.logistics.configure_policy(conservation, "earth_orbit", "electronics", {"mode":"SUPPLY", "reserve":0})
@@ -672,6 +694,10 @@ func _test_location_logistics(database: ContentDatabase) -> void:
 	state.region_states["lunar_space"]["discovered"] = true
 	state.region_states["lunar_space"]["exploration_state"] = "SURVEYED"
 	simulation.ensure_frontier_state(state)
+	simulation._install_survey_staging_package(state, "lunar_space")
+	state.location_state("lunar_space")["logistics"]["storage_capacities"] = {"BULK":1000, "COMPONENT":1000, "FLUID":1000, "SPECIAL":1000}
+	state.location_state("lunar_space")["logistics"]["local_throughput_capacity"] = 100.0
+	state.location_state("lunar_space")["logistics"]["hub_throughput"] = 100.0
 	state.add_item("iron_ore", 60, "earth_orbit")
 	var before_ore := state.aggregate_item_quantity("iron_ore")
 	var before_propellant := state.item_quantity("chemical_propellant", "earth_orbit")
@@ -704,6 +730,10 @@ func _test_location_logistics(database: ContentDatabase) -> void:
 	energy_state.technologies["mass_driver_logistics"] = true
 	energy_state.add_item("iron_ore", 20, "earth_orbit")
 	simulation.ensure_frontier_state(energy_state)
+	simulation._install_survey_staging_package(energy_state, "lunar_space")
+	energy_state.location_state("lunar_space")["logistics"]["storage_capacities"]["BULK"] = 1000
+	energy_state.location_state("lunar_space")["logistics"]["local_throughput_capacity"] = 100.0
+	energy_state.location_state("lunar_space")["logistics"]["hub_throughput"] = 100.0
 	simulation.logistics.configure_policy(energy_state, "earth_orbit", "iron_ore", {"mode":"SUPPLY", "reserve":0})
 	simulation.logistics.configure_policy(energy_state, "lunar_space", "iron_ore", {"mode":"DEMAND", "target":10})
 	energy_state.location_state("earth_orbit")["industry"]["power_capacity"] = 0.0
@@ -711,9 +741,11 @@ func _test_location_logistics(database: ContentDatabase) -> void:
 	energy_state.location_state("earth_orbit")["power"]["available_capacity"] = 0.0
 	_check(simulation.logistics._dispatch(energy_state).is_empty(), "energy-based Logistics technology cannot dispatch from an unpowered Hub")
 	energy_state.location_state("earth_orbit")["industry"]["power_capacity"] = 100.0
+	energy_state.location_state("lunar_space")["industry"]["power_capacity"] = 100.0
 	simulation.ensure_frontier_state(energy_state)
 	energy_state.location_state("earth_orbit")["power"]["available_capacity"] = 100.0
-	_check(not simulation.logistics._dispatch(energy_state).is_empty(), "available Location power supplies the Logistics energy budget and restores dispatch")
+	energy_state.location_state("lunar_space")["power"]["available_capacity"] = 100.0
+	_check(not simulation.logistics._dispatch(energy_state).is_empty(), "available power at both physical Logistics hubs restores energy-based dispatch")
 
 
 func _test_system_overviews(database: ContentDatabase) -> void:
@@ -1220,7 +1252,11 @@ func _test_location_industry_rules(database: ContentDatabase) -> void:
 	var natural_operation := state.industrial_operation_for("natural_test", "makeshift_workshop")
 	natural_operation.merge({"activity_id":"refine_iron", "status":"RUNNING"}, true)
 	state.add_item("iron_ore", 100, "natural_test")
-	_check(simulation.location_industry_constraint_profile(state, "natural_test").get("cooling_required", true) == false and simulation.effective_duration_ms(state, "industry", database.activities["refine_iron"], natural_operation) != INF, "Natural Locations do not require Cooling")
+	state.location_state("natural_test")["industry"]["power_capacity"] = 100.0
+	state.location_state("natural_test")["logistics"]["local_throughput_capacity"] = 100.0
+	_check(bool(simulation.location_industry_constraint_profile(state, "natural_test").get("cooling_required", false)) and simulation.effective_duration_ms(state, "industry", database.activities["refine_iron"], natural_operation) == INF, "natural industrial sites need real heat rejection instead of a free Cooling exemption")
+	state.location_state("natural_test")["industry"]["cooling_capacity"] = 100.0
+	_check(simulation.effective_duration_ms(state, "industry", database.activities["refine_iron"], natural_operation) != INF, "building Cooling restores production at a Natural Location")
 
 	state.ensure_location("artificial_test", LocationState.ARTIFICIAL, true, "sol")
 	state.location_state("artificial_test")["industry"]["structural_capacity"] = 0.0
@@ -1239,6 +1275,8 @@ func _test_location_industry_rules(database: ContentDatabase) -> void:
 	var station_operation := state.industrial_operation_for("artificial_test", "makeshift_workshop")
 	station_operation.merge({"activity_id":"refine_iron", "status":"RUNNING"}, true)
 	state.add_item("iron_ore", 100, "artificial_test")
+	state.location_state("artificial_test")["industry"]["power_capacity"] = 100.0
+	state.location_state("artificial_test")["logistics"]["local_throughput_capacity"] = 100.0
 	state.location_state("artificial_test")["industry"]["cooling_capacity"] = 0.0
 	_check(float(simulation.location_industry_constraint_profile(state, "artificial_test").get("cooling_coverage", 1.0)) == 0.0 and simulation.effective_duration_ms(state, "industry", database.activities["refine_iron"], station_operation) == INF, "Artificial-station Cooling shortage is a real throughput constraint")
 	state.location_state("artificial_test")["industry"]["cooling_capacity"] = 100.0
@@ -1289,49 +1327,107 @@ func _test_megastructure_stages(database: ContentDatabase) -> void:
 	state.facilities["orbital_construction_yard"]["level"] = 3
 	state.facilities["orbital_construction_yard"]["installed_modules"] = ["autonomous_builder_control"]
 	state.technologies["megastructure_engineering"] = true
-	state.add_item("project_core", 10)
-	state.add_item("antimatter_cell", 20)
-	state.add_item("iron_ingot", 100)
-	state.add_item("electronics", 100)
-	state.add_item("power_bus_component", 10)
-	state.add_item("heavy_structural_section", 10)
-	var activity: Dictionary = database.activities["construct_stellar_energy"]
-	var runtime: Dictionary = state.construction_operations[0]
-	runtime.merge({"activity_id":activity.get("id", ""), "status":"RUNNING", "cycle_progress":0.0, "project_cycles_completed":0, "paid_cycles":0, "consumed":{}, "reserved_costs":{}}, true)
-	simulation.begin_megastructure_project(state, runtime, activity)
-	var duration := simulation.effective_duration_ms(state, "construction", activity, runtime)
-	simulation.advance(state, duration * 25.0 + 1.0)
-	var project: Dictionary = state.megastructure_projects.get("stellar_energy", {})
-	_check(int(project.get("progress_percent", 0)) == 25 and int(project.get("stage_index", -1)) == 2, "Megastructure construction crosses real 10 and 25 percent stages")
-	_check(not project.get("delivered_materials", {}).is_empty() and str(project.get("material_flow_status", "")) == "RECEIVING", "Megastructure stage state records delivered Material Flow")
+	state.completed_projects["research_megastructures"] = true
+	var site_id := "earth_sun_lagrange"
+	state.location_state(site_id)["survey_state"] = LocationState.DEEP_SURVEYED
+	simulation._install_survey_staging_package(state, site_id)
+	var definition: Dictionary = database.megastructures["stellar_energy"]
+	var phases: Array = definition.get("phases", [])
+	state.megastructure_projects["stellar_energy"] = {
+		"id":"stellar_energy", "site_location_id":site_id, "location_id":site_id,
+		"phase_index":1, "stage_index":1, "status":"READY", "phase_history":[{"phase_index":0, "phase_id":"stellar_site_selection", "materials_consumed":{}}],
+		"total_materials_consumed":{}, "total_capital_goods":{}, "total_cargo_transported":0.0,
+		"peak_construction_throughput":0.0, "peak_power_demand":0.0, "supplier_locations":{}, "started_at_ms":0
+	}
+	# Unit-level phase validation pre-provisions the maximum site envelope. The
+	# Golden Path separately proves those capacities are built and supplied.
+	state.location_state(site_id)["industry"].merge({"power_capacity":5000.0, "cooling_capacity":5000.0, "structural_capacity":1000.0}, true)
+	state.location_state(site_id)["construction"]["capacity"] = 100.0
+	state.location_state(site_id)["logistics"].merge({"local_throughput_capacity":1000.0, "hub_throughput":1000.0}, true)
+	state.location_state(site_id)["logistics"]["storage_capacities"] = {"BULK":20000, "COMPONENT":20000, "FLUID":5000, "SPECIAL":10000}
+	for phase_index in range(1, phases.size()):
+		var phase := phases[phase_index] as Dictionary
+		var activity: Dictionary = database.activities[str(phase.get("activity_id", ""))]
+		var runtime: Dictionary = state.construction_operations[0]
+		runtime.clear()
+		runtime.merge(SpaceGameState._empty_construction_project(0), true)
+		runtime["activity_id"] = activity.get("id", "")
+		runtime["status"] = "RUNNING"
+		simulation.initialize_construction_project(state, runtime, activity, site_id, 90)
+		simulation.begin_megastructure_project(state, runtime, activity)
+		for cost_value in activity.get("costs", []):
+			var cost := cost_value as Dictionary
+			state.add_item(str(cost.get("item", "")), int(cost.get("quantity", 0)), site_id)
+		for _segment in 100:
+			simulation._complete_construction_cycle(state, runtime, activity)
+		_check(int(state.megastructure_projects["stellar_energy"].get("phase_index", 0)) == phase_index + 1, "Megastructure phase %d completes through the normal Construction cycle" % phase_index)
+	var project: Dictionary = state.megastructure_projects["stellar_energy"]
+	_check(bool(state.megastructures.get("stellar_energy", false)) and state.game_complete and str(project.get("status", "")) == "COMPLETE", "the only Megastructure completes the one-star-system game")
+	_check(project.get("phase_history", []).size() == 8 and not project.get("total_materials_consumed", {}).is_empty() and not project.get("total_capital_goods", {}).is_empty() and float(project.get("peak_construction_throughput", 0.0)) > 0.0 and float(project.get("peak_power_demand", 0.0)) >= 3400.0, "all eight physical phases retain materials, Capital Goods and peak construction/power statistics")
 	var restored := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
-	_check(int(restored.megastructure_projects.get("stellar_energy", {}).get("progress_percent", 0)) == 25, "Megastructure stage and delivered materials survive save/load")
-	simulation.advance(state, duration * 75.0 + 1.0)
-	_check(bool(state.megastructures.get("stellar_energy", false)) and str(state.megastructure_projects.get("stellar_energy", {}).get("status", "")) == "COMPLETE", "the 100 percent stage applies the Megastructure's gameplay effect")
+	_check(bool(restored.megastructures.get("stellar_energy", false)) and restored.megastructure_projects.get("stellar_energy", {}).get("phase_history", []).size() == 8, "completed Megastructure phases and statistics survive save/load")
 
-	var freight_state := _new_state(database, simulation)
-	freight_state.regions["lunar_space"] = true
-	freight_state.region_states["lunar_space"].merge({"discovered":true, "exploration_state":"SURVEYED"}, true)
-	simulation.ensure_frontier_state(freight_state)
-	freight_state.add_item("iron_ingot", 50, "lunar_space")
-	freight_state.add_item("chemical_propellant", 5, "lunar_space")
-	freight_state.add_item("repair_material", 5, "lunar_space")
-	_check(simulation.logistics.configure_policy(freight_state, "lunar_space", "iron_ingot", {"mode":"SUPPLY", "reserve":0}), "a remote Megastructure material source can be exposed through Supply")
-	var freight_runtime: Dictionary = freight_state.construction_operations[0]
-	freight_runtime.merge({"activity_id":activity.get("id", ""), "status":"BLOCKED", "location_id":"earth_orbit", "project_cycles_completed":0, "paid_cycles":0, "consumed":{}}, true)
-	simulation.begin_megastructure_project(freight_state, freight_runtime, activity)
-	freight_state.megastructure_projects["stellar_energy"]["status"] = "BLOCKED"
-	simulation.advance(freight_state, 5000.0)
-	_check(freight_state.logistics_network.get("shipments", []).any(func(value): return int((value as Dictionary).get("cargo", {}).get("iron_ingot", 0)) > 0 and str((value as Dictionary).get("destination", "")) == "earth_orbit"), "a live Megastructure creates project Demand and moves remote material through a real Shipment")
-	_check(str(freight_state.megastructure_projects["stellar_energy"].get("material_flow_status", "")) == "IN_TRANSIT", "Megastructure Material Flow distinguishes in-transit cargo from local construction progress")
+
+func _test_phase_eight_industrial_geography(database: ContentDatabase) -> void:
+	var simulation := SimulationEngine.new(database)
+	var state := _new_state(database, simulation)
+	_check(database.regions.values().all(func(region): return str((region as Dictionary).get("system_id", "")) == "sol" and not (region as Dictionary).get("environment", {}).is_empty()), "every developable Location belongs to the one Sol system and carries unified environment data")
+	_check(database.mining_locations.values().all(func(location): return (location as Dictionary).has("resource_profile") and not (location as Dictionary).has("remaining_ore") and not (location as Dictionary).has("depletion")), "resource profiles expose sustainable potential without normal deposit depletion")
+
+	var unknown := simulation.location_intelligence(state, "asteroid_belt")
+	_check(str(unknown.get("survey_state", "")) == LocationState.UNKNOWN and not unknown.has("resources") and not unknown.has("environment"), "UNKNOWN intelligence reveals only the celestial Location identity")
+	var survey_ship := state._create_ship_instance("deep_survey_vessel", ["deep_survey_system"], "ISS Geography Test")
+	var survey_ship_id := str(survey_ship.get("instance_id", ""))
+	state.add_item("chemical_propellant", 20)
+	state.add_item("repair_material", 20)
+	state.add_item("electronics", 20)
+	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.DETECTED, [survey_ship_id]), "Survey uses a real fitted vessel and normal fuel inventory instead of Survey Points")
+	var saved_running := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
+	_check(str(saved_running.survey_mission.get("status", "")) == "RUNNING" and saved_running.survey_mission.get("assigned_ship_ids", []).has(survey_ship_id), "a running Survey Mission and its assigned physical vessel survive save/load")
+	simulation.advance(state, float(state.survey_mission.get("duration_ms", 1.0)) + 1.0)
+	var detected := simulation.location_intelligence(state, "asteroid_belt")
+	_check(str(detected.get("survey_state", "")) == LocationState.DETECTED and detected.get("resources", []).all(func(profile): return (profile as Dictionary).has("potential_band") and not (profile as Dictionary).has("extraction_potential") and not (profile as Dictionary).has("byproducts")), "DETECTED supports go/no-go decisions without leaking exact potential, grade or byproducts")
+	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.SURVEYED, [survey_ship_id]), "the next Survey level is an explicit mission rather than an automatic reveal")
+	simulation.advance(state, float(state.survey_mission.get("duration_ms", 1.0)) + 1.0)
+	var surveyed := simulation.location_intelligence(state, "asteroid_belt")
+	_check(str(surveyed.get("survey_state", "")) == LocationState.SURVEYED and surveyed.get("resources", []).all(func(profile): return (profile as Dictionary).has("grade_range") and (profile as Dictionary).has("extraction_potential") and (profile as Dictionary).has("allowed_methods")), "SURVEYED intelligence exposes investment-grade resource, method and infrastructure data")
+
+	var site_id := "belt_cobalt_frontier"
+	var base_potential := simulation.extraction_site_sustainable_potential(state, site_id, "fixed_excavation")
+	state.add_item("industrial_machine_tools", 10, "asteroid_belt")
+	state.add_item("heavy_structural_section", 10, "asteroid_belt")
+	state.add_item("electronics", 10, "asteroid_belt")
+	_check(simulation.queue_site_development(state, site_id, "fixed_excavation", 60), "a Surveyed site enters the normal Construction queue for permanent development")
+	_check(str(state.construction_operations[0].get("project_type", "")) == "SITE_DEVELOPMENT" and str(state.construction_operations[0].get("location_id", "")) == "asteroid_belt", "Site Development consumes local inventory and remote construction capacity through the shared project model")
+	simulation.advance(state, 120000.0)
+	_check(bool(state.mining_site_states[site_id].get("developed", false)) and str(state.mining_site_states[site_id].get("extraction_method_id", "")) == "fixed_excavation", "completed Site Development creates a permanent extraction site with the selected method: %s" % str(state.construction_operations[0]))
+	_check(bool(simulation.extraction_site_infrastructure_status(state, site_id).get("operational", false)), "permanent extraction reads real local power, Bulk Storage and logistics support")
+	_check(base_potential > float(database.mining_locations["belt_cobalt_seam"].get("extraction_potential", 0.0)), "the selected Extraction Method changes sustainable scale rather than a finite reserve")
+
+	var vacuum_method: Dictionary = database.activities["refine_steel_electric"]
+	_check(bool(simulation.production_method_environment_eligibility(state, "earth_orbit", vacuum_method).get("eligible", false)) and not bool(simulation.production_method_environment_eligibility(state, "gas_giant_region", vacuum_method).get("eligible", true)), "Production Methods read extensible Location environment conditions instead of region percentage buffs")
+	_check(simulation._maintenance_environment_multiplier("gas_giant_region", "electronics") > simulation._maintenance_environment_multiplier("earth_orbit", "electronics"), "radiation environment increases actual Electronics O&M demand through the shared maintenance system")
+	_check(simulation.logistics_lead_time_ms(state, "earth_orbit", "outer_system") > simulation.logistics_lead_time_ms(state, "earth_orbit", "lunar_space"), "outer-system bases create a longer real Logistics lead time within the same star system")
+	var plan := simulation.target_throughput_plan(state, {"mixed_raw_ore":500.0}, "earth_orbit")
+	var geography: Dictionary = plan.get("industrial_geography", {}).get("products", {}).get("mixed_raw_ore", {})
+	_check(bool(plan.get("read_only", false)) and float(geography.get("surveyed_capacity", 0.0)) > 0.0 and float(geography.get("shortfall", 0.0)) > 0.0 and not geography.get("potential_solutions", []).is_empty(), "Planner compares industrial targets with currently Surveyed sustainable extraction capacity and suggests non-mutating solutions")
+	state.technologies["heavy_extraction"] = true
+	_check(simulation.extraction_site_sustainable_potential(state, site_id, "deep_fracture_extraction") > base_potential, "new extraction technology can increase the value of an already Surveyed old site")
+	var schema_thirty_three := state.to_dictionary()
+	schema_thirty_three["save_version"] = 33
+	schema_thirty_three.erase("survey_mission")
+	schema_thirty_three.erase("next_survey_mission_serial")
+	var migrated := SpaceGameState.from_dictionary(schema_thirty_three, database.domains.keys(), database.regions)
+	simulation.ensure_frontier_state(migrated)
+	_check(str(migrated.survey_mission.get("status", "")) == "IDLE" and bool(migrated.mining_site_states[site_id].get("developed", false)) and str(migrated.mining_site_states[site_id].get("extraction_method_id", "")) == "fixed_excavation", "schema 33 migrates to Survey Mission state without invalidating previously usable permanent extraction sites")
 
 
 func _test_save_contract(database: ContentDatabase) -> void:
 	var state := _new_state(database)
 	state.mining_operations.append(SpaceGameState.create_operation_record(state.mining_operations.size(), "mining"))
 	var data := state.to_dictionary()
-	_check(int(data.get("save_version", 0)) == SpaceGameState.SAVE_VERSION and SpaceGameState.SAVE_VERSION == 33, "the phase-seven release uses one clean current save schema")
-	_check(data.has("demand_registry") and data.has("operations_maintenance") and data.has("economy_telemetry") and data.has("planning_scenarios") and data.has("automation_rules") and data.has("automation_audit") and data.has("mining_site_states") and data.has("extraction_command") and data.has("equipment_instances") and data.has("asset_semantics_version") and not data.has("standard_module_accounting") and data.has("fleet_logistics") and data.has("fleet_maintenance") and data.has("ship_service_projects") and data.has("naval_archive") and data.has("logistics_network") and data.has("construction_history") and data.has("next_construction_project_serial") and data.has("next_production_line_serial") and data.has("technology_domains") and data.has("completed_research_routes") and data.has("technology_spillovers") and data.has("experimental_maturity") and data.has("unlocked_industrial_transformations") and data.has("adopted_industrial_transformations"), "physical assets, Demand Registry, O&M, Planner and Automation audit state persist without generic production or research currency")
+	_check(int(data.get("save_version", 0)) == SpaceGameState.SAVE_VERSION and SpaceGameState.SAVE_VERSION == 35, "the single-system core uses the explicit schema-35 migration target")
+	_check(data.has("demand_registry") and data.has("operations_maintenance") and data.has("economy_telemetry") and data.has("planning_scenarios") and data.has("automation_rules") and data.has("automation_audit") and data.has("mining_site_states") and data.has("extraction_command") and data.has("survey_mission") and data.has("next_survey_mission_serial") and data.has("equipment_instances") and data.has("asset_semantics_version") and not data.has("standard_module_accounting") and data.has("fleet_logistics") and data.has("fleet_maintenance") and data.has("ship_service_projects") and data.has("naval_archive") and data.has("logistics_network") and data.has("construction_history") and data.has("next_construction_project_serial") and data.has("next_production_line_serial") and data.has("technology_domains") and data.has("completed_research_routes") and data.has("technology_spillovers") and data.has("experimental_maturity") and data.has("unlocked_industrial_transformations") and data.has("adopted_industrial_transformations"), "physical assets, Survey Mission, Demand Registry, O&M, Planner and Automation audit state persist without generic production or research currency")
 	_check(data.has("extraction_assets") and not data.has("prospect_states") and not data.has("operation_limits") and not data.has("salvaging_operation") and not data.has("salvage_target_states"), "the save contract contains no retired salvage runtime")
 	var restored := SpaceGameState.from_dictionary(data, database.domains.keys(), database.regions)
 	_check(restored.equipment_instances.size() == state.equipment_instances.size() and restored.ships.size() == state.ships.size(), "current-schema save round-trip preserves physical assets")
@@ -1397,6 +1493,7 @@ func _test_phase_seven_inventory_planning(database: ContentDatabase) -> void:
 func _new_state(database: ContentDatabase, simulation: SimulationEngine = null) -> SpaceGameState:
 	var state := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	var active_simulation := simulation if simulation != null else SimulationEngine.new(database)
+	active_simulation.set_simulation_profile("TEST_PROFILE")
 	active_simulation.ensure_frontier_state(state)
 	return state
 

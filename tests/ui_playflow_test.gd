@@ -17,8 +17,9 @@ func _run() -> void:
 	await _redraw()
 
 	_check(main.find_child("SystemMap2D", true, false) != null, "formal UI contains the interactive 2D System Map")
-	for page_id in ["overview", "system_map", "location", "frontier", "industry", "megastructure", "research", "fleet", "expedition"]:
+	for page_id in ["overview", "system_map", "location", "frontier", "industry", "research", "fleet", "expedition"]:
 		_check(main.find_child("Navigation_%s" % page_id, true, false) != null, "navigation exposes %s" % page_id)
+	_check(main.find_child("Navigation_megastructure", true, false) != null and Game.content.megastructures.size() == 1 and Game.content.megastructures.get("stellar_energy", {}).get("phases", []).size() == 8, "the UI exposes exactly one eight-phase single-system Megastructure endgame")
 
 	var fleet_nav := main.find_child("Navigation_fleet", true, false) as Button
 	_press(fleet_nav)
@@ -107,12 +108,6 @@ func _run() -> void:
 	_press(start_foundry)
 	Game.simulation.advance(Game.state, 35000.0)
 	_check("orbital_foundry" in Game.state.facilities, "guide-provided Foundry materials complete the real construction project")
-
-	var mega_nav := main.find_child("Navigation_megastructure", true, false) as Button
-	_press(mega_nav)
-	await _redraw()
-	_check(main.find_child("StartMegastructure_stellar_energy", true, false) != null, "Megastructure projects have a formal UI action")
-	_check(_has_text_fragment(main, "阶段里程碑"), "Megastructure UI exposes the real stage timeline")
 
 	var expedition_nav := main.find_child("Navigation_expedition", true, false) as Button
 	_press(expedition_nav)

@@ -554,8 +554,12 @@ func _demand_rows(state: SpaceGameState) -> Array[Dictionary]:
 			var remaining := maxi(0, int(material_plan.get(item_id, 0)) - int(consumed.get(item_id, 0)))
 			if remaining <= 0:
 				continue
+			# Freight only the next balanced construction tranche. Asking for every
+			# remaining unit lets the alphabetically first Component fill a finite
+			# staging depot and prevent the complementary BOM from ever arriving.
+			var staged_quantity := mini(remaining, maxi(1, ceili(float(material_plan.get(item_id, 0)) * 0.05)))
 			var target_key := "%s:%s" % [location_id, item_id]
-			cumulative_targets[target_key] = int(cumulative_targets.get(target_key, 0)) + remaining
+			cumulative_targets[target_key] = int(cumulative_targets.get(target_key, 0)) + staged_quantity
 			result.append({
 				"mode":MODE_DEMAND,
 				"reserve":0,
@@ -675,6 +679,16 @@ func _deliver_shipment(state: SpaceGameState, shipment: Dictionary) -> bool:
 		var item_stats: Dictionary = state.logistics_network["item_statistics"].get(str(item_id), {"delivered":0})
 		item_stats["delivered"] = int(item_stats.get("delivered", 0)) + int(shipment["cargo"][item_id])
 		state.logistics_network["item_statistics"][str(item_id)] = item_stats
+	for project_id_value in state.megastructure_projects.keys():
+		var project: Dictionary = state.megastructure_projects[project_id_value]
+		if str(project.get("site_location_id", "")) != destination or str(project.get("status", "")) == "COMPLETE":
+			continue
+		var freight_units := maxf(0.0, float(shipment.get("freight_units", 0.0)))
+		project["total_cargo_transported"] = float(project.get("total_cargo_transported", 0.0)) + freight_units
+		var suppliers: Dictionary = project.get("supplier_locations", {})
+		var origin := str(shipment.get("origin", ""))
+		suppliers[origin] = float(suppliers.get(origin, 0.0)) + freight_units
+		project["supplier_locations"] = suppliers
 	return true
 
 

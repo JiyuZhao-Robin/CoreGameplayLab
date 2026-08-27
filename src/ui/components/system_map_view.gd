@@ -41,15 +41,12 @@ func configure(locations: Array[Dictionary], routes: Array[Dictionary], selected
 		var discovered := bool(location.get("discovered", false))
 		var button := Button.new()
 		button.name = "Location_%s" % location_id
-		button.text = "%s\n%s" % [
-			String(location.get("name", location_id)) if discovered else "UNKNOWN LOCATION",
-			String(location.get("survey_state", "UNSURVEYED")) if discovered else "UNDISCOVERED"
-		]
-		button.disabled = not discovered
+		button.text = "%s\n%s" % [String(location.get("name", location_id)), String(location.get("survey_state", "UNKNOWN"))]
+		button.disabled = false
 		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.custom_minimum_size = NODE_SIZE
 		button.add_theme_font_size_override("font_size", 12)
-		button.add_theme_color_override("font_color", COLOR_DISCOVERED)
+		button.add_theme_color_override("font_color", COLOR_DISCOVERED if discovered else COLOR_UNKNOWN)
 		button.add_theme_color_override("font_disabled_color", COLOR_UNKNOWN)
 		button.add_theme_stylebox_override("normal", _node_style(Color(0.02, 0.09, 0.12, 0.94), COLOR_SELECTED if location_id == _selected_location_id else COLOR_DISCOVERED))
 		button.add_theme_stylebox_override("hover", _node_style(Color(0.03, 0.14, 0.18, 0.98), COLOR_SELECTED))

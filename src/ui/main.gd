@@ -43,8 +43,6 @@ func _ready() -> void:
 	_build_theme()
 	_build_shell()
 	_connect_game_signals()
-	if I18n.current_locale != "zh_CN":
-		I18n.set_locale("zh_CN")
 	_append_log("核心玩法实验室已启动。所有画面均由 Godot 控件生成，不使用 UI 图片。")
 	_rebuild_all()
 	var capture_requested := OS.get_cmdline_user_args().has("--capture-map") or OS.get_cmdline_user_args().has("--capture-location")
@@ -60,7 +58,7 @@ func _process(_delta: float) -> void:
 		_update_header()
 		_last_header_ms = now
 	if (_dirty and now - _last_refresh_ms >= 180) or now - _last_refresh_ms >= 1000:
-		_rebuild_all()
+		_rebuild_active_page()
 
 
 func _build_theme() -> void:
@@ -111,10 +109,10 @@ func _build_shell() -> void:
 	_add_page("流程总览", "overview")
 	_add_page("前线作业", "frontier")
 	_add_page("工业建设", "industry")
-	_add_page("文明工程", "megastructure")
 	_add_page("科研", "research")
 	_add_page("舰队", "fleet")
 	_add_page("远征", "expedition")
+	_add_page("恒星工程", "megastructure")
 	_tabs.current_tab = 0
 
 	var sidebar := _panel()
@@ -154,10 +152,10 @@ func _build_navigation_rail() -> Control:
 		["location", "地点管理"],
 		["frontier", "资源开采"],
 		["industry", "工业与建设"],
-		["megastructure", "文明工程"],
 		["research", "科研技术"],
 		["fleet", "星港与舰队"],
-		["expedition", "远征与战斗"]
+		["expedition", "远征与战斗"],
+		["megastructure", "恒星工程"]
 	]
 	for entry in entries:
 		var key := String(entry[0])
@@ -181,6 +179,8 @@ func _switch_page(key: String) -> void:
 	if not is_instance_valid(page):
 		return
 	_tabs.current_tab = page.get_index()
+	_dirty = true
+	_rebuild_active_page()
 	_update_navigation_state()
 
 
@@ -225,6 +225,9 @@ func _build_header() -> Control:
 		_speed_buttons[speed] = speed_button
 		row.add_child(speed_button)
 
+	var locale_button := _button("EN / 中文", _toggle_locale)
+	locale_button.name = "ToggleLocale"
+	row.add_child(locale_button)
 	row.add_child(_button("保存", _save_game))
 	row.add_child(_button("重开", _reset_game, false, COLOR_BAD))
 	return panel
@@ -264,10 +267,32 @@ func _rebuild_all() -> void:
 	_rebuild_overview()
 	_rebuild_frontier()
 	_rebuild_industry()
-	_rebuild_megastructure()
 	_rebuild_research()
 	_rebuild_fleet()
 	_rebuild_expedition()
+	_rebuild_megastructure()
+	_update_header()
+	_update_navigation_state()
+	_dirty = false
+	_last_refresh_ms = Time.get_ticks_msec()
+
+
+func _rebuild_active_page() -> void:
+	if not is_instance_valid(Game.state) or not is_instance_valid(Game.content) or not is_instance_valid(_tabs):
+		return
+	_rebuild_sidebar()
+	var active_page: Control = _tabs.get_current_tab_control()
+	var key: String = str(active_page.name) if is_instance_valid(active_page) else "overview"
+	match key:
+		"system_map": _rebuild_system_map()
+		"location": _rebuild_location()
+		"overview": _rebuild_overview()
+		"frontier": _rebuild_frontier()
+		"industry": _rebuild_industry()
+		"research": _rebuild_research()
+		"fleet": _rebuild_fleet()
+		"expedition": _rebuild_expedition()
+		"megastructure": _rebuild_megastructure()
 	_update_header()
 	_update_navigation_state()
 	_dirty = false
@@ -288,6 +313,11 @@ func _rebuild_sidebar() -> void:
 		next_button.name = "NextStepCTA"
 		box.add_child(next_button)
 	box.add_child(_separator())
+	if not Game.offline_report.is_empty():
+		box.add_child(_section_title("离线结算"))
+		var report := Game.offline_report
+		box.add_child(_rich("已结算 %s · %d 个状态边界\n剩余待结算 %s" % [_format_ms(int(report.get("simulated_ms", 0.0))), int(report.get("operations", 0)), _format_ms(int(report.get("unprocessed_ms", 0.0)))], COLOR_MUTED))
+		box.add_child(_separator())
 
 	box.add_child(_section_title("全局库存（只读汇总）"))
 	var inventory_lines: Array[String] = []
@@ -333,7 +363,7 @@ func _rebuild_system_map() -> void:
 			"id":location_id,
 			"name":_location_name(location_id),
 			"discovered":discovered,
-			"survey_state":String(location.get("survey_state", LocationState.UNSURVEYED))
+			"survey_state":String(location.get("survey_state", LocationState.UNKNOWN))
 		})
 	var map_routes: Array[Dictionary] = []
 	for route_value in Game.content.logistics_routes.values():
@@ -415,8 +445,31 @@ func _rebuild_location() -> void:
 
 
 func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
+	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
+	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 	box.add_child(_section_title("地点信息"))
-	box.add_child(_card_text("编号 %s\n类型 %s\n所属系统 %s\n发现状态 %s\n勘测状态 %s" % [_selected_location_id, _status_text(String(location.get("type", "UNKNOWN"))), String(location.get("system_id", "UNKNOWN")).to_upper(), _status_text(String(location.get("discovery_state", "UNKNOWN"))), _status_text(String(location.get("survey_state", "UNKNOWN")))], COLOR_TEXT))
+	box.add_child(_card_text("编号 %s\n类型 %s\n所属系统 %s\n勘测状态 %s" % [_selected_location_id, _status_text(String(location.get("type", "UNKNOWN"))), String(location.get("system_id", "UNKNOWN")).to_upper(), _status_text(survey_state)], COLOR_TEXT))
+	var next_states := {LocationState.UNKNOWN:LocationState.DETECTED, LocationState.DETECTED:LocationState.SURVEYED, LocationState.SURVEYED:LocationState.DEEP_SURVEYED}
+	if next_states.has(survey_state):
+		var next_state := String(next_states[survey_state])
+		var mission_running := String(Game.state.survey_mission.get("status", "IDLE")) == "RUNNING"
+		var costs: Array = Game.content.survey_rules.get("base_costs", {}).get(next_state, [])
+		var survey_button := _button("执行%s任务 · %s" % [_status_text(next_state), _resource_list(costs)], _command.bind("启动勘测任务", Game.start_survey_mission.bind(_selected_location_id, next_state)), mission_running, COLOR_ACCENT)
+		survey_button.name = "StartSurvey_%s_%s" % [_selected_location_id, next_state]
+		box.add_child(survey_button)
+		if mission_running:
+			var mission: Dictionary = Game.state.survey_mission
+			box.add_child(_label("勘测舰正在执行 %s → %s（%.0f%%）" % [mission.get("target", ""), _status_text(String(mission.get("target_state", ""))), 100.0 * float(mission.get("progress_ms", 0.0)) / maxf(1.0, float(mission.get("duration_ms", 1.0)))], 13, COLOR_WARN))
+	var environment: Dictionary = intelligence.get("environment", {})
+	if survey_state == LocationState.DETECTED:
+		box.add_child(_section_title("初步环境"))
+		box.add_child(_card_text("辐射 %s · 距离 %s · 建设难度 %s" % [_status_text(String(environment.get("radiation", "UNKNOWN"))), _status_text(String(environment.get("transport_distance_band", "UNKNOWN"))), _status_text(String(environment.get("construction_difficulty_band", "UNKNOWN")))], COLOR_MUTED))
+	elif survey_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
+		box.add_child(_section_title("环境条件"))
+		box.add_child(_card_text("重力 %.2f g · %s · 大气 %s\n太阳辐照 %.2f · 热环境 %s · 辐射 %s\n建设难度 ×%.2f · 运输距离 %.1f" % [float(environment.get("gravity", 0.0)), "真空" if bool(environment.get("vacuum", false)) else "非真空", _status_text(String(environment.get("atmosphere", "UNKNOWN"))), float(environment.get("solar_flux", 0.0)), _status_text(String(environment.get("thermal_environment", "UNKNOWN"))), _status_text(String(environment.get("radiation", "UNKNOWN"))), float(environment.get("construction_difficulty", 1.0)), float(environment.get("transport_distance", 0.0))], COLOR_MUTED))
+	if survey_state == LocationState.UNKNOWN:
+		box.add_child(_card_text("尚无可用于工业投资的情报。先派遣装有勘测模块的舰船执行探测任务。", COLOR_MUTED))
+		return
 	box.add_child(_section_title("本地库存"))
 	var lines: Array[String] = []
 	for item_value in Game.state.location_inventory(_selected_location_id).keys():
@@ -441,21 +494,46 @@ func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
 
 func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> void:
 	box.add_child(_section_title("已知资源点"))
-	var found := false
-	for site_value in Game.content.mining_sites.values():
-		var site := site_value as Dictionary
-		var resource_region: Dictionary = Game.content.resource_regions.get(String(site.get("resource_region", "")), {})
-		if String(resource_region.get("region", "")) != _selected_location_id:
-			continue
-		var runtime: Dictionary = Game.state.mining_site_states.get(String(site.get("id", "")), {})
-		if not bool(runtime.get("discovered", false)):
-			continue
-		found = true
-		var mining_location: Dictionary = Game.content.mining_locations.get(String(site.get("location", "")), {})
-		var item_id := String(mining_location.get("raw_material", ""))
-		box.add_child(_card_text("%s\n状态 %s · 资源 %s · 品位 %.2f · 开采潜力 %.1f" % [_content_name(site, String(site.get("id", ""))), _status_text(String(runtime.get("state", "UNKNOWN"))), _content_name(Game.content.items.get(item_id, {}), item_id), float(mining_location.get("density", 0.0)), float(mining_location.get("extraction_potential", 0.0))], COLOR_TEXT))
-	if not found:
-		box.add_child(_card_text("没有已知资源点", COLOR_MUTED))
+	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
+	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
+	var resources: Array = intelligence.get("resources", [])
+	if resources.is_empty():
+		box.add_child(_card_text("当前勘测层级没有可公开的资源情报。", COLOR_MUTED))
+		return
+	for profile_value in resources:
+		var profile := profile_value as Dictionary
+		var mining_location_id := String(profile.get("mining_location_id", ""))
+		var mining_location: Dictionary = Game.content.mining_locations.get(mining_location_id, {})
+		var site_id := ""
+		for site_value in Game.content.mining_sites.values():
+			if String((site_value as Dictionary).get("location", "")) == mining_location_id:
+				site_id = String((site_value as Dictionary).get("id", ""))
+				break
+		var site: Dictionary = Game.content.mining_sites.get(site_id, {})
+		var runtime: Dictionary = Game.state.mining_site_states.get(site_id, {})
+		var card := _card()
+		card.add_child(_label(_content_name(site, mining_location_id), 16, COLOR_TEXT))
+		if survey_state == LocationState.DETECTED:
+			card.add_child(_label("资源类别 %s · 潜力 %s" % [_status_text(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
+		else:
+			var item_id := String(profile.get("resource_type", ""))
+			var grade_range: Array = profile.get("grade_range", [])
+			var grade_text := "%.2f–%.2f" % [float(grade_range[0]), float(grade_range[1])] if grade_range.size() >= 2 else "未知"
+			card.add_child(_label("资源 %s · 品位范围 %s · 可持续潜力 %.1f · 置信度 %.0f%%" % [_content_name(Game.content.items.get(item_id, {}), item_id), grade_text, float(profile.get("extraction_potential", 0.0)), float(profile.get("survey_confidence", 0.0)) * 100.0], 13, COLOR_MUTED))
+			if survey_state == LocationState.DEEP_SURVEYED:
+				card.add_child(_label("精确品位 %.2f · 已知高级潜力 %.1f · 副产物 %s" % [float(profile.get("grade", 0.0)), float(profile.get("advanced_potential", 0.0)), ", ".join(profile.get("byproducts", []))], 13, COLOR_ACCENT))
+			card.add_child(_label("场地状态 %s · 永久开发 %s · 当前工法 %s" % [_status_text(String(runtime.get("state", "AVAILABLE"))), "已完成" if bool(runtime.get("developed", false)) else "未完成", _content_name(Game.content.extraction_methods.get(String(runtime.get("extraction_method_id", "")), {}), "未选择")], 13, COLOR_MUTED))
+			if not bool(runtime.get("developed", false)):
+				for method_id_value in profile.get("allowed_methods", []):
+					var method_id := String(method_id_value)
+					var method: Dictionary = Game.content.extraction_methods.get(method_id, {})
+					if not bool(method.get("permanent", false)):
+						continue
+					var available := Game.simulation.extraction_method_available(Game.state, site_id, method_id)
+					var button := _button("开发场地 · %s · 潜力 %.1f" % [_content_name(method, method_id), Game.simulation.extraction_site_sustainable_potential(Game.state, site_id, method_id)], _command.bind("场地开发", Game.queue_site_development.bind(site_id, method_id)), not available, COLOR_GOOD)
+					button.name = "DevelopSite_%s_%s" % [site_id, method_id]
+					card.add_child(button)
+		box.add_child(_wrap_card(card))
 
 
 func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
@@ -1102,6 +1180,8 @@ func _build_industry_construction(box: VBoxContainer) -> void:
 		var activity := activity_value as Dictionary
 		if String(activity.get("domain", "")) != "industry" or not Game.simulation.is_construction_activity(activity):
 			continue
+		if Game.simulation.construction_project_type_for_activity(activity) == "MEGASTRUCTURE":
+			continue
 		if not Game.simulation.definition_revealed(Game.state, activity):
 			continue
 		var activity_id := String(activity.get("id", ""))
@@ -1215,7 +1295,7 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 		var status := String(product.get("status", "STABLE"))
 		var status_color := COLOR_BAD if status == "CRITICAL" else (COLOR_WARN if status in ["TIGHT", "STORAGE_FULL"] else (COLOR_GOOD if status == "STABLE" else COLOR_ACCENT))
 		card.add_child(_label("%s · %s · %s" % [_content_name(Game.content.items.get(product_id, {}), product_id), _status_text(status), _status_text(String(product.get("storage_class", "BULK")))], 15, status_color))
-		card.add_child(_label("库存 %d / %.0f · 生产 +%.2f/h · 消费 -%.2f/h · 进/出口 +%.2f/-%.2f/h · 净变化 %+.2f/h · 已承诺 %.0f" % [int(product.get("stock", 0)), float(product.get("storage_capacity", 0.0)), float(product.get("production_rate", 0.0)), float(product.get("consumption_rate", 0.0)), float(product.get("import_rate", 0.0)), float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0)), float(product.get("committed_demand", 0.0))], 12, COLOR_MUTED))
+		card.add_child(_label("在库 %d（可用 %d / 已预留 %d）/ %.0f · 生产 +%.2f/h · 消费 -%.2f/h · 进/出口 +%.2f/-%.2f/h · 净变化 %+.2f/h · 已承诺 %.0f" % [int(product.get("on_hand", product.get("stock", 0))), int(product.get("available", 0)), int(product.get("reserved", 0)), float(product.get("storage_capacity", 0.0)), float(product.get("production_rate", 0.0)), float(product.get("consumption_rate", 0.0)), float(product.get("import_rate", 0.0)), float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0)), float(product.get("committed_demand", 0.0))], 12, COLOR_MUTED))
 		var demand_parts: Array[String] = []
 		for demand_value in product.get("demand_sources", []):
 			var demand := demand_value as Dictionary
@@ -1247,6 +1327,42 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 	box.add_child(planner_controls)
 	if not _planner_result.is_empty():
 		_build_read_only_plan_result(box, _planner_result)
+
+	box.add_child(_section_title("条件自动化（有限授权）"))
+	box.add_child(_card_text("自动化只调用正常暂停/恢复、路线策略和项目优先级事务；不会创建资源或擅自扩建。规则保留触发快照、冷却时间、滞回和手动锁。", COLOR_MUTED))
+	for rule_value in Game.state.automation_rules:
+		var rule := rule_value as Dictionary
+		var rule_card := _card()
+		var condition: Dictionary = rule.get("condition", {})
+		var action: Dictionary = rule.get("action", {})
+		rule_card.add_child(_label("%s · %s" % [String(rule.get("rule_id", "AUTOMATION")), "暂停" if bool(rule.get("paused", false)) else "已授权"], 14, COLOR_ACCENT))
+		rule_card.add_child(_label("IF %s %s %.2f → %s · 冷却 %.0fs · 滞回 %.2f" % [String(condition.get("type", "CONDITION")), String(condition.get("operator", "LT")), float(condition.get("threshold", 0.0)), String(action.get("type", "ACTION")), float(rule.get("cooldown_ms", 0.0)) / 1000.0, float(rule.get("hysteresis", 0.0))], 12, COLOR_MUTED))
+		var rule_actions := HFlowContainer.new()
+		rule_actions.add_child(_button("恢复规则" if bool(rule.get("paused", false)) else "暂停规则", _command.bind("切换自动化规则", Game.set_automation_rule_paused.bind(String(rule.get("rule_id", "")), not bool(rule.get("paused", false)))), false, COLOR_WARN))
+		rule_actions.add_child(_button("撤销授权", _command.bind("撤销自动化授权", Game.revoke_automation_rule.bind(String(rule.get("rule_id", "")))), false, COLOR_BAD))
+		rule_card.add_child(rule_actions)
+		box.add_child(_wrap_card(rule_card))
+	for runtime_value in Game.state.industrial_operations:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"] or not bool(runtime.get("manual_lock", true)):
+			continue
+		var slot := int(runtime.get("slot", -1))
+		var facility_id := String(runtime.get("facility_id", ""))
+		var location_id := String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+		var guard_button := _button("授权满仓暂停/80%恢复 · %s" % _content_name(Game.content.facilities.get(facility_id, {}), facility_id), _command.bind("授权仓储自动化", _authorize_storage_guard.bind(slot, location_id)), false, COLOR_GOOD)
+		guard_button.name = "AuthorizeStorageGuard_%d" % slot
+		box.add_child(guard_button)
+
+
+func _authorize_storage_guard(slot: int, location_id: String) -> bool:
+	if slot < 0 or slot >= Game.state.industrial_operations.size():
+		return false
+	var control_mode := String(Game.state.industrial_operations[slot].get("control_mode", "PINNED"))
+	if not Game.set_production_line_control(slot, control_mode, false):
+		return false
+	var pause_condition := {"type":"STORAGE_UTILIZATION", "location_id":location_id, "operator":"GT", "threshold":0.95}
+	var resume_condition := {"type":"STORAGE_UTILIZATION", "location_id":location_id, "operator":"LT", "threshold":0.80}
+	return Game.add_automation_rule(pause_condition, {"type":"PAUSE_FACTORY", "slot":slot}, 30000.0, 0.03) and Game.add_automation_rule(resume_condition, {"type":"RESUME_FACTORY", "slot":slot}, 30000.0, 0.03)
 
 
 func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_input: SpinBox) -> void:
@@ -1298,58 +1414,69 @@ func _demand_source_text(source_type: String) -> String:
 func _rebuild_megastructure() -> void:
 	var box: VBoxContainer = _pages["megastructure"]
 	_clear(box)
-	box.add_child(_page_title("文明工程", "四项巨构是主线末段的真实建造项目：消耗物资、占用建造队列，并按里程碑逐段交付。"))
+	box.add_child(_page_title("恒星能源巨构", "唯一太阳系工业终局。八个阶段分别调用真实勘测、库存、物流、建设、能源、散热与维护系统。"))
+	if Game.content.megastructures.is_empty():
+		box.add_child(_label("当前内容没有定义终局工程。", 14, COLOR_WARN))
+		return
+	var definition := Game.content.megastructures.values()[0] as Dictionary
+	var megastructure_id := String(definition.get("id", "stellar_energy"))
+	var phases: Array = definition.get("phases", [])
+	var project: Dictionary = Game.state.megastructure_projects.get(megastructure_id, {})
 	var queue_used := Game.simulation.construction_queue_size(Game.state)
 	var queue_capacity := Game.simulation.construction_queue_capacity(Game.state)
-	var complete_count := 0
-	for megastructure_id_value in Game.content.megastructures.keys():
-		if bool(Game.state.megastructures.get(String(megastructure_id_value), false)):
-			complete_count += 1
+	var complete := bool(Game.state.megastructures.get(megastructure_id, false))
 	var summary := HBoxContainer.new()
 	summary.add_theme_constant_override("separation", 8)
-	summary.add_child(_stat_card("已完成", "%d / %d" % [complete_count, Game.content.megastructures.size()], COLOR_GOOD if complete_count == Game.content.megastructures.size() else COLOR_ACCENT))
+	summary.add_child(_stat_card("状态", "已完成" if complete else String(project.get("status", "尚未选址")), COLOR_GOOD if complete else COLOR_ACCENT))
 	summary.add_child(_stat_card("建造队列", "%d / %d" % [queue_used, queue_capacity], COLOR_WARN if queue_used >= queue_capacity else COLOR_TEXT))
-	summary.add_child(_stat_card("工程等级", str(Game.simulation.construction_engineering_level(Game.state)), COLOR_TEXT))
+	summary.add_child(_stat_card("阶段", "%d / %d" % [int(project.get("phase_index", 0)), phases.size()], COLOR_TEXT))
 	box.add_child(summary)
-
-	for definition_value in Game.content.megastructures.values():
-		var definition := definition_value as Dictionary
-		var megastructure_id := String(definition.get("id", ""))
-		var activity_id := String(definition.get("construction_activity", ""))
-		var activity := Game.content.activities.get(activity_id, {}) as Dictionary
-		var project: Dictionary = Game.state.megastructure_projects.get(megastructure_id, {})
-		var runtime := _construction_runtime_for_activity(activity_id)
-		var complete := bool(Game.state.megastructures.get(megastructure_id, false))
-		var card := _card()
-		card.add_child(_label(("✓ " if complete else "") + _content_name(definition, megastructure_id), 18, COLOR_GOOD if complete else COLOR_TEXT))
-		card.add_child(_label(_project_summary(activity), 13, COLOR_MUTED))
-		var percent := 100 if complete else int(project.get("progress_percent", 0))
-		var stage_index := int(project.get("stage_index", definition.get("stages", []).size() - 1 if complete else 0))
-		var stages: Array = definition.get("stages", [])
-		var stage_definition: Dictionary = stages[clampi(stage_index, 0, maxi(0, stages.size() - 1))] if not stages.is_empty() else {}
-		var stage_percent := int(stage_definition.get("percent", percent))
-		var stage_fallback := String(project.get("stage_name", stage_definition.get("name", "Operational" if complete else "Planned")))
-		var stage_name := I18n.megastructure_stage(megastructure_id, stage_percent, stage_fallback)
-		card.add_child(_megastructure_progress(percent, stage_name))
-		card.add_child(_label("阶段里程碑 · " + _megastructure_stage_line(definition, percent), 12, COLOR_MUTED))
-		if not project.is_empty():
-			card.add_child(_label("物资流：%s · 已交付 %s" % [_status_text(String(project.get("material_flow_status", "RECEIVING"))), _quantity_map_text(project.get("delivered_materials", {}))], 13, COLOR_ACCENT if String(project.get("material_flow_status", "")) != "AWAITING_SHIPMENT" else COLOR_WARN))
-		if complete:
-			card.add_child(_label("已投入运行，其系统效果已写入实际文明状态。", 13, COLOR_GOOD))
-		elif not runtime.is_empty():
-			card.add_child(_label("队列 #%d · %s" % [int(runtime.get("slot", 0)) + 1, _status_text(String(runtime.get("status", "QUEUED")))], 13, COLOR_WARN if String(runtime.get("status", "")) == "BLOCKED" else COLOR_TEXT))
-			_add_blocker_label(card, runtime)
-			var cancel_button := _button("取消巨构项目", _command.bind("取消巨构项目", Game.stop_construction_project.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
-			cancel_button.name = "CancelMegastructure_%s" % megastructure_id
-			card.add_child(cancel_button)
-		else:
-			var reason := _construction_block_reason(activity_id)
-			var start_button := _button("启动文明工程", _command.bind("启动文明工程", Game.start_construction_project.bind(activity_id)), not reason.is_empty(), COLOR_GOOD)
-			start_button.name = "StartMegastructure_%s" % megastructure_id
-			card.add_child(start_button)
-			if not reason.is_empty():
-				card.add_child(_label("尚不可用：" + reason, 13, COLOR_WARN))
-		box.add_child(_wrap_card(card))
+	box.add_child(_megastructure_phase_visual(definition, int(project.get("phase_index", 0)), complete))
+	if project.is_empty():
+		var site_card := _card()
+		site_card.add_child(_label("Phase 0 · 研发与选址", 18, COLOR_ACCENT))
+		site_card.add_child(_label("先完成恒星能源巨构计划，再用勘测舰将至少一个候选位置推进到深度勘测。区位差异来自真实太阳辐照、散热、维护与运输周期。", 13, COLOR_MUTED))
+		for candidate_value in definition.get("site_candidates", []):
+			var candidate_id := String(candidate_value)
+			var candidate: Dictionary = Game.state.location_state(candidate_id)
+			var environment: Dictionary = Game.content.regions.get(candidate_id, {}).get("environment", {})
+			var row := HBoxContainer.new()
+			row.add_child(_label("%s · %s · 辐照 %.1f · 距离 %.1f · 维护 %.2f" % [_location_name(candidate_id), String(candidate.get("survey_state", LocationState.UNKNOWN)), float(environment.get("solar_flux", 0.0)), float(environment.get("transport_distance", 0.0)), float(environment.get("maintenance_severity", {}).get("electronics", 1.0))], 13, COLOR_TEXT))
+			var selectable := bool(Game.state.completed_projects.get("research_megastructures", false)) and String(candidate.get("survey_state", "")) == LocationState.DEEP_SURVEYED
+			var select_button := _button("选定工地", _command.bind("选定巨构工地", Game.select_megastructure_site.bind(megastructure_id, candidate_id)), not selectable, COLOR_GOOD)
+			select_button.name = "SelectMegastructureSite_%s" % candidate_id
+			row.add_child(select_button)
+			site_card.add_child(row)
+		box.add_child(_wrap_card(site_card))
+		return
+	var site_id := String(project.get("site_location_id", ""))
+	var current_index := int(project.get("phase_index", 0))
+	var current_phase: Dictionary = phases[clampi(current_index, 0, maxi(0, phases.size() - 1))] if not phases.is_empty() else {}
+	var activity_id := String(current_phase.get("activity_id", ""))
+	var activity := Game.content.activities.get(activity_id, {}) as Dictionary
+	var runtime := _construction_runtime_for_activity(activity_id)
+	var card := _card()
+	card.add_child(_label(("✓ " if complete else "") + _content_name(definition, megastructure_id), 18, COLOR_GOOD if complete else COLOR_TEXT))
+	card.add_child(_label("工地 · %s · 物资流 %s" % [_location_name(site_id), _status_text(String(project.get("material_flow_status", "AWAITING_NEXT_PHASE")))], 13, COLOR_ACCENT))
+	card.add_child(_megastructure_progress(100 if complete else int(project.get("progress_percent", 0)), I18n.megastructure_stage(megastructure_id, current_index, String(current_phase.get("name", "Operational")))))
+	if complete:
+		card.add_child(_label("恒星能源系统已完成调试并投入运行。", 14, COLOR_GOOD))
+		card.add_child(_label("总材料：%s\n资本品：%s\n运输货量：%.1f freight units\n峰值建设吞吐：%.2f\n峰值功率需求：%.1f\n项目工期：%s\n主要供应地：%s" % [_quantity_map_text(project.get("total_materials_consumed", {})), _quantity_map_text(project.get("total_capital_goods", {})), float(project.get("total_cargo_transported", 0.0)), float(project.get("peak_construction_throughput", 0.0)), float(project.get("peak_power_demand", 0.0)), _format_ms(maxi(0, int(project.get("completed_at_ms", 0)) - int(project.get("started_at_ms", 0)))), _supplier_map_text(project.get("supplier_locations", {}))], 13, COLOR_TEXT))
+	elif not runtime.is_empty():
+		card.add_child(_label("%s\n已投入：%s" % [_project_summary(activity), _quantity_map_text(project.get("delivered_materials", {}))], 13, COLOR_MUTED))
+		_add_blocker_label(card, runtime)
+		var cancel_button := _button("取消当前阶段", _command.bind("取消巨构阶段", Game.stop_construction_project.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
+		cancel_button.name = "CancelMegastructure_%s" % megastructure_id
+		card.add_child(cancel_button)
+	else:
+		card.add_child(_label("下一阶段 BOM · " + _project_summary(activity), 13, COLOR_MUTED))
+		var blocker: Dictionary = Game.simulation.megastructure_site_requirement_blocker(Game.state, current_phase, site_id)
+		var start_button := _button("启动当前阶段", _command.bind("启动巨构阶段", Game.start_megastructure_phase.bind(megastructure_id, 90)), not blocker.is_empty(), COLOR_GOOD)
+		start_button.name = "StartMegastructure_%s" % megastructure_id
+		card.add_child(start_button)
+		if not blocker.is_empty():
+			card.add_child(_label("工地阻塞 · " + _blocker_text(blocker), 13, COLOR_WARN))
+	box.add_child(_wrap_card(card))
 
 
 func _megastructure_progress(percent: int, stage_name: String) -> Control:
@@ -1365,15 +1492,41 @@ func _megastructure_progress(percent: int, stage_name: String) -> Control:
 	return progress_box
 
 
-func _megastructure_stage_line(definition: Dictionary, current_percent: int) -> String:
-	var parts: Array[String] = []
+func _megastructure_phase_visual(definition: Dictionary, current_phase: int, complete: bool) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
 	var megastructure_id := String(definition.get("id", ""))
-	for stage_value in definition.get("stages", []):
-		var stage := stage_value as Dictionary
-		var stage_percent := int(stage.get("percent", 0))
-		var stage_name := I18n.megastructure_stage(megastructure_id, stage_percent, String(stage.get("name", "Stage")))
-		parts.append("%s%d%% %s" % ["✓ " if stage_percent <= current_percent else "○ ", stage_percent, stage_name])
-	return "  →  ".join(parts)
+	var phases: Array = definition.get("phases", [])
+	for index in phases.size():
+		var phase := phases[index] as Dictionary
+		var achieved := complete or index < current_phase
+		var active := not complete and index == current_phase
+		var tile := _card()
+		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tile.add_child(_label("%s %d" % ["✓" if achieved else ("◆" if active else "○"), index], 13, COLOR_GOOD if achieved else (COLOR_ACCENT if active else COLOR_MUTED)))
+		tile.add_child(_label(I18n.megastructure_stage(megastructure_id, index, String(phase.get("name", "Phase"))), 10, COLOR_TEXT))
+		row.add_child(tile)
+	return row
+
+
+func _supplier_map_text(values: Dictionary) -> String:
+	if values.is_empty():
+		return "本地建设"
+	var parts: Array[String] = []
+	for location_id_value in values.keys():
+		parts.append("%s %.1f" % [_location_name(String(location_id_value)), float(values[location_id_value])])
+	parts.sort()
+	return "、".join(parts)
+
+
+func _format_ms(milliseconds: int) -> String:
+	var seconds := maxi(0, milliseconds) / 1000
+	if seconds < 60:
+		return "%d 秒" % seconds
+	var minutes := seconds / 60
+	if minutes < 60:
+		return "%d 分钟" % minutes
+	return "%d 小时 %d 分钟" % [minutes / 60, minutes % 60]
 
 
 func _quantity_map_text(values: Dictionary) -> String:
@@ -2440,7 +2593,9 @@ func _status_text(status: String) -> String:
 		"UNDISCOVERED": return "未发现"
 		"DISCOVERED": return "已发现"
 		"UNSURVEYED": return "未勘测"
+		"DETECTED": return "已探测"
 		"SURVEYED": return "已勘测"
+		"DEEP_SURVEYED": return "深度勘测"
 		"PROSPECT": return "勘探点"
 		"MAIN_BASE": return "主基地"
 		"CELESTIAL_BODY": return "天体"

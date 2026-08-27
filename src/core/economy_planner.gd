@@ -6,6 +6,7 @@ extends RefCounted
 
 var content: ContentDatabase
 var simulation: RefCounted
+var _dependency_graph_cache := {}
 
 
 func _init(database: ContentDatabase, simulation_engine: RefCounted) -> void:
@@ -14,6 +15,8 @@ func _init(database: ContentDatabase, simulation_engine: RefCounted) -> void:
 
 
 func production_dependency_graph() -> Dictionary:
+	if not _dependency_graph_cache.is_empty():
+		return _dependency_graph_cache
 	var nodes := {}
 	var edges: Array = []
 	var producers := {}
@@ -50,7 +53,8 @@ func production_dependency_graph() -> Dictionary:
 			var infrastructure_node := "infrastructure:%s" % support
 			nodes[infrastructure_node] = {"id":infrastructure_node, "kind":"INFRASTRUCTURE_REQUIREMENT", "definition_id":support}
 			edges.append({"from":method_node, "to":infrastructure_node, "type":"REQUIRES"})
-	return {"nodes":nodes, "edges":edges, "producers":producers, "cycle_policy":"EXTERNAL_CREDIT"}
+	_dependency_graph_cache = {"nodes":nodes, "edges":edges, "producers":producers, "cycle_policy":"EXTERNAL_CREDIT"}
+	return _dependency_graph_cache
 
 
 func upstream_dependencies(product_id: String) -> Dictionary:
@@ -88,11 +92,11 @@ func _expand_upstream(product_id: String, graph: Dictionary, nodes: Dictionary, 
 
 
 func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dictionary:
-	simulation.refresh_demand_registry(state)
 	var rows := {}
+	var storage_snapshot: Dictionary = simulation.location_storage_snapshot(state, location_id)
 	for item_id_value in content.items.keys():
 		var item_id := str(item_id_value)
-		rows[item_id] = _empty_economy_row(state, location_id, item_id)
+		rows[item_id] = _empty_economy_row(state, location_id, item_id, storage_snapshot)
 	for runtime_value in state.mining_operations + state.industrial_operations:
 		var runtime := runtime_value as Dictionary
 		var domain_id := str(runtime.get("domain", ""))
@@ -135,7 +139,9 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 			var product_id := str(mining_location.get("raw_material", ""))
 			var cycles_per_hour: float = 3600000.0 / float(simulation.extraction_network_cycle_duration_ms(network))
 			if str(runtime.get("status", "")) == "RUNNING":
-				rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + float(network.get("quantity_per_site", 1)) * float(runtime.get("level", 1)) * cycles_per_hour
+				var nominal_rate := float(network.get("quantity_per_site", 1)) * float(runtime.get("level", 1)) * cycles_per_hour
+				var sustainable_rate: float = float(simulation.extraction_site_sustainable_potential(state, str(site_id_value))) * float(simulation.simulation_speed_multiplier("mining"))
+				rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + minf(nominal_rate, sustainable_rate)
 			else:
 				rows[product_id]["blocked_sources"].append({"source_id":network_id, "blocker":{"primary_reason":"STORAGE_FULL", "location_id":location_id}})
 	for demand_value in state.demand_registry.get("sources", {}).values():
@@ -167,14 +173,15 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 		if int(row.get("stock", 0)) > 0 or absf(float(row.get("net_rate", 0.0))) > 0.000001 or float(row.get("committed_demand", 0.0)) > 0.0 or not row.get("blocked_sources", []).is_empty():
 			result.append(row)
 	result.sort_custom(func(a, b): return _status_rank(str(a.get("status", "STABLE"))) > _status_rank(str(b.get("status", "STABLE"))) if _status_rank(str(a.get("status", "STABLE"))) != _status_rank(str(b.get("status", "STABLE"))) else str(a.get("product_id", "")) < str(b.get("product_id", "")))
-	return {"location_id":location_id, "products":result, "storage":simulation.location_storage_snapshot(state, location_id), "generated_at_ms":int(state.total_elapsed_ms)}
+	return {"location_id":location_id, "products":result, "storage":storage_snapshot, "generated_at_ms":int(state.total_elapsed_ms)}
 
 
-func _empty_economy_row(state: SpaceGameState, location_id: String, item_id: String) -> Dictionary:
-	var storage: Dictionary = simulation.location_storage_snapshot(state, location_id)
+func _empty_economy_row(state: SpaceGameState, location_id: String, item_id: String, storage: Dictionary) -> Dictionary:
 	var storage_class: String = str(simulation.storage_class_for_item(item_id))
 	var class_row: Dictionary = storage.get("classes", {}).get(storage_class, {})
-	return {"product_id":item_id, "stock":state.item_quantity(item_id, location_id), "storage_class":storage_class, "storage_capacity":class_row.get("capacity", 0.0), "free_storage":class_row.get("free", 0.0), "storage_utilization":class_row.get("utilization", 0.0), "production_rate":0.0, "production_consumption_rate":0.0, "continuous_demand_rate":0.0, "committed_demand":0.0, "import_rate":0.0, "export_rate":0.0, "net_rate":0.0, "stock_coverage_hours":INF, "demand_sources":[], "blocked_sources":[], "status":"STABLE"}
+	var on_hand := state.item_quantity(item_id, location_id)
+	var available := state.available_item_quantity(item_id, location_id)
+	return {"product_id":item_id, "stock":on_hand, "on_hand":on_hand, "reserved":maxi(0, on_hand - available), "available":available, "storage_class":storage_class, "storage_capacity":class_row.get("capacity", 0.0), "free_storage":class_row.get("free", 0.0), "storage_utilization":class_row.get("utilization", 0.0), "production_rate":0.0, "production_consumption_rate":0.0, "continuous_demand_rate":0.0, "committed_demand":0.0, "import_rate":0.0, "export_rate":0.0, "net_rate":0.0, "stock_coverage_hours":INF, "demand_sources":[], "blocked_sources":[], "status":"STABLE"}
 
 
 func _finalize_economy_row(row: Dictionary) -> void:
@@ -229,7 +236,7 @@ func plan_targets(state: SpaceGameState, targets: Dictionary, location_id: Strin
 	var bottlenecks: Array = []
 	for item_id_value in targets.keys():
 		bottlenecks.append(trace_bottleneck(state, str(item_id_value), location_id, float(targets[item_id_value])))
-	return {"location_id":location_id, "targets":targets.duplicate(true), "product_requirements":required, "method_selections":selections, "factory_requirements":factories, "infrastructure_requirements":{"power":power_required, "cooling":cooling_required, "storage":_planned_storage(required), "capital_goods":capital_goods}, "logistics":_planned_logistics(state, location_id, required), "bottlenecks":bottlenecks, "external_credits":external_credits, "current_economy":current_analysis, "read_only":true}
+	return {"location_id":location_id, "targets":targets.duplicate(true), "product_requirements":required, "method_selections":selections, "factory_requirements":factories, "infrastructure_requirements":{"power":power_required, "cooling":cooling_required, "storage":_planned_storage(required), "capital_goods":capital_goods}, "logistics":_planned_logistics(state, location_id, required), "industrial_geography":extraction_capacity_analysis(state, required), "bottlenecks":bottlenecks, "external_credits":external_credits, "current_economy":current_analysis, "read_only":true}
 
 
 func _expand_requirement(state: SpaceGameState, item_id: String, rate: float, location_id: String, required: Dictionary, method_cycles: Dictionary, selections: Dictionary, external_credits: Array, stack: Array) -> void:
@@ -269,7 +276,7 @@ func _preferred_method(state: SpaceGameState, item_id: String, location_id: Stri
 			continue
 		if not activity.get("rewards", []).any(func(reward): return str((reward as Dictionary).get("item", "")) == item_id):
 			continue
-		if simulation.activity_available(state, activity):
+		if simulation.activity_available(state, activity) and bool(simulation.production_method_environment_eligibility(state, location_id, activity).get("eligible", false)):
 			candidates.append(activity)
 	if candidates.is_empty():
 		return {}
@@ -340,7 +347,66 @@ func _planned_logistics(state: SpaceGameState, location_id: String, required: Di
 		var item_id := str(item_id_value)
 		if state.item_quantity(item_id, location_id) > 0 or _preferred_method(state, item_id, location_id).is_empty():
 			continue
-		result.append({"product_id":item_id, "destination":location_id, "required_rate":required[item_id], "current_route_capacity":0.0, "potential_congestion":"NO_LOCAL_SOURCE"})
+		result.append({"product_id":item_id, "destination":location_id, "required_rate":required[item_id], "current_route_capacity":0.0, "lead_time_ms":_best_known_source_lead_time(state, item_id, location_id), "potential_congestion":"NO_LOCAL_SOURCE"})
+	return result
+
+
+func extraction_capacity_analysis(state: SpaceGameState, requirements: Dictionary) -> Dictionary:
+	var products := {}
+	for product_id_value in requirements.keys():
+		var product_id := str(product_id_value)
+		var sites: Array = []
+		var total := 0.0
+		var has_unsurveyed := false
+		var has_deep_survey_option := false
+		var has_method_option := false
+		for site_id_value in content.mining_sites.keys():
+			var site_id := str(site_id_value)
+			var site: Dictionary = content.mining_sites.get(site_id, {})
+			var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
+			if str(mining_location.get("raw_material", "")) != product_id:
+				continue
+			var runtime: Dictionary = state.mining_site_states.get(site_id, {})
+			var survey_state := str(runtime.get("survey_state", LocationState.UNKNOWN))
+			if simulation.survey_state_rank(survey_state) < simulation.survey_state_rank(LocationState.SURVEYED):
+				has_unsurveyed = true
+				continue
+			var method_id := str(runtime.get("extraction_method_id", "mobile_surface_extraction"))
+			if method_id.is_empty():
+				method_id = "mobile_surface_extraction"
+			var potential := float(simulation.extraction_site_sustainable_potential(state, site_id, method_id))
+			total += potential
+			sites.append({"site_id":site_id, "location_id":mining_location.get("region", ""), "survey_state":survey_state, "method_id":method_id, "developed":runtime.get("developed", false), "sustainable_potential":potential})
+			has_deep_survey_option = has_deep_survey_option or survey_state == LocationState.SURVEYED
+			for method_value in mining_location.get("resource_profile", {}).get("allowed_methods", []):
+				if str(method_value) != method_id and float(content.extraction_methods.get(str(method_value), {}).get("potential_multiplier", 1.0)) > float(content.extraction_methods.get(method_id, {}).get("potential_multiplier", 1.0)):
+					has_method_option = true
+		var required_rate := maxf(0.0, float(requirements.get(product_id, 0.0)))
+		if sites.is_empty() and not has_unsurveyed:
+			continue
+		var solutions: Array[String] = []
+		if required_rate > total + 0.000001:
+			if has_unsurveyed:
+				solutions.append("SURVEY_ADDITIONAL_SITES")
+			if has_deep_survey_option:
+				solutions.append("DEEP_SURVEY_EXISTING_SITES")
+			if has_method_option:
+				solutions.append("UNLOCK_OR_ADOPT_ADVANCED_EXTRACTION")
+		products[product_id] = {"required_rate":required_rate, "surveyed_capacity":total, "shortfall":maxf(0.0, required_rate - total), "sites":sites, "potential_solutions":solutions}
+	return {"products":products, "read_only":true}
+
+
+func _best_known_source_lead_time(state: SpaceGameState, item_id: String, destination: String) -> float:
+	var result := INF
+	for site_value in content.mining_sites.values():
+		var site := site_value as Dictionary
+		var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
+		if str(mining_location.get("raw_material", "")) != item_id:
+			continue
+		var origin := str(mining_location.get("region", ""))
+		if not state.has_location(origin) or str(state.location_state(origin).get("survey_state", LocationState.UNKNOWN)) == LocationState.UNKNOWN:
+			continue
+		result = minf(result, float(simulation.logistics_lead_time_ms(state, origin, destination)))
 	return result
 
 
