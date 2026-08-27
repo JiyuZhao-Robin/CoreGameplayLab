@@ -43,7 +43,7 @@ func _ready() -> void:
 	_build_theme()
 	_build_shell()
 	_connect_game_signals()
-	_append_log("核心玩法实验室已启动。所有画面均由 Godot 控件生成，不使用 UI 图片。")
+	_append_log(I18n.inline("核心玩法实验室已启动。所有画面均由 Godot 控件生成，不使用 UI 图片。"))
 	_rebuild_all()
 	var capture_requested := OS.get_cmdline_user_args().has("--capture-map") or OS.get_cmdline_user_args().has("--capture-location")
 	for argument in OS.get_cmdline_user_args():
@@ -104,15 +104,15 @@ func _build_shell() -> void:
 	_tabs.tabs_visible = false
 	workspace.add_child(_tabs)
 
-	_add_page("星系地图", "system_map")
-	_add_page("地点", "location")
-	_add_page("流程总览", "overview")
-	_add_page("前线作业", "frontier")
-	_add_page("工业建设", "industry")
-	_add_page("科研", "research")
-	_add_page("舰队", "fleet")
-	_add_page("远征", "expedition")
-	_add_page("恒星工程", "megastructure")
+	_add_page(I18n.core("page.system_map"), "system_map")
+	_add_page(I18n.core("page.location"), "location")
+	_add_page(I18n.core("page.overview"), "overview")
+	_add_page(I18n.core("page.frontier"), "frontier")
+	_add_page(I18n.core("page.industry"), "industry")
+	_add_page(I18n.core("page.research"), "research")
+	_add_page(I18n.core("page.fleet"), "fleet")
+	_add_page(I18n.core("page.expedition"), "expedition")
+	_add_page(I18n.core("page.megastructure"), "megastructure")
 	_tabs.current_tab = 0
 
 	var sidebar := _panel()
@@ -145,21 +145,23 @@ func _build_navigation_rail() -> Control:
 	var rail := VBoxContainer.new()
 	rail.add_theme_constant_override("separation", 5)
 	margin.add_child(rail)
-	rail.add_child(_label("运营控制", 12, COLOR_MUTED))
+	var operations_title := _label(I18n.core("shell.operations"), 12, COLOR_MUTED)
+	operations_title.name = "OperationsTitle"
+	rail.add_child(operations_title)
 	var entries := [
-		["overview", "运营总览"],
-		["system_map", "星系地图"],
-		["location", "地点管理"],
-		["frontier", "资源开采"],
-		["industry", "工业与建设"],
-		["research", "科研技术"],
-		["fleet", "星港与舰队"],
-		["expedition", "远征与战斗"],
-		["megastructure", "恒星工程"]
+		["overview", "nav.overview"],
+		["system_map", "nav.system_map"],
+		["location", "nav.location"],
+		["frontier", "nav.frontier"],
+		["industry", "nav.industry"],
+		["research", "nav.research"],
+		["fleet", "nav.fleet"],
+		["expedition", "nav.expedition"],
+		["megastructure", "nav.megastructure"]
 	]
 	for entry in entries:
 		var key := String(entry[0])
-		var button := _button(String(entry[1]), _switch_page.bind(key))
+		var button := _button(I18n.core(String(entry[1])), _switch_page.bind(key))
 		button.name = "Navigation_%s" % key
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.custom_minimum_size = Vector2(188, 42)
@@ -168,7 +170,8 @@ func _build_navigation_rail() -> Control:
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	rail.add_child(spacer)
-	var scope := _label("可玩核心闭环\n真实状态 · 存档 · 离线结算", 10, COLOR_MUTED)
+	var scope := _label(I18n.core("shell.scope"), 10, COLOR_MUTED)
+	scope.name = "ScopeLabel"
 	scope.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rail.add_child(scope)
 	return panel
@@ -208,9 +211,11 @@ func _build_header() -> Control:
 	var title_box := VBoxContainer.new()
 	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(title_box)
-	var title := _label("赫利俄斯 · 核心玩法实验室", 22, COLOR_TEXT)
+	var title := _label(I18n.core("shell.title"), 22, COLOR_TEXT)
+	title.name = "ShellTitle"
 	title_box.add_child(title)
-	var subtitle := _label("独立项目 / 无图片依赖 / 直接验证玩法闭环", 13, COLOR_MUTED)
+	var subtitle := _label(I18n.core("shell.subtitle"), 13, COLOR_MUTED)
+	subtitle.name = "ShellSubtitle"
 	title_box.add_child(subtitle)
 
 	_header_status = _label("", 14, COLOR_MUTED)
@@ -219,17 +224,22 @@ func _build_header() -> Control:
 	row.add_child(_header_status)
 
 	for speed in [0.0, 1.0, 10.0, 50.0]:
-		var text_value := "暂停" if speed == 0.0 else "%d×" % int(speed)
+		var text_value := I18n.core("shell.pause") if speed == 0.0 else "%d×" % int(speed)
 		var speed_button := _button(text_value, _set_speed.bind(speed))
+		speed_button.name = "SpeedPause" if speed == 0.0 else "Speed%d" % int(speed)
 		speed_button.custom_minimum_size.x = 56
 		_speed_buttons[speed] = speed_button
 		row.add_child(speed_button)
 
-	var locale_button := _button("EN / 中文", _toggle_locale)
+	var locale_button := _button(I18n.core("shell.locale_toggle"), _toggle_locale)
 	locale_button.name = "ToggleLocale"
 	row.add_child(locale_button)
-	row.add_child(_button("保存", _save_game))
-	row.add_child(_button("重开", _reset_game, false, COLOR_BAD))
+	var save_button := _button(I18n.core("shell.save"), _save_game)
+	save_button.name = "SaveButton"
+	row.add_child(save_button)
+	var restart_button := _button(I18n.core("shell.restart"), _reset_game, false, COLOR_BAD)
+	restart_button.name = "RestartButton"
+	row.add_child(restart_button)
 	return panel
 
 
@@ -302,24 +312,24 @@ func _rebuild_active_page() -> void:
 func _rebuild_sidebar() -> void:
 	var box: VBoxContainer = _pages["sidebar"]
 	_clear(box)
-	box.add_child(_section_title("当前引导"))
+	box.add_child(_section_title(I18n.core("sidebar.guide")))
 	var next_step := _next_flow_step()
 	var guide := _rich(next_step, COLOR_ACCENT)
 	guide.fit_content = true
 	box.add_child(guide)
 	var next_page := _next_flow_page()
 	if not next_page.is_empty():
-		var next_button := _button("前往下一步 →", _open_next_flow_target, false, COLOR_GOOD)
+		var next_button := _button(I18n.core("sidebar.next"), _open_next_flow_target, false, COLOR_GOOD)
 		next_button.name = "NextStepCTA"
 		box.add_child(next_button)
 	box.add_child(_separator())
 	if not Game.offline_report.is_empty():
-		box.add_child(_section_title("离线结算"))
+		box.add_child(_section_title(I18n.core("sidebar.offline")))
 		var report := Game.offline_report
 		box.add_child(_rich("已结算 %s · %d 个状态边界\n剩余待结算 %s" % [_format_ms(int(report.get("simulated_ms", 0.0))), int(report.get("operations", 0)), _format_ms(int(report.get("unprocessed_ms", 0.0)))], COLOR_MUTED))
 		box.add_child(_separator())
 
-	box.add_child(_section_title("全局库存（只读汇总）"))
+	box.add_child(_section_title(I18n.core("sidebar.inventory")))
 	var inventory_lines: Array[String] = []
 	var aggregate_inventory := Game.state.aggregate_inventory()
 	for item_id in aggregate_inventory.keys():
@@ -333,10 +343,10 @@ func _rebuild_sidebar() -> void:
 			owners.append("%s %d" % [_location_name(String(row.get("location_id", ""))), int(row.get("quantity", 0))])
 		inventory_lines.append("%s  × %d\n  %s" % [_content_name(item, String(item_id)), amount, " / ".join(owners)])
 	inventory_lines.sort()
-	box.add_child(_rich("\n".join(inventory_lines) if not inventory_lines.is_empty() else "库存为空", COLOR_TEXT))
+	box.add_child(_rich("\n".join(inventory_lines) if not inventory_lines.is_empty() else I18n.core("sidebar.empty"), COLOR_TEXT))
 
 	box.add_child(_separator())
-	box.add_child(_section_title("已建成设施"))
+	box.add_child(_section_title(I18n.core("sidebar.facilities")))
 	var facility_lines: Array[String] = []
 	for facility_id in Game.state.facilities:
 		var facility := Game.content.facilities.get(String(facility_id), {}) as Dictionary
@@ -344,9 +354,9 @@ func _rebuild_sidebar() -> void:
 	box.add_child(_rich("\n".join(facility_lines), COLOR_MUTED))
 
 	box.add_child(_separator())
-	box.add_child(_section_title("最近事件"))
+	box.add_child(_section_title(I18n.core("sidebar.events")))
 	var recent := _event_log.slice(maxi(0, _event_log.size() - 7))
-	box.add_child(_rich("\n".join(recent) if not recent.is_empty() else "暂无", COLOR_MUTED))
+	box.add_child(_rich("\n".join(recent) if not recent.is_empty() else I18n.core("sidebar.none"), COLOR_MUTED))
 
 
 func _rebuild_system_map() -> void:
@@ -2587,6 +2597,12 @@ func _logistics_mode_text(mode: String) -> String:
 
 func _status_text(status: String) -> String:
 	var normalized := status.strip_edges().to_upper().replace(" ", "_")
+	var status_key := "status.none" if normalized.is_empty() else "status.%s" % normalized
+	var translated := I18n.core(status_key, status_key)
+	if translated != status_key:
+		return translated
+	if not I18n.is_chinese():
+		return normalized.replace("_", " ").capitalize() if not normalized.is_empty() else I18n.core("status.none")
 	match normalized:
 		"": return "无"
 		"UNKNOWN": return "未知"
@@ -2692,31 +2708,23 @@ func _blocker_text(blocker: Dictionary) -> String:
 	var requirement: Dictionary = blocker.get("requirement", {})
 	var item_id := String(blocker.get("item_id", ""))
 	var item_name := _content_name(Game.content.items.get(item_id, {}), item_id) if not item_id.is_empty() else ""
-	var shortage_name := item_name if not item_name.is_empty() else "所需原料"
+	var shortage_name := item_name if not item_name.is_empty() else I18n.core("blocker.required_input")
+	var requirement_text := I18n.inline(Game.requirement_text(requirement))
 	if String(requirement.get("type", "")) == "activity_complete":
-		return "需要完成真实原型制造：%s" % Game.requirement_text(requirement)
+		return I18n.core("blocker.activity_complete") % requirement_text
 	match reason:
-		"KNOWLEDGE_GATE": return "技术能力域不足：%s" % Game.requirement_text(blocker.get("requirement", {}))
-		"RESEARCH_CAPACITY_SHORTAGE": return "研究容量不足（%.1f / %.1f，容量是持续流量）" % [float(blocker.get("available", 0.0)), float(blocker.get("required", 1.0))]
-		"OPERATING_CONDITION": return "工程运行条件不足：%s" % Game.requirement_text(blocker.get("requirement", {}))
-		"FIELD_TEST_REQUIRED": return "必须完成真实原型实测：%s" % Game.requirement_text(blocker.get("requirement", {}))
-		"MISSING_TECH": return "缺少科技或研究前置"
-		"MISSING_FACILITY": return "缺少设施或制造工艺模块"
-		"MISSING_SCALE_STAGE": return "工程等级不足（%s / %s）" % [blocker.get("available", 0), blocker.get("required", 0)]
-		"MISSING_CAPITAL_GOOD": return "%s资本品不足（%s / %s）" % [shortage_name, blocker.get("available", 0), blocker.get("required", 0)]
-		"INPUT_SHORTAGE": return "%s不足（%s / %s）" % [shortage_name, blocker.get("available", 0), blocker.get("required", 0)]
-		"INPUT_IN_TRANSIT": return "%s正在运输（库存 %s / 需求 %s，在途 %s）" % [shortage_name, blocker.get("available", 0), blocker.get("required", 0), blocker.get("incoming", 0)]
-		"ROUTE_UNAVAILABLE": return "没有可用运输路线"
-		"TRANSPORT_MODE_UNAVAILABLE": return "没有兼容的运输方式"
-		"ROUTE_CONGESTED": return "运输路线拥堵"
-		"HANDLING_CONGESTED": return "枢纽装卸能力不足"
-		"POWER_SHORTAGE": return "电力不足"
-		"COOLING_SHORTAGE": return "冷却不足"
-		"STORAGE_FULL": return "本地仓储已满"
-		"MAINTENANCE_SHORTAGE": return "维护材料不足"
-		"CONSTRUCTION_CAPACITY_FULL": return "建设能力已满"
-		"PROJECT_SLOT_FULL": return "项目槽位已满"
-		"MANUALLY_PAUSED": return "已手动暂停"
+		"KNOWLEDGE_GATE", "OPERATING_CONDITION", "FIELD_TEST_REQUIRED":
+			return I18n.core("blocker.%s" % reason) % requirement_text
+		"RESEARCH_CAPACITY_SHORTAGE":
+			return I18n.core("blocker.RESEARCH_CAPACITY_SHORTAGE") % [float(blocker.get("available", 0.0)), float(blocker.get("required", 1.0))]
+		"MISSING_SCALE_STAGE":
+			return I18n.core("blocker.MISSING_SCALE_STAGE") % [blocker.get("available", 0), blocker.get("required", 0)]
+		"MISSING_CAPITAL_GOOD", "INPUT_SHORTAGE":
+			return I18n.core("blocker.%s" % reason) % [shortage_name, blocker.get("available", 0), blocker.get("required", 0)]
+		"INPUT_IN_TRANSIT":
+			return I18n.core("blocker.INPUT_IN_TRANSIT") % [shortage_name, blocker.get("available", 0), blocker.get("required", 0), blocker.get("incoming", 0)]
+		"MISSING_TECH", "MISSING_FACILITY", "ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED", "POWER_SHORTAGE", "COOLING_SHORTAGE", "STORAGE_FULL", "MAINTENANCE_SHORTAGE", "CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL", "MANUALLY_PAUSED":
+			return I18n.core("blocker.%s" % reason)
 		_: return reason.replace("_", " ").capitalize()
 
 
@@ -2758,7 +2766,7 @@ func _update_header() -> void:
 	var day := total_minutes / (24 * 60) + 1
 	var hour := (total_minutes / 60) % 24
 	var minute := total_minutes % 60
-	_header_status.text = "第 %d 天  ·  %02d:%02d  ·  文明 %d 级" % [day, hour, minute, int(Game.state.progression_tier)]
+	_header_status.text = I18n.core("header.clock") % [day, hour, minute, int(Game.state.progression_tier)]
 	for speed_value in _speed_buttons.keys():
 		var button := _speed_buttons[speed_value] as Button
 		button.modulate = COLOR_ACCENT if is_equal_approx(float(speed_value), Engine.time_scale) else Color.WHITE
@@ -2771,7 +2779,7 @@ func _append_log(text_value: String) -> void:
 	if _event_log.size() > 40:
 		_event_log.pop_front()
 	if is_instance_valid(_notice_label):
-		_notice_label.text = text_value
+		_notice_label.text = I18n.inline(text_value)
 	_dirty = true
 
 
@@ -2790,7 +2798,46 @@ func _on_command_rejected(reason: String) -> void:
 
 
 func _on_locale_changed(_locale: String) -> void:
+	_refresh_shell_locale()
 	_dirty = true
+	call_deferred("_rebuild_active_page")
+
+
+func _refresh_shell_locale() -> void:
+	var operations_title := find_child("OperationsTitle", true, false) as Label
+	if is_instance_valid(operations_title):
+		operations_title.text = I18n.core("shell.operations")
+	var scope := find_child("ScopeLabel", true, false) as Label
+	if is_instance_valid(scope):
+		scope.text = I18n.core("shell.scope")
+	var title := find_child("ShellTitle", true, false) as Label
+	if is_instance_valid(title):
+		title.text = I18n.core("shell.title")
+	var subtitle := find_child("ShellSubtitle", true, false) as Label
+	if is_instance_valid(subtitle):
+		subtitle.text = I18n.core("shell.subtitle")
+	var pause_button := find_child("SpeedPause", true, false) as Button
+	if is_instance_valid(pause_button):
+		pause_button.text = I18n.core("shell.pause")
+	var save_button := find_child("SaveButton", true, false) as Button
+	if is_instance_valid(save_button):
+		save_button.text = I18n.core("shell.save")
+	var restart_button := find_child("RestartButton", true, false) as Button
+	if is_instance_valid(restart_button):
+		restart_button.text = I18n.core("shell.restart")
+	var locale_button := find_child("ToggleLocale", true, false) as Button
+	if is_instance_valid(locale_button):
+		locale_button.text = I18n.core("shell.locale_toggle")
+	for key_value in _nav_buttons.keys():
+		var key := String(key_value)
+		(_nav_buttons[key] as Button).text = I18n.core("nav.%s" % key)
+	var page_order := ["system_map", "location", "overview", "frontier", "industry", "research", "fleet", "expedition", "megastructure"]
+	for key_value in page_order:
+		var key := String(key_value)
+		var page := _page_controls.get(key) as Control
+		if is_instance_valid(page):
+			_tabs.set_tab_title(page.get_index(), I18n.core("page.%s" % key))
+	_update_header()
 
 
 func _clear(container: Node) -> void:
@@ -2851,7 +2898,7 @@ func _section_title(text_value: String) -> Label:
 
 func _label(text_value: String, size: int = 15, color: Color = COLOR_TEXT) -> Label:
 	var value := Label.new()
-	value.text = text_value
+	value.text = I18n.inline(text_value)
 	value.add_theme_font_size_override("font_size", size)
 	value.add_theme_color_override("font_color", color)
 	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2861,7 +2908,7 @@ func _label(text_value: String, size: int = 15, color: Color = COLOR_TEXT) -> La
 func _rich(text_value: String, color: Color = COLOR_TEXT) -> RichTextLabel:
 	var value := RichTextLabel.new()
 	value.bbcode_enabled = false
-	value.text = text_value
+	value.text = I18n.inline(text_value)
 	value.fit_content = true
 	value.scroll_active = false
 	value.add_theme_color_override("default_color", color)
@@ -2870,7 +2917,7 @@ func _rich(text_value: String, color: Color = COLOR_TEXT) -> RichTextLabel:
 
 func _button(text_value: String, callback: Callable, disabled := false, color: Color = COLOR_ACCENT) -> Button:
 	var value := Button.new()
-	value.text = text_value
+	value.text = I18n.inline(text_value)
 	value.disabled = disabled
 	value.custom_minimum_size.y = 34
 	value.add_theme_color_override("font_color", color)
