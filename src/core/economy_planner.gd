@@ -309,7 +309,7 @@ func plan_megastructure_phase(state: SpaceGameState, megastructure_id: String, p
 	var activity: Dictionary = content.activities.get(str(phase.get("activity_id", "")), {})
 	var bom := _entry_totals(activity.get("costs", []))
 	var result := plan_bom_target(state, "%s:%s" % [megastructure_id, phase_id], bom, target_location, horizon_hours)
-	result.merge({"target_type":"MEGASTRUCTURE_PHASE", "megastructure_id":megastructure_id, "phase_id":phase_id, "activity_id":activity.get("id", ""), "phase_kind":phase.get("kind", ""), "site_requirements":phase.get("site_requirements", {}).duplicate(true), "completion_site_effects":phase.get("completion_site_effects", {}).duplicate(true)}, true)
+	result.merge({"target_type":"MEGASTRUCTURE_PHASE", "megastructure_id":megastructure_id, "phase_id":phase_id, "activity_id":activity.get("id", ""), "phase_kind":phase.get("kind", ""), "site_requirements":simulation.megastructure_effective_site_requirements(state, phase), "completion_site_effects":phase.get("completion_site_effects", {}).duplicate(true)}, true)
 	return result
 
 
@@ -360,7 +360,7 @@ func _preferred_method(state: SpaceGameState, item_id: String, location_id: Stri
 			continue
 		if not activity.get("rewards", []).any(func(reward): return str((reward as Dictionary).get("item", "")) == item_id):
 			continue
-		if simulation.activity_available(state, activity) and bool(simulation.production_method_environment_eligibility(state, location_id, activity).get("eligible", false)):
+		if simulation.activity_available(state, activity, location_id) and bool(simulation.production_method_environment_eligibility(state, location_id, activity).get("eligible", false)):
 			candidates.append(activity)
 	if candidates.is_empty():
 		return {}

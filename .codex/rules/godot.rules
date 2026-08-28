@@ -1,0 +1,38 @@
+# Allow this trusted project's Godot executable to leave the Windows sandbox
+# without prompting. The project path remains part of the allowed prefix.
+prefix_rule(
+    pattern = [
+        "D:\\Godot\\godot.exe",
+        "--headless",
+        "--path",
+        ["D:\\Projects\\standalone\\core_gameplay_lab", "."],
+    ],
+    decision = "allow",
+    justification = "Godot 4.6.x can access-violate when run inside the restricted Windows sandbox.",
+    match = [
+        "'D:\\Godot\\godot.exe' --headless --path 'D:\\Projects\\standalone\\core_gameplay_lab' --script res://tests/headless_test.gd -- --no-persistence",
+        "'D:\\Godot\\godot.exe' --headless --path . --log-file 'D:\\Projects\\standalone\\core_gameplay_lab\\.audit-logs\\headless.log' res://tests/golden_path_test.tscn -- --no-persistence",
+    ],
+    not_match = [
+        "'D:\\Godot\\godot.exe' --headless --path 'D:\\Projects\\PlanetArtDemo' --script res://tests/headless_test.gd",
+        "'D:\\Godot\\godot.exe' --path 'D:\\Projects\\standalone\\core_gameplay_lab'",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "D:\\Godot\\godot.exe",
+        "--path",
+        ["D:\\Projects\\standalone\\core_gameplay_lab", "."],
+    ],
+    decision = "allow",
+    justification = "Allow direct Godot scene runs for this trusted project without sandbox-related crashes.",
+    match = [
+        "'D:\\Godot\\godot.exe' --path 'D:\\Projects\\standalone\\core_gameplay_lab' res://tests/ui_playflow_test.tscn -- --no-persistence",
+        "'D:\\Godot\\godot.exe' --path . --editor",
+    ],
+    not_match = [
+        "'D:\\Godot\\godot.exe' --path 'D:\\Projects\\PlanetArtDemo'",
+        "'D:\\Godot\\godot.exe' --headless --path 'D:\\Projects\\standalone\\core_gameplay_lab' --script res://tests/headless_test.gd",
+    ],
+)

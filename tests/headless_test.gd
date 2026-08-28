@@ -13,6 +13,7 @@ func _init() -> void:
 	_test_economic_closure(database)
 	_test_phase_one_progression_contract(database)
 	_test_phase_two_construction_projects(database)
+	_test_facility_modules_use_construction(database)
 	_test_phase_three_production_lines(database)
 	_test_structured_blocker_diagnostics(database)
 	# Visual-profile coverage belongs to the presentation project, not Gameplay Lab.
@@ -42,6 +43,26 @@ func _init() -> void:
 	_finish()
 
 
+func _test_facility_modules_use_construction(database: ContentDatabase) -> void:
+	var simulation := SimulationEngine.new(database)
+	var state := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	var module: Dictionary = database.facilities.get("orbital_construction_yard", {}).get("upgrade_modules", {}).get("prefabrication_line", {})
+	for cost_value in module.get("costs", []):
+		var cost := cost_value as Dictionary
+		state.add_item(str(cost.get("item", "")), int(cost.get("quantity", 0)), "earth_orbit")
+	var owned_before := state.aggregate_inventory()
+	_check(simulation.queue_facility_module_installation(state, "orbital_construction_yard", "prefabrication_line"), "infrastructure module enters the shared Construction queue")
+	_check(not state.facilities.get("orbital_construction_yard", {}).get("installed_modules", []).has("prefabrication_line") and str(state.construction_operations[0].get("project_type", "")) == "FACILITY_MODULE_INSTALL", "module does not grant capacity before Construction completes")
+	var runtime: Dictionary = state.construction_operations[0]
+	var activity: Dictionary = simulation.construction_activity_for_runtime(runtime)
+	for _cycle in 100:
+		simulation._complete_construction_cycle(state, runtime, activity)
+		if str(runtime.get("status", "")) == "COMPLETE":
+			break
+	_check(state.facilities.get("orbital_construction_yard", {}).get("installed_modules", []).has("prefabrication_line"), "completed Construction installs the infrastructure module")
+	_check(state.aggregate_inventory() != owned_before and state.construction_history.any(func(row): return str((row as Dictionary).get("project_type", "")) == "FACILITY_MODULE_INSTALL"), "module materials are consumed and completion is auditable")
+
+
 func _test_localization(database: ContentDatabase) -> void:
 	var localization = load("res://src/application/localization.gd").new()
 	localization._load_translations()
@@ -52,7 +73,7 @@ func _test_localization(database: ContentDatabase) -> void:
 	for collection in [
 		database.domains, database.items, database.ships, database.modules,
 		database.process_modules, database.universal_industry_plugins, database.facilities,
-		database.mining_locations, database.mining_hazards, database.activities,
+		database.mining_locations, database.mining_hazards, database.extraction_methods, database.activities,
 		database.regions, database.resource_regions, database.mining_sites,
 		database.combat_areas, database.extraction_networks, database.logistics_routes,
 		database.transport_modes, database.industrial_templates,
@@ -231,6 +252,8 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 		queue_state.add_item(item_id, 100)
 	_check(simulation.queue_facility_expansion(queue_state, "earth_orbit", "makeshift_workshop", 2, 20), "facility expansion enters the generic Construction queue")
 	_check(simulation.queue_location_capacity_upgrade(queue_state, "earth_orbit", "LOGISTICS_HUB_UPGRADE", 125, 90), "Location capacity upgrades enter the same Construction queue")
+	var canonical_capacity_plan := simulation.location_capacity_upgrade_plan(queue_state, "earth_orbit", "BULK_STORAGE_UPGRADE", simulation.suggested_location_capacity_upgrade_target(queue_state, "earth_orbit", "BULK_STORAGE_UPGRADE"))
+	_check(not canonical_capacity_plan.is_empty() and not (canonical_capacity_plan.get("costs", {}) as Dictionary).is_empty(), "capacity-upgrade planning exposes the same canonical material plan used by Construction and UI availability checks")
 	var priority_project: Dictionary = queue_state.construction_operations[0]
 	var queued_project: Dictionary = queue_state.construction_operations[1]
 	var required_fields := ["project_id", "project_type", "location_id", "target_id", "start_level", "target_level", "priority", "slot", "total_work", "completed_work", "material_plan", "delivered_materials", "in_transit_materials", "consumed", "status", "blocker"]
@@ -291,18 +314,37 @@ func _test_phase_two_construction_projects(database: ContentDatabase) -> void:
 	_check(allocated_incoming_total == 3, "one in-transit cargo allocation is never displayed or claimed by two Construction projects")
 
 	var capacity_state := _new_state(database, simulation)
+	var founding_bulk := simulation.location_capacity_value(capacity_state, "earth_orbit", "BULK_STORAGE_UPGRADE")
+	var suggested_bulk := simulation.suggested_location_capacity_upgrade_target(capacity_state, "earth_orbit", "BULK_STORAGE_UPGRADE")
+	_check(founding_bulk == 400000 and suggested_bulk == 500000, "Domain Query batches mature Bulk Storage expansion into one strategic 100k target")
+	var strategic_bulk_state := _new_state(database, simulation)
+	_check(simulation.queue_location_capacity_upgrade(strategic_bulk_state, "earth_orbit", "BULK_STORAGE_UPGRADE", suggested_bulk, 50), "the suggested Bulk Storage target enters normal Construction")
+	var strategic_bulk_runtime: Dictionary = strategic_bulk_state.construction_operations[0]
+	_check(int(strategic_bulk_runtime.get("material_plan", {}).get("heavy_structural_section", 0)) == 10 \
+		and int(strategic_bulk_runtime.get("material_plan", {}).get("precision_actuator", 0)) == 10 \
+		and is_equal_approx(float(strategic_bulk_runtime.get("total_work", 0.0)), 250.0), "batched Storage preserves the exact ten-step BOM and Construction work instead of granting free capacity")
 	for item_id in ["industrial_machine_tools", "precision_actuator", "electronics"]:
 		capacity_state.add_item(item_id, 10)
 	var starting_throughput := int(capacity_state.location_state("earth_orbit").get("logistics", {}).get("hub_throughput", 0))
 	_check(simulation.queue_location_capacity_upgrade(capacity_state, "earth_orbit", "LOGISTICS_HUB_UPGRADE", starting_throughput + 25, 50), "a Logistics Hub upgrade can be queued at its fixed construction increment")
 	var capacity_runtime: Dictionary = capacity_state.construction_operations[0]
 	var capacity_activity := simulation.construction_activity_for_runtime(capacity_runtime)
+	var capacity_project_id := str(capacity_runtime.get("project_id", ""))
+	_check(simulation.set_construction_project_paused(capacity_state, capacity_project_id, true), "Construction Project can be paused by stable project identity")
+	var paused_progress := float(capacity_state.construction_operations[0].get("cycle_progress", 0.0))
+	simulation.advance(capacity_state, 5000.0)
+	_check(str(capacity_state.construction_operations[0].get("status", "")) == "PAUSED" and is_equal_approx(float(capacity_state.construction_operations[0].get("cycle_progress", 0.0)), paused_progress), "paused Construction consumes no time or materials")
+	var paused_roundtrip := SpaceGameState.from_dictionary(capacity_state.to_dictionary(), database.domains.keys(), database.regions)
+	_check(str(paused_roundtrip.construction_operations[0].get("status", "")) == "PAUSED" and simulation.set_construction_project_paused(paused_roundtrip, capacity_project_id, false), "Construction pause persists through save/load and resumes through the Domain rule")
+	capacity_state = paused_roundtrip
+	capacity_runtime = capacity_state.construction_operations[0]
+	capacity_activity = simulation.construction_activity_for_runtime(capacity_runtime)
 	for _segment in 50:
 		simulation._complete_construction_cycle(capacity_state, capacity_runtime, capacity_activity)
 	_check(int(capacity_state.location_state("earth_orbit").get("logistics", {}).get("hub_throughput", 0)) == starting_throughput and not capacity_runtime.get("consumed", {}).is_empty(), "capacity remains unchanged while project materials are consumed progressively")
 	for _segment in 50:
 		simulation._complete_construction_cycle(capacity_state, capacity_runtime, capacity_activity)
-	_check(int(capacity_state.location_state("earth_orbit").get("logistics", {}).get("hub_throughput", 0)) == starting_throughput + 25 and str(capacity_state.construction_history[-1].get("status", "")) == "COMPLETE", "capacity changes only when its ConstructionProject completes")
+	_check(int(capacity_state.location_state("earth_orbit").get("logistics", {}).get("hub_throughput", 0)) == starting_throughput + 25 and int(capacity_state.location_state("earth_orbit").get("logistics", {}).get("local_throughput_capacity", 0)) == starting_throughput + 25 and str(capacity_state.construction_history[-1].get("status", "")) == "COMPLETE", "a completed Logistics Hub improves freight handling and local industrial throughput")
 
 	var bulk_state := _new_state(database, simulation)
 	var segmented_state := _new_state(database, simulation)
@@ -568,6 +610,27 @@ func _test_mature_extraction_network(database: ContentDatabase) -> void:
 	var sustainable_output := int(floor(simulation.extraction_site_sustainable_potential(state, "earth_resource_cluster_prospect") * simulation.simulation_speed_multiplier("mining") * accelerated_network_duration * network_cycles / 3600000.0))
 	_check(sustainable_output > 0 and state.item_quantity("mixed_raw_ore") == before + sustainable_output, "the automatic network obeys the site's sustainable extraction potential")
 	_check(state.item_quantity("iron_ore") == 0, "the automatic network never bypasses industrial refinement into specific minerals")
+	var foreground_line: Dictionary = state.industrial_operations[0]
+	foreground_line.merge({"activity_id":"refine_iron", "method_id":"refine_iron", "facility_id":"makeshift_workshop", "location_id":"earth_orbit", "status":"RUNNING", "operating_state":"RUNNING"}, true)
+	state.extraction_network_states["earth_extraction_network"]["cycle_progress"] = 1.0
+	var before_foreground_priority := state.item_quantity("mixed_raw_ore")
+	_check(simulation.next_state_change_ms(state) > 0.01, "a ready background extraction Cycle yields the scheduler boundary to explicit player production")
+	_check(not simulation._settle_extraction_network_cycle(state, "earth_extraction_network") and state.item_quantity("mixed_raw_ore") == before_foreground_priority, "explicit player production takes the shared storage boundary before background extraction")
+	foreground_line.merge({"status":"BLOCKED", "blocked_reason":"RESOURCES"}, true)
+	_check(simulation._settle_extraction_network_cycle(state, "earth_extraction_network") and float(state.extraction_network_states["earth_extraction_network"].get("cycle_progress", 1.0)) < 1.0, "an input-blocked foreground line cannot deadlock ready background extraction")
+	state.extraction_network_states["earth_extraction_network"]["cycle_progress"] = 1.0
+	foreground_line["status"] = "PAUSED"
+	var paused_foreground_before := float(state.total_elapsed_ms)
+	var paused_foreground_report := simulation.advance(state, accelerated_network_duration + 1.0)
+	_check(is_equal_approx(float(paused_foreground_report.get("simulated_ms", 0.0)), accelerated_network_duration + 1.0) and float(state.total_elapsed_ms) > paused_foreground_before, "a ready extraction network with a paused foreground line consumes the complete requested simulation window")
+	state.extraction_network_states["earth_extraction_network"]["cycle_progress"] = 1.0
+	_check(simulation._settle_extraction_network_cycle(state, "earth_extraction_network") and float(state.extraction_network_states["earth_extraction_network"].get("cycle_progress", 1.0)) < 1.0, "background extraction automatically resumes after explicit production stops")
+	var used_before_headroom := float(simulation.location_storage_used(state, "earth_orbit").get("BULK", 0.0))
+	state.location_state("earth_orbit")["logistics"]["storage_capacities"]["BULK"] = ceili(used_before_headroom + 40.0)
+	simulation.advance(state, accelerated_network_duration * 200.0)
+	var headroom_snapshot: Dictionary = simulation.location_storage_snapshot(state, "earth_orbit").get("classes", {}).get("BULK", {})
+	var configured_headroom := float(database.industry_rules.get("storage_classes", {}).get("background_headroom_ratio", 0.20))
+	_check(str(state.extraction_network_states["earth_extraction_network"].get("status", "")) == "BLOCKED_OUTPUT" and float(headroom_snapshot.get("free", 0.0)) >= float(headroom_snapshot.get("capacity", 0.0)) * configured_headroom - 4.0, "background extraction preserves configured storage headroom for explicit player production")
 	var background_state := _new_state(database, simulation)
 	background_state.background_economy["mining_sources"]["mixed_raw_gas"] = {"source_id":"test_source", "facility_id":"", "per_second":1.0, "enabled":true}
 	simulation.advance(background_state, 101.0)
@@ -614,6 +677,14 @@ func _test_phase_four_freight_services(database: ContentDatabase) -> void:
 	var tug_service: Dictionary = simulation.logistics.service_for_route(state, "earth_lunar_freight")
 	_check(tug_service.get("assigned_ship_ids", []).has(tug_id) and str(state.ship_by_id(tug_id).get("assignment", {}).get("domain", "")) == "logistics" and str(state.ship_by_id(tug_id).get("status", "")) == "LOGISTICS_SERVICE", "Transport Ship assignment references and reserves the actual Ship instance")
 	_check(float(simulation.logistics.service_snapshot(state, "earth_lunar_freight").get("capacity_per_minute", 0.0)) > float(simulation.logistics.service_snapshot(state, "earth_lunar_freight").get("capacity_per_dispatch", 0.0)), "a route Logistics Service exposes per-minute capacity, classes, utilization and allocation state")
+	_check(simulation.logistics.policy_gameplay_status({"blocker":{"code":"NO_SUPPLY_SOURCE"}}) == "BLOCKED_SOURCE" and simulation.logistics.policy_gameplay_status({"blocker":{"code":"ROUTE_CONGESTION"}}) == "SATURATED", "Logistics policy raw blockers share one player-facing state vocabulary")
+	_check(simulation.logistics.shipment_gameplay_status({"status":"BLOCKED_OUTPUT"}) == "BLOCKED_DESTINATION" and simulation.logistics.shipment_gameplay_status({"status":"IN_TRANSIT"}) == "IN_TRANSIT", "shipment arrival blockers share the same player-facing state vocabulary")
+	_check(simulation.logistics.set_service_paused(state, "earth_lunar_freight", true) and str(simulation.logistics.service_snapshot(state, "earth_lunar_freight").get("status", "")) == "PAUSED" and is_zero_approx(simulation.logistics.service_capacity(state, "earth_lunar_freight")), "pausing a Logistics Service is a real Domain state that removes dispatch capacity")
+	var paused_round_trip := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
+	simulation.logistics.ensure_state(paused_round_trip)
+	_check(str(simulation.logistics.service_snapshot(paused_round_trip, "earth_lunar_freight").get("status", "")) == "PAUSED", "paused Logistics Service state persists through Save serialization")
+	_check(simulation.logistics.set_service_paused(state, "earth_lunar_freight", false) and str(simulation.logistics.service_snapshot(state, "earth_lunar_freight").get("status", "")) != "PAUSED" and simulation.logistics.service_capacity(state, "earth_lunar_freight") > 0.0, "resuming a Logistics Service restores its configured physical capacity")
+	_check(simulation.construction_gameplay_state({"status":"QUEUED"}) == "WAITING_CAPACITY" and simulation.construction_gameplay_state({"status":"BLOCKED", "blocker":{"primary_reason":"INPUT_SHORTAGE"}}) == "WAITING_MATERIAL", "Construction UI states come from the shared Domain vocabulary")
 	_check(simulation.logistics._demand_priority_score(state, {"priority":50, "item_id":"mixed_raw_ore"}) > simulation.logistics._demand_priority_score(state, {"priority":50, "item_id":"electronics"}), "route Priority Strategy changes automatic batch scheduling order")
 	_check(simulation.logistics.service_capacity(state, "earth_lunar_freight") > 0.0 and not simulation.logistics._shortest_path(state, "earth_orbit", "lunar_space", "mixed_raw_ore").is_empty() and simulation.logistics._shortest_path(state, "earth_orbit", "lunar_space", "electronics").is_empty(), "Bulk Tug capacity and Freight Class compatibility affect actual path selection")
 
@@ -1043,7 +1114,13 @@ func _test_phase_five_loadout_fabrication(database: ContentDatabase) -> void:
 	survey["modules"] = ["deep_survey_system"]
 	bulk["modules"] = ["bulk_freight_array"]
 	cryogenic["modules"] = ["cryogenic_hold_system"]
-	_check(simulation.construction_capacity(state) > empty_role_capacity and simulation.repair_support_rate(state) > 1.0 and simulation.expedition_support_rate(state) > 1.0, "construction, repair and deep-survey effects activate only after their role plugins are fitted")
+	_check(is_equal_approx(simulation.construction_capacity(state), empty_role_capacity), "an idle Construction Support hull is not a global passive Construction buff")
+	_check(simulation.assign_construction_support(state, str(constructor.get("instance_id", "")), SpaceGameState.MAIN_BASE_LOCATION_ID) and simulation.construction_capacity(state) > empty_role_capacity and simulation.repair_support_rate(state) > 1.0 and simulation.expedition_support_rate(state) > 1.0, "construction, repair and deep-survey effects activate only after their role plugins are fitted and Construction Support is assigned")
+	constructor["maintenance_coverage"] = 0.0
+	_check(is_equal_approx(simulation.construction_capacity(state), empty_role_capacity), "unsupported Construction vessels provide no free capacity at zero Maintenance coverage")
+	constructor["maintenance_coverage"] = 1.0
+	var construction_assignment_roundtrip := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
+	_check(str(construction_assignment_roundtrip.ship_by_id(str(constructor.get("instance_id", ""))).get("assignment", {}).get("type", "")) == "CONSTRUCTION_SUPPORT", "Construction Support assignment survives save/load as exclusive asset ownership")
 	_check(simulation.logistics.ship_eligible_for_mode(state, str(bulk.get("instance_id", "")), "bulk_tug") and simulation.logistics.ship_eligible_for_mode(state, str(cryogenic.get("instance_id", "")), "cryogenic_carrier"), "bulk and cryogenic Logistics Services are enabled by the current Loadout rather than the hull model")
 
 
@@ -1383,16 +1460,34 @@ func _test_phase_eight_industrial_geography(database: ContentDatabase) -> void:
 	state.add_item("chemical_propellant", 20)
 	state.add_item("repair_material", 20)
 	state.add_item("electronics", 20)
-	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.DETECTED, [survey_ship_id]), "Survey uses a real fitted vessel and normal fuel inventory instead of Survey Points")
+	for item_id_value in simulation.survey_mission_costs(LocationState.SURVEYED):
+		var survey_cost_item := str(item_id_value)
+		var missing_survey_cost := maxi(0, int(simulation.survey_mission_costs(LocationState.SURVEYED).get(survey_cost_item, 0)) - state.item_quantity(survey_cost_item))
+		if missing_survey_cost > 0:
+			state.add_item(survey_cost_item, missing_survey_cost)
+	_check(not simulation.start_survey_mission(state, "asteroid_belt", LocationState.DETECTED, [survey_ship_id]), "Survey cannot bypass the Expedition route that grants strategic access to a remote region")
+	state.regions["asteroid_belt"] = true
+	simulation.ensure_frontier_state(state)
+	var detected := simulation.location_intelligence(state, "asteroid_belt")
+	_check(str(detected.get("survey_state", "")) == LocationState.DETECTED and detected.get("resources", []).all(func(profile): return (profile as Dictionary).has("potential_band") and not (profile as Dictionary).has("extraction_potential") and not (profile as Dictionary).has("byproducts")), "strategic access detects a region without leaking exact potential, grade or byproducts")
+	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.SURVEYED, [survey_ship_id]), "Survey uses a real fitted vessel and normal fuel inventory instead of Survey Points")
 	var saved_running := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
 	_check(str(saved_running.survey_mission.get("status", "")) == "RUNNING" and saved_running.survey_mission.get("assigned_ship_ids", []).has(survey_ship_id), "a running Survey Mission and its assigned physical vessel survive save/load")
-	simulation.advance(state, float(state.survey_mission.get("duration_ms", 1.0)) + 1.0)
-	var detected := simulation.location_intelligence(state, "asteroid_belt")
-	_check(str(detected.get("survey_state", "")) == LocationState.DETECTED and detected.get("resources", []).all(func(profile): return (profile as Dictionary).has("potential_band") and not (profile as Dictionary).has("extraction_potential") and not (profile as Dictionary).has("byproducts")), "DETECTED supports go/no-go decisions without leaking exact potential, grade or byproducts")
-	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.SURVEYED, [survey_ship_id]), "the next Survey level is an explicit mission rather than an automatic reveal")
+	var restored_survey_ship := saved_running.ship_by_id(survey_ship_id)
+	_check(str(restored_survey_ship.get("status", "")) == "EXPEDITION" and str(restored_survey_ship.get("assignment", {}).get("type", "")) == "SURVEY_MISSION", "save/load preserves the Survey vessel's exclusive active assignment")
+	_check(not saved_running.ship_is_docked(survey_ship_id), "a running Survey vessel cannot be double-spent as a docked ship after save/load or a transaction clone")
 	simulation.advance(state, float(state.survey_mission.get("duration_ms", 1.0)) + 1.0)
 	var surveyed := simulation.location_intelligence(state, "asteroid_belt")
 	_check(str(surveyed.get("survey_state", "")) == LocationState.SURVEYED and surveyed.get("resources", []).all(func(profile): return (profile as Dictionary).has("grade_range") and (profile as Dictionary).has("extraction_potential") and (profile as Dictionary).has("allowed_methods")), "SURVEYED intelligence exposes investment-grade resource, method and infrastructure data")
+	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.DEEP_SURVEYED, [survey_ship_id]), "the next Survey level is an explicit mission rather than an automatic reveal")
+	simulation.advance(state, float(state.survey_mission.get("duration_ms", 1.0)) + 1.0)
+	var deep_surveyed := simulation.location_intelligence(state, "asteroid_belt")
+	_check(str(deep_surveyed.get("survey_state", "")) == LocationState.DEEP_SURVEYED and deep_surveyed.get("resources", []).all(func(profile): return (profile as Dictionary).has("byproducts")), "DEEP_SURVEYED intelligence exposes exact byproduct data")
+	state.regions["deep_system"] = true
+	simulation.ensure_frontier_state(state)
+	_check(simulation.start_survey_mission(state, "earth_sun_lagrange", LocationState.DETECTED, [survey_ship_id]), "a site candidate becomes surveyable through its explicit parent access region")
+	simulation.advance(state, float(state.survey_mission.get("duration_ms", 1.0)) + 1.0)
+	_check(not bool(state.regions.get("earth_sun_lagrange", false)) and str(state.location_state("earth_sun_lagrange").get("survey_state", "")) == LocationState.DETECTED, "Survey intelligence does not manufacture a strategic region unlock")
 
 	var site_id := "belt_cobalt_frontier"
 	var base_potential := simulation.extraction_site_sustainable_potential(state, site_id, "fixed_excavation")

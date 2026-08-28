@@ -135,6 +135,23 @@ func configure_service(state: SpaceGameState, route_id: String, mode_id: String,
 	return true
 
 
+func set_service_paused(state: SpaceGameState, route_id: String, paused: bool) -> bool:
+	ensure_state(state)
+	if not content.logistics_routes.has(route_id):
+		return false
+	var service: Dictionary = state.logistics_network.get("services", {}).get(route_id, {})
+	if service.is_empty():
+		return false
+	var currently_paused := str(service.get("status", "ACTIVE")) == "PAUSED"
+	if currently_paused == paused:
+		return false
+	service["status"] = "PAUSED" if paused else "ACTIVE"
+	service["last_blocker"] = {}
+	if paused:
+		service["last_utilization"] = 0.0
+	return true
+
+
 func ship_eligible_for_mode(state: SpaceGameState, ship_id: String, mode_id: String) -> bool:
 	var ship: Dictionary = state.ship_by_id(ship_id)
 	var mode: Dictionary = content.transport_modes.get(mode_id, {})
@@ -191,6 +208,9 @@ func service_snapshot(state: SpaceGameState, route_id: String) -> Dictionary:
 	var service := service_for_route(state, route_id)
 	var mode: Dictionary = content.transport_modes.get(str(service.get("transport_mode_id", "")), {})
 	var per_dispatch := service_capacity(state, route_id)
+	var utilization := float(service.get("last_utilization", 0.0))
+	var raw_status := str(service.get("status", "ACTIVE"))
+	var gameplay_status := "PAUSED" if raw_status == "PAUSED" else ("NO_TRANSPORT" if per_dispatch <= 0.0 else ("SATURATED" if utilization >= 0.999 else ("UNDERUTILIZED" if utilization < 0.25 else "ACTIVE")))
 	return {
 		"id":service.get("id", ""),
 		"route_id":route_id,
@@ -200,10 +220,34 @@ func service_snapshot(state: SpaceGameState, route_id: String) -> Dictionary:
 		"capacity_per_dispatch":per_dispatch,
 		"capacity_per_minute":per_dispatch * 60000.0 / maxf(100.0, float(state.logistics_network.get("dispatch_interval_ms", DISPATCH_INTERVAL_MS))),
 		"supported_freight_classes":mode.get("supported_freight_classes", []).duplicate(),
-		"utilization":float(service.get("last_utilization", 0.0)),
+		"utilization":utilization,
 		"priority_strategy":service.get("priority_strategy", "DEMAND_PRIORITY"),
-		"status":service.get("status", "ACTIVE")
+		"status":gameplay_status,
+		"raw_status":raw_status,
+		"last_blocker":service.get("last_blocker", {}).duplicate(true)
 	}
+
+
+# Player-facing state normalization lives with the Logistics rules so every UI,
+# diagnostic and test uses the same vocabulary without reinterpreting raw
+# dispatch/storage implementation codes.
+func policy_gameplay_status(policy: Dictionary) -> String:
+	var blocker: Dictionary = policy.get("blocker", {}) if policy.get("blocker", null) is Dictionary else {}
+	match str(blocker.get("code", "")):
+		"NO_SUPPLY_SOURCE", "LOGISTICS_OPERATING_COST":
+			return "BLOCKED_SOURCE"
+		"ROUTE_LOCK_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE":
+			return "NO_TRANSPORT"
+		"ROUTE_CONGESTION":
+			return "SATURATED"
+		_:
+			return "ACTIVE"
+
+
+func shipment_gameplay_status(shipment: Dictionary) -> String:
+	if str(shipment.get("status", "IN_TRANSIT")) == "BLOCKED_OUTPUT":
+		return "BLOCKED_DESTINATION"
+	return "IN_TRANSIT"
 
 
 func _mode_available(state: SpaceGameState, mode: Dictionary) -> bool:

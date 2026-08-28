@@ -19,11 +19,11 @@ func _run() -> void:
 	_check(["goal_id", "step_id", "page", "section", "location_id", "focus_entity_id", "reason", "acquisition_path"].all(func(key): return initial_guidance.has(key)) and not str(initial_guidance.get("page", "")).is_empty(), "Guidance exposes an actionable page, section, location, focus entity, reason and acquisition path")
 
 	_check(main.find_child("SystemMap2D", true, false) != null, "formal UI contains the interactive 2D System Map")
-	for page_id in ["overview", "system_map", "location", "frontier", "industry", "research", "fleet", "expedition"]:
+	for page_id in ["system_map", "location", "industry", "inventory", "logistics", "construction", "research", "ships", "survey", "megastructure", "diagnostics"]:
 		_check(main.find_child("Navigation_%s" % page_id, true, false) != null, "navigation exposes %s" % page_id)
 	_check(main.find_child("Navigation_megastructure", true, false) != null and Game.content.megastructures.size() == 1 and Game.content.megastructures.get("stellar_energy", {}).get("phases", []).size() == 8, "the UI exposes exactly one eight-phase single-system Megastructure endgame")
 
-	var fleet_nav := main.find_child("Navigation_fleet", true, false) as Button
+	var fleet_nav := main.find_child("Navigation_ships", true, false) as Button
 	_press(fleet_nav)
 	await _redraw()
 	for section_id in ["roster", "readiness", "shipyard", "archive"]:
@@ -42,7 +42,7 @@ func _run() -> void:
 	_check(retreat_label != null and retreat_label.size.x >= 100.0 and retreat_label.size.y < 60.0, "Fleet retreat policy keeps a horizontal readable layout")
 	_check(_has_text_fragment(main, "前列") and _has_text_fragment(main, "中列") and _has_text_fragment(main, "后列"), "Fleet UI exposes the translated three-line formation")
 
-	var mining_nav := main.find_child("Navigation_frontier", true, false) as Button
+	var mining_nav := main.find_child("Navigation_survey", true, false) as Button
 	_press(mining_nav)
 	await _redraw()
 	var start_mining := main.find_child("StartMining_earth_resource_cluster_prospect", true, false) as Button
@@ -66,7 +66,7 @@ func _run() -> void:
 		if String(operation.get("site_id", "")) == "earth_resource_cluster_prospect":
 			operation["status"] = "INTEGRATED"
 	Game.state.extraction_network_states["earth_extraction_network"].merge({"unlocked":true, "status":"RUNNING", "integrated_site_ids":["earth_resource_cluster_prospect"]}, true)
-	_check(bool(main.call("_has_active_mining")), "Guide recognizes an integrated extraction network as active production")
+	_check(String(Game.guidance_snapshot().get("step_id", "")) != "extract_mixed_ore", "Guide recognizes an integrated extraction network as active production")
 	_check("启动近地永久采集点" not in String(main.call("_next_flow_step")), "Guide never regresses to the starter mining instruction after the first completed extraction cycle")
 	Game.state.extraction_network_states["earth_extraction_network"]["status"] = "IDLE"
 
@@ -95,7 +95,7 @@ func _run() -> void:
 	Game.state.add_item("structural_frame", 1, SpaceGameState.MAIN_BASE_LOCATION_ID)
 	Game.state_changed.emit()
 	await _redraw()
-	_check("4 铁锭" in String(main.call("_next_flow_step")) and String(main.call("_next_flow_industry_section")) == "production", "guide states the exact Orbital Foundry shortage and keeps the player in Production")
+	_check("4 铁锭" in String(Game.guidance_snapshot().get("message", "")) and String(Game.guidance_snapshot().get("section", "")) == "production", "guide states the exact Orbital Foundry shortage and keeps the player in Production")
 	Game.state.add_item("iron_ingot", 4, SpaceGameState.MAIN_BASE_LOCATION_ID)
 	Game.state_changed.emit()
 	await _redraw()
@@ -111,7 +111,9 @@ func _run() -> void:
 	Game.simulation.advance(Game.state, 35000.0)
 	_check("orbital_foundry" in Game.state.facilities, "guide-provided Foundry materials complete the real construction project")
 
-	var expedition_nav := main.find_child("Navigation_expedition", true, false) as Button
+	_press(fleet_nav)
+	await _redraw()
+	var expedition_nav := main.find_child("ShipsMissions", true, false) as Button
 	_press(expedition_nav)
 	await _redraw()
 	_check(main.find_child("StartRoute_lunar_route", true, false) != null, "Expedition route has a formal UI action")

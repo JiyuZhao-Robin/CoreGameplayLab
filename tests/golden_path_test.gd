@@ -7,6 +7,7 @@ var snapshots: Array[Dictionary] = []
 var blocker_history: Array[Dictionary] = []
 var peak_inventory: Dictionary = {}
 var production_stack: Array[String] = []
+var emitted_research_state_scenarios: Dictionary = {}
 
 
 func _ready() -> void:
@@ -127,6 +128,7 @@ func _run_golden_path() -> void:
 	_prepare_stellar_program_process_stock()
 	_survey_to_state("earth_sun_lagrange", LocationState.DEEP_SURVEYED)
 	_research("research_megastructures")
+	_emit_scenario("megastructure_site_preparation")
 	_check(Game.select_megastructure_site("stellar_energy", "earth_sun_lagrange"), "the deeply surveyed Lagrange worksite is committed without free infrastructure")
 	_snapshot("prepare_stellar_energy")
 	if _failed(): return
@@ -428,6 +430,7 @@ func _research(project_id: String) -> void:
 		if stage.is_empty():
 			_advance(1.0)
 			continue
+		_capture_research_state_scenario()
 		for requirement_value in stage.get("requirements", []):
 			var requirement := requirement_value as Dictionary
 			if Game.simulation.requirement_met(Game.state, requirement):
@@ -464,6 +467,15 @@ func _research(project_id: String) -> void:
 		_advance(work / maxf(0.01, Game.simulation.research_capacity(Game.state)) * 2.0 + 1.0)
 	_check(bool(Game.state.completed_projects.get(project_id, false)), "R&D Program completes through real stage supplies, facilities and Field Tests: %s" % project_id)
 	if not _failed(): print("GOLDEN: completed R&D %s" % project_id)
+
+
+func _capture_research_state_scenario() -> void:
+	_advance(1.0)
+	var gameplay_state := Game.simulation.research_gameplay_state(Game.state)
+	if gameplay_state not in ["WAITING_FACILITY", "WAITING_KNOWLEDGE", "WAITING_PROTOTYPE", "WAITING_FIELD_TEST"] or emitted_research_state_scenarios.has(gameplay_state):
+		return
+	emitted_research_state_scenarios[gameplay_state] = true
+	_emit_scenario("research_%s" % gameplay_state.to_lower())
 
 
 func _develop_ship(project_id: String) -> void:
@@ -562,7 +574,13 @@ func _route(route_id: String, ship_ids: Array) -> void:
 	_ensure_item("kinetic_munitions", 120)
 	_ensure_item("repair_supplies", 20)
 	var route: Dictionary = Game.content.expedition_routes.get(route_id, {})
-	_command(Game.set_fleet_supply_plan("chemical_propellant", int(route.get("fuel_cost", 0))), "set exact route propellant plan for %s" % route_id)
+	var propellant_target := int(route.get("fuel_cost", 0))
+	var current_plan: Dictionary = Game.state.fleet_logistics_runtime("expedition").get("supply_plan", {})
+	# Consecutive routes can legitimately require the same exact target. The
+	# player command rejects unchanged values, so preserve the already-valid plan
+	# instead of treating domain-level idempotence as a Golden Path failure.
+	if int(current_plan.get("chemical_propellant", -1)) != propellant_target:
+		_command(Game.set_fleet_supply_plan("chemical_propellant", propellant_target), "set exact route propellant plan for %s" % route_id)
 	for ship_id_value in ship_ids:
 		if not _command(Game.set_ship_fleet_assignment(str(ship_id_value), "expedition"), "assign Expedition ship %s" % ship_id_value):
 			return
@@ -596,7 +614,7 @@ func _survey_to_investment_grade(location_id: String) -> void:
 		if selected_ship_id.is_empty():
 			_fail("no fitted Survey Vessel can advance %s to %s" % [location_id, target_state])
 			return
-		_ensure_costs(_cost_dictionary(Game.content.survey_rules.get("base_costs", {}).get(target_state, [])))
+		_ensure_costs(Game.simulation.survey_mission_costs(target_state))
 		if not _command(Game.start_survey_mission(location_id, target_state, [selected_ship_id]), "survey %s to %s" % [location_id, target_state]):
 			return
 		_advance(float(Game.state.survey_mission.get("duration_ms", 1.0)) + 1.0)
@@ -624,7 +642,7 @@ func _survey_to_state(location_id: String, target_state: String) -> void:
 		if selected_ship_id.is_empty():
 			_fail("no physical Survey Vessel has %s for %s" % [capability, next_state])
 			return
-		_ensure_costs(_cost_dictionary(Game.content.survey_rules.get("base_costs", {}).get(next_state, [])))
+		_ensure_costs(Game.simulation.survey_mission_costs(next_state))
 		if not _command(Game.start_survey_mission(location_id, next_state, [selected_ship_id]), "survey %s to %s" % [location_id, next_state]):
 			return
 		_advance(float(Game.state.survey_mission.get("duration_ms", 1.0)) + 1.0)
@@ -737,6 +755,9 @@ func _complete_stellar_energy_megastructure() -> void:
 	var site_id := "earth_sun_lagrange"
 	var definition: Dictionary = Game.content.megastructures.get("stellar_energy", {})
 	var phases: Array = definition.get("phases", [])
+	# Preserve the legal pre-construction state as Phase 1. Later snapshots are
+	# emitted only after the preceding phase transaction has completed.
+	_emit_scenario("megastructure_phase_1")
 	while int(Game.state.megastructure_projects.get("stellar_energy", {}).get("phase_index", 0)) < phases.size():
 		var phase_index := int(Game.state.megastructure_projects.get("stellar_energy", {}).get("phase_index", 0))
 		if phase_index == 4:
@@ -759,6 +780,7 @@ func _complete_stellar_energy_megastructure() -> void:
 		_complete_remote_construction(site_id, "MEGASTRUCTURE", activity_id)
 		if _failed(): return
 		_check(int(Game.state.megastructure_projects.get("stellar_energy", {}).get("phase_index", 0)) == phase_index + 1, "Megastructure phase advances exactly once: %s" % activity_id)
+		_emit_scenario("megastructure_phase_%d" % (phase_index + 1))
 	_check(Game.state.game_complete and bool(Game.state.megastructures.get("stellar_energy", false)), "Commissioning completes the single-system game")
 
 
@@ -875,6 +897,27 @@ func _snapshot(goal_id: String) -> void:
 		"ships":Game.state.ships.size()
 	})
 	print("GOLDEN: completed goal %s at %.1f simulated minutes" % [goal_id, Game.state.total_elapsed_ms / 60000.0])
+	_emit_scenario(goal_id)
+
+
+func _emit_scenario(scenario_id: String) -> void:
+	if not OS.get_cmdline_user_args().has("--emit-scenarios"):
+		return
+	var directory := ProjectSettings.globalize_path("res://artifacts/ui-scenarios")
+	DirAccess.make_dir_recursive_absolute(directory)
+	var path := "%s/%s.json" % [directory, scenario_id]
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		_fail("cannot write generated Scenario state: %s" % path)
+		return
+	file.store_string(JSON.stringify({
+		"scenario_id":scenario_id,
+		"generated_by":"golden_path_test",
+		"invariant_source":"normal_domain_commands_and_simulation",
+		"state":Game.state.to_dictionary()
+	}, "  "))
+	file.close()
+	print("SCENARIO_SAVED: res://artifacts/ui-scenarios/%s.json" % scenario_id)
 
 
 func _requirements_complete(values: Array) -> bool:

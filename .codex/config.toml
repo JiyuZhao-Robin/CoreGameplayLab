@@ -1,0 +1,4 @@
+# This repository is explicitly trusted for autonomous local execution.
+# Keep this project-local so other Codex projects retain their own policies.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"

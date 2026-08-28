@@ -16,12 +16,12 @@ func _run() -> void:
 	var main: Control = MainScene.instantiate()
 	add_child(main)
 	await _redraw()
-	_check(_has_text_fragment(main, "Operations Overview"), "English navigation is rendered")
+	_check(_has_text_fragment(main, "System") and _has_text_fragment(main, "Inventory") and _has_text_fragment(main, "Diagnostics"), "English fixed core navigation is rendered")
 	_check(_has_text_fragment(main, "CURRENT GUIDANCE"), "English contextual guidance is rendered")
 	_check(String(main.call("_status_text", "BLOCKED_OUTPUT")) == "Output Storage Full", "English runtime status is localized")
 	var blocker_text := String(main.call("_blocker_text", {"primary_reason":"INPUT_SHORTAGE", "item_id":"iron_ingot", "available":1, "required":4}))
 	_check("Insufficient Iron Ingots" in blocker_text and not _contains_cjk(blocker_text), "English structured blocker is localized")
-	_scan_visible_page(main, "overview")
+	_scan_visible_page(main, "system map initial")
 
 	_press(main.find_child("Navigation_system_map", true, false) as Button)
 	await _redraw()
@@ -35,7 +35,7 @@ func _run() -> void:
 		await _redraw()
 		_scan_visible_page(main, "location %s" % location_tab)
 
-	_press(main.find_child("Navigation_frontier", true, false) as Button)
+	_press(main.find_child("Navigation_survey", true, false) as Button)
 	await _redraw()
 	_scan_visible_page(main, "frontier operations")
 
@@ -47,23 +47,27 @@ func _run() -> void:
 		_scan_visible_page(main, "industry %s" % industry_section)
 	_press(main.find_child("IndustrySection_automation", true, false) as Button)
 	await _redraw()
-	_check(_has_text_fragment(main, "CURRENT ECONOMY ANALYSIS"), "English diagnostics are rendered")
-	_check(_has_text_fragment(main, "READ-ONLY THROUGHPUT PLANNER"), "English planner is rendered")
-	_check(_has_text_fragment(main, "CONDITIONAL AUTOMATION"), "English automation is rendered")
+	_check(_has_text_fragment(main, I18n.core("diagnostics.economy.title")), "English diagnostics are rendered from its stable key")
+	_check(_has_text_fragment(main, I18n.core("planner.title")), "English planner is rendered from its stable key")
+	_check(_has_text_fragment(main, I18n.core("automation.title")), "English automation is rendered from its stable key")
 	_scan_visible_page(main, "industry diagnostics")
+	for core_page in ["inventory", "logistics", "construction", "diagnostics"]:
+		_press(main.find_child("Navigation_%s" % core_page, true, false) as Button)
+		await _redraw()
+		_scan_visible_page(main, core_page)
 
 	_press(main.find_child("Navigation_research", true, false) as Button)
 	await _redraw()
 	_scan_visible_page(main, "research")
 
-	_press(main.find_child("Navigation_fleet", true, false) as Button)
+	_press(main.find_child("Navigation_ships", true, false) as Button)
 	await _redraw()
 	for fleet_section in ["roster", "readiness", "shipyard", "archive"]:
 		_press(main.find_child("FleetSection_%s" % fleet_section, true, false) as Button)
 		await _redraw()
 		_scan_visible_page(main, "fleet %s" % fleet_section)
 
-	_press(main.find_child("Navigation_expedition", true, false) as Button)
+	_press(main.find_child("ShipsMissions", true, false) as Button)
 	await _redraw()
 	_scan_visible_page(main, "expedition")
 

@@ -16,8 +16,18 @@ func _ready() -> void:
 	var selected_loadout_id := str(Game.state.saved_loadouts.keys()[0])
 	var initial_loadout: Array = Game.state.saved_loadouts[selected_loadout_id].get("modules", [])
 	var initial_loadout_bom: Dictionary = Game.simulation.loadout_fabrication_costs(initial_loadout)
+	_check(not initial_loadout_bom.is_empty(), "starter Loadout has a physical fabrication BOM")
+	var shortage_item_id := str(initial_loadout_bom.keys()[0])
+	var temporarily_removed := Game.state.item_quantity(shortage_item_id)
+	if temporarily_removed > 0:
+		Game.state.remove_item(shortage_item_id, temporarily_removed)
+	var initial_availability := Game.ship_loadout_availability(ship_id, initial_loadout)
+	_check(not bool(initial_availability.get("allowed", true)) and str(initial_availability.get("reason_code", "")) == "FABRICATION_INPUT_SHORTAGE", "Loadout availability rejects the same missing full-BOM resources as the refit transaction")
+	if temporarily_removed > 0:
+		Game.state.add_item(shortage_item_id, temporarily_removed)
 	for item_id_value in initial_loadout_bom.keys():
 		Game.state.add_item(str(item_id_value), int(initial_loadout_bom[item_id_value]))
+	_check(bool(Game.ship_loadout_availability(ship_id, initial_loadout).get("allowed", false)), "Loadout availability becomes ready once every full-BOM input is physically available")
 	_check(Game.apply_ship_loadout(ship_id, selected_loadout_id), "a named Loadout commits a real fabrication-and-installation refit")
 	_check(Game.state.refit_projects[0].get("consumed_bom", {}) == initial_loadout_bom and Game.state.ship_by_id(ship_id).get("modules", []).is_empty(), "applying even the current configuration consumes its complete ordinary-plugin BOM and dismantles the old configuration")
 	Game.simulation.advance(Game.state, 1000000.0)
@@ -72,6 +82,10 @@ func _ready() -> void:
 	var revision_after_trigger := Game.state.revision
 	_check(Game.run_automation_rules() == 0 and Game.state.revision == revision_after_trigger, "an unchanged active condition does not spam transactions or retrigger its action")
 	_check(Game._automation_condition_active_with_hysteresis({"value":10.5, "threshold":10.0, "operator":"LT"}, {"hysteresis":1.0}, true) and not Game._automation_condition_active_with_hysteresis({"value":11.0, "threshold":10.0, "operator":"LT"}, {"hysteresis":1.0}, true), "Automation hysteresis holds the active edge until the reset boundary")
+
+	Game.reset_game()
+	var catchup := Game.advance_game_time(30.0 * 60.0 * 60.0 * 1000.0)
+	_check(is_equal_approx(float(catchup.get("simulated_ms", 0.0)), 30.0 * 60.0 * 60.0 * 1000.0) and float(catchup.get("unprocessed_ms", -1.0)) <= 0.001, "the shared online/offline orchestrator drains time beyond the Simulation 24-hour chunk cap before player commands can reorder history")
 
 	if failures.is_empty():
 		print("Gameplay Lab flow test passed")

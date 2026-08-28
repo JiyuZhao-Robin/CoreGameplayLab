@@ -1,17 +1,26 @@
 extends Control
 
 const SystemMapViewScript = preload("res://src/ui/components/system_map_view.gd")
+const MegastructureProgressViewScript = preload("res://src/ui/components/megastructure_progress_view.gd")
+const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
-const COLOR_BG := Color("15191f")
-const COLOR_PANEL := Color("20262e")
-const COLOR_PANEL_ALT := Color("29323d")
-const COLOR_BORDER := Color("465362")
-const COLOR_TEXT := Color("e8edf2")
-const COLOR_MUTED := Color("9aa8b6")
-const COLOR_ACCENT := Color("66c6ff")
-const COLOR_GOOD := Color("71d79b")
-const COLOR_WARN := Color("f1bd62")
-const COLOR_BAD := Color("ee7b78")
+const COLOR_BG := UiTokens.COLOR_CANVAS
+const COLOR_PANEL := UiTokens.COLOR_PANEL
+const COLOR_PANEL_ALT := UiTokens.COLOR_RAISED
+const COLOR_BORDER := UiTokens.COLOR_BORDER
+const COLOR_TEXT := UiTokens.COLOR_TEXT
+const COLOR_MUTED := UiTokens.COLOR_TEXT_MUTED
+const COLOR_ACCENT := UiTokens.COLOR_FOCUS
+const COLOR_GOOD := UiTokens.COLOR_RUNNING
+const COLOR_WARN := UiTokens.COLOR_WARNING
+const COLOR_BAD := UiTokens.COLOR_CRITICAL
+const UI_CONFIG_PATH := "user://core_gameplay_ui.cfg"
+const NAV_TRANSLATION_KEYS := {
+	"system_map":"nav.system_map", "location":"nav.location", "industry":"nav.industry",
+	"inventory":"nav.inventory", "logistics":"nav.logistics", "construction":"nav.construction",
+	"research":"nav.research", "fleet":"nav.ships", "frontier":"nav.survey",
+	"megastructure":"nav.megastructure", "diagnostics":"nav.diagnostics"
+}
 
 var _tabs: TabContainer
 var _pages: Dictionary = {}
@@ -29,13 +38,25 @@ var _location_section := "overview"
 var _industry_section := "production"
 var _fleet_section := "roster"
 var _logistics_item_selection := {}
+var _logistics_advanced := false
 var _planner_product_id := ""
 var _planner_target_rate := 1.0
 var _planner_result: Dictionary = {}
 var _planner_target_label := ""
+var _inventory_search_text := ""
+var _logistics_route_focus_id := ""
+var _active_page_key := "system_map"
+var _developer_details := false
+var _ui_config := ConfigFile.new()
+var _alert_records := {}
+var _active_blocker_cache: Array[Dictionary] = []
+var _telemetry_events: Array[Dictionary] = []
+var _seen_blocker_ids := {}
+var _navigation_history: Array[String] = []
 
 
 func _ready() -> void:
+	_load_ui_preferences()
 	for argument in OS.get_cmdline_user_args():
 		if String(argument).begins_with("--fleet-section="):
 			_fleet_section = String(argument).trim_prefix("--fleet-section=")
@@ -44,8 +65,10 @@ func _ready() -> void:
 	_build_theme()
 	_build_shell()
 	_connect_game_signals()
-	_append_log(I18n.inline("核心玩法实验室已启动。所有画面均由 Godot 控件生成，不使用 UI 图片。"))
+	_append_log(I18n.core("timeline.lab_started"))
 	_rebuild_all()
+	call_deferred("_focus_active_navigation_if_empty")
+	_record_telemetry("ScreenOpen", {"screen":_active_page_key, "initial":true})
 	var capture_requested := OS.get_cmdline_user_args().has("--capture-map") or OS.get_cmdline_user_args().has("--capture-location")
 	for argument in OS.get_cmdline_user_args():
 		capture_requested = capture_requested or String(argument).begins_with("--capture-view=")
@@ -58,19 +81,41 @@ func _process(_delta: float) -> void:
 	if now - _last_header_ms >= 200:
 		_update_header()
 		_last_header_ms = now
-	if (_dirty and now - _last_refresh_ms >= 180) or now - _last_refresh_ms >= 1000:
+	var focused := get_viewport().gui_get_focus_owner()
+	var editing_text := focused is LineEdit or focused is TextEdit
+	if not editing_text and _dirty and now - _last_refresh_ms >= 180:
 		_rebuild_active_page()
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_focus_next") and get_viewport().gui_get_focus_owner() == null:
+		_focus_active_navigation_if_empty()
+		get_viewport().set_input_as_handled()
+		return
+	if not event.is_action_pressed("ui_cancel"):
+		return
+	var destination := ""
+	while not _navigation_history.is_empty() and destination.is_empty():
+		var candidate: String = String(_navigation_history.pop_back())
+		if candidate != _active_page_key and _page_controls.has(candidate):
+			destination = candidate
+	if destination.is_empty() and _active_page_key != "system_map":
+		destination = "system_map"
+	if not destination.is_empty():
+		_switch_page(destination, false)
+		get_viewport().set_input_as_handled()
+
+
+func _focus_active_navigation_if_empty() -> void:
+	if get_viewport().gui_get_focus_owner() != null:
+		return
+	var button := _nav_buttons.get(_active_page_key) as Button
+	if is_instance_valid(button) and button.is_visible_in_tree() and not button.disabled:
+		button.grab_focus()
+
+
 func _build_theme() -> void:
-	var system_font := SystemFont.new()
-	system_font.font_names = PackedStringArray([
-		"PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", "Arial Unicode MS"
-	])
-	var lab_theme := Theme.new()
-	lab_theme.default_font = system_font
-	lab_theme.default_font_size = 15
-	theme = lab_theme
+	theme = UiTokens.build_theme()
 
 
 func _build_shell() -> void:
@@ -107,17 +152,21 @@ func _build_shell() -> void:
 
 	_add_page(I18n.core("page.system_map"), "system_map")
 	_add_page(I18n.core("page.location"), "location")
-	_add_page(I18n.core("page.overview"), "overview")
-	_add_page(I18n.core("page.frontier"), "frontier")
 	_add_page(I18n.core("page.industry"), "industry")
+	_add_page(I18n.core("page.inventory", "Inventory"), "inventory")
+	_add_page(I18n.core("page.logistics", "Logistics"), "logistics")
+	_add_page(I18n.core("page.construction", "Construction"), "construction")
 	_add_page(I18n.core("page.research"), "research")
 	_add_page(I18n.core("page.fleet"), "fleet")
+	_add_page(I18n.core("page.frontier"), "frontier")
 	_add_page(I18n.core("page.expedition"), "expedition")
 	_add_page(I18n.core("page.megastructure"), "megastructure")
-	_tabs.current_tab = 0
+	_add_page(I18n.core("page.diagnostics", "Diagnostics"), "diagnostics")
+	var restored_page: Control = _page_controls.get(_active_page_key)
+	_tabs.current_tab = restored_page.get_index() if is_instance_valid(restored_page) else 0
 
 	var sidebar := _panel()
-	sidebar.custom_minimum_size = Vector2(285, 0)
+	sidebar.custom_minimum_size = Vector2(UiTokens.INSPECTOR_WIDTH, 0)
 	workspace.add_child(sidebar)
 	var sidebar_margin := _margin(14, 14, 14, 14)
 	sidebar.add_child(sidebar_margin)
@@ -130,17 +179,23 @@ func _build_shell() -> void:
 	sidebar_scroll.add_child(sidebar_box)
 	_pages["sidebar"] = sidebar_box
 
+	var timeline_panel := _panel(Color("0d151a"))
+	timeline_panel.custom_minimum_size.y = UiTokens.BOTTOM_BAR_HEIGHT
+	root_box.add_child(timeline_panel)
+	var timeline_margin := _margin(14, 8, 14, 8)
+	timeline_panel.add_child(timeline_margin)
 	_notice_label = Label.new()
-	_notice_label.custom_minimum_size.y = 28
+	_notice_label.name = "AlertsTimelineTasks"
+	_notice_label.custom_minimum_size.y = 42
 	_notice_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_notice_label.add_theme_color_override("font_color", COLOR_MUTED)
 	_notice_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	root_box.add_child(_notice_label)
+	timeline_margin.add_child(_notice_label)
 
 
 func _build_navigation_rail() -> Control:
 	var panel := _panel(Color("101820"))
-	panel.custom_minimum_size.x = 210
+	panel.custom_minimum_size.x = UiTokens.NAV_WIDTH
 	var margin := _margin(10, 12, 10, 12)
 	panel.add_child(margin)
 	var rail := VBoxContainer.new()
@@ -150,22 +205,25 @@ func _build_navigation_rail() -> Control:
 	operations_title.name = "OperationsTitle"
 	rail.add_child(operations_title)
 	var entries := [
-		["overview", "nav.overview"],
 		["system_map", "nav.system_map"],
 		["location", "nav.location"],
-		["frontier", "nav.frontier"],
 		["industry", "nav.industry"],
+		["inventory", "nav.inventory"],
+		["logistics", "nav.logistics"],
+		["construction", "nav.construction"],
 		["research", "nav.research"],
-		["fleet", "nav.fleet"],
-		["expedition", "nav.expedition"],
-		["megastructure", "nav.megastructure"]
+		["fleet", "nav.ships"],
+		["frontier", "nav.survey"],
+		["megastructure", "nav.megastructure"],
+		["diagnostics", "nav.diagnostics"]
 	]
 	for entry in entries:
 		var key := String(entry[0])
 		var button := _button(I18n.core(String(entry[1])), _switch_page.bind(key))
-		button.name = "Navigation_%s" % key
+		var public_key := "ships" if key == "fleet" else ("survey" if key == "frontier" else key)
+		button.name = "Navigation_%s" % public_key
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.custom_minimum_size = Vector2(188, 42)
+		button.custom_minimum_size = Vector2(UiTokens.NAV_WIDTH - 20, UiTokens.ROW_HEIGHT)
 		_nav_buttons[key] = button
 		rail.add_child(button)
 	var spacer := Control.new()
@@ -178,14 +236,21 @@ func _build_navigation_rail() -> Control:
 	return panel
 
 
-func _switch_page(key: String) -> void:
+func _switch_page(key: String, record_history: bool = true) -> void:
 	var page: Control = _page_controls.get(key)
 	if not is_instance_valid(page):
 		return
+	if record_history and key != _active_page_key and _page_controls.has(_active_page_key):
+		_navigation_history.append(_active_page_key)
+		if _navigation_history.size() > 32:
+			_navigation_history.pop_front()
 	_tabs.current_tab = page.get_index()
+	_active_page_key = key
+	_save_ui_preferences()
 	_dirty = true
 	_rebuild_active_page()
 	_update_navigation_state()
+	_record_telemetry("ScreenOpen", {"screen":key})
 
 
 func _update_navigation_state() -> void:
@@ -196,6 +261,12 @@ func _update_navigation_state() -> void:
 		var button := _nav_buttons[key] as Button
 		var page: Control = _page_controls.get(key)
 		var active := is_instance_valid(page) and page.get_index() == _tabs.current_tab
+		var availability: Dictionary = Game.ui_navigation_availability(key)
+		var caption := I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize())
+		if not bool(availability.get("unlocked", true)):
+			caption += "  ·  " + I18n.core("nav.locked", "Locked")
+		button.text = caption
+		button.tooltip_text = "" if bool(availability.get("unlocked", true)) else I18n.core(String(availability.get("condition_key", "")), "Progression requirement not met")
 		button.add_theme_color_override("font_color", COLOR_ACCENT if active else COLOR_TEXT)
 		button.add_theme_stylebox_override("normal", _button_style(Color("18303a") if active else Color("141c24"), COLOR_ACCENT if active else COLOR_BORDER))
 
@@ -220,15 +291,20 @@ func _build_header() -> Control:
 	title_box.add_child(subtitle)
 
 	_header_status = _label("", 14, COLOR_MUTED)
-	_header_status.custom_minimum_size.x = 260
+	_header_status.name = "HeaderStatus"
+	_header_status.custom_minimum_size.x = 360
+	_header_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_header_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_header_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(_header_status)
 
-	for speed in [0.0, 1.0, 10.0, 50.0]:
+	for speed in [0.0, 1.0, 2.0, 5.0, 10.0, 100.0]:
 		var text_value := I18n.core("shell.pause") if speed == 0.0 else "%d×" % int(speed)
 		var speed_button := _button(text_value, _set_speed.bind(speed))
 		speed_button.name = "SpeedPause" if speed == 0.0 else "Speed%d" % int(speed)
-		speed_button.custom_minimum_size.x = 56
+		speed_button.custom_minimum_size.x = 60 if speed >= 100.0 else 56
+		if speed >= 100.0:
+			speed_button.tooltip_text = I18n.core("shell.speed_100_tooltip", "Fast-forward 100× through the normal deterministic simulation; all costs and blockers still apply.")
 		_speed_buttons[speed] = speed_button
 		row.add_child(speed_button)
 
@@ -238,7 +314,7 @@ func _build_header() -> Control:
 	var save_button := _button(I18n.core("shell.save"), _save_game)
 	save_button.name = "SaveButton"
 	row.add_child(save_button)
-	var restart_button := _button(I18n.core("shell.restart"), _reset_game, false, COLOR_BAD)
+	var restart_button := _button(I18n.core("shell.restart"), _request_reset_game, false, COLOR_BAD)
 	restart_button.name = "RestartButton"
 	row.add_child(restart_button)
 	return panel
@@ -272,17 +348,22 @@ func _connect_game_signals() -> void:
 func _rebuild_all() -> void:
 	if not is_instance_valid(Game.state) or not is_instance_valid(Game.content):
 		return
+	_refresh_alerts()
 	_rebuild_sidebar()
 	_rebuild_system_map()
 	_rebuild_location()
-	_rebuild_overview()
 	_rebuild_frontier()
 	_rebuild_industry()
+	_rebuild_inventory()
+	_rebuild_logistics()
+	_rebuild_construction()
 	_rebuild_research()
 	_rebuild_fleet()
 	_rebuild_expedition()
 	_rebuild_megastructure()
+	_rebuild_diagnostics()
 	_update_header()
+	_update_bottom_bar()
 	_update_navigation_state()
 	_dirty = false
 	_last_refresh_ms = Time.get_ticks_msec()
@@ -291,29 +372,103 @@ func _rebuild_all() -> void:
 func _rebuild_active_page() -> void:
 	if not is_instance_valid(Game.state) or not is_instance_valid(Game.content) or not is_instance_valid(_tabs):
 		return
+	var focused := get_viewport().gui_get_focus_owner()
+	var focused_name := String(focused.name) if is_instance_valid(focused) and is_ancestor_of(focused) else ""
+	var page_before: Control = _tabs.get_current_tab_control()
+	var scroll_before := 0
+	if page_before is ScrollContainer:
+		scroll_before = (page_before as ScrollContainer).scroll_vertical
+	_refresh_alerts()
 	_rebuild_sidebar()
 	var active_page: Control = _tabs.get_current_tab_control()
-	var key: String = str(active_page.name) if is_instance_valid(active_page) else "overview"
+	var key: String = str(active_page.name) if is_instance_valid(active_page) else "system_map"
 	match key:
 		"system_map": _rebuild_system_map()
 		"location": _rebuild_location()
-		"overview": _rebuild_overview()
 		"frontier": _rebuild_frontier()
 		"industry": _rebuild_industry()
+		"inventory": _rebuild_inventory()
+		"logistics": _rebuild_logistics()
+		"construction": _rebuild_construction()
 		"research": _rebuild_research()
 		"fleet": _rebuild_fleet()
 		"expedition": _rebuild_expedition()
 		"megastructure": _rebuild_megastructure()
+		"diagnostics": _rebuild_diagnostics()
 	_update_header()
+	_update_bottom_bar()
 	_update_navigation_state()
 	_dirty = false
 	_last_refresh_ms = Time.get_ticks_msec()
+	call_deferred("_restore_rebuilt_page_context", focused_name, key, scroll_before)
+
+
+func _restore_rebuilt_page_context(focused_name: String, page_key: String, scroll_vertical: int) -> void:
+	var page := _page_controls.get(page_key) as Control
+	if page is ScrollContainer:
+		(page as ScrollContainer).scroll_vertical = scroll_vertical
+	if focused_name.is_empty():
+		return
+	var replacement := find_child(focused_name, true, false) as Control
+	if not is_instance_valid(replacement) or not replacement.is_visible_in_tree() or replacement.focus_mode == Control.FOCUS_NONE:
+		_focus_active_navigation_if_empty()
+		return
+	if replacement is BaseButton and (replacement as BaseButton).disabled:
+		_focus_active_navigation_if_empty()
+		return
+	replacement.grab_focus()
 
 
 func _rebuild_sidebar() -> void:
 	var box: VBoxContainer = _pages["sidebar"]
 	_clear(box)
+	box.add_child(_section_title(I18n.core("sidebar.context", "Context Inspector")))
+	var selector := OptionButton.new()
+	selector.name = "LocationSelector"
+	var location_ids: Array[String] = []
+	for location_id_value in Game.state.locations.keys():
+		var location_id := String(location_id_value)
+		var location := Game.state.location_state(location_id)
+		if String(location.get("discovery_state", LocationState.UNDISCOVERED)) != LocationState.DISCOVERED:
+			continue
+		location_ids.append(location_id)
+	location_ids.sort()
+	for location_id in location_ids:
+		selector.add_item(_location_name(location_id))
+		if location_id == _selected_location_id:
+			selector.select(selector.item_count - 1)
+	selector.item_selected.connect(_on_context_location_selected.bind(location_ids))
+	box.add_child(selector)
+	var selected := Game.state.location_state(_selected_location_id)
+	if not selected.is_empty():
+		var power: Dictionary = selected.get("power", {})
+		var storage: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
+		var logistics: Dictionary = selected.get("logistics_summary", {})
+		box.add_child(_card_text(I18n.core("sidebar.location_summary") % [
+			_location_name(_selected_location_id),
+			_status_text(String(selected.get("type", "UNKNOWN"))), _status_text(String(selected.get("survey_state", "UNKNOWN"))),
+			I18n.core("header.power", "Power"), float(power.get("current_demand", 0.0)), float(power.get("generation_capacity", power.get("available_capacity", 0.0))),
+			I18n.core("inventory.storage", "Storage"), float(storage.get("used", 0.0)), float(storage.get("capacity", 0.0)),
+			I18n.core("page.logistics", "Logistics"), _status_text(String(logistics.get("status", "NOT_CONNECTED")))
+		], COLOR_TEXT))
+		var open_location := _button(I18n.core("sidebar.open_location", "Open Location"), _open_location.bind(_selected_location_id), false, COLOR_ACCENT)
+		open_location.name = "ContextOpenLocation"
+		box.add_child(open_location)
+
+	var blockers: Array[Dictionary] = _current_blockers(_selected_location_id)
+	box.add_child(_section_title(I18n.core("sidebar.blockers", "Active blockers")))
+	if blockers.is_empty():
+		box.add_child(_label(I18n.core("diagnostics.clear", "No critical blocker is active."), 12, COLOR_GOOD))
+	else:
+		for blocker_value in blockers.slice(0, 3):
+			var blocker := blocker_value as Dictionary
+			var inspect := _button(_blocker_text(blocker), _navigate_blocker.bind(blocker), false, COLOR_WARN)
+			inspect.tooltip_text = I18n.core("diagnostics.open_resolution", "Open resolution")
+			box.add_child(inspect)
+
+	box.add_child(_separator())
 	box.add_child(_section_title(I18n.core("sidebar.guide")))
+	var guidance := Game.guidance_snapshot()
 	var next_step := _next_flow_step()
 	var guide := _rich(next_step, COLOR_ACCENT)
 	guide.fit_content = true
@@ -322,66 +477,63 @@ func _rebuild_sidebar() -> void:
 	if not next_page.is_empty():
 		var next_button := _button(I18n.core("sidebar.next"), _open_next_flow_target, false, COLOR_GOOD)
 		next_button.name = "NextStepCTA"
+		next_button.tooltip_text = String(guidance.get("reason", ""))
 		box.add_child(next_button)
 	box.add_child(_separator())
 	if not Game.offline_report.is_empty():
 		box.add_child(_section_title(I18n.core("sidebar.offline")))
 		var report := Game.offline_report
-		box.add_child(_rich("已结算 %s · %d 个状态边界\n剩余待结算 %s" % [_format_ms(int(report.get("simulated_ms", 0.0))), int(report.get("operations", 0)), _format_ms(int(report.get("unprocessed_ms", 0.0)))], COLOR_MUTED))
+		box.add_child(_rich(I18n.core("sidebar.offline_summary") % [_format_ms(int(report.get("simulated_ms", 0.0))), int(report.get("operations", 0)), _format_ms(int(report.get("unprocessed_ms", 0.0)))], COLOR_MUTED))
 		box.add_child(_separator())
-
-	box.add_child(_section_title(I18n.core("sidebar.inventory")))
-	var inventory_lines: Array[String] = []
-	var aggregate_inventory := Game.state.aggregate_inventory()
-	for item_id in aggregate_inventory.keys():
-		var amount := int(aggregate_inventory[item_id])
-		if amount <= 0:
-			continue
-		var item := Game.content.items.get(String(item_id), {}) as Dictionary
-		var owners: Array[String] = []
-		for row_value in Game.state.inventory_breakdown(String(item_id)):
-			var row := row_value as Dictionary
-			owners.append("%s %d" % [_location_name(String(row.get("location_id", ""))), int(row.get("quantity", 0))])
-		inventory_lines.append("%s  × %d\n  %s" % [_content_name(item, String(item_id)), amount, " / ".join(owners)])
-	inventory_lines.sort()
-	box.add_child(_rich("\n".join(inventory_lines) if not inventory_lines.is_empty() else I18n.core("sidebar.empty"), COLOR_TEXT))
-
-	box.add_child(_separator())
-	box.add_child(_section_title(I18n.core("sidebar.facilities")))
-	var facility_lines: Array[String] = []
-	for facility_id in Game.state.facilities:
-		var facility := Game.content.facilities.get(String(facility_id), {}) as Dictionary
-		facility_lines.append("• " + _content_name(facility, String(facility_id)))
-	box.add_child(_rich("\n".join(facility_lines), COLOR_MUTED))
-
-	box.add_child(_separator())
-	box.add_child(_section_title(I18n.core("sidebar.events")))
-	var recent := _event_log.slice(maxi(0, _event_log.size() - 7))
-	box.add_child(_rich("\n".join(recent) if not recent.is_empty() else I18n.core("sidebar.none"), COLOR_MUTED))
+	var developer_toggle := _button(I18n.core("developer.hide", "Hide Developer Details") if _developer_details else I18n.core("developer.show", "Developer Details"), _toggle_developer_details, false, COLOR_MUTED)
+	developer_toggle.name = "DeveloperDetailsToggle"
+	box.add_child(developer_toggle)
+	if _developer_details:
+		box.add_child(_card_text(I18n.core("developer.snapshot") % [
+			_selected_location_id, Game.state.total_elapsed_ms,
+			String(guidance.get("goal_id", "")), String(guidance.get("step_id", "")),
+			String(guidance.get("focus_entity_id", ""))
+		], COLOR_MUTED))
 
 
 func _rebuild_system_map() -> void:
 	var box: VBoxContainer = _pages["system_map"]
 	_clear(box)
-	box.add_child(_page_title("太阳系前沿", "轨道节点来自真实地点状态；虚线表示内容定义的物流走廊，未知地点不可操作。"))
+	box.add_child(_page_title(I18n.core("system.title"), I18n.core("system.subtitle")))
 	var map_locations: Array[Dictionary] = []
 	for definition_value in Game.content.regions.values():
 		var definition := definition_value as Dictionary
 		var location_id := String(definition.get("id", ""))
 		var location: Dictionary = Game.state.location_state(location_id)
 		var discovered := not location.is_empty() and String(location.get("discovery_state", LocationState.UNDISCOVERED)) == LocationState.DISCOVERED
+		var fleet_task_count := 0
+		for ship_value in Game.state.ships:
+			var ship := ship_value as Dictionary
+			if String(ship.get("location_id", "")) == location_id and (not String(ship.get("fleet_assignment", "")).is_empty() or not (ship.get("assignment", {}) as Dictionary).is_empty()):
+				fleet_task_count += 1
+		var mega_here := false
+		for project_value in Game.state.megastructure_projects.values():
+			if String((project_value as Dictionary).get("site_id", "")) == location_id:
+				mega_here = true
 		map_locations.append({
 			"id":location_id,
 			"name":_location_name(location_id),
 			"discovered":discovered,
-			"survey_state":String(location.get("survey_state", LocationState.UNKNOWN))
+			"survey_state":String(location.get("survey_state", LocationState.UNKNOWN)),
+			"fleet_task_count":fleet_task_count,
+			"megastructure":mega_here
 		})
 	var map_routes: Array[Dictionary] = []
 	for route_value in Game.content.logistics_routes.values():
 		var route := (route_value as Dictionary).duplicate(true)
 		var from_location: Dictionary = Game.state.location_state(String(route.get("from", "")))
 		var to_location: Dictionary = Game.state.location_state(String(route.get("to", "")))
-		route["active"] = String(from_location.get("discovery_state", "")) == LocationState.DISCOVERED and String(to_location.get("discovery_state", "")) == LocationState.DISCOVERED
+		var route_id := String(route.get("id", ""))
+		var service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, route_id)
+		var snapshot: Dictionary = Game.simulation.logistics.service_snapshot(Game.state, route_id)
+		var endpoints_known := String(from_location.get("discovery_state", "")) == LocationState.DISCOVERED and String(to_location.get("discovery_state", "")) == LocationState.DISCOVERED
+		route["active"] = endpoints_known and not service.is_empty() and float(snapshot.get("capacity_per_minute", 0.0)) > 0.0
+		route["utilization"] = float(snapshot.get("utilization", 0.0))
 		map_routes.append(route)
 	var map_view := SystemMapViewScript.new()
 	map_view.name = "SystemMap2D"
@@ -390,23 +542,23 @@ func _rebuild_system_map() -> void:
 	box.add_child(map_view)
 	map_view.configure(map_locations, map_routes, _selected_location_id)
 
-	box.add_child(_section_title("系统生产与物流"))
+	box.add_child(_section_title(I18n.core("system.production_logistics")))
 	for system_id in Game.simulation.known_system_ids(Game.state):
 		var production: Dictionary = Game.simulation.system_production_overview(Game.state, system_id)
 		var logistics: Dictionary = Game.simulation.system_logistics_overview(Game.state, system_id)
 		var system_card := _card()
-		system_card.add_child(_label("%s · 系统生产与物流总览" % system_id.to_upper(), 18, COLOR_ACCENT))
-		system_card.add_child(_label("地点 %d · 库存 %d · 生产作业 %d 运行 / %d 受阻" % [int(production.get("location_count", 0)), int(production.get("stock_units", 0)), int(production.get("running_operations", 0)), int(production.get("blocked_operations", 0))], 13, COLOR_TEXT))
+		system_card.add_child(_label(I18n.core("system.card_title") % system_id.to_upper(), 18, COLOR_ACCENT))
+		system_card.add_child(_label(I18n.core("system.production_summary") % [int(production.get("location_count", 0)), int(production.get("stock_units", 0)), int(production.get("running_operations", 0)), int(production.get("blocked_operations", 0))], 13, COLOR_TEXT))
 		var shipment_counts: Dictionary = logistics.get("shipment_counts", {})
 		var shipment_units: Dictionary = logistics.get("shipment_units", {})
-		system_card.add_child(_label("航线 %d 条内部 / %d 条外部 · 货运能力 %d · 物流策略 %d" % [int(logistics.get("internal_routes", 0)), int(logistics.get("external_routes", 0)), int(logistics.get("freight_capacity", 0)), int(logistics.get("policy_count", 0))], 13, COLOR_MUTED))
-		system_card.add_child(_label("运输批次 %d 内部 / %d 入站 / %d 出站 · 数量 %d / %d / %d" % [int(shipment_counts.get("internal", 0)), int(shipment_counts.get("inbound", 0)), int(shipment_counts.get("outbound", 0)), int(shipment_units.get("internal", 0)), int(shipment_units.get("inbound", 0)), int(shipment_units.get("outbound", 0))], 13, COLOR_MUTED))
+		system_card.add_child(_label(I18n.core("system.logistics_summary") % [int(logistics.get("internal_routes", 0)), int(logistics.get("external_routes", 0)), int(logistics.get("freight_capacity", 0)), int(logistics.get("policy_count", 0))], 13, COLOR_MUTED))
+		system_card.add_child(_label(I18n.core("system.shipment_summary") % [int(shipment_counts.get("internal", 0)), int(shipment_counts.get("inbound", 0)), int(shipment_counts.get("outbound", 0)), int(shipment_units.get("internal", 0)), int(shipment_units.get("inbound", 0)), int(shipment_units.get("outbound", 0))], 13, COLOR_MUTED))
 		var flow_lines: Array[String] = []
 		for flow_value in production.get("flows", []):
 			var flow := flow_value as Dictionary
 			if int(flow.get("stock", 0)) <= 0 and int(flow.get("incoming", 0)) <= 0 and absf(float(flow.get("net_per_hour", 0.0))) < 0.001:
 				continue
-			flow_lines.append("%s  库存 %d + 在途 %d · 净变化 %+.1f/小时" % [_content_name(Game.content.items.get(String(flow.get("item_id", "")), {}), String(flow.get("item_id", ""))), int(flow.get("stock", 0)), int(flow.get("incoming", 0)), float(flow.get("net_per_hour", 0.0))])
+			flow_lines.append(I18n.core("system.flow_row") % [_content_name(Game.content.items.get(String(flow.get("item_id", "")), {}), String(flow.get("item_id", ""))), int(flow.get("stock", 0)), int(flow.get("incoming", 0)), float(flow.get("net_per_hour", 0.0))])
 		if not flow_lines.is_empty():
 			system_card.add_child(_rich("\n".join(flow_lines.slice(0, 8)), COLOR_MUTED))
 		box.add_child(_wrap_card(system_card))
@@ -417,12 +569,24 @@ func _open_location(location_id: String) -> void:
 		return
 	_selected_location_id = location_id
 	_location_section = "overview"
+	_save_ui_preferences()
+	_switch_page("location")
+	_rebuild_location()
+
+
+func _open_location_section(location_id: String, section: String) -> void:
+	if not Game.state.has_location(location_id):
+		return
+	_selected_location_id = location_id
+	_location_section = section
+	_save_ui_preferences()
 	_switch_page("location")
 	_rebuild_location()
 
 
 func _select_location_section(section: String) -> void:
 	_location_section = section
+	_save_ui_preferences()
 	_rebuild_location()
 
 
@@ -431,13 +595,13 @@ func _rebuild_location() -> void:
 	_clear(box)
 	var location: Dictionary = Game.state.location_state(_selected_location_id)
 	if location.is_empty():
-		box.add_child(_page_title("地点", "请先从星系地图选择已知地点。"))
+		box.add_child(_page_title(I18n.core("location.title"), I18n.core("location.select_known")))
 		return
-	box.add_child(_page_title(_location_name(_selected_location_id), "%s · %s" % [_status_text(String(location.get("type", "UNKNOWN"))), String(location.get("system_id", "UNKNOWN")).to_upper()]))
+	box.add_child(_page_title(_location_name(_selected_location_id), I18n.core("location.subtitle") % [_status_text(String(location.get("type", "UNKNOWN"))), _system_name(String(location.get("system_id", "UNKNOWN")))]))
 	var nav := HBoxContainer.new()
 	nav.add_theme_constant_override("separation", 6)
 	for section in ["overview", "resources", "industry", "logistics", "projects"]:
-		var captions := {"overview":"总览", "resources":"资源", "industry":"工业", "logistics":"物流", "projects":"工程"}
+		var captions := {"overview":I18n.core("location.tab.overview"), "resources":I18n.core("location.tab.resources"), "industry":I18n.core("location.tab.industry"), "logistics":I18n.core("location.tab.logistics"), "projects":I18n.core("location.tab.projects")}
 		var tab_button := _button(String(captions[section]), _select_location_section.bind(section), section == _location_section, COLOR_ACCENT)
 		tab_button.name = "LocationTab_%s" % section
 		nav.add_child(tab_button)
@@ -458,58 +622,72 @@ func _rebuild_location() -> void:
 func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
 	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
 	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
-	box.add_child(_section_title("地点信息"))
-	box.add_child(_card_text("编号 %s\n类型 %s\n所属系统 %s\n勘测状态 %s" % [_selected_location_id, _status_text(String(location.get("type", "UNKNOWN"))), String(location.get("system_id", "UNKNOWN")).to_upper(), _status_text(survey_state)], COLOR_TEXT))
+	box.add_child(_section_title(I18n.core("location.info")))
+	box.add_child(_card_text(I18n.core("location.identity_summary") % [_status_text(String(location.get("type", "UNKNOWN"))), _system_name(String(location.get("system_id", "UNKNOWN"))), _status_text(survey_state)], COLOR_TEXT))
 	var next_states := {LocationState.UNKNOWN:LocationState.DETECTED, LocationState.DETECTED:LocationState.SURVEYED, LocationState.SURVEYED:LocationState.DEEP_SURVEYED}
 	if next_states.has(survey_state):
 		var next_state := String(next_states[survey_state])
-		var mission_running := String(Game.state.survey_mission.get("status", "IDLE")) == "RUNNING"
-		var costs: Array = Game.content.survey_rules.get("base_costs", {}).get(next_state, [])
-		var survey_button := _button("执行%s任务 · %s" % [_status_text(next_state), _resource_list(costs)], _command.bind("启动勘测任务", Game.start_survey_mission.bind(_selected_location_id, next_state)), mission_running, COLOR_ACCENT)
-		survey_button.name = "StartSurvey_%s_%s" % [_selected_location_id, next_state]
-		box.add_child(survey_button)
-		if mission_running:
+		var costs: Dictionary = Game.simulation.survey_mission_costs(next_state)
+		box.add_child(_label(I18n.core("survey.select_vessel", "Select a Survey Vessel") + " · " + _resource_dictionary(costs), 13, COLOR_ACCENT))
+		var eligible_found := false
+		for ship_value in Game.state.ships:
+			var ship := ship_value as Dictionary
+			var ship_id := String(ship.get("instance_id", ""))
+			var availability: Dictionary = Game.survey_mission_availability(_selected_location_id, next_state, [ship_id])
+			if (availability.get("blockers", []) as Array).any(func(blocker): return String((blocker as Dictionary).get("code", "")) in ["SURVEY_VESSEL_UNAVAILABLE", "SURVEY_VESSEL_REQUIRED"]):
+				continue
+			eligible_found = true
+			var survey_button := _button(I18n.core("location.survey_action") % [String(ship.get("name", ship_id)), I18n.core("survey.start", "Start %s mission") % _status_text(next_state)], _command.bind(I18n.core("command.start_survey"), Game.start_survey_mission.bind(_selected_location_id, next_state, [ship_id])), not bool(availability.get("allowed", false)), COLOR_ACCENT)
+			survey_button.name = "StartSurvey_%s_%s_%s" % [_selected_location_id, next_state, ship_id]
+			survey_button.tooltip_text = _availability_reason(availability)
+			box.add_child(survey_button)
+		if not eligible_found:
+			var availability: Dictionary = Game.survey_mission_availability(_selected_location_id, next_state)
+			var missing_button := _button(I18n.core("survey.no_vessel", "No eligible Survey Vessel"), Callable(), true, COLOR_WARN)
+			missing_button.tooltip_text = _availability_reason(availability)
+			box.add_child(missing_button)
+		if String(Game.state.survey_mission.get("status", "IDLE")) == "RUNNING":
 			var mission: Dictionary = Game.state.survey_mission
-			box.add_child(_label("勘测舰正在执行 %s → %s（%.0f%%）" % [mission.get("target", ""), _status_text(String(mission.get("target_state", ""))), 100.0 * float(mission.get("progress_ms", 0.0)) / maxf(1.0, float(mission.get("duration_ms", 1.0)))], 13, COLOR_WARN))
+			box.add_child(_label(I18n.core("location.survey_progress") % [mission.get("target", ""), _status_text(String(mission.get("target_state", ""))), 100.0 * float(mission.get("progress_ms", 0.0)) / maxf(1.0, float(mission.get("duration_ms", 1.0)))], 13, COLOR_WARN))
 	var environment: Dictionary = intelligence.get("environment", {})
 	if survey_state == LocationState.DETECTED:
-		box.add_child(_section_title("初步环境"))
-		box.add_child(_card_text("辐射 %s · 距离 %s · 建设难度 %s" % [_status_text(String(environment.get("radiation", "UNKNOWN"))), _status_text(String(environment.get("transport_distance_band", "UNKNOWN"))), _status_text(String(environment.get("construction_difficulty_band", "UNKNOWN")))], COLOR_MUTED))
+		box.add_child(_section_title(I18n.core("location.environment.preliminary")))
+		box.add_child(_card_text(I18n.core("location.environment.detected") % [_status_text(String(environment.get("radiation", "UNKNOWN"))), _status_text(String(environment.get("transport_distance_band", "UNKNOWN"))), _status_text(String(environment.get("construction_difficulty_band", "UNKNOWN")))], COLOR_MUTED))
 	elif survey_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
-		box.add_child(_section_title("环境条件"))
-		box.add_child(_card_text("重力 %.2f g · %s · 大气 %s\n太阳辐照 %.2f · 热环境 %s · 辐射 %s\n建设难度 ×%.2f · 运输距离 %.1f" % [float(environment.get("gravity", 0.0)), "真空" if bool(environment.get("vacuum", false)) else "非真空", _status_text(String(environment.get("atmosphere", "UNKNOWN"))), float(environment.get("solar_flux", 0.0)), _status_text(String(environment.get("thermal_environment", "UNKNOWN"))), _status_text(String(environment.get("radiation", "UNKNOWN"))), float(environment.get("construction_difficulty", 1.0)), float(environment.get("transport_distance", 0.0))], COLOR_MUTED))
+		box.add_child(_section_title(I18n.core("location.environment.conditions")))
+		box.add_child(_card_text(I18n.core("location.environment.surveyed") % [float(environment.get("gravity", 0.0)), I18n.core("location.environment.vacuum") if bool(environment.get("vacuum", false)) else I18n.core("location.environment.non_vacuum"), _status_text(String(environment.get("atmosphere", "UNKNOWN"))), float(environment.get("solar_flux", 0.0)), _status_text(String(environment.get("thermal_environment", "UNKNOWN"))), _status_text(String(environment.get("radiation", "UNKNOWN"))), float(environment.get("construction_difficulty", 1.0)), float(environment.get("transport_distance", 0.0))], COLOR_MUTED))
 	if survey_state == LocationState.UNKNOWN:
-		box.add_child(_card_text("尚无可用于工业投资的情报。先派遣装有勘测模块的舰船执行探测任务。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("location.intelligence_unknown"), COLOR_MUTED))
 		return
-	box.add_child(_section_title("本地库存"))
+	box.add_child(_section_title(I18n.core("location.local_inventory")))
 	var lines: Array[String] = []
 	for item_value in Game.state.location_inventory(_selected_location_id).keys():
 		var item_id := String(item_value)
 		var quantity := Game.state.item_quantity(item_id, _selected_location_id)
 		if quantity > 0:
-			lines.append("%s × %d" % [_content_name(Game.content.items.get(item_id, {}), item_id), quantity])
+			lines.append(I18n.core("format.item_quantity") % [_content_name(Game.content.items.get(item_id, {}), item_id), quantity])
 	lines.sort()
-	box.add_child(_card_text("\n".join(lines) if not lines.is_empty() else "库存为空", COLOR_TEXT))
+	box.add_child(_card_text("\n".join(lines) if not lines.is_empty() else I18n.core("location.inventory_empty"), COLOR_TEXT))
 	var power: Dictionary = location.get("power", {})
 	var power_text := _status_text(String(power.get("status", "UNKNOWN")))
 	if power.has("generation_capacity"):
-		power_text = "发电 %.1f / 负载 %.1f / 可用 %.1f" % [float(power.get("generation_capacity", 0.0)), float(power.get("current_demand", 0.0)), float(power.get("available_capacity", 0.0))]
-	box.add_child(_section_title("能源"))
+		power_text = I18n.core("location.power_summary") % [float(power.get("generation_capacity", 0.0)), float(power.get("current_demand", 0.0)), float(power.get("available_capacity", 0.0))]
+	box.add_child(_section_title(I18n.core("location.energy")))
 	box.add_child(_card_text(power_text, COLOR_TEXT))
 	var industry: Dictionary = location.get("industry_summary", {})
-	box.add_child(_section_title("工业"))
-	box.add_child(_card_text("%s · 已启用设施 %s · 运行作业 %s" % [_status_text(String(industry.get("status", "UNKNOWN"))), industry.get("active_facilities", 0), industry.get("active_operations", 0)], COLOR_TEXT))
-	box.add_child(_section_title("物流 / 工程 / 舰队"))
-	box.add_child(_card_text("物流状态 %s\n进行中工程 %d\n驻留舰队 %d" % [_status_text(String(location.get("logistics_summary", {}).get("status", "NOT_CONNECTED"))), int(location.get("projects_summary", {}).get("active_count", 0)), location.get("fleet_presence", []).size()], COLOR_TEXT))
+	box.add_child(_section_title(I18n.core("location.industry")))
+	box.add_child(_card_text(I18n.core("location.industry_summary") % [_status_text(String(industry.get("status", "UNKNOWN"))), industry.get("active_facilities", 0), industry.get("active_operations", 0)], COLOR_TEXT))
+	box.add_child(_section_title(I18n.core("location.operations")))
+	box.add_child(_card_text(I18n.core("location.operations_summary") % [_status_text(String(location.get("logistics_summary", {}).get("status", "NOT_CONNECTED"))), int(location.get("projects_summary", {}).get("active_count", 0)), location.get("fleet_presence", []).size()], COLOR_TEXT))
 
 
 func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> void:
-	box.add_child(_section_title("已知资源点"))
+	box.add_child(_section_title(I18n.core("location.resources.known_sites")))
 	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
 	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 	var resources: Array = intelligence.get("resources", [])
 	if resources.is_empty():
-		box.add_child(_card_text("当前勘测层级没有可公开的资源情报。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("location.resources.none_visible"), COLOR_MUTED))
 		return
 	for profile_value in resources:
 		var profile := profile_value as Dictionary
@@ -525,15 +703,15 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 		var card := _card()
 		card.add_child(_label(_content_name(site, mining_location_id), 16, COLOR_TEXT))
 		if survey_state == LocationState.DETECTED:
-			card.add_child(_label("资源类别 %s · 潜力 %s" % [_status_text(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
+			card.add_child(_label(I18n.core("location.resources.detected") % [I18n.category(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
 		else:
 			var item_id := String(profile.get("resource_type", ""))
 			var grade_range: Array = profile.get("grade_range", [])
-			var grade_text := "%.2f–%.2f" % [float(grade_range[0]), float(grade_range[1])] if grade_range.size() >= 2 else "未知"
-			card.add_child(_label("资源 %s · 品位范围 %s · 可持续潜力 %.1f · 置信度 %.0f%%" % [_content_name(Game.content.items.get(item_id, {}), item_id), grade_text, float(profile.get("extraction_potential", 0.0)), float(profile.get("survey_confidence", 0.0)) * 100.0], 13, COLOR_MUTED))
+			var grade_text := I18n.core("format.range_decimal") % [float(grade_range[0]), float(grade_range[1])] if grade_range.size() >= 2 else I18n.core("status.UNKNOWN")
+			card.add_child(_label(I18n.core("location.resources.surveyed") % [_content_name(Game.content.items.get(item_id, {}), item_id), grade_text, float(profile.get("extraction_potential", 0.0)), float(profile.get("survey_confidence", 0.0)) * 100.0], 13, COLOR_MUTED))
 			if survey_state == LocationState.DEEP_SURVEYED:
-				card.add_child(_label("精确品位 %.2f · 已知高级潜力 %.1f · 副产物 %s" % [float(profile.get("grade", 0.0)), float(profile.get("advanced_potential", 0.0)), ", ".join(profile.get("byproducts", []))], 13, COLOR_ACCENT))
-			card.add_child(_label("场地状态 %s · 永久开发 %s · 当前工法 %s" % [_status_text(String(runtime.get("state", "AVAILABLE"))), "已完成" if bool(runtime.get("developed", false)) else "未完成", _content_name(Game.content.extraction_methods.get(String(runtime.get("extraction_method_id", "")), {}), "未选择")], 13, COLOR_MUTED))
+				card.add_child(_label(I18n.core("location.resources.deep_surveyed") % [float(profile.get("grade", 0.0)), float(profile.get("advanced_potential", 0.0)), I18n.core("format.list_separator").join(profile.get("byproducts", []))], 13, COLOR_ACCENT))
+			card.add_child(_label(I18n.core("location.resources.site_status") % [_status_text(String(runtime.get("state", "AVAILABLE"))), I18n.core("status.COMPLETED") if bool(runtime.get("developed", false)) else I18n.core("status.INCOMPLETE"), _content_name(Game.content.extraction_methods.get(String(runtime.get("extraction_method_id", "")), {}), I18n.core("status.NOT_SELECTED"))], 13, COLOR_MUTED))
 			if not bool(runtime.get("developed", false)):
 				for method_id_value in profile.get("allowed_methods", []):
 					var method_id := String(method_id_value)
@@ -541,7 +719,7 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 					if not bool(method.get("permanent", false)):
 						continue
 					var available := Game.simulation.extraction_method_available(Game.state, site_id, method_id)
-					var button := _button("开发场地 · %s · 潜力 %.1f" % [_content_name(method, method_id), Game.simulation.extraction_site_sustainable_potential(Game.state, site_id, method_id)], _command.bind("场地开发", Game.queue_site_development.bind(site_id, method_id)), not available, COLOR_GOOD)
+					var button := _button(I18n.core("location.resources.develop_site") % [_content_name(method, method_id), Game.simulation.extraction_site_sustainable_potential(Game.state, site_id, method_id)], _command.bind(I18n.core("command.develop_site"), Game.queue_site_development.bind(site_id, method_id)), not available, COLOR_GOOD)
 					button.name = "DevelopSite_%s_%s" % [site_id, method_id]
 					card.add_child(button)
 		box.add_child(_wrap_card(card))
@@ -549,13 +727,64 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 
 func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 	var summary: Dictionary = location.get("industry_summary", {})
-	box.add_child(_card_text("状态 %s · 已启用设施 %s · 运行作业 %s" % [_status_text(String(summary.get("status", "NOT_AVAILABLE"))), summary.get("active_facilities", 0), summary.get("active_operations", 0)], COLOR_TEXT))
+	box.add_child(_card_text(I18n.core("location.industry.status_summary") % [_status_text(String(summary.get("status", "NOT_AVAILABLE"))), summary.get("active_facilities", 0), summary.get("active_operations", 0)], COLOR_TEXT))
 	var local_logistics: Dictionary = summary.get("local_logistics", {})
-	box.add_child(_card_text("本地物流 · %s · 需求 %.2f / 容量 %.2f 单位/秒 · 利用率 %.0f%%" % [_status_text(String(local_logistics.get("status", "NOT_AVAILABLE"))), float(local_logistics.get("required", 0.0)), float(local_logistics.get("capacity", 0.0)), float(local_logistics.get("utilization", 0.0)) * 100.0], COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
+	box.add_child(_card_text(I18n.core("location.industry.local_logistics") % [_status_text(String(local_logistics.get("status", "NOT_AVAILABLE"))), float(local_logistics.get("required", 0.0)), float(local_logistics.get("capacity", 0.0)), float(local_logistics.get("utilization", 0.0)) * 100.0], COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
 	var constraints: Dictionary = summary.get("constraints", {})
-	box.add_child(_card_text("能源 %.1f / %.1f · 冷却%s %.1f / %.1f · 结构 %.1f / %.1f · 吞吐率 %.0f%%" % [float(constraints.get("power_demand", 0.0)), float(constraints.get("power_capacity", 0.0)), "需求" if bool(constraints.get("cooling_required", false)) else "（无需）", float(constraints.get("cooling_demand", 0.0)), float(constraints.get("cooling_capacity", 0.0)), float(constraints.get("structural_used", 0.0)), float(constraints.get("structural_capacity", 0.0)), float(constraints.get("throughput_multiplier", 0.0)) * 100.0], COLOR_WARN if str(constraints.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
-	box.add_child(_card_text("生产由已建 Factory、已安装 Production Device 与已选择 Production Method 真实执行。系统只诊断问题，不会擅自扩厂、改配方或重做物流。", COLOR_MUTED))
-	box.add_child(_section_title("本地工业"))
+	box.add_child(_card_text(I18n.core("location.industry.constraints") % [float(constraints.get("power_demand", 0.0)), float(constraints.get("power_capacity", 0.0)), I18n.core("location.industry.cooling_required") if bool(constraints.get("cooling_required", false)) else I18n.core("location.industry.cooling_not_required"), float(constraints.get("cooling_demand", 0.0)), float(constraints.get("cooling_capacity", 0.0)), float(constraints.get("structural_used", 0.0)), float(constraints.get("structural_capacity", 0.0)), float(constraints.get("throughput_multiplier", 0.0)) * 100.0], COLOR_WARN if str(constraints.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
+	box.add_child(_card_text(I18n.core("location.industry.domain_contract"), COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("industry.templates", "Industrial policy templates")))
+	var template_card := _card()
+	var automation: Dictionary = location.get("automation", {})
+	var active_template_id := String(automation.get("industrial_template_id", ""))
+	template_card.add_child(_label(I18n.core("industry.template_current", "Current template") + " · " + (_content_name(Game.content.industrial_templates.get(active_template_id, {}), active_template_id) if not active_template_id.is_empty() else I18n.core("status.NONE", "None")), 13, COLOR_ACCENT if not active_template_id.is_empty() else COLOR_MUTED))
+	var template_selector := OptionButton.new()
+	template_selector.name = "IndustrialTemplateSelector"
+	var template_ids: Array = Game.content.industrial_templates.keys()
+	template_ids.sort()
+	for template_id_value in template_ids:
+		var template_id := String(template_id_value)
+		var template: Dictionary = Game.content.industrial_templates.get(template_id, {})
+		template_selector.add_item(_content_name(template, template_id))
+		if template_id == active_template_id:
+			template_selector.select(template_selector.item_count - 1)
+	template_card.add_child(template_selector)
+	var template_actions := HFlowContainer.new()
+	template_actions.add_theme_constant_override("h_separation", 6)
+	var apply_template := _button(I18n.core("industry.template_apply", "Apply template"), _apply_selected_industrial_template.bind(template_selector, template_ids), template_ids.is_empty(), COLOR_GOOD)
+	apply_template.name = "ApplyIndustrialTemplate"
+	template_actions.add_child(apply_template)
+	var clear_template := _button(I18n.core("industry.template_clear", "Clear template"), _command.bind(I18n.core("command.clear_industrial_template"), Game.clear_location_industrial_template.bind(_selected_location_id)), active_template_id.is_empty(), COLOR_WARN)
+	clear_template.name = "ClearIndustrialTemplate"
+	template_actions.add_child(clear_template)
+	if not active_template_id.is_empty():
+		var target_level := int(automation.get("target_level", Game.content.industrial_templates.get(active_template_id, {}).get("auto_expand_target", 5)))
+		var automation_enabled := bool(automation.get("enabled", false))
+		template_actions.add_child(_button(I18n.core("industry.template_pause", "Pause managed expansion") if automation_enabled else I18n.core("industry.template_resume", "Resume managed expansion"), _command.bind(I18n.core("command.toggle_template_expansion"), Game.configure_location_industrial_automation.bind(_selected_location_id, not automation_enabled, target_level)), false, COLOR_ACCENT))
+	template_card.add_child(template_actions)
+	template_card.add_child(_label(I18n.core("industry.template_help", "Templates set explainable logistics policies and an authorized expansion target; they do not create materials or bypass Construction."), 12, COLOR_MUTED))
+	box.add_child(_wrap_card(template_card))
+	var developing_facilities: Array[Dictionary] = []
+	for project_value in Game.state.construction_operations:
+		var project := project_value as Dictionary
+		if String(project.get("location_id", "")) != _selected_location_id or String(project.get("project_type", "")) not in ["FACILITY_BUILD", "FACILITY_EXPANSION", "SCALE_STAGE_UPGRADE"] or String(project.get("status", "")) not in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
+			continue
+		developing_facilities.append(project)
+	if not developing_facilities.is_empty():
+		box.add_child(_section_title(I18n.core("industry.development.title", "Factories under Construction")))
+		for project in developing_facilities:
+			var project_id := String(project.get("project_id", "PROJECT"))
+			var target_id := String(project.get("target_id", project.get("facility_id", "")))
+			var development_card := _card()
+			development_card.add_child(_label(I18n.core("industry.development.summary", "%s · %s") % [_content_name(Game.content.facilities.get(target_id, {}), target_id), _status_text("BUILDING")], 15, COLOR_ACCENT))
+			development_card.add_child(_label(I18n.core("industry.development.project", "Project %s · %s") % [project_id, _construction_project_type_name(String(project.get("project_type", "FACILITY_BUILD")))], 12, COLOR_MUTED))
+			development_card.add_child(_operation_progress(project, I18n.core("construction.status") % _status_text(Game.simulation.construction_gameplay_state(project))))
+			development_card.add_child(_label(I18n.core("construction.materials") % [_resource_dictionary(project.get("material_plan", {})), _resource_dictionary(project.get("consumed", {})), _resource_dictionary(project.get("delivered_materials", {})), _resource_dictionary(project.get("in_transit_materials", {}))], 12, COLOR_MUTED))
+			var open_project := _button(I18n.core("industry.development.open_construction", "Open Construction Project"), _open_production_construction.bind(project_id), false, COLOR_ACCENT)
+			open_project.name = "OpenProductionConstruction_%s" % project_id
+			development_card.add_child(open_project)
+			box.add_child(_wrap_card(development_card))
+	box.add_child(_section_title(I18n.core("location.industry.local")))
 	for facility_value in SpaceGameState.MANUFACTURING_FACILITY_IDS:
 		var facility_id := String(facility_value)
 		if not Game.simulation.facility_available(Game.state, facility_id):
@@ -564,10 +793,10 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 		var local_industry: Dictionary = Game.state.location_industry(_selected_location_id, facility_id)
 		var level := int(local_industry.get("level", 0))
 		var scale_stage := String(local_industry.get("scale_stage", "WORKSHOP"))
-		var scale_names := {"WORKSHOP":"工坊", "FACTORY":"工厂", "INDUSTRIAL_COMPLEX":"工业综合体", "AUTOMATED_DISTRICT":"自动化工业区"}
+		var scale_names := {"WORKSHOP":I18n.core("industry.scale.WORKSHOP"), "FACTORY":I18n.core("industry.scale.FACTORY"), "INDUSTRIAL_COMPLEX":I18n.core("industry.scale.INDUSTRIAL_COMPLEX"), "AUTOMATED_DISTRICT":I18n.core("industry.scale.AUTOMATED_DISTRICT")}
 		var lines := Game.state.production_lines_for(_selected_location_id, facility_id)
 		var card := _card()
-		card.add_child(_label("%s · 工业等级 %d · %s · 总产能 %.1f · 产线 %d/%d" % [_content_name(facility, facility_id), level, scale_names.get(scale_stage, scale_stage), Game.simulation.facility_manufacturing_throughput(Game.state, facility_id, _selected_location_id), lines.size(), Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id)], 16, COLOR_TEXT))
+		card.add_child(_label(I18n.core("location.industry.facility_summary") % [_content_name(facility, facility_id), level, scale_names.get(scale_stage, scale_stage), Game.simulation.facility_manufacturing_throughput(Game.state, facility_id, _selected_location_id), lines.size(), Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id)], 16, COLOR_TEXT))
 		if level > 0:
 			for runtime_value in lines:
 				var runtime := runtime_value as Dictionary
@@ -576,45 +805,72 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 					current_activity_id = String(runtime.get("method_id", ""))
 				var mastery := Game.simulation.industry_mastery_profile(Game.state, _selected_location_id, facility_id, current_activity_id)
 				var device_id := String(runtime.get("production_device_id", ""))
-				var method_name := _content_name(Game.content.activities.get(current_activity_id, {}), "未配置")
-				var status_id := String(runtime.get("status", "IDLE"))
-				card.add_child(_label("%s · %s · %s\n装置 %s · 控制 %s · 优先级 %d · 理论/实际 %.3f/%.3f Cycle/s · 熟练度 %d" % [String(runtime.get("line_id", "LINE")), _status_text(status_id), method_name, device_id if not device_id.is_empty() else "未安装", _status_text(String(runtime.get("control_mode", "PINNED"))), int(runtime.get("priority", 50)), float(runtime.get("theoretical_rate", 0.0)), float(runtime.get("actual_rate", 0.0)), int(mastery.get("mastery_level", 0))], 13, COLOR_WARN if status_id.begins_with("BLOCKED") or status_id.ends_with("LIMITED") else COLOR_MUTED))
+				var method_name := _content_name(Game.content.activities.get(current_activity_id, {}), I18n.core("status.NOT_CONFIGURED"))
+				var status_id := Game.simulation.production_gameplay_state(Game.state, runtime)
+				card.add_child(_label(I18n.core("location.industry.line_summary") % [String(runtime.get("line_id", "LINE")), _status_text(status_id), method_name, device_id if not device_id.is_empty() else I18n.core("status.NOT_INSTALLED"), _status_text(String(runtime.get("control_mode", "PINNED"))), int(runtime.get("priority", 50)), float(runtime.get("theoretical_rate", 0.0)), float(runtime.get("actual_rate", 0.0)), int(mastery.get("mastery_level", 0))], 13, COLOR_WARN if status_id.begins_with("BLOCKED") or status_id.ends_with("LIMITED") else COLOR_MUTED))
+				_add_blocker_label(card, runtime)
 				var control_row := HFlowContainer.new()
 				control_row.add_theme_constant_override("h_separation", 6)
 				var slot := int(runtime.get("slot", -1))
 				var mode := String(runtime.get("control_mode", "PINNED"))
 				var manual_lock := bool(runtime.get("manual_lock", true))
-				control_row.add_child(_button("固定工艺运行", _command.bind("固定生产工艺", Game.set_production_line_control.bind(slot, "PINNED", manual_lock)), mode == "PINNED", COLOR_ACCENT))
-				control_row.add_child(_button("关闭", _command.bind("关闭生产线", Game.set_production_line_control.bind(slot, "OFF", manual_lock)), mode == "OFF", COLOR_WARN))
-				control_row.add_child(_button("手动锁定：%s" % ("是" if manual_lock else "否"), _command.bind("切换手动锁定", Game.set_production_line_control.bind(slot, mode, not manual_lock)), false, COLOR_GOOD if manual_lock else COLOR_MUTED))
-				control_row.add_child(_button("高优先", _command.bind("提高产线优先级", Game.configure_production_line.bind(slot, 100, 100)), int(runtime.get("priority", 50)) == 100, COLOR_ACCENT))
-				control_row.add_child(_button("常规", _command.bind("恢复产线优先级", Game.configure_production_line.bind(slot, 100, 50)), int(runtime.get("priority", 50)) == 50))
+				var capability_disabled := status_id == "DISABLED"
+				var run_pinned := _button(I18n.core("industry.line.run_pinned"), _command.bind(I18n.core("command.pin_production_method"), Game.set_production_line_control.bind(slot, "PINNED", manual_lock)), mode == "PINNED" or capability_disabled, COLOR_ACCENT)
+				run_pinned.name = "RunProductionLine_%d" % slot
+				if capability_disabled:
+					run_pinned.tooltip_text = I18n.core("industry.line.disabled_tooltip", "Install the required production device or choose a compatible method.")
+				control_row.add_child(run_pinned)
+				control_row.add_child(_button(I18n.core("industry.line.turn_off"), _command.bind(I18n.core("command.stop_production_line"), Game.set_production_line_control.bind(slot, "OFF", manual_lock)), mode == "OFF", COLOR_WARN))
+				control_row.add_child(_button(I18n.core("industry.line.manual_lock") % (I18n.core("common.yes") if manual_lock else I18n.core("common.no")), _command.bind(I18n.core("command.toggle_manual_lock"), Game.set_production_line_control.bind(slot, mode, not manual_lock)), false, COLOR_GOOD if manual_lock else COLOR_MUTED))
+				control_row.add_child(_button(I18n.core("industry.line.high_priority"), _command.bind(I18n.core("command.raise_line_priority"), Game.configure_production_line.bind(slot, 100, 100)), int(runtime.get("priority", 50)) == 100, COLOR_ACCENT))
+				control_row.add_child(_button(I18n.core("industry.line.normal_priority"), _command.bind(I18n.core("command.restore_line_priority"), Game.configure_production_line.bind(slot, 100, 50)), int(runtime.get("priority", 50)) == 50))
+				if capability_disabled:
+					var open_capability := _button(I18n.core("industry.line.open_capability", "Open Facility Configuration"), _open_production_capability.bind(_selected_location_id), false, COLOR_WARN)
+					open_capability.name = "OpenProductionCapability_%d" % slot
+					control_row.add_child(open_capability)
 				card.add_child(control_row)
-				if status_id == "IDLE" or current_activity_id.is_empty():
+				# `production_gameplay_state()` intentionally projects an unused IDLE
+				# runtime as PAUSED.  Configuration availability, however, belongs to
+				# the authoritative raw runtime status; otherwise a legal empty line has
+				# no player surface for choosing its first Production Method.
+				if String(runtime.get("status", "IDLE")) == "IDLE" or current_activity_id.is_empty():
 					for activity_value in Game.content.activities.values():
 						var activity := activity_value as Dictionary
 						var activity_id := String(activity.get("id", ""))
 						if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
 							continue
 						var scale_blocked := not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)
-						card.add_child(_button("采用工艺 · %s%s" % [_content_name(activity, activity_id), "（需更高规模阶段）" if scale_blocked else ""], _command.bind("设置生产工艺", Game.start_industry_operation.bind(slot, activity_id)), scale_blocked or not Game.simulation.activity_available(Game.state, activity)))
-			if lines.size() < Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id):
-				card.add_child(_label("新增生产线（同一工厂的运行产线自动均分真实设备吞吐）", 13, COLOR_ACCENT))
-				for activity_value in Game.content.activities.values():
-					var activity := activity_value as Dictionary
-					var activity_id := String(activity.get("id", ""))
-					if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
-						continue
-					card.add_child(_button("新增产线 · %s" % _content_name(activity, activity_id), _command.bind("新增生产线", Game.add_production_line.bind(_selected_location_id, facility_id, activity_id, 50, 50)), not Game.simulation.activity_available(Game.state, activity) or not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)))
+						var method_button := _button(I18n.core("industry.line.select_method") % [_content_name(activity, activity_id), I18n.core("industry.line.higher_scale_required") if scale_blocked else ""], _command.bind(I18n.core("command.set_production_method"), Game.start_industry_operation.bind(slot, activity_id)), scale_blocked or not Game.simulation.activity_available(Game.state, activity))
+						method_button.name = "SelectProductionMethod_%d_%s" % [slot, activity_id]
+						card.add_child(method_button)
+			var line_capacity := Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id)
+			var line_capacity_full := lines.size() >= line_capacity
+			card.add_child(_label(I18n.core("industry.line.capacity_full", "Production-line capacity is full. Upgrade the Factory scale stage to add another line.") if line_capacity_full else I18n.core("industry.line.add_help"), 13, COLOR_WARN if line_capacity_full else COLOR_ACCENT))
+			for activity_value in Game.content.activities.values():
+				var activity := activity_value as Dictionary
+				var activity_id := String(activity.get("id", ""))
+				if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
+					continue
+				var activity_blocked := not Game.simulation.activity_available(Game.state, activity) or not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)
+				var add_line_button := _button(I18n.core("industry.line.add") % _content_name(activity, activity_id), _command.bind(I18n.core("command.add_production_line"), Game.add_production_line.bind(_selected_location_id, facility_id, activity_id, 50, 50)), line_capacity_full or activity_blocked)
+				add_line_button.name = "AddProductionLine_%s_%s" % [facility_id, activity_id]
+				if line_capacity_full:
+					add_line_button.tooltip_text = I18n.core("industry.line.capacity_full", "Production-line capacity is full. Upgrade the Factory scale stage to add another line.")
+				card.add_child(add_line_button)
 		var expansion_row := HBoxContainer.new()
 		expansion_row.add_theme_constant_override("separation", 6)
 		var stage_definition: Dictionary = Game.simulation.industry_scale_stage_definition(scale_stage)
 		var stage_max_level := int(stage_definition.get("max_level", 4))
 		for amount in [1, 5, 10]:
-			expansion_row.add_child(_button("排队扩建 +%d" % amount, _command.bind("扩建本地工业", Game.expand_location_industry.bind(_selected_location_id, facility_id, amount)), level + amount > stage_max_level))
+			var expansion_button := _button(I18n.core("industry.expansion.queue") % amount, _command.bind(I18n.core("command.expand_local_industry"), Game.expand_location_industry.bind(_selected_location_id, facility_id, amount)), level + amount > stage_max_level)
+			expansion_button.name = "ExpandIndustry_%s_%d" % [facility_id, amount]
+			expansion_button.tooltip_text = I18n.core("construction.inputs") % _resource_dictionary(Game.simulation.industry_expansion_costs(Game.state, _selected_location_id, facility_id, amount))
+			expansion_row.add_child(expansion_button)
 		var next_stage := String(stage_definition.get("next_stage", ""))
 		if level >= stage_max_level and not next_stage.is_empty():
-			expansion_row.add_child(_button("建设跃迁 · %s" % scale_names.get(next_stage, next_stage), _command.bind("规模阶段跃迁", Game.queue_scale_stage_upgrade.bind(_selected_location_id, facility_id, 70)), Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state), COLOR_ACCENT))
+			var scale_button := _button(I18n.core("industry.expansion.scale_transition") % scale_names.get(next_stage, next_stage), _command.bind(I18n.core("command.scale_stage_transition"), Game.queue_scale_stage_upgrade.bind(_selected_location_id, facility_id, 70)), Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state), COLOR_ACCENT)
+			scale_button.name = "UpgradeScaleStage_%s_%s_%s" % [_selected_location_id, facility_id, next_stage]
+			expansion_row.add_child(scale_button)
 		card.add_child(expansion_row)
 		box.add_child(_wrap_card(card))
 	var mastered_transformations: Array[String] = []
@@ -623,18 +879,22 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 		if bool(Game.state.unlocked_industrial_transformations.get(transformation_id, false)):
 			mastered_transformations.append(transformation_id)
 	if not mastered_transformations.is_empty():
-		box.add_child(_section_title("工业体系改造项目"))
+		box.add_child(_section_title(I18n.core("industry.transformation.title")))
 		for transformation_id in mastered_transformations:
 			var transformation: Dictionary = Game.content.industry_rules.get("industrial_transformations", {}).get(transformation_id, {})
 			var transformation_card := _card()
 			var adopted := bool(Game.state.adopted_industrial_transformations.get(transformation_id, false))
-			transformation_card.add_child(_label("%s · %s" % [transformation.get("name", transformation_id), "已采用" if adopted else "已掌握，尚未采用"], 15, COLOR_GOOD if adopted else COLOR_ACCENT))
-			transformation_card.add_child(_label("%s\n资本品：%s · 改造期间工业吞吐降至 %.0f%%" % [transformation.get("description", ""), _resource_list(transformation.get("costs", [])), float(transformation.get("downtime_multiplier", 0.5)) * 100.0], 12, COLOR_MUTED))
-			transformation_card.add_child(_button("启动工业改造项目", _command.bind("工业体系改造", Game.queue_industrial_transformation.bind(transformation_id, 70)), adopted, COLOR_ACCENT))
+			var transformation_name := I18n.t("industrial_transformation.%s.name" % transformation_id, String(transformation.get("name", transformation_id)))
+			var transformation_description := I18n.t("industrial_transformation.%s.description" % transformation_id, String(transformation.get("description", "")))
+			transformation_card.add_child(_label(I18n.core("industry.transformation.status") % [transformation_name, I18n.core("industry.transformation.adopted") if adopted else I18n.core("industry.transformation.available")], 15, COLOR_GOOD if adopted else COLOR_ACCENT))
+			transformation_card.add_child(_label(I18n.core("industry.transformation.details") % [transformation_description, _resource_list(transformation.get("costs", [])), float(transformation.get("downtime_multiplier", 0.5)) * 100.0], 12, COLOR_MUTED))
+			var transformation_button := _button(I18n.core("industry.transformation.start"), _command.bind(I18n.core("command.start_industrial_transformation"), Game.queue_industrial_transformation.bind(transformation_id, 70)), adopted, COLOR_ACCENT)
+			transformation_button.name = "AdoptIndustrialTransformation_%s" % transformation_id
+			transformation_card.add_child(transformation_button)
 			box.add_child(_wrap_card(transformation_card))
-	box.add_child(_section_title("地点容量工程"))
+	box.add_child(_section_title(I18n.core("industry.capacity.title")))
 	var capacity_card := _card()
-	capacity_card.add_child(_label("所有容量扩建都会进入统一建设队列；四类仓储互不转换。", 13, COLOR_MUTED))
+	capacity_card.add_child(_label(I18n.core("industry.capacity.help"), 13, COLOR_MUTED))
 	var storage_snapshot: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
 	var storage_classes: Dictionary = storage_snapshot.get("classes", {})
 	var capacity_values := {
@@ -647,14 +907,21 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 		"SPECIAL_STORAGE_UPGRADE":int(storage_classes.get("SPECIAL", {}).get("capacity", 0)),
 		"LOGISTICS_HUB_UPGRADE":int(location.get("logistics", {}).get("hub_throughput", 0))
 	}
-	var capacity_names := {"POWER_UPGRADE":"电力", "COOLING_UPGRADE":"冷却", "STRUCTURE_UPGRADE":"结构", "BULK_STORAGE_UPGRADE":"大宗仓储", "COMPONENT_STORAGE_UPGRADE":"部件仓储", "FLUID_STORAGE_UPGRADE":"流体仓储", "SPECIAL_STORAGE_UPGRADE":"特殊仓储", "LOGISTICS_HUB_UPGRADE":"物流枢纽"}
+	var capacity_names := {"POWER_UPGRADE":I18n.core("industry.capacity.power"), "COOLING_UPGRADE":I18n.core("industry.capacity.cooling"), "STRUCTURE_UPGRADE":I18n.core("industry.capacity.structure"), "BULK_STORAGE_UPGRADE":I18n.core("industry.capacity.bulk_storage"), "COMPONENT_STORAGE_UPGRADE":I18n.core("industry.capacity.component_storage"), "FLUID_STORAGE_UPGRADE":I18n.core("industry.capacity.fluid_storage"), "SPECIAL_STORAGE_UPGRADE":I18n.core("industry.capacity.special_storage"), "LOGISTICS_HUB_UPGRADE":I18n.core("industry.capacity.logistics_hub")}
 	var capacity_actions := HFlowContainer.new()
 	capacity_actions.add_theme_constant_override("h_separation", 6)
 	for project_type_value in capacity_values.keys():
 		var project_type := String(project_type_value)
-		var rules: Dictionary = Game.content.industry_rules.get("capacity_upgrade_projects", {}).get(project_type, {})
-		var target := int(capacity_values[project_type]) + int(rules.get("increment", 1))
-		capacity_actions.add_child(_button("%s → %d" % [capacity_names.get(project_type, project_type), target], _command.bind("排队容量工程", Game.queue_location_capacity_upgrade.bind(_selected_location_id, project_type, target, 50)), Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state)))
+		# Domain owns both the legal increment and the strategic batch size. This
+		# keeps large mature depots from requiring ten identical clicks without
+		# teaching the UI any construction or economy formula.
+		var target := Game.simulation.suggested_location_capacity_upgrade_target(Game.state, _selected_location_id, project_type)
+		var queue_full := Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state)
+		var capacity_button := _button(I18n.core("industry.capacity.target") % [capacity_names.get(project_type, project_type), target], _command.bind(I18n.core("command.queue_capacity_project"), Game.queue_location_capacity_upgrade.bind(_selected_location_id, project_type, target, 50)), queue_full)
+		capacity_button.name = "UpgradeLocationCapacity_%s_%s_%d" % [_selected_location_id, project_type, target]
+		if queue_full:
+			capacity_button.tooltip_text = I18n.t("notice.construction_queue_full", "The construction queue is full")
+		capacity_actions.add_child(capacity_button)
 	capacity_card.add_child(capacity_actions)
 	box.add_child(_wrap_card(capacity_card))
 
@@ -662,7 +929,7 @@ func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
 func _apply_selected_industrial_template(selector: OptionButton, template_ids: Array) -> void:
 	if selector.selected < 0 or selector.selected >= template_ids.size():
 		return
-	_command("应用工业模板", Game.apply_location_industrial_template.bind(_selected_location_id, String(template_ids[selector.selected])))
+	_command(I18n.core("command.apply_industrial_template"), Game.apply_location_industrial_template.bind(_selected_location_id, String(template_ids[selector.selected])))
 
 
 func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void:
@@ -670,7 +937,7 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 	var logistics: Dictionary = location.get("logistics", {})
 	var logistics_technology: Dictionary = summary.get("technology_profile", Game.simulation.logistics.technology_profile(Game.state))
 	var storage_snapshot: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
-	box.add_child(_card_text("%s · 航线 %d · 入站 %d · 出站 %d\n加权仓储 %.0f / %.0f · 枢纽单次吞吐 %d\n运输技术 %s · 运量 ×%.2f · 耗时 ×%.2f · 燃料 ×%.2f · 能耗 %.2f/单位/航线 · 装卸 %.0f 毫秒/单位/端点" % [
+	box.add_child(_card_text(I18n.core("location.logistics.summary") % [
 		_status_text(String(summary.get("status", "NOT_CONNECTED"))),
 		int(summary.get("route_count", 0)),
 		int(summary.get("inbound_shipments", 0)),
@@ -687,13 +954,13 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 	], COLOR_TEXT))
 	for storage_class in ["BULK", "COMPONENT", "FLUID", "SPECIAL"]:
 		var class_row: Dictionary = storage_snapshot.get("classes", {}).get(storage_class, {})
-		box.add_child(_label("%s：%.0f / %.0f（%.0f%%）" % [_status_text(storage_class), float(class_row.get("used", 0.0)), float(class_row.get("capacity", 0.0)), float(class_row.get("utilization", 0.0)) * 100.0], 12, COLOR_WARN if float(class_row.get("utilization", 0.0)) >= 0.9 else COLOR_MUTED))
-	box.add_child(_card_text("库存和枢纽容量不再免费即时修改；请在本地点“工业”页的地点容量工程中排队升级。", COLOR_MUTED))
+		box.add_child(_label(I18n.core("location.logistics.storage_class") % [_status_text(storage_class), float(class_row.get("used", 0.0)), float(class_row.get("capacity", 0.0)), float(class_row.get("utilization", 0.0)) * 100.0], 12, COLOR_WARN if float(class_row.get("utilization", 0.0)) >= 0.9 else COLOR_MUTED))
+	box.add_child(_card_text(I18n.core("location.logistics.capacity_help"), COLOR_MUTED))
 
-	box.add_child(_section_title("航线物流服务"))
+	box.add_child(_section_title(I18n.core("location.logistics.route_services")))
 	var connected_routes := _connected_logistics_routes(_selected_location_id)
 	if connected_routes.is_empty():
-		box.add_child(_card_text("尚未发现与本地点连通的货运航线。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("location.logistics.no_routes"), COLOR_MUTED))
 	for route_value in connected_routes:
 		var route := route_value as Dictionary
 		var route_id := String(route.get("id", ""))
@@ -701,12 +968,20 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 		var service_snapshot: Dictionary = Game.simulation.logistics.service_snapshot(Game.state, route_id)
 		var current_mode: Dictionary = Game.content.transport_modes.get(String(service.get("transport_mode_id", "")), {})
 		var service_card := _card()
-		service_card.add_child(_label("%s · %s" % [_content_name(route, route_id), _content_name(current_mode, String(service.get("transport_mode_id", "")))], 16, COLOR_TEXT))
-		service_card.add_child(_label("运力 %.1f 货运体积/批次 · %.1f/分钟 · 利用率 %.0f%% · 分配舰船 %d · %s · 策略 %s" % [float(service_snapshot.get("capacity_per_dispatch", 0.0)), float(service_snapshot.get("capacity_per_minute", 0.0)), float(service_snapshot.get("utilization", 0.0)) * 100.0, int(service_snapshot.get("allocated_ships", 0)), "基础设施" if bool(current_mode.get("infrastructure_service", false)) else "舰船/公共运力", String(service.get("priority_strategy", "DEMAND_PRIORITY"))], 13, COLOR_MUTED))
+		if route_id == _logistics_route_focus_id:
+			service_card.add_child(_label(I18n.core("diagnostics.focused_route", "Focused route · %s") % _content_name(route, route_id), 12, COLOR_ACCENT))
+		var service_status := String(service_snapshot.get("status", "ACTIVE"))
+		var service_color := COLOR_BAD if service_status == "NO_TRANSPORT" else (COLOR_WARN if service_status == "SATURATED" else (COLOR_ACCENT if service_status == "ACTIVE" else COLOR_MUTED))
+		service_card.add_child(_label(I18n.core("location.logistics.service_header") % [_content_name(route, route_id), _content_name(current_mode, String(service.get("transport_mode_id", ""))), _status_text(service_status)], 16, service_color))
+		service_card.add_child(_label(I18n.core("location.logistics.service_summary") % [float(service_snapshot.get("capacity_per_dispatch", 0.0)), float(service_snapshot.get("capacity_per_minute", 0.0)), float(service_snapshot.get("utilization", 0.0)) * 100.0, int(service_snapshot.get("allocated_ships", 0)), I18n.core("location.logistics.infrastructure_capacity") if bool(current_mode.get("infrastructure_service", false)) else I18n.core("location.logistics.ship_public_capacity"), _logistics_priority_text(String(service.get("priority_strategy", "DEMAND_PRIORITY")))], 13, COLOR_MUTED))
+		var service_paused := String(service.get("status", "ACTIVE")) == "PAUSED"
+		var service_pause_button := _button(I18n.core("location.logistics.resume_route") if service_paused else I18n.core("location.logistics.pause_route"), _command.bind(I18n.core("command.resume_logistics_route") if service_paused else I18n.core("command.pause_logistics_route"), Game.set_logistics_service_paused.bind(route_id, not service_paused)), false, COLOR_ACCENT if service_paused else COLOR_WARN)
+		service_pause_button.name = "%sLogisticsRoute_%s" % ["Resume" if service_paused else "Pause", route_id]
+		service_card.add_child(service_pause_button)
 		var supported_names: Array[String] = []
 		for freight_class_value in current_mode.get("supported_freight_classes", []):
 			supported_names.append(String(freight_class_value))
-		service_card.add_child(_label("支持：%s" % " / ".join(supported_names), 12, COLOR_MUTED))
+		service_card.add_child(_label(I18n.core("location.logistics.supported_classes") % I18n.core("format.slash_separator").join(supported_names), 12, COLOR_MUTED))
 		var mode_actions := HFlowContainer.new()
 		mode_actions.add_theme_constant_override("h_separation", 6)
 		for mode_value in Game.content.transport_modes.values():
@@ -717,13 +992,14 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 			if not bool(candidate_mode.get("infrastructure_service", false)) and not bool(candidate_mode.get("public_base_capacity", false)):
 				unavailable = unavailable or _eligible_logistics_ship_ids(candidate_mode, service).is_empty()
 			var mode_button: Button = _button(_content_name(candidate_mode, mode_id), _configure_route_transport_mode.bind(route_id, mode_id), unavailable, COLOR_ACCENT if mode_id == String(service.get("transport_mode_id", "")) else COLOR_MUTED)
+			mode_button.name = "TransportMode_%s_%s" % [route_id, mode_id]
 			mode_button.tooltip_text = _transport_mode_requirement_text(candidate_mode)
 			mode_actions.add_child(mode_button)
 		service_card.add_child(mode_actions)
 		if not bool(current_mode.get("infrastructure_service", false)):
 			var eligible_current_ships := _eligible_logistics_ship_ids(current_mode, service)
 			if eligible_current_ships.is_empty():
-				service_card.add_child(_label("没有满足当前运输方式货舱、模块与停泊状态要求的舰船。将鼠标停在运输方式按钮上可查看条件。", 12, COLOR_WARN))
+				service_card.add_child(_label(I18n.core("location.logistics.no_eligible_ship"), 12, COLOR_WARN))
 			else:
 				var ship_actions := HFlowContainer.new()
 				ship_actions.add_theme_constant_override("h_separation", 6)
@@ -732,49 +1008,78 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 					var ship: Dictionary = Game.state.ship_by_id(ship_id)
 					var is_assigned: bool = service.get("assigned_ship_ids", []).has(ship_id)
 					var cannot_remove_last: bool = is_assigned and service.get("assigned_ship_ids", []).size() <= 1 and not bool(current_mode.get("public_base_capacity", false))
-					var action_text := "移除 %s" % String(ship.get("name", ship_id)) if is_assigned else "分配 %s" % String(ship.get("name", ship_id))
-					ship_actions.add_child(_button(action_text, _toggle_logistics_service_ship.bind(route_id, ship_id), cannot_remove_last, COLOR_WARN if is_assigned else COLOR_ACCENT))
+					var action_text := I18n.core("location.logistics.remove_ship") % String(ship.get("name", ship_id)) if is_assigned else I18n.core("location.logistics.assign_ship") % String(ship.get("name", ship_id))
+					var ship_button := _button(action_text, _toggle_logistics_service_ship.bind(route_id, ship_id), cannot_remove_last, COLOR_WARN if is_assigned else COLOR_ACCENT)
+					ship_button.name = "%sLogisticsShip_%s_%s" % ["Remove" if is_assigned else "Assign", route_id, ship_id]
+					if cannot_remove_last:
+						ship_button.tooltip_text = I18n.core("logistics.last_ship_required")
+					ship_actions.add_child(ship_button)
 				service_card.add_child(ship_actions)
 		var priority_actions := HFlowContainer.new()
 		priority_actions.add_theme_constant_override("h_separation", 6)
+		var current_priority := String(service.get("priority_strategy", "DEMAND_PRIORITY"))
 		for strategy in ["DEMAND_PRIORITY", "PRECISION_FIRST", "MAINTENANCE_FIRST", "BULK_FIRST"]:
-			priority_actions.add_child(_button(String(strategy), _configure_route_priority.bind(route_id, String(strategy)), false, COLOR_ACCENT if String(strategy) == String(service.get("priority_strategy", "DEMAND_PRIORITY")) else COLOR_MUTED))
+			var selected_priority := String(strategy) == current_priority
+			var priority_button := _button(_logistics_priority_text(String(strategy)), _configure_route_priority.bind(route_id, String(strategy)), selected_priority, COLOR_ACCENT if selected_priority else COLOR_MUTED)
+			priority_button.name = "LogisticsPriority_%s_%s" % [route_id, String(strategy)]
+			if selected_priority:
+				priority_button.tooltip_text = I18n.core("location.logistics.priority_selected", "This route already uses this priority strategy.")
+			priority_actions.add_child(priority_button)
 		service_card.add_child(priority_actions)
-		box.add_child(_wrap_card(service_card))
+		var wrapped_service_card := _wrap_card(service_card)
+		wrapped_service_card.name = "LogisticsRouteCard_%s" % route_id
+		box.add_child(wrapped_service_card)
 
-	box.add_child(_section_title("供给 / 需求策略"))
+	box.add_child(_section_title(I18n.core("location.logistics.policies")))
 	var policy_ids: Array = logistics.get("policies", {}).keys()
 	policy_ids.sort()
 	if policy_ids.is_empty():
-		box.add_child(_card_text("当前没有物流策略。可新增供给、需求目标或被动仓储策略。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("logistics.policy_empty", "No exception policy is active. Industrial templates can establish routine supply automatically."), COLOR_MUTED))
 	for item_value in policy_ids:
 		var item_id := String(item_value)
 		var policy: Dictionary = logistics.get("policies", {}).get(item_id, {})
-		box.add_child(_wrap_card(_logistics_policy_editor(item_id, policy)))
+		if _logistics_advanced:
+			box.add_child(_wrap_card(_logistics_policy_editor(item_id, policy)))
+		else:
+			var blocker: Dictionary = policy.get("blocker", {})
+			var policy_status: String = Game.simulation.logistics.policy_gameplay_status(policy)
+			var summary_card := _card()
+			summary_card.add_child(_label(I18n.core("logistics.policy_summary") % [_content_name(Game.content.items.get(item_id, {}), item_id), _logistics_mode_text(String(policy.get("mode", LogisticsEngine.MODE_STORAGE))), _status_text(policy_status)], 14, COLOR_WARN if not blocker.is_empty() else COLOR_TEXT))
+			if not blocker.is_empty():
+				var blocker_info := Game.logistics_policy_blocker_info(blocker)
+				summary_card.add_child(_label(I18n.core("location.logistics.blocked") % [_status_text(String(blocker.get("code", "LOGISTICS_BLOCKED"))), _blocker_text(blocker_info)], 12, COLOR_WARN))
+				summary_card.add_child(_button(I18n.core("diagnostics.why", "Why?") + " → " + I18n.core("diagnostics.open_resolution", "Open resolution"), _navigate_blocker.bind(blocker_info), false, COLOR_WARN))
+			box.add_child(_wrap_card(summary_card))
+	var advanced_toggle := _button(I18n.core("logistics.policy_hide_advanced", "Hide Advanced Policies") if _logistics_advanced else I18n.core("logistics.policy_show_advanced", "Advanced Policy Exceptions"), _toggle_logistics_advanced, false, COLOR_MUTED)
+	advanced_toggle.name = "LogisticsPolicyAdvancedToggle"
+	box.add_child(advanced_toggle)
+	if _logistics_advanced:
+		box.add_child(_card_text(I18n.core("logistics.policy_advanced_help", "Use per-product controls only for strategic exceptions. Industrial templates remain the default for routine administration."), COLOR_MUTED))
+		var add_card := _card()
+		add_card.add_child(_label(I18n.core("location.logistics.add_policy"), 16, COLOR_ACCENT))
+		var item_ids: Array = Game.content.items.keys()
+		item_ids.sort_custom(func(a, b): return _content_name(Game.content.items.get(String(a), {}), String(a)) < _content_name(Game.content.items.get(String(b), {}), String(b)))
+		var item_selector := OptionButton.new()
+		item_selector.name = "LogisticsItemSelector"
+		var selected_item := String(_logistics_item_selection.get(_selected_location_id, item_ids[0] if not item_ids.is_empty() else ""))
+		for index in item_ids.size():
+			var item_id := String(item_ids[index])
+			item_selector.add_item(_content_name(Game.content.items.get(item_id, {}), item_id))
+			if item_id == selected_item:
+				item_selector.select(index)
+		item_selector.item_selected.connect(_on_logistics_item_selected.bind(item_ids))
+		add_card.add_child(item_selector)
+		var add_row := HBoxContainer.new()
+		add_row.add_theme_constant_override("separation", 6)
+		for mode in [LogisticsEngine.MODE_SUPPLY, LogisticsEngine.MODE_DEMAND, LogisticsEngine.MODE_STORAGE]:
+			var mode_text := I18n.core("location.logistics.set_supply") if mode == LogisticsEngine.MODE_SUPPLY else (I18n.core("location.logistics.set_demand") if mode == LogisticsEngine.MODE_DEMAND else I18n.core("location.logistics.set_storage"))
+			var add_policy_button := _button(mode_text, _add_selected_logistics_policy.bind(mode, item_selector, item_ids), item_ids.is_empty(), COLOR_MUTED if mode == LogisticsEngine.MODE_STORAGE else COLOR_ACCENT)
+			add_policy_button.name = "AddLogisticsPolicy_%s_%s" % [_selected_location_id, mode]
+			add_row.add_child(add_policy_button)
+		add_card.add_child(add_row)
+		box.add_child(_wrap_card(add_card))
 
-	var add_card := _card()
-	add_card.add_child(_label("新增策略", 16, COLOR_ACCENT))
-	var item_ids: Array = Game.content.items.keys()
-	item_ids.sort_custom(func(a, b): return _content_name(Game.content.items.get(String(a), {}), String(a)) < _content_name(Game.content.items.get(String(b), {}), String(b)))
-	var item_selector := OptionButton.new()
-	item_selector.name = "LogisticsItemSelector"
-	var selected_item := String(_logistics_item_selection.get(_selected_location_id, item_ids[0] if not item_ids.is_empty() else ""))
-	for index in item_ids.size():
-		var item_id := String(item_ids[index])
-		item_selector.add_item(_content_name(Game.content.items.get(item_id, {}), item_id))
-		if item_id == selected_item:
-			item_selector.select(index)
-	item_selector.item_selected.connect(_on_logistics_item_selected.bind(item_ids))
-	add_card.add_child(item_selector)
-	var add_row := HBoxContainer.new()
-	add_row.add_theme_constant_override("separation", 6)
-	add_row.add_child(_button("设为供给", _add_selected_logistics_policy.bind(LogisticsEngine.MODE_SUPPLY, item_selector, item_ids), item_ids.is_empty()))
-	add_row.add_child(_button("设为需求", _add_selected_logistics_policy.bind(LogisticsEngine.MODE_DEMAND, item_selector, item_ids), item_ids.is_empty()))
-	add_row.add_child(_button("设为仓储", _add_selected_logistics_policy.bind(LogisticsEngine.MODE_STORAGE, item_selector, item_ids), item_ids.is_empty(), COLOR_MUTED))
-	add_card.add_child(add_row)
-	box.add_child(_wrap_card(add_card))
-
-	box.add_child(_section_title("在途运输"))
+	box.add_child(_section_title(I18n.core("location.logistics.in_transit")))
 	var shipment_found := false
 	for shipment_value in Game.state.logistics_network.get("shipments", []):
 		var shipment := shipment_value as Dictionary
@@ -784,15 +1089,27 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 		var cargo_lines: Array[String] = []
 		for item_value in shipment.get("cargo", {}).keys():
 			var item_id := String(item_value)
-			cargo_lines.append("%s × %d" % [_content_name(Game.content.items.get(item_id, {}), item_id), int(shipment.get("cargo", {}).get(item_id, 0))])
-		box.add_child(_card_text("%s · %s → %s · 剩余 %.1f 秒（装卸 %.1f 秒）· %s · %s · 质量 %.1f / 体积 %.1f · 能耗 %.1f\n%s" % [shipment.get("id", "运输批次"), _location_name(String(shipment.get("origin", ""))), _location_name(String(shipment.get("destination", ""))), float(shipment.get("remaining_ms", 0.0)) / 1000.0, float(shipment.get("handling_time_ms", 0.0)) / 1000.0, _status_text(String(shipment.get("logistics_technology_id", "chemical_cargo"))), String(shipment.get("freight_class", "STANDARD")), float(shipment.get("cargo_mass", shipment.get("freight_units", 0.0))), float(shipment.get("cargo_volume", shipment.get("freight_units", 0.0))), float(shipment.get("energy_units", 0.0)), "、".join(cargo_lines)], COLOR_ACCENT))
+			cargo_lines.append(I18n.core("format.item_quantity") % [_content_name(Game.content.items.get(item_id, {}), item_id), int(shipment.get("cargo", {}).get(item_id, 0))])
+		var shipment_card := _card()
+		shipment_card.add_child(_label(I18n.core("location.logistics.shipment") % [shipment.get("id", I18n.core("location.logistics.shipment_fallback")), _location_name(String(shipment.get("origin", ""))), _location_name(String(shipment.get("destination", ""))), float(shipment.get("remaining_ms", 0.0)) / 1000.0, float(shipment.get("handling_time_ms", 0.0)) / 1000.0, _logistics_technology_name(String(shipment.get("logistics_technology_id", "chemical_cargo"))), _freight_class_text(String(shipment.get("freight_class", "STANDARD"))), float(shipment.get("cargo_mass", shipment.get("freight_units", 0.0))), float(shipment.get("cargo_volume", shipment.get("freight_units", 0.0))), float(shipment.get("energy_units", 0.0)), I18n.core("format.list_separator").join(cargo_lines)], 13, COLOR_ACCENT))
+		var shipment_status: String = Game.simulation.logistics.shipment_gameplay_status(shipment)
+		var shipment_blocker: Dictionary = shipment.get("blocker", {}) if shipment.get("blocker", null) is Dictionary else {}
+		var shipment_detail := String(shipment_blocker.get("primary_reason", shipment.get("status", "IN_TRANSIT")))
+		shipment_card.add_child(_label(I18n.core("location.logistics.shipment_status") % [_status_text(shipment_status), _status_text(shipment_detail)], 13, COLOR_WARN if shipment_status == "BLOCKED_DESTINATION" else COLOR_MUTED))
+		if shipment_status == "BLOCKED_DESTINATION":
+			shipment_card.add_child(_label(I18n.core("location.logistics.blocked") % [shipment_detail, _blocker_text(shipment_blocker)], 12, COLOR_WARN))
+			var destination_id := String(shipment.get("destination", ""))
+			var storage_button := _button(I18n.core("location.logistics.open_destination_storage"), _open_location_section.bind(destination_id, "industry"), not Game.state.has_location(destination_id), COLOR_WARN)
+			storage_button.name = "ShipmentResolution_%s" % String(shipment.get("id", "SHIPMENT"))
+			shipment_card.add_child(storage_button)
+		box.add_child(_wrap_card(shipment_card))
 	if not shipment_found:
-		box.add_child(_card_text("当前没有在途运输", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("location.logistics.no_shipments"), COLOR_MUTED))
 
 
 func _logistics_policy_editor(item_id: String, policy: Dictionary) -> VBoxContainer:
 	var card := _card()
-	card.add_child(_label("%s · 本地 %d · 在途 %d" % [
+	card.add_child(_label(I18n.core("location.logistics.policy_summary") % [
 		_content_name(Game.content.items.get(item_id, {}), item_id),
 		Game.state.item_quantity(item_id, _selected_location_id),
 		Game.simulation.logistics.incoming_quantity(Game.state, _selected_location_id, item_id)
@@ -803,18 +1120,18 @@ func _logistics_policy_editor(item_id: String, policy: Dictionary) -> VBoxContai
 		mode_selector.add_item(_logistics_mode_text(String(modes[index])))
 		if String(policy.get("mode", LogisticsEngine.MODE_STORAGE)) == String(modes[index]):
 			mode_selector.select(index)
-	card.add_child(_labeled_control("模式", mode_selector))
+	card.add_child(_labeled_control(I18n.core("location.logistics.mode"), mode_selector))
 	var reserve_input := _number_input(int(policy.get("reserve", 0)), 0, 1000000, 1)
 	var target_input := _number_input(int(policy.get("target", 0)), 0, 1000000, 1)
 	var priority_input := _number_input(int(policy.get("priority", 50)), 0, 100, 5)
 	var threshold_input := _number_input(int(policy.get("dispatch_threshold", 1)), 1, 1000000, 1)
-	card.add_child(_labeled_control("本地保留量", reserve_input))
-	card.add_child(_labeled_control("目标库存", target_input))
-	card.add_child(_labeled_control("优先级", priority_input))
-	card.add_child(_labeled_control("发运阈值", threshold_input))
+	card.add_child(_labeled_control(I18n.core("location.logistics.local_reserve"), reserve_input))
+	card.add_child(_labeled_control(I18n.core("location.logistics.target_stock"), target_input))
+	card.add_child(_labeled_control(I18n.core("location.logistics.priority"), priority_input))
+	card.add_child(_labeled_control(I18n.core("location.logistics.dispatch_threshold"), threshold_input))
 	var source_ids: Array[String] = [""]
 	var source_selector := OptionButton.new()
-	source_selector.add_item("自动选择来源")
+	source_selector.add_item(I18n.core("location.logistics.auto_source"))
 	for location_value in Game.state.locations.keys():
 		var source_id := String(location_value)
 		if source_id == _selected_location_id or String(Game.state.location_state(source_id).get("discovery_state", "UNDISCOVERED")) != LocationState.DISCOVERED:
@@ -823,10 +1140,10 @@ func _logistics_policy_editor(item_id: String, policy: Dictionary) -> VBoxContai
 		source_selector.add_item(_location_name(source_id))
 		if source_id == String(policy.get("source_lock", "")):
 			source_selector.select(source_ids.size() - 1)
-	card.add_child(_labeled_control("来源", source_selector))
+	card.add_child(_labeled_control(I18n.core("location.logistics.source"), source_selector))
 	var route_ids: Array[String] = [""]
 	var route_selector := OptionButton.new()
-	route_selector.add_item("自动选择航线")
+	route_selector.add_item(I18n.core("location.logistics.auto_route"))
 	for route_value in Game.content.logistics_routes.values():
 		var route := route_value as Dictionary
 		var route_id := String(route.get("id", ""))
@@ -834,14 +1151,20 @@ func _logistics_policy_editor(item_id: String, policy: Dictionary) -> VBoxContai
 		route_selector.add_item(_content_name(route, route_id))
 		if route_id == String(policy.get("route_lock", "")):
 			route_selector.select(route_ids.size() - 1)
-	card.add_child(_labeled_control("航线锁定", route_selector))
+	card.add_child(_labeled_control(I18n.core("location.logistics.route_lock"), route_selector))
 	var blocker: Dictionary = policy.get("blocker", {})
 	if not blocker.is_empty():
-		card.add_child(_label("阻塞 %s：%s" % [blocker.get("code", "LOGISTICS_BLOCKED"), blocker.get("message", "")], 12, COLOR_WARN))
+		var blocker_info := Game.logistics_policy_blocker_info(blocker)
+		card.add_child(_label(I18n.core("location.logistics.blocked") % [_status_text(String(blocker.get("code", "LOGISTICS_BLOCKED"))), _blocker_text(blocker_info)], 12, COLOR_WARN))
+		card.add_child(_button(I18n.core("diagnostics.why", "Why?") + " → " + I18n.core("diagnostics.open_resolution", "Open resolution"), _navigate_blocker.bind(blocker_info), false, COLOR_WARN))
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 6)
-	actions.add_child(_button("保存策略", _save_logistics_policy.bind(item_id, mode_selector, modes, reserve_input, target_input, priority_input, threshold_input, source_selector, source_ids, route_selector, route_ids)))
-	actions.add_child(_button("清除", _command.bind("清除物流策略", Game.clear_location_logistics_policy.bind(_selected_location_id, item_id)), false, COLOR_WARN))
+	var save_policy_button := _button(I18n.core("location.logistics.save_policy"), _save_logistics_policy.bind(item_id, mode_selector, modes, reserve_input, target_input, priority_input, threshold_input, source_selector, source_ids, route_selector, route_ids))
+	save_policy_button.name = "SetLogisticsPolicy_%s_%s" % [_selected_location_id, item_id]
+	actions.add_child(save_policy_button)
+	var clear_policy_button := _button(I18n.core("location.logistics.clear"), _command.bind(I18n.core("command.clear_logistics_policy"), Game.clear_location_logistics_policy.bind(_selected_location_id, item_id)), false, COLOR_WARN)
+	clear_policy_button.name = "ClearLogisticsPolicy_%s_%s" % [_selected_location_id, item_id]
+	actions.add_child(clear_policy_button)
 	card.add_child(actions)
 	return card
 
@@ -849,6 +1172,11 @@ func _logistics_policy_editor(item_id: String, policy: Dictionary) -> VBoxContai
 func _on_logistics_item_selected(index: int, item_ids: Array) -> void:
 	if index >= 0 and index < item_ids.size():
 		_logistics_item_selection[_selected_location_id] = String(item_ids[index])
+
+
+func _toggle_logistics_advanced() -> void:
+	_logistics_advanced = not _logistics_advanced
+	_dirty = true
 
 
 func _add_selected_logistics_policy(mode: String, selector: OptionButton, item_ids: Array) -> void:
@@ -859,14 +1187,14 @@ func _add_selected_logistics_policy(mode: String, selector: OptionButton, item_i
 	_logistics_item_selection[_selected_location_id] = item_id
 	var current := Game.state.item_quantity(item_id, _selected_location_id)
 	var target := maxi(50, current) if mode == LogisticsEngine.MODE_DEMAND else 0
-	_command("新增物流策略", Game.set_location_logistics_policy.bind(_selected_location_id, item_id, mode, 0, target, 50, 1, ""))
+	_command(I18n.core("command.add_logistics_policy"), Game.set_location_logistics_policy.bind(_selected_location_id, item_id, mode, 0, target, 50, 1, ""))
 
 
 func _save_logistics_policy(item_id: String, mode_selector: OptionButton, modes: Array, reserve_input: SpinBox, target_input: SpinBox, priority_input: SpinBox, threshold_input: SpinBox, source_selector: OptionButton, source_ids: Array[String], route_selector: OptionButton, route_ids: Array[String]) -> void:
 	var mode_index := clampi(mode_selector.selected, 0, modes.size() - 1)
 	var source_index := clampi(source_selector.selected, 0, source_ids.size() - 1)
 	var route_index := clampi(route_selector.selected, 0, route_ids.size() - 1)
-	_command("保存物流策略", Game.set_location_logistics_policy.bind(
+	_command(I18n.core("command.save_logistics_policy"), Game.set_location_logistics_policy.bind(
 		_selected_location_id,
 		item_id,
 		String(modes[mode_index]),
@@ -909,18 +1237,18 @@ func _transport_mode_requirement_text(mode: Dictionary) -> String:
 	var lines: Array[String] = [I18n.content(mode, "description")]
 	var technology_id := String(mode.get("required_technology", ""))
 	if not technology_id.is_empty():
-		lines.append("科技：%s" % _content_name(Game.content.technologies.get(technology_id, {}), technology_id))
+		lines.append(I18n.core("logistics.requirement.technology") % _content_name(Game.content.technologies.get(technology_id, {}), technology_id))
 	var facility_id := String(mode.get("required_facility", ""))
 	if not facility_id.is_empty():
-		lines.append("设施：%s" % _content_name(Game.content.facilities.get(facility_id, {}), facility_id))
-	var capability_names := {"bulk_freight":"大宗货运阵列", "insulated_cargo":"低温货舱系统", "high_speed_freight":"高速货运推进（高级推进器）"}
+		lines.append(I18n.core("logistics.requirement.facility") % _content_name(Game.content.facilities.get(facility_id, {}), facility_id))
+	var capability_names := {"bulk_freight":I18n.core("logistics.capability.bulk_freight"), "insulated_cargo":I18n.core("logistics.capability.insulated_cargo"), "high_speed_freight":I18n.core("logistics.capability.high_speed_freight")}
 	for capability_id_value in mode.get("required_ship_capabilities", []):
 		var capability_id := String(capability_id_value)
-		lines.append("舰船能力：%s" % capability_names.get(capability_id, capability_id))
+		lines.append(I18n.core("logistics.requirement.ship_capability") % capability_names.get(capability_id, capability_id))
 	var minimum_capacity := int(mode.get("minimum_ship_cargo_capacity", 0))
 	var maximum_capacity := int(mode.get("maximum_ship_cargo_capacity", 0))
 	if minimum_capacity > 0:
-		lines.append("装配后货舱：%d%s" % [minimum_capacity, "–%d" % maximum_capacity if maximum_capacity > 0 else " 以上"])
+		lines.append(I18n.core("logistics.requirement.cargo_capacity") % [minimum_capacity, I18n.core("format.maximum_suffix") % maximum_capacity if maximum_capacity > 0 else I18n.core("format.or_more_suffix")])
 	return "\n".join(lines)
 
 
@@ -932,12 +1260,12 @@ func _configure_route_transport_mode(route_id: String, mode_id: String) -> void:
 		var eligible := _eligible_logistics_ship_ids(mode, service)
 		if not eligible.is_empty():
 			ship_ids.append(eligible[0])
-	_command("配置航线物流服务", Game.configure_logistics_service.bind(route_id, mode_id, ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
+	_command(I18n.core("command.configure_route_service"), Game.configure_logistics_service.bind(route_id, mode_id, ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
 
 
 func _configure_route_priority(route_id: String, priority_strategy: String) -> void:
 	var service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, route_id)
-	_command("调整航线优先策略", Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), service.get("assigned_ship_ids", []).duplicate(), priority_strategy))
+	_command(I18n.core("command.change_route_priority"), Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), service.get("assigned_ship_ids", []).duplicate(), priority_strategy))
 
 
 func _toggle_logistics_service_ship(route_id: String, ship_id: String) -> void:
@@ -947,7 +1275,7 @@ func _toggle_logistics_service_ship(route_id: String, ship_id: String) -> void:
 		ship_ids.erase(ship_id)
 	else:
 		ship_ids.append(ship_id)
-	_command("调整物流舰船分配", Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
+	_command(I18n.core("command.change_logistics_ship_assignment"), Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
 
 
 func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void:
@@ -959,16 +1287,18 @@ func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void
 		found = true
 		var activity: Dictionary = Game.simulation.construction_activity_for_runtime(operation)
 		var project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
-		var stage_line := "\n文明工程 %d%% · %s · 物资流 %s" % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "RECEIVING")))] if not project.is_empty() else ""
-		box.add_child(_card_text("建造 · %s · %s%s" % [_construction_project_name(operation, activity), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
+		var stage_line := I18n.core("construction.megastructure_stage_suffix") % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "RECEIVING")))] if not project.is_empty() else ""
+		box.add_child(_card_text(I18n.core("construction.location_project") % [_construction_project_name(operation, activity), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
 	for order_value in Game.state.shipyard_queue:
 		var order := order_value as Dictionary
 		if String(order.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id:
 			continue
 		found = true
-		box.add_child(_card_text("船坞 · %s · %s" % [order.get("plan_id", "未知计划"), _status_text(String(order.get("status", "UNKNOWN")))], COLOR_TEXT))
+		var plan_id := String(order.get("plan_id", ""))
+		var plan_name := _content_name(Game.content.ship_plans.get(plan_id, {}), plan_id) if not plan_id.is_empty() else I18n.core("ships.unknown_plan")
+		box.add_child(_card_text(I18n.core("construction.location_shipyard") % [plan_name, _status_text(String(order.get("status", "UNKNOWN")))], COLOR_TEXT))
 	if not found:
-		box.add_child(_card_text("当前没有进行中的工程", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("construction.location_empty"), COLOR_MUTED))
 
 
 func _location_name(location_id: String) -> String:
@@ -980,11 +1310,15 @@ func _capture_requested_view() -> void:
 	var args := OS.get_cmdline_user_args()
 	var file_name := "lab_system_map.png"
 	var requested_view := ""
+	var requested_output := ""
 	for argument in args:
 		if String(argument).begins_with("--capture-view="):
 			requested_view = String(argument).trim_prefix("--capture-view=")
-	if not requested_view.is_empty() and _page_controls.has(requested_view):
-		_switch_page(requested_view)
+		elif String(argument).begins_with("--capture-output="):
+			requested_output = String(argument).trim_prefix("--capture-output=")
+	var requested_page := "fleet" if requested_view == "ships" else ("frontier" if requested_view == "survey" else requested_view)
+	if not requested_page.is_empty() and _page_controls.has(requested_page):
+		_switch_page(requested_page)
 		file_name = "lab_%s.png" % requested_view
 	elif args.has("--capture-location"):
 		_open_location(SpaceGameState.MAIN_BASE_LOCATION_ID)
@@ -999,61 +1333,23 @@ func _capture_requested_view() -> void:
 	await get_tree().process_frame
 	var directory := ProjectSettings.globalize_path("res://artifacts/ui")
 	DirAccess.make_dir_recursive_absolute(directory)
-	var output_path := "res://artifacts/ui/%s" % file_name
+	var output_path := requested_output if not requested_output.is_empty() else "res://artifacts/ui/%s" % file_name
+	if output_path.is_absolute_path():
+		DirAccess.make_dir_recursive_absolute(output_path.get_base_dir())
+	else:
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(output_path.get_base_dir()))
 	var error := get_viewport().get_texture().get_image().save_png(ProjectSettings.globalize_path(output_path))
 	print("CAPTURE_SAVED: %s" % output_path if error == OK else "CAPTURE_FAILED: %s" % error_string(error))
 	get_tree().quit(0 if error == OK else 1)
 
 
-func _rebuild_overview() -> void:
-	var box: VBoxContainer = _pages["overview"]
-	_clear(box)
-	box.add_child(_page_title("玩法流程总览", "从近地采矿开始，逐步建立可持续的地球工业与远征能力。"))
-
-	var stats := HBoxContainer.new()
-	stats.add_theme_constant_override("separation", 10)
-	stats.add_child(_stat_card("文明等级", "%d 级" % Game.state.progression_tier, COLOR_ACCENT))
-	stats.add_child(_stat_card("飞船", str(Game.state.ships.size()), COLOR_TEXT))
-	stats.add_child(_stat_card("设施", str(Game.state.facilities.size()), COLOR_TEXT))
-	stats.add_child(_stat_card("已完成科研", str(Game.state.completed_projects.size()), COLOR_GOOD))
-	box.add_child(stats)
-
-	box.add_child(_section_title("阶段目标"))
-	for goal_value in Game.content.goals.values():
-		var goal := goal_value as Dictionary
-		if not Game.simulation.definition_revealed(Game.state, goal):
-			continue
-		var complete := _requirements_complete(goal.get("requirements", []))
-		var goal_box := _card()
-		var title_text := ("✓ " if complete else "○ ") + _content_name(goal, String(goal.get("id", "goal")))
-		goal_box.add_child(_label(title_text, 17, COLOR_GOOD if complete else COLOR_TEXT))
-		var description := I18n.content(goal, "description")
-		if not description.is_empty():
-			goal_box.add_child(_rich(description, COLOR_MUTED))
-		for step_value in goal.get("steps", []):
-			var step := step_value as Dictionary
-			var step_done := _requirements_complete(step.get("requirements", []))
-			var step_id := String(step.get("id", "step"))
-			var step_name := I18n.goal_step(step_id, step_id.replace("_", " ").capitalize())
-			goal_box.add_child(_label("   %s %s" % ["✓" if step_done else "·", step_name], 14, COLOR_GOOD if step_done else COLOR_MUTED))
-		box.add_child(_wrap_card(goal_box))
-
-	box.add_child(_section_title("运行状态"))
-	var operation_lines := _active_operation_lines()
-	box.add_child(_card_text("\n".join(operation_lines) if not operation_lines.is_empty() else "当前没有正在运行的作业。", COLOR_MUTED))
-
-	var power := Game.simulation.civilization_power_state(Game.state)
-	if not power.is_empty():
-		box.add_child(_section_title("能源"))
-		box.add_child(_card_text("发电 %.1f / 负载 %.1f / 可用 %.1f" % [float(power.get("generation_capacity", 0.0)), float(power.get("current_demand", 0.0)), float(power.get("available_capacity", 0.0))], COLOR_TEXT))
-
-
 func _rebuild_frontier() -> void:
 	var box: VBoxContainer = _pages["frontier"]
 	_clear(box)
-	box.add_child(_page_title("前线作业", "将装备采矿模块的飞船编入采矿舰队，建立稳定原料来源。"))
+	box.add_child(_page_title(I18n.core("survey.title"), I18n.core("survey.subtitle")))
+	_add_unlock_banner(box, "frontier")
 
-	box.add_child(_section_title("资源采集点"))
+	box.add_child(_section_title(I18n.core("survey.extraction_sites")))
 	var visible_site := false
 	for site_value in Game.content.mining_sites.values():
 		var site := site_value as Dictionary
@@ -1065,24 +1361,49 @@ func _rebuild_frontier() -> void:
 		var card := _card()
 		card.add_child(_label(_content_name(site, site_id), 17, COLOR_TEXT))
 		var mining_location := Game.content.mining_locations.get(String(site.get("location", "")), {}) as Dictionary
-		card.add_child(_label("状态：%s · 品位 %d · 开采潜力 %.1f · 资源 %s" % [_status_text(String(site_state.get("status", "PROSPECT"))), int(mining_location.get("material_grade", 1)), float(mining_location.get("extraction_potential", 0.0)), _content_name(Game.content.items.get(String(mining_location.get("raw_material", "")), {}), String(mining_location.get("raw_material", "")))], 14, COLOR_MUTED))
+		var region_id := String(mining_location.get("region", ""))
+		var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, region_id)
+		var resource_intelligence := {}
+		for profile_value in intelligence.get("resources", []):
+			var profile := profile_value as Dictionary
+			if String(profile.get("mining_location_id", "")) == String(mining_location.get("id", "")):
+				resource_intelligence = profile
+				break
+		var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
+		if survey_state == LocationState.DETECTED:
+			card.add_child(_label(I18n.core("survey.intelligence.detected") % [_status_text(survey_state), I18n.category(String(resource_intelligence.get("resource_category", "UNKNOWN"))), _status_text(String(resource_intelligence.get("potential_band", "UNKNOWN")))], 14, COLOR_MUTED))
+		elif survey_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
+			var resource_id := String(resource_intelligence.get("resource_type", ""))
+			var grade_text := "%.2f" % float(resource_intelligence.get("grade", 0.0)) if resource_intelligence.has("grade") else str(resource_intelligence.get("grade_range", []))
+			card.add_child(_label(I18n.core("survey.intelligence.surveyed") % [_status_text(survey_state), grade_text, float(resource_intelligence.get("extraction_potential", 0.0)), _content_name(Game.content.items.get(resource_id, {}), resource_id)], 14, COLOR_MUTED))
+		else:
+			card.add_child(_label(I18n.core("survey.intelligence.hidden") % _status_text(survey_state), 14, COLOR_MUTED))
 		var integrated_network_id := String(site_state.get("integrated_network_id", ""))
 		if not integrated_network_id.is_empty():
-			card.add_child(_label("✓ 已接入 %s · 后台稳定产出" % _content_name(Game.content.extraction_networks.get(integrated_network_id, {}), integrated_network_id), 13, COLOR_GOOD))
+			var network_runtime: Dictionary = Game.state.extraction_network_states.get(integrated_network_id, {})
+			var network_status := String(network_runtime.get("status", "IDLE"))
+			var network_color := COLOR_GOOD if network_status == "RUNNING" else (COLOR_WARN if network_status == "BLOCKED_OUTPUT" else COLOR_MUTED)
+			card.add_child(_label(I18n.core("survey.network_status") % ["✓" if network_status == "RUNNING" else "!", _content_name(Game.content.extraction_networks.get(integrated_network_id, {}), integrated_network_id), _status_text(network_status), _resource_dictionary(network_runtime.get("production_totals", {}))], 13, network_color))
+			if network_status == "BLOCKED_OUTPUT":
+				var storage_blocker := Game.blocker_info({"primary_reason":"STORAGE_FULL", "domain":"mining", "location_id":region_id, "network_id":integrated_network_id})
+				card.add_child(_button(I18n.core("diagnostics.why", "Why?") + " · " + _blocker_text(storage_blocker), _navigate_blocker.bind(storage_blocker), false, COLOR_WARN))
 		var operation := _mining_operation_for_site(site_id)
-		if not operation.is_empty() and String(operation.get("status", "")) == "RUNNING":
+		if not operation.is_empty() and String(operation.get("status", "")) in ["RUNNING", "BLOCKED"]:
 			var hazard_profile := Game.simulation.mining_hazard_profile(Game.state, operation)
-			card.add_child(_label("已安装开采力 %.1f / 潜力 %.1f · 工艺效率 ×%.2f · 风险可用率 %.0f%%" % [float(operation.get("installed_extraction_power", 0.0)), float(operation.get("site_extraction_potential", mining_location.get("extraction_potential", 0.0))), float(operation.get("method_efficiency", 1.0)), float(hazard_profile.get("uptime", 1.0)) * 100.0], 13, COLOR_ACCENT))
-			card.add_child(_operation_progress(operation, "采矿进行中"))
-			card.add_child(_button("停止采矿", _command.bind("停止采矿", Game.stop_mining_operation.bind(int(operation.get("slot", 0)))), false, COLOR_WARN))
+			var operation_color := COLOR_ACCENT if String(operation.get("status", "")) == "RUNNING" else COLOR_WARN
+			card.add_child(_label(I18n.core("survey.extraction_performance") % [float(operation.get("installed_extraction_power", 0.0)), float(operation.get("site_extraction_potential", mining_location.get("extraction_potential", 0.0))), float(operation.get("method_efficiency", 1.0)), float(hazard_profile.get("uptime", 1.0)) * 100.0], 13, operation_color))
+			card.add_child(_operation_progress(operation, I18n.core("survey.mining_active")))
+			var stop_mining_button := _button(I18n.core("survey.stop_mining"), _command.bind(I18n.core("command.stop_mining"), Game.stop_mining_operation.bind(int(operation.get("slot", 0)))), false, COLOR_WARN)
+			stop_mining_button.name = "StopMining_%s" % site_id
+			card.add_child(stop_mining_button)
 		elif integrated_network_id.is_empty():
 			var site_activity := _activity_for_mining_site(site_id)
 			var reason := _activity_block_reason("mining", String(site_activity.get("id", "")))
-			var start_mining_button := _button("开始采矿", _command.bind("开始采矿", Game.start_extraction_operation.bind(site_id)), not reason.is_empty())
+			var start_mining_button := _button(I18n.core("survey.start_mining"), _command.bind(I18n.core("command.start_mining"), Game.start_extraction_operation.bind(site_id)), not reason.is_empty())
 			start_mining_button.name = "StartMining_%s" % site_id
 			card.add_child(start_mining_button)
 			if not reason.is_empty():
-				card.add_child(_label("尚不可用：" + reason, 13, COLOR_WARN))
+				card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
 		if integrated_network_id.is_empty():
 			for network_value in Game.content.extraction_networks.values():
 				var network := network_value as Dictionary
@@ -1090,24 +1411,182 @@ func _rebuild_frontier() -> void:
 					continue
 				var network_id := String(network.get("id", ""))
 				var eligibility := Game.simulation.mining_site_network_eligibility(Game.state, site_id, network_id)
-				var network_button := _button("接入自动采掘网络 · %s" % _content_name(network, network_id), _command.bind("接入自动采掘网络", Game.integrate_mining_site.bind(site_id, network_id)), not bool(eligibility.get("eligible", false)), COLOR_GOOD)
+				var network_button := _button(I18n.core("survey.integrate_network") % _content_name(network, network_id), _command.bind(I18n.core("command.integrate_mining_network"), Game.integrate_mining_site.bind(site_id, network_id)), not bool(eligibility.get("eligible", false)), COLOR_GOOD)
 				network_button.name = "IntegrateMining_%s" % site_id
+				if not bool(eligibility.get("eligible", false)):
+					network_button.tooltip_text = I18n.core("survey.automation_not_ready") % [I18n.core("status.COMPLETED") if bool(eligibility.get("network_unlocked", false)) else I18n.core("status.INCOMPLETE"), int(eligibility.get("technology_current", 0)), int(eligibility.get("technology_required", 0)), int(eligibility.get("mastery_current", 0)), int(eligibility.get("mastery_required", 0))]
 				card.add_child(network_button)
 				if not bool(eligibility.get("eligible", false)):
-					card.add_child(_label("自动化尚未就绪：网络 %s · 开采技术 %d/%d · 场地训练 %d/%d" % ["已建成" if bool(eligibility.get("network_unlocked", false)) else "未建成", int(eligibility.get("technology_current", 0)), int(eligibility.get("technology_required", 0)), int(eligibility.get("mastery_current", 0)), int(eligibility.get("mastery_required", 0))], 12, COLOR_MUTED))
+					card.add_child(_label(I18n.core("survey.automation_not_ready") % [I18n.core("status.COMPLETED") if bool(eligibility.get("network_unlocked", false)) else I18n.core("status.INCOMPLETE"), int(eligibility.get("technology_current", 0)), int(eligibility.get("technology_required", 0)), int(eligibility.get("mastery_current", 0)), int(eligibility.get("mastery_required", 0))], 12, COLOR_MUTED))
 		box.add_child(_wrap_card(card))
 	if not visible_site:
-		box.add_child(_card_text("没有已发现的采集点。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("survey.no_sites"), COLOR_MUTED))
+
+
+func _rebuild_inventory() -> void:
+	var box: VBoxContainer = _pages["inventory"]
+	_clear(box)
+	box.add_child(_page_title(I18n.core("page.inventory", "Inventory"), I18n.core("inventory.subtitle", "Search stock, reservations, demand, supply and net flow at the selected Location.")))
+	var search := LineEdit.new()
+	search.name = "InventorySearch"
+	search.placeholder_text = I18n.core("inventory.search", "Search products")
+	search.text = _inventory_search_text
+	search.text_changed.connect(_on_inventory_search_changed)
+	box.add_child(search)
+	var analysis: Dictionary = Game.simulation.current_economy_analysis(Game.state, _selected_location_id)
+	var products: Array = analysis.get("products", [])
+	var visible := 0
+	for product_value in products:
+		var product := product_value as Dictionary
+		var product_id := String(product.get("product_id", ""))
+		var product_name := _content_name(Game.content.items.get(product_id, {}), product_id)
+		if not _inventory_search_text.is_empty() and not product_name.to_lower().contains(_inventory_search_text.to_lower()) and not product_id.to_lower().contains(_inventory_search_text.to_lower()):
+			continue
+		visible += 1
+		var card := _card()
+		var status := String(product.get("status", "STABLE"))
+		var status_color := COLOR_BAD if status == "CRITICAL" else (COLOR_WARN if status in ["TIGHT", "STORAGE_FULL"] else COLOR_GOOD)
+		var detail_button := _button(I18n.core("inventory.product_header") % [product_name, _status_text(status)], _open_product_diagnostics.bind(product_id), false, status_color)
+		detail_button.name = "ProductDetails_%s" % product_id
+		card.add_child(detail_button)
+		card.add_child(_label("%d / %.0f · %s %d · %s %d\n+%.2f/h · -%.2f/h · %+.2f/h" % [int(product.get("on_hand", 0)), float(product.get("storage_capacity", 0.0)), I18n.core("inventory.available", "Available"), int(product.get("available", 0)), I18n.core("inventory.reserved", "Reserved"), int(product.get("reserved", 0)), float(product.get("production_rate", 0.0)) + float(product.get("import_rate", 0.0)), float(product.get("consumption_rate", 0.0)) + float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0))], 13, COLOR_MUTED))
+		if not product.get("demand_sources", []).is_empty():
+			card.add_child(_label(I18n.core("inventory.demand_sources", "Demand sources") + " · %d" % product.get("demand_sources", []).size(), 12, COLOR_MUTED))
+		if not product.get("blocked_sources", []).is_empty():
+			card.add_child(_button(I18n.core("diagnostics.why", "Why?") + " · " + _status_text(status), _open_product_diagnostics.bind(product_id), false, COLOR_WARN))
+		box.add_child(_wrap_card(card))
+	if visible == 0:
+		box.add_child(_card_text(I18n.core("inventory.empty_search", "No products match this search."), COLOR_MUTED))
+
+
+func _on_inventory_search_changed(value: String) -> void:
+	_inventory_search_text = value
+	_dirty = true
+
+
+func _open_product_diagnostics(product_id: String) -> void:
+	_planner_product_id = product_id
+	_inventory_search_text = product_id
+	_switch_page("diagnostics")
+
+
+func _rebuild_logistics() -> void:
+	var box: VBoxContainer = _pages["logistics"]
+	_clear(box)
+	box.add_child(_page_title(I18n.core("page.logistics", "Logistics"), I18n.core("logistics.subtitle", "Routes, transport assets, actual flow, utilization and project supply.")))
+	_build_location_logistics(box, Game.state.location_state(_selected_location_id))
+
+
+func _rebuild_construction() -> void:
+	var box: VBoxContainer = _pages["construction"]
+	_clear(box)
+	box.add_child(_page_title(I18n.core("page.construction", "Construction"), I18n.core("construction.subtitle", "One material-backed queue for facilities, upgrades, remote sites and stellar engineering.")))
+	_build_industry_construction(box)
+
+
+func _rebuild_diagnostics() -> void:
+	var box: VBoxContainer = _pages["diagnostics"]
+	_clear(box)
+	box.add_child(_page_title(I18n.core("page.diagnostics", "Diagnostics"), I18n.core("diagnostics.subtitle", "See what stopped, why it stopped, and where to resolve the root cause.")))
+	var problems := _current_blockers()
+	if problems.is_empty():
+		box.add_child(_card_text(I18n.core("diagnostics.clear", "No critical blocker is active. Planner forecasts are available below."), COLOR_GOOD))
+	for blocker in problems:
+		var card := _card()
+		var reason := String(blocker.get("code", blocker.get("primary_reason", "UNKNOWN")))
+		var severity := String(blocker.get("severity", "CRITICAL"))
+		var severity_color := COLOR_BAD if severity == "CRITICAL" else (COLOR_WARN if severity == "WARNING" else COLOR_ACCENT)
+		card.add_child(_label(_status_text(severity) + " · " + _status_text(reason), 16, severity_color))
+		card.add_child(_label(_blocker_text(blocker), 13, COLOR_MUTED))
+		var upstream: Dictionary = blocker.get("upstream_cause", {})
+		if not upstream.is_empty():
+			card.add_child(_label(I18n.core("diagnostics.upstream", "Upstream cause") + " · " + _status_text(String(upstream.get("code", "UNKNOWN"))), 12, COLOR_WARN))
+			var upstream_button := _button(I18n.core("diagnostics.open_upstream", "Open upstream cause"), _navigate_blocker.bind(upstream), false, COLOR_WARN)
+			upstream_button.name = "BlockerUpstream_%s_%s" % [reason, String(upstream.get("route_id", "ROOT"))]
+			card.add_child(upstream_button)
+		var why_button := _button(I18n.core("diagnostics.why", "Why?") + " → " + I18n.core("diagnostics.open_resolution", "Open resolution"), _navigate_blocker.bind(blocker), false, COLOR_WARN)
+		why_button.name = "BlockerWhy_%s" % reason
+		card.add_child(why_button)
+		box.add_child(_wrap_card(card))
+	_build_background_economy_controls(box)
+
+
+func _navigate_blocker(blocker: Dictionary) -> void:
+	var info: Dictionary = blocker if blocker.has("navigation_target") else Game.blocker_info(blocker)
+	var target: Dictionary = info.get("navigation_target", {})
+	var location_id := String(target.get("location_id", ""))
+	if not location_id.is_empty() and Game.state.has_location(location_id):
+		_selected_location_id = location_id
+	var item_id := String(target.get("item_id", ""))
+	if not item_id.is_empty():
+		_inventory_search_text = item_id
+	var screen := String(target.get("screen", "industry"))
+	if screen == "logistics":
+		_logistics_route_focus_id = ""
+		if not item_id.is_empty() and not location_id.is_empty():
+			_logistics_item_selection[location_id] = item_id
+		var route_id := String(target.get("entity_id", target.get("route_id", "")))
+		if not route_id.is_empty() and Game.content.logistics_routes.has(route_id):
+			_logistics_route_focus_id = route_id
+	_switch_page(screen)
+
+
+func _current_blockers(location_id: String = "") -> Array[Dictionary]:
+	if location_id.is_empty():
+		return _active_blocker_cache.duplicate(true)
+	return _active_blocker_cache.filter(func(blocker): return String((blocker as Dictionary).get("location_id", "")) == location_id)
+
+
+func _refresh_alerts() -> void:
+	var current := Game.active_blockers()
+	var now := int(Game.state.total_elapsed_ms)
+	var active_ids := {}
+	_active_blocker_cache.clear()
+	for blocker_value in current:
+		var blocker := blocker_value as Dictionary
+		var source: Dictionary = blocker.get("source_entity", {})
+		var missing: Dictionary = blocker.get("missing_requirement", {})
+		var alert_id := "%s|%s|%s|%s" % [blocker.get("code", "UNKNOWN"), blocker.get("location_id", ""), source.get("id", ""), missing.get("item_id", "")]
+		active_ids[alert_id] = true
+		var record: Dictionary = _alert_records.get(alert_id, {
+			"alert_id":alert_id, "timestamp":now, "resolved":false
+		})
+		record["source"] = source.duplicate(true)
+		record["reason"] = blocker.get("code", "UNKNOWN")
+		record["severity"] = blocker.get("severity", "INFO")
+		record["affected_entity"] = source.duplicate(true)
+		record["navigation_target"] = blocker.get("navigation_target", {}).duplicate(true)
+		record["last_seen"] = now
+		record["resolved"] = false
+		_alert_records[alert_id] = record
+		if not _seen_blocker_ids.has(alert_id):
+			_seen_blocker_ids[alert_id] = true
+			_record_telemetry("BlockerSeen", {
+				"blocker_id":alert_id,
+				"code":String(blocker.get("code", "UNKNOWN")),
+				"navigation_target":blocker.get("navigation_target", {}).duplicate(true)
+			})
+		var enriched := blocker.duplicate(true)
+		enriched["alert"] = record.duplicate(true)
+		_active_blocker_cache.append(enriched)
+	for alert_id_value in _alert_records.keys():
+		var alert_id := String(alert_id_value)
+		if active_ids.has(alert_id):
+			continue
+		var record: Dictionary = _alert_records[alert_id]
+		if not bool(record.get("resolved", false)):
+			record["resolved"] = true
+			record["resolved_at"] = now
 
 
 func _rebuild_industry() -> void:
 	var box: VBoxContainer = _pages["industry"]
 	_clear(box)
-	box.add_child(_page_title("工业与建设", "工业配方占用对应设施；大型设施进入独立的建造队列。"))
+	box.add_child(_page_title(I18n.core("industry.title"), I18n.core("industry.subtitle")))
 	var section_tabs := HFlowContainer.new()
 	section_tabs.add_theme_constant_override("h_separation", 6)
 	section_tabs.add_theme_constant_override("v_separation", 6)
-	for entry in [["production", "生产配方"], ["facilities", "设施与工艺"], ["construction", "设施建设"], ["automation", "经济诊断与规划"]]:
+	for entry in [["production", I18n.core("industry.tab.production")], ["facilities", I18n.core("industry.tab.facilities")], ["construction", I18n.core("industry.tab.construction")], ["automation", I18n.core("industry.tab.diagnostics")]]:
 		var section_id := String(entry[0])
 		var section_button := _button(String(entry[1]), _select_industry_section.bind(section_id), section_id == _industry_section, COLOR_ACCENT)
 		section_button.name = "IndustrySection_%s" % section_id
@@ -1126,11 +1605,23 @@ func _rebuild_industry() -> void:
 
 func _select_industry_section(section: String) -> void:
 	_industry_section = section
+	_save_ui_preferences()
 	_rebuild_industry()
 
 
+func _open_production_construction(_project_id: String) -> void:
+	_industry_section = "construction"
+	_switch_page("construction")
+
+
+func _open_production_capability(location_id: String) -> void:
+	_selected_location_id = location_id
+	_industry_section = "facilities"
+	_switch_page("industry")
+
+
 func _build_industry_production(box: VBoxContainer) -> void:
-	box.add_child(_section_title("生产配方"))
+	box.add_child(_section_title(I18n.core("industry.production_methods")))
 	for activity_value in Game.content.activities.values():
 		var activity := activity_value as Dictionary
 		if String(activity.get("domain", "")) != "industry":
@@ -1142,29 +1633,32 @@ func _build_industry_production(box: VBoxContainer) -> void:
 		var activity_id := String(activity.get("id", ""))
 		var facility_id := String(activity.get("facility", ""))
 		var runtime := _industrial_runtime_for_facility(facility_id)
+		var runtime_active := not runtime.is_empty() and String(runtime.get("status", "IDLE")) in ["RUNNING", "BLOCKED"]
 		var card := _card()
 		card.add_child(_label(_content_name(activity, activity_id), 16, COLOR_TEXT))
 		card.add_child(_label(_activity_summary(activity), 13, COLOR_MUTED))
-		if not runtime.is_empty() and String(runtime.get("activity_id", "")) == activity_id:
-			card.add_child(_operation_progress(runtime, "生产中"))
+		if runtime_active and String(runtime.get("activity_id", "")) == activity_id:
+			card.add_child(_operation_progress(runtime, I18n.core("industry.production_active")))
 			_add_blocker_label(card, runtime)
-			card.add_child(_button("停止", _command.bind("停止生产", Game.stop_industry_operation.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN))
+			var stop_industry_button := _button(I18n.core("common.stop"), _command.bind(I18n.core("command.stop_production"), Game.stop_industry_operation.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
+			stop_industry_button.name = "StopIndustry_%s" % activity_id
+			card.add_child(stop_industry_button)
 		else:
-			var busy := not runtime.is_empty() and not String(runtime.get("activity_id", "")).is_empty()
+			var busy := runtime_active
 			var reason := _activity_block_reason("industry", activity_id)
 			var disabled := busy or not reason.is_empty()
-			var start_industry_button := _button("开始生产", _command.bind("开始生产", Game.start_industry_operation.bind(int(runtime.get("slot", 0)), activity_id)), disabled)
+			var start_industry_button := _button(I18n.core("industry.start_production"), _command.bind(I18n.core("command.start_production"), Game.start_industry_operation.bind(int(runtime.get("slot", 0)), activity_id)), disabled)
 			start_industry_button.name = "StartIndustry_%s" % activity_id
 			card.add_child(start_industry_button)
 			if busy:
-				card.add_child(_label("设施正在执行其他配方。", 13, COLOR_WARN))
+				card.add_child(_label(I18n.core("industry.facility_busy"), 13, COLOR_WARN))
 			elif not reason.is_empty():
-				card.add_child(_label("尚不可用：" + reason, 13, COLOR_WARN))
+				card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 
 
 func _build_industry_construction(box: VBoxContainer) -> void:
-	box.add_child(_section_title("设施建设"))
+	box.add_child(_section_title(I18n.core("construction.facilities")))
 	for operation_value in Game.state.construction_operations:
 		var operation := operation_value as Dictionary
 		if String(operation.get("activity_id", "")).is_empty():
@@ -1172,20 +1666,46 @@ func _build_industry_construction(box: VBoxContainer) -> void:
 		var definition := Game.simulation.construction_activity_for_runtime(operation)
 		var active_card := _card()
 		active_card.add_child(_label(_construction_project_name(operation, definition), 16, COLOR_TEXT))
-		active_card.add_child(_label("%s · %s · %s · 优先级 %d" % [String(operation.get("project_id", "PROJECT")), _construction_project_type_name(String(operation.get("project_type", "FACILITY_BUILD"))), _content_name(Game.content.regions.get(String(operation.get("location_id", "")), {"name":operation.get("location_id", "")}), String(operation.get("location_id", ""))), int(operation.get("priority", 50))], 13, COLOR_MUTED))
-		active_card.add_child(_operation_progress(operation, "状态：" + _status_text(String(operation.get("status", "QUEUED")))))
+		active_card.add_child(_label(I18n.core("construction.project_header") % [String(operation.get("project_id", "PROJECT")), _construction_project_type_name(String(operation.get("project_type", "FACILITY_BUILD"))), _content_name(Game.content.regions.get(String(operation.get("location_id", "")), {"name":operation.get("location_id", "")}), String(operation.get("location_id", ""))), int(operation.get("priority", 50))], 13, COLOR_MUTED))
+		active_card.add_child(_operation_progress(operation, I18n.core("construction.status") % _status_text(Game.simulation.construction_gameplay_state(operation))))
 		_add_blocker_label(active_card, operation)
-		active_card.add_child(_label("材料计划 %s\n已投入 %s · 已交付/预留 %s · 在途 %s" % [_resource_dictionary(operation.get("material_plan", {})), _resource_dictionary(operation.get("consumed", {})), _resource_dictionary(operation.get("delivered_materials", {})), _resource_dictionary(operation.get("in_transit_materials", {}))], 12, COLOR_MUTED))
+		active_card.add_child(_label(I18n.core("construction.materials") % [_resource_dictionary(operation.get("material_plan", {})), _resource_dictionary(operation.get("consumed", {})), _resource_dictionary(operation.get("delivered_materials", {})), _resource_dictionary(operation.get("in_transit_materials", {}))], 12, COLOR_MUTED))
 		var priority_actions := HBoxContainer.new()
 		priority_actions.add_theme_constant_override("separation", 6)
 		for priority in [100, 50, 10]:
-			priority_actions.add_child(_button("优先级 %d" % priority, _command.bind("调整建设优先级", Game.set_construction_project_priority.bind(String(operation.get("project_id", "")), priority)), int(operation.get("priority", 50)) == priority, COLOR_ACCENT))
+			var priority_button := _button(I18n.core("construction.priority") % priority, _command.bind(I18n.core("command.change_construction_priority"), Game.set_construction_project_priority.bind(String(operation.get("project_id", "")), priority)), int(operation.get("priority", 50)) == priority, COLOR_ACCENT)
+			priority_button.name = "ConstructionPriority_%s_%d" % [String(operation.get("project_id", "PROJECT")), priority]
+			priority_actions.add_child(priority_button)
 		active_card.add_child(priority_actions)
+		var paused := String(operation.get("status", "")) == "PAUSED"
+		var pause_button := _button(I18n.core("construction.resume") if paused else I18n.core("construction.pause"), _command.bind(I18n.core("command.resume_construction") if paused else I18n.core("command.pause_construction"), Game.set_construction_project_paused.bind(String(operation.get("project_id", "")), not paused)), false, COLOR_ACCENT)
+		pause_button.name = "%sConstruction_%s" % ["Resume" if paused else "Pause", String(operation.get("project_id", "PROJECT"))]
+		active_card.add_child(pause_button)
 		var megastructure_project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
 		if not megastructure_project.is_empty():
-			active_card.add_child(_label("阶段 %d%% · %s · 物资流 %s" % [int(megastructure_project.get("progress_percent", 0)), _status_text(String(megastructure_project.get("stage_name", "PLANNED"))), _status_text(String(megastructure_project.get("material_flow_status", "RECEIVING")))], 14, COLOR_ACCENT))
-		active_card.add_child(_button("取消项目", _command.bind("取消建造", Game.stop_construction_project.bind(int(operation.get("slot", 0)))), false, COLOR_WARN))
+			active_card.add_child(_label(I18n.core("construction.megastructure_phase") % [int(megastructure_project.get("progress_percent", 0)), _status_text(String(megastructure_project.get("stage_name", "PLANNED"))), _status_text(String(megastructure_project.get("material_flow_status", "RECEIVING")))], 14, COLOR_ACCENT))
+		var cancel_button := _button(I18n.core("construction.cancel"), _command.bind(I18n.core("command.cancel_construction"), Game.stop_construction_project.bind(int(operation.get("slot", 0)))), false, COLOR_WARN)
+		cancel_button.name = "CancelConstruction_%s" % String(operation.get("project_id", "PROJECT"))
+		active_card.add_child(cancel_button)
 		box.add_child(_wrap_card(active_card))
+
+	if not Game.state.construction_history.is_empty():
+		box.add_child(_section_title(I18n.core("construction.history.title")))
+		var history_start := maxi(0, Game.state.construction_history.size() - 10)
+		for history_index in range(Game.state.construction_history.size() - 1, history_start - 1, -1):
+			var history := Game.state.construction_history[history_index] as Dictionary
+			var history_definition := Game.content.activities.get(String(history.get("activity_id", "")), {}) as Dictionary
+			var history_card := _card()
+			history_card.add_child(_label(I18n.core("construction.history.header") % [_status_text(String(history.get("status", "COMPLETE"))), _construction_project_name(history, history_definition)], 16, COLOR_GOOD if String(history.get("status", "")) == "COMPLETE" else COLOR_WARN))
+			history_card.add_child(_label(I18n.core("construction.history.summary") % [String(history.get("project_id", "PROJECT")), _construction_project_type_name(String(history.get("project_type", "FACILITY_BUILD"))), _location_name(String(history.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))), _format_ms(int(history.get("finished_at_ms", 0)))], 13, COLOR_MUTED))
+			history_card.add_child(_label(I18n.core("construction.history.materials") % [_resource_dictionary(history.get("material_plan", {})), _resource_dictionary(history.get("consumed", {}))], 12, COLOR_MUTED))
+			var cancellation: Dictionary = history.get("cancellation_result", {}) if history.get("cancellation_result", null) is Dictionary else {}
+			if String(history.get("status", "")) == "CANCELLED":
+				history_card.add_child(_label(I18n.core("construction.history.cancellation") % [_resource_dictionary(cancellation.get("delivered_released", {})), _resource_dictionary(cancellation.get("consumed_lost", {})), _location_name(String(cancellation.get("in_transit_destination", history.get("location_id", ""))))], 12, COLOR_WARN))
+			var history_button := _button(I18n.core("construction.history.open_ledger"), _open_construction_history_target.bind(history), false, COLOR_ACCENT)
+			history_button.name = "ConstructionHistory_%s" % String(history.get("project_id", "PROJECT"))
+			history_card.add_child(history_button)
+			box.add_child(_wrap_card(history_card))
 
 	for activity_value in Game.content.activities.values():
 		var activity := activity_value as Dictionary
@@ -1200,17 +1720,24 @@ func _build_industry_construction(box: VBoxContainer) -> void:
 		card.add_child(_label(_content_name(activity, activity_id), 16, COLOR_TEXT))
 		card.add_child(_label(_activity_summary(activity), 13, COLOR_MUTED))
 		var reason := _construction_block_reason(activity_id)
-		var start_construction_button := _button("开始建造", _command.bind("开始建造", Game.start_construction_project.bind(activity_id)), not reason.is_empty())
+		var start_construction_button := _button(I18n.core("construction.start"), _command.bind(I18n.core("command.start_construction"), Game.start_construction_project.bind(activity_id)), not reason.is_empty())
 		start_construction_button.name = "StartConstruction_%s" % activity_id
+		if not reason.is_empty():
+			start_construction_button.tooltip_text = reason
 		card.add_child(start_construction_button)
 		if not reason.is_empty():
-			card.add_child(_label("尚不可用：" + reason, 13, COLOR_WARN))
+			card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 
 
+func _open_construction_history_target(history: Dictionary) -> void:
+	var location_id := String(history.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	_open_location_section(location_id, "industry")
+
+
 func _build_facility_management(box: VBoxContainer) -> void:
-	box.add_child(_section_title("设施配置与工艺能力"))
-	box.add_child(_card_text("设施模块直接消耗真实库存。制造设施运行时必须先停止生产，才能更换工艺模块或通用插件。", COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("facility.config_title", "Facility Configuration & Process Capability")))
+	box.add_child(_card_text(I18n.core("facility.config_help", "Facility modules use real materials and the shared Construction queue. Stop a manufacturing facility before changing Process Modules or Universal Plugins."), COLOR_MUTED))
 	var facility_ids: Array = Game.state.facilities.keys()
 	facility_ids.sort()
 	for facility_id_value in facility_ids:
@@ -1222,31 +1749,35 @@ func _build_facility_management(box: VBoxContainer) -> void:
 		var runtime_busy := Game.simulation.industry_facility_busy(Game.state, facility_id)
 		var state_entry: Dictionary = Game.state.facilities.get(facility_id, {})
 		var card := _card()
-		card.add_child(_label("%s · %d 级" % [_content_name(definition, facility_id), int(state_entry.get("level", 1))], 17, COLOR_TEXT))
+		card.add_child(_label(I18n.core("facility.level", "%s · Tier %d") % [_content_name(definition, facility_id), int(state_entry.get("level", 1))], 17, COLOR_TEXT))
 		if not runtime.is_empty():
-			card.add_child(_label("生产状态：%s%s" % [_status_text(String(runtime.get("status", "IDLE"))), " · 需先停止生产才能改造" if runtime_busy else ""], 13, COLOR_WARN if runtime_busy else COLOR_MUTED))
+			card.add_child(_label(I18n.core("facility.production_status", "Production status: %s%s") % [_status_text(String(runtime.get("status", "IDLE"))), I18n.core("facility.stop_before_refit", " · Stop production before refitting") if runtime_busy else ""], 13, COLOR_WARN if runtime_busy else COLOR_MUTED))
 
-		var advanced_demand := float(definition.get("advanced_power_demand", 0.0)) + float(definition.get("advanced_power_demand_per_level", 0.0)) * float(maxi(0, int(state_entry.get("level", 1)) - 1))
+		var advanced_demand := Game.simulation.facility_advanced_power_demand(Game.state, facility_id)
 		if advanced_demand > 0.0 or definition.has("advanced_power_priority"):
-			card.add_child(_label("高级能源优先级", 14, COLOR_ACCENT))
+			card.add_child(_label(I18n.core("facility.advanced_power_priority", "Advanced Power Priority · Actual demand %.1f") % advanced_demand, 14, COLOR_ACCENT))
 			var current_priority := String(Game.state.energy_system.get("advanced_priorities", {}).get(facility_id, definition.get("advanced_power_priority", "NORMAL")))
 			var priority_row := HFlowContainer.new()
 			priority_row.add_theme_constant_override("h_separation", 6)
 			for priority in ["CRITICAL", "HIGH", "NORMAL", "LOW"]:
-				priority_row.add_child(_button(_status_text(priority), _command.bind("设置能源优先级", Game.set_advanced_power_priority.bind(facility_id, priority)), current_priority == priority))
+				var power_priority_button := _button(_status_text(priority), _command.bind(I18n.core("command.set_power_priority", "Set Power Priority"), Game.set_advanced_power_priority.bind(facility_id, priority)), current_priority == priority)
+				power_priority_button.name = "AdvancedPowerPriority_%s_%s" % [facility_id, priority]
+				priority_row.add_child(power_priority_button)
 			card.add_child(priority_row)
 
 		var installed_upgrades: Array = state_entry.get("installed_modules", [])
 		if not definition.get("upgrade_modules", {}).is_empty():
-			card.add_child(_label("基础设施模块 %d / %d" % [installed_upgrades.size(), int(definition.get("module_slots", 0))], 14, COLOR_ACCENT))
+			card.add_child(_label(I18n.core("facility.infrastructure_modules", "Infrastructure Modules %d / %d") % [installed_upgrades.size(), int(definition.get("module_slots", 0))], 14, COLOR_ACCENT))
 			for module_id_value in definition.get("upgrade_modules", {}).keys():
 				var module_id := String(module_id_value)
 				var module := definition.get("upgrade_modules", {}).get(module_id, {}) as Dictionary
 				if installed_upgrades.has(module_id):
-					card.add_child(_label("✓ %s" % _content_name(module, module_id), 13, COLOR_GOOD))
+					card.add_child(_label(I18n.core("common.completed_item") % _content_name(module, module_id), 13, COLOR_GOOD))
 				else:
 					var available := Game.simulation.facility_module_available(Game.state, facility_id, module_id)
-					card.add_child(_button("安装 · %s · %s" % [_content_name(module, module_id), _resource_list(module.get("costs", []))], _command.bind("安装设施模块", Game.install_facility_module.bind(facility_id, module_id)), not available))
+					var facility_module_button := _button(I18n.core("facility.queue_install", "Queue Installation · %s · %s") % [_content_name(module, module_id), _resource_list(module.get("costs", []))], _command.bind(I18n.core("command.queue_facility_module", "Queue Facility Module Installation"), Game.install_facility_module.bind(facility_id, module_id)), not available)
+					facility_module_button.name = "InstallFacilityModule_%s_%s" % [facility_id, module_id]
+					card.add_child(facility_module_button)
 
 		if int(definition.get("manufacturing_generation", 0)) > 0:
 			_add_manufacturing_module_controls(card, facility_id, definition, state_entry, "process", runtime_busy)
@@ -1259,14 +1790,16 @@ func _add_manufacturing_module_controls(card: VBoxContainer, facility_id: String
 	var slot_field := "process_module_slots" if module_kind == "process" else "plugin_slots"
 	var definitions: Dictionary = Game.content.process_modules if module_kind == "process" else Game.content.universal_industry_plugins
 	var installed: Array = state_entry.get(field, [])
-	card.add_child(_label("%s %d / %d" % ["工艺模块" if module_kind == "process" else "通用插件", installed.size(), int(facility.get(slot_field, 0))], 14, COLOR_ACCENT))
+	card.add_child(_label(I18n.core("facility.manufacturing_modules") % [I18n.core("facility.process_modules") if module_kind == "process" else I18n.core("facility.universal_plugins"), installed.size(), int(facility.get(slot_field, 0))], 14, COLOR_ACCENT))
 	for installed_id_value in installed:
 		var installed_id := String(installed_id_value)
 		var installed_definition := definitions.get(installed_id, {}) as Dictionary
 		var installed_row := HFlowContainer.new()
 		installed_row.add_theme_constant_override("h_separation", 6)
-		installed_row.add_child(_label("✓ %s" % _content_name(installed_definition, installed_id), 13, COLOR_GOOD))
-		installed_row.add_child(_button("卸下", _command.bind("卸下制造模块", Game.uninstall_manufacturing_module.bind(facility_id, installed_id, module_kind)), runtime_busy, COLOR_WARN))
+		installed_row.add_child(_label(I18n.core("common.completed_item") % _content_name(installed_definition, installed_id), 13, COLOR_GOOD))
+		var uninstall_button := _button(I18n.core("facility.remove_module"), _command.bind(I18n.core("command.remove_manufacturing_module"), Game.uninstall_manufacturing_module.bind(facility_id, installed_id, module_kind)), runtime_busy, COLOR_WARN)
+		uninstall_button.name = "UninstallManufacturingModule_%s_%s_%s" % [facility_id, installed_id, module_kind]
+		installed_row.add_child(uninstall_button)
 		card.add_child(installed_row)
 	for module_id_value in definitions.keys():
 		var module_id := String(module_id_value)
@@ -1280,47 +1813,49 @@ func _add_manufacturing_module_controls(card: VBoxContainer, facility_id: String
 			continue
 		var available := Game.simulation.manufacturing_module_available(Game.state, facility_id, module_id, module_kind)
 		var storage := int(Game.state.manufacturing_module_inventory.get(module_id, 0))
-		card.add_child(_button("安装 · %s%s · %s" % [_content_name(module, module_id), "（库存 %d）" % storage if storage > 0 else "", _resource_list(module.get("costs", []))], _command.bind("安装制造模块", Game.install_manufacturing_module.bind(facility_id, module_id, module_kind)), runtime_busy or not available))
+		var install_button := _button(I18n.core("facility.install_manufacturing_module") % [_content_name(module, module_id), I18n.core("facility.module_stock") % storage if storage > 0 else "", _resource_list(module.get("costs", []))], _command.bind(I18n.core("command.install_manufacturing_module"), Game.install_manufacturing_module.bind(facility_id, module_id, module_kind)), runtime_busy or not available)
+		install_button.name = "InstallManufacturingModule_%s_%s_%s" % [facility_id, module_id, module_kind]
+		card.add_child(install_button)
 
 
 func _build_background_economy_controls(box: VBoxContainer) -> void:
-	box.add_child(_section_title("当前经济诊断"))
-	box.add_child(_card_text("库存状态由实际生产、持续需求、项目承诺、运输与分级仓储自动计算；无需逐商品设置目标库存或生产百分比。", COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("diagnostics.economy.title")))
+	box.add_child(_card_text(I18n.core("diagnostics.economy.help"), COLOR_MUTED))
 	var analysis: Dictionary = Game.simulation.current_economy_analysis(Game.state, _selected_location_id)
 	var storage: Dictionary = analysis.get("storage", {})
 	var constraints: Dictionary = Game.simulation.location_industry_constraint_profile(Game.state, _selected_location_id)
 	var local_logistics: Dictionary = Game.simulation.local_logistics_profile(Game.state, _selected_location_id)
 	var summary := HBoxContainer.new()
 	summary.add_theme_constant_override("separation", 8)
-	summary.add_child(_stat_card("仓储利用率", "%.0f%%" % (float(storage.get("utilization", 0.0)) * 100.0), COLOR_WARN if float(storage.get("utilization", 0.0)) >= 0.9 else COLOR_TEXT))
-	summary.add_child(_stat_card("电力余量", "%.1f" % maxf(0.0, float(constraints.get("power_capacity", 0.0)) - float(constraints.get("power_demand", 0.0))), COLOR_WARN if float(constraints.get("power_coverage", 1.0)) < 1.0 else COLOR_TEXT))
-	summary.add_child(_stat_card("本地物流", "%.0f%%" % (float(local_logistics.get("utilization", 0.0)) * 100.0), COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_TEXT))
+	summary.add_child(_stat_card(I18n.core("diagnostics.economy.storage_utilization"), "%.0f%%" % (float(storage.get("utilization", 0.0)) * 100.0), COLOR_WARN if float(storage.get("utilization", 0.0)) >= 0.9 else COLOR_TEXT))
+	summary.add_child(_stat_card(I18n.core("diagnostics.economy.power_margin"), "%.1f" % maxf(0.0, float(constraints.get("power_capacity", 0.0)) - float(constraints.get("power_demand", 0.0))), COLOR_WARN if float(constraints.get("power_coverage", 1.0)) < 1.0 else COLOR_TEXT))
+	summary.add_child(_stat_card(I18n.core("diagnostics.economy.local_logistics"), "%.0f%%" % (float(local_logistics.get("utilization", 0.0)) * 100.0), COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_TEXT))
 	box.add_child(summary)
 	var products: Array = analysis.get("products", [])
 	if products.is_empty():
-		box.add_child(_card_text("当前地点尚无库存流或登记需求。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("diagnostics.economy.empty"), COLOR_MUTED))
 	for product_value in products:
 		var product := product_value as Dictionary
 		var product_id := String(product.get("product_id", ""))
 		var card := _card()
 		var status := String(product.get("status", "STABLE"))
 		var status_color := COLOR_BAD if status == "CRITICAL" else (COLOR_WARN if status in ["TIGHT", "STORAGE_FULL"] else (COLOR_GOOD if status == "STABLE" else COLOR_ACCENT))
-		card.add_child(_label("%s · %s · %s" % [_content_name(Game.content.items.get(product_id, {}), product_id), _status_text(status), _status_text(String(product.get("storage_class", "BULK")))], 15, status_color))
-		card.add_child(_label("在库 %d（可用 %d / 已预留 %d）/ %.0f · 生产 +%.2f/h · 消费 -%.2f/h · 进/出口 +%.2f/-%.2f/h · 净变化 %+.2f/h · 已承诺 %.0f" % [int(product.get("on_hand", product.get("stock", 0))), int(product.get("available", 0)), int(product.get("reserved", 0)), float(product.get("storage_capacity", 0.0)), float(product.get("production_rate", 0.0)), float(product.get("consumption_rate", 0.0)), float(product.get("import_rate", 0.0)), float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0)), float(product.get("committed_demand", 0.0))], 12, COLOR_MUTED))
+		card.add_child(_label(I18n.core("diagnostics.economy.product_header") % [_content_name(Game.content.items.get(product_id, {}), product_id), _status_text(status), _status_text(String(product.get("storage_class", "BULK")))], 15, status_color))
+		card.add_child(_label(I18n.core("diagnostics.economy.product_flow") % [int(product.get("on_hand", product.get("stock", 0))), int(product.get("available", 0)), int(product.get("reserved", 0)), float(product.get("storage_capacity", 0.0)), float(product.get("production_rate", 0.0)), float(product.get("consumption_rate", 0.0)), float(product.get("import_rate", 0.0)), float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0)), float(product.get("committed_demand", 0.0))], 12, COLOR_MUTED))
 		var demand_parts: Array[String] = []
 		for demand_value in product.get("demand_sources", []):
 			var demand := demand_value as Dictionary
 			var amount := "%.2f/h" % float(demand.get("rate_per_hour", 0.0)) if String(demand.get("demand_kind", "")) == "CONTINUOUS" else "%.0f" % float(demand.get("quantity", 0.0))
-			demand_parts.append("%s:%s" % [_demand_source_text(String(demand.get("source_type", ""))), amount])
+			demand_parts.append(I18n.core("diagnostics.economy.demand_entry") % [_demand_source_text(String(demand.get("source_type", ""))), amount])
 		if not demand_parts.is_empty():
-			card.add_child(_label("需求来源 · " + " · ".join(demand_parts), 12, COLOR_MUTED))
+			card.add_child(_label(I18n.core("diagnostics.economy.demand_sources") % I18n.core("format.dot_separator").join(demand_parts), 12, COLOR_MUTED))
 		if not product.get("blocked_sources", []).is_empty() or status == "CRITICAL":
 			var trace: Dictionary = Game.simulation.shortest_bottleneck_chain(Game.state, product_id, _selected_location_id)
-			card.add_child(_label("首要瓶颈 · %s\n最短链 · %s" % [_status_text(String(trace.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(trace.get("shortest_chain", []))], 12, COLOR_WARN))
+			card.add_child(_label(I18n.core("planner.bottleneck_trace") % [_status_text(String(trace.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(trace.get("shortest_chain", []))], 12, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title("只读目标产能规划器"))
-	box.add_child(_card_text("输入目标产品吞吐（单位/小时）。规划器只做 BOM 展开、Factory/Device/能源/仓储/物流与瓶颈计算，不会执行建设或改动生产线。", COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("planner.title")))
+	box.add_child(_card_text(I18n.core("planner.help"), COLOR_MUTED))
 	var product_ids: Array = Game.content.items.keys()
 	product_ids.sort()
 	var selector := OptionButton.new()
@@ -1332,9 +1867,9 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 	var target_input := _number_input(int(maxf(1.0, _planner_target_rate)), 1, 1000000, 1)
 	var planner_controls := HFlowContainer.new()
 	planner_controls.add_theme_constant_override("h_separation", 6)
-	planner_controls.add_child(_labeled_control("目标产品", selector))
-	planner_controls.add_child(_labeled_control("单位/小时", target_input))
-	planner_controls.add_child(_button("计算（只读）", _run_read_only_plan.bind(selector, product_ids, target_input), product_ids.is_empty(), COLOR_ACCENT))
+	planner_controls.add_child(_labeled_control(I18n.core("planner.target_product"), selector))
+	planner_controls.add_child(_labeled_control(I18n.core("planner.units_per_hour"), target_input))
+	planner_controls.add_child(_button(I18n.core("planner.calculate"), _run_read_only_plan.bind(selector, product_ids, target_input), product_ids.is_empty(), COLOR_ACCENT))
 	box.add_child(planner_controls)
 
 	var ship_plan_ids: Array = Game.content.ship_construction_projects.keys()
@@ -1346,9 +1881,9 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 	var ship_rate := _number_input(1, 1, 1000, 1)
 	var ship_controls := HFlowContainer.new()
 	ship_controls.add_theme_constant_override("h_separation", 6)
-	ship_controls.add_child(_labeled_control("舰船型号", ship_selector))
-	ship_controls.add_child(_labeled_control("艘/月", ship_rate))
-	ship_controls.add_child(_button("规划舰船产率", _run_ship_read_only_plan.bind(ship_selector, ship_plan_ids, ship_rate), ship_plan_ids.is_empty(), COLOR_ACCENT))
+	ship_controls.add_child(_labeled_control(I18n.core("planner.ship_model"), ship_selector))
+	ship_controls.add_child(_labeled_control(I18n.core("planner.ships_per_month"), ship_rate))
+	ship_controls.add_child(_button(I18n.core("planner.plan_ship_rate"), _run_ship_read_only_plan.bind(ship_selector, ship_plan_ids, ship_rate), ship_plan_ids.is_empty(), COLOR_ACCENT))
 	box.add_child(ship_controls)
 
 	var research_targets: Array = []
@@ -1363,11 +1898,11 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 		for stage_value in Game.simulation.research_stages(project):
 			var stage := stage_value as Dictionary
 			research_targets.append({"project_id":project_id, "phase_id":String(stage.get("id", ""))})
-			research_selector.add_item("%s · %s" % [_content_name(project, project_id), _content_name(stage, String(stage.get("id", "")))])
+			research_selector.add_item(I18n.core("planner.target_label") % [_content_name(project, project_id), _content_name(stage, String(stage.get("id", "")))])
 	var research_controls := HFlowContainer.new()
 	research_controls.add_theme_constant_override("h_separation", 6)
-	research_controls.add_child(_labeled_control("研发阶段", research_selector))
-	research_controls.add_child(_button("规划阶段物资", _run_research_read_only_plan.bind(research_selector, research_targets), research_targets.is_empty(), COLOR_ACCENT))
+	research_controls.add_child(_labeled_control(I18n.core("planner.research_stage"), research_selector))
+	research_controls.add_child(_button(I18n.core("planner.plan_stage_materials"), _run_research_read_only_plan.bind(research_selector, research_targets), research_targets.is_empty(), COLOR_ACCENT))
 	box.add_child(research_controls)
 
 	var mega_targets: Array = []
@@ -1377,27 +1912,27 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 		for phase_value in megastructure.get("phases", []):
 			var phase := phase_value as Dictionary
 			mega_targets.append({"megastructure_id":String(megastructure.get("id", "")), "phase_id":String(phase.get("id", ""))})
-			mega_selector.add_item("%s · %s" % [_content_name(megastructure, String(megastructure.get("id", ""))), _content_name(phase, String(phase.get("id", "")))])
+			mega_selector.add_item(I18n.core("planner.target_label") % [_content_name(megastructure, String(megastructure.get("id", ""))), _content_name(phase, String(phase.get("id", "")))])
 	var mega_controls := HFlowContainer.new()
 	mega_controls.add_theme_constant_override("h_separation", 6)
-	mega_controls.add_child(_labeled_control("巨构阶段", mega_selector))
-	mega_controls.add_child(_button("规划终局阶段", _run_mega_read_only_plan.bind(mega_selector, mega_targets), mega_targets.is_empty(), COLOR_ACCENT))
+	mega_controls.add_child(_labeled_control(I18n.core("planner.megastructure_phase"), mega_selector))
+	mega_controls.add_child(_button(I18n.core("planner.plan_endgame_phase"), _run_mega_read_only_plan.bind(mega_selector, mega_targets), mega_targets.is_empty(), COLOR_ACCENT))
 	box.add_child(mega_controls)
 	if not _planner_result.is_empty():
 		_build_read_only_plan_result(box, _planner_result)
 
-	box.add_child(_section_title("条件自动化（有限授权）"))
-	box.add_child(_card_text("自动化只调用正常暂停/恢复、路线策略和项目优先级事务；不会创建资源或擅自扩建。规则保留触发快照、冷却时间、滞回和手动锁。", COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("automation.title")))
+	box.add_child(_card_text(I18n.core("automation.help"), COLOR_MUTED))
 	for rule_value in Game.state.automation_rules:
 		var rule := rule_value as Dictionary
 		var rule_card := _card()
 		var condition: Dictionary = rule.get("condition", {})
 		var action: Dictionary = rule.get("action", {})
-		rule_card.add_child(_label("%s · %s" % [String(rule.get("rule_id", "AUTOMATION")), "暂停" if bool(rule.get("paused", false)) else "已授权"], 14, COLOR_ACCENT))
-		rule_card.add_child(_label("IF %s %s %.2f → %s · 冷却 %.0fs · 滞回 %.2f" % [String(condition.get("type", "CONDITION")), String(condition.get("operator", "LT")), float(condition.get("threshold", 0.0)), String(action.get("type", "ACTION")), float(rule.get("cooldown_ms", 0.0)) / 1000.0, float(rule.get("hysteresis", 0.0))], 12, COLOR_MUTED))
+		rule_card.add_child(_label(I18n.core("automation.rule_header") % [String(rule.get("rule_id", "AUTOMATION")), I18n.core("status.PAUSED") if bool(rule.get("paused", false)) else I18n.core("automation.authorized")], 14, COLOR_ACCENT))
+		rule_card.add_child(_label(I18n.core("automation.rule_condition") % [_automation_term("condition", String(condition.get("type", "CONDITION"))), _automation_term("operator", String(condition.get("operator", "LT"))), float(condition.get("threshold", 0.0)), _automation_term("action", String(action.get("type", "ACTION"))), float(rule.get("cooldown_ms", 0.0)) / 1000.0, float(rule.get("hysteresis", 0.0))], 12, COLOR_MUTED))
 		var rule_actions := HFlowContainer.new()
-		rule_actions.add_child(_button("恢复规则" if bool(rule.get("paused", false)) else "暂停规则", _command.bind("切换自动化规则", Game.set_automation_rule_paused.bind(String(rule.get("rule_id", "")), not bool(rule.get("paused", false)))), false, COLOR_WARN))
-		rule_actions.add_child(_button("撤销授权", _command.bind("撤销自动化授权", Game.revoke_automation_rule.bind(String(rule.get("rule_id", "")))), false, COLOR_BAD))
+		rule_actions.add_child(_button(I18n.core("automation.resume_rule") if bool(rule.get("paused", false)) else I18n.core("automation.pause_rule"), _command.bind(I18n.core("command.toggle_automation_rule"), Game.set_automation_rule_paused.bind(String(rule.get("rule_id", "")), not bool(rule.get("paused", false)))), false, COLOR_WARN))
+		rule_actions.add_child(_button(I18n.core("automation.revoke"), _command.bind(I18n.core("command.revoke_automation"), Game.revoke_automation_rule.bind(String(rule.get("rule_id", "")))), false, COLOR_BAD))
 		rule_card.add_child(rule_actions)
 		box.add_child(_wrap_card(rule_card))
 	for runtime_value in Game.state.industrial_operations:
@@ -1407,20 +1942,13 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 		var slot := int(runtime.get("slot", -1))
 		var facility_id := String(runtime.get("facility_id", ""))
 		var location_id := String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-		var guard_button := _button("授权满仓暂停/80%恢复 · %s" % _content_name(Game.content.facilities.get(facility_id, {}), facility_id), _command.bind("授权仓储自动化", _authorize_storage_guard.bind(slot, location_id)), false, COLOR_GOOD)
+		var guard_button := _button(I18n.core("automation.authorize_storage_guard") % _content_name(Game.content.facilities.get(facility_id, {}), facility_id), _command.bind(I18n.core("command.authorize_storage_automation"), _authorize_storage_guard.bind(slot, location_id)), false, COLOR_GOOD)
 		guard_button.name = "AuthorizeStorageGuard_%d" % slot
 		box.add_child(guard_button)
 
 
 func _authorize_storage_guard(slot: int, location_id: String) -> bool:
-	if slot < 0 or slot >= Game.state.industrial_operations.size():
-		return false
-	var control_mode := String(Game.state.industrial_operations[slot].get("control_mode", "PINNED"))
-	if not Game.set_production_line_control(slot, control_mode, false):
-		return false
-	var pause_condition := {"type":"STORAGE_UTILIZATION", "location_id":location_id, "operator":"GT", "threshold":0.95}
-	var resume_condition := {"type":"STORAGE_UTILIZATION", "location_id":location_id, "operator":"LT", "threshold":0.80}
-	return Game.add_automation_rule(pause_condition, {"type":"PAUSE_FACTORY", "slot":slot}, 30000.0, 0.03) and Game.add_automation_rule(resume_condition, {"type":"RESUME_FACTORY", "slot":slot}, 30000.0, 0.03)
+	return Game.authorize_storage_guard(slot, location_id)
 
 
 func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_input: SpinBox) -> void:
@@ -1430,7 +1958,7 @@ func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_inpu
 	_planner_target_rate = float(target_input.value)
 	_planner_result = Game.simulation.target_throughput_plan(Game.state, {_planner_product_id:_planner_target_rate}, _selected_location_id)
 	_planner_result["target_type"] = "PRODUCT_RATE"
-	_planner_target_label = "%s %.1f/h" % [_content_name(Game.content.items.get(_planner_product_id, {}), _planner_product_id), _planner_target_rate]
+	_planner_target_label = I18n.core("planner.product_rate_label") % [_content_name(Game.content.items.get(_planner_product_id, {}), _planner_product_id), _planner_target_rate]
 	_dirty = true
 
 
@@ -1438,7 +1966,7 @@ func _run_ship_read_only_plan(selector: OptionButton, ship_plan_ids: Array, targ
 	if selector.selected < 0 or selector.selected >= ship_plan_ids.size():
 		return
 	var ship_plan_id := String(ship_plan_ids[selector.selected])
-	_planner_target_label = "%s %.1f/月" % [_content_name(Game.content.ship_construction_projects.get(ship_plan_id, {}), ship_plan_id), float(target_input.value)]
+	_planner_target_label = I18n.core("planner.ship_rate_label") % [_content_name(Game.content.ship_construction_projects.get(ship_plan_id, {}), ship_plan_id), float(target_input.value)]
 	_planner_result = Game.simulation.ship_per_month_plan(Game.state, ship_plan_id, float(target_input.value), _selected_location_id)
 	_dirty = true
 
@@ -1449,7 +1977,7 @@ func _run_research_read_only_plan(selector: OptionButton, research_targets: Arra
 	var target := research_targets[selector.selected] as Dictionary
 	var project_id := String(target.get("project_id", ""))
 	var phase_id := String(target.get("phase_id", ""))
-	_planner_target_label = "%s · %s" % [_content_name(Game.content.research_projects.get(project_id, {}), project_id), phase_id]
+	_planner_target_label = I18n.core("planner.target_label") % [_content_name(Game.content.research_projects.get(project_id, {}), project_id), phase_id]
 	_planner_result = Game.simulation.research_phase_plan(Game.state, project_id, phase_id, _selected_location_id)
 	_dirty = true
 
@@ -1460,7 +1988,7 @@ func _run_mega_read_only_plan(selector: OptionButton, mega_targets: Array) -> vo
 	var target := mega_targets[selector.selected] as Dictionary
 	var megastructure_id := String(target.get("megastructure_id", ""))
 	var phase_id := String(target.get("phase_id", ""))
-	_planner_target_label = "%s · %s" % [_content_name(Game.content.megastructures.get(megastructure_id, {}), megastructure_id), phase_id]
+	_planner_target_label = I18n.core("planner.target_label") % [_content_name(Game.content.megastructures.get(megastructure_id, {}), megastructure_id), phase_id]
 	_planner_result = Game.simulation.megastructure_phase_plan(Game.state, megastructure_id, phase_id)
 	_dirty = true
 
@@ -1468,24 +1996,24 @@ func _run_mega_read_only_plan(selector: OptionButton, mega_targets: Array) -> vo
 func _build_read_only_plan_result(box: VBoxContainer, plan: Dictionary) -> void:
 	var card := _card()
 	var production_plan: Dictionary = plan.get("production_plan", plan)
-	card.add_child(_label("方案 · %s · 只读" % (_planner_target_label if not _planner_target_label.is_empty() else String(plan.get("target_id", "目标"))), 15, COLOR_ACCENT))
+	card.add_child(_label(I18n.core("planner.result_header") % (_planner_target_label if not _planner_target_label.is_empty() else String(plan.get("target_id", I18n.core("planner.target_fallback")))), 15, COLOR_ACCENT))
 	var requirement_parts: Array[String] = []
 	for item_id_value in production_plan.get("product_requirements", {}).keys():
 		var item_id := String(item_id_value)
-		requirement_parts.append("%s %.2f/h" % [_content_name(Game.content.items.get(item_id, {}), item_id), float(production_plan.get("product_requirements", {}).get(item_id, 0.0))])
-	card.add_child(_label("产品需求 · " + (" · ".join(requirement_parts) if not requirement_parts.is_empty() else "无"), 12, COLOR_MUTED))
+		requirement_parts.append(I18n.core("planner.requirement_entry") % [_content_name(Game.content.items.get(item_id, {}), item_id), float(production_plan.get("product_requirements", {}).get(item_id, 0.0))])
+	card.add_child(_label(I18n.core("planner.product_requirements") % (I18n.core("format.dot_separator").join(requirement_parts) if not requirement_parts.is_empty() else I18n.core("status.NONE")), 12, COLOR_MUTED))
 	for factory_value in production_plan.get("factory_requirements", []):
 		var factory := factory_value as Dictionary
 		var facility_id := String(factory.get("facility_id", ""))
-		card.add_child(_label("%s · 当前 %d / 建议 %d / 缺口 %d · 装置能力 %s · 利用率 %.0f%%" % [_content_name(Game.content.facilities.get(facility_id, {}), facility_id), int(factory.get("current", 0)), int(factory.get("recommended", 0)), int(factory.get("shortage", 0)), ", ".join(factory.get("production_device_requirements", [])), float(factory.get("utilization", 0.0)) * 100.0], 12, COLOR_TEXT))
+		card.add_child(_label(I18n.core("planner.factory_requirement") % [_content_name(Game.content.facilities.get(facility_id, {}), facility_id), int(factory.get("current", 0)), int(factory.get("recommended", 0)), int(factory.get("shortage", 0)), I18n.core("format.list_separator").join(factory.get("production_device_requirements", [])), float(factory.get("utilization", 0.0)) * 100.0], 12, COLOR_TEXT))
 	var infrastructure: Dictionary = production_plan.get("infrastructure_requirements", {})
-	card.add_child(_label("基础设施 · 电力 %.1f · 冷却 %.1f · 仓储 %s · 资本品 %s" % [float(infrastructure.get("power", 0.0)), float(infrastructure.get("cooling", 0.0)), str(infrastructure.get("storage", {})), str(infrastructure.get("capital_goods", {}))], 12, COLOR_MUTED))
+	card.add_child(_label(I18n.core("planner.infrastructure") % [float(infrastructure.get("power", 0.0)), float(infrastructure.get("cooling", 0.0)), str(infrastructure.get("storage", {})), str(infrastructure.get("capital_goods", {}))], 12, COLOR_MUTED))
 	for logistics_value in production_plan.get("logistics", []):
 		var logistics := logistics_value as Dictionary
-		card.add_child(_label("物流 · %s → %s · %.2f 质量/h · %.2f 体积/h · 路线 %s · 周期 %.1fs" % [_location_name(String(logistics.get("origin", ""))), _location_name(String(logistics.get("destination", ""))), float(logistics.get("cargo_mass_per_hour", 0.0)), float(logistics.get("cargo_volume_per_hour", 0.0)), " → ".join(logistics.get("route_ids", [])), float(logistics.get("lead_time_ms", 0.0)) / 1000.0], 12, COLOR_MUTED))
+		card.add_child(_label(I18n.core("planner.logistics") % [_location_name(String(logistics.get("origin", ""))), _location_name(String(logistics.get("destination", ""))), float(logistics.get("cargo_mass_per_hour", 0.0)), float(logistics.get("cargo_volume_per_hour", 0.0)), I18n.core("format.chain_separator").join(logistics.get("route_ids", [])), float(logistics.get("lead_time_ms", 0.0)) / 1000.0], 12, COLOR_MUTED))
 	for bottleneck_value in production_plan.get("bottlenecks", []):
 		var bottleneck := bottleneck_value as Dictionary
-		card.add_child(_label("首要瓶颈 · %s\n最短链 · %s" % [_status_text(String(bottleneck.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(bottleneck.get("shortest_chain", []))], 12, COLOR_WARN))
+		card.add_child(_label(I18n.core("planner.bottleneck_trace") % [_status_text(String(bottleneck.get("primary_bottleneck", "UNKNOWN"))), _planner_chain_text(bottleneck.get("shortest_chain", []))], 12, COLOR_WARN))
 	box.add_child(_wrap_card(card))
 
 
@@ -1506,15 +2034,24 @@ func _planner_chain_text(chain: Array) -> String:
 
 
 func _demand_source_text(source_type: String) -> String:
-	return {"maintenance":"维护", "construction":"建设", "research_project":"研发", "shipbuilding":"造船", "fleet_operation":"舰队运营", "logistics_export":"出口", "manual_order":"手动订单"}.get(source_type, source_type)
+	match source_type:
+		"maintenance": return I18n.core("inventory.demand.maintenance")
+		"construction": return I18n.core("inventory.demand.construction")
+		"research_project": return I18n.core("inventory.demand.research")
+		"shipbuilding": return I18n.core("inventory.demand.shipbuilding")
+		"fleet_operation": return I18n.core("inventory.demand.fleet")
+		"logistics_export": return I18n.core("inventory.demand.export")
+		"manual_order": return I18n.core("inventory.demand.manual")
+		_: return source_type
 
 
 func _rebuild_megastructure() -> void:
 	var box: VBoxContainer = _pages["megastructure"]
 	_clear(box)
-	box.add_child(_page_title("恒星能源巨构", "唯一太阳系工业终局。八个阶段分别调用真实勘测、库存、物流、建设、能源、散热与维护系统。"))
+	box.add_child(_page_title(I18n.core("megastructure.title"), I18n.core("megastructure.subtitle")))
+	_add_unlock_banner(box, "megastructure")
 	if Game.content.megastructures.is_empty():
-		box.add_child(_label("当前内容没有定义终局工程。", 14, COLOR_WARN))
+		box.add_child(_label(I18n.core("megastructure.no_definition"), 14, COLOR_WARN))
 		return
 	var definition := Game.content.megastructures.values()[0] as Dictionary
 	var megastructure_id := String(definition.get("id", "stellar_energy"))
@@ -1525,23 +2062,39 @@ func _rebuild_megastructure() -> void:
 	var complete := bool(Game.state.megastructures.get(megastructure_id, false))
 	var summary := HBoxContainer.new()
 	summary.add_theme_constant_override("separation", 8)
-	summary.add_child(_stat_card("状态", "已完成" if complete else String(project.get("status", "尚未选址")), COLOR_GOOD if complete else COLOR_ACCENT))
-	summary.add_child(_stat_card("建造队列", "%d / %d" % [queue_used, queue_capacity], COLOR_WARN if queue_used >= queue_capacity else COLOR_TEXT))
-	summary.add_child(_stat_card("阶段", "%d / %d" % [int(project.get("phase_index", 0)), phases.size()], COLOR_TEXT))
+	var megastructure_status := Game.simulation.megastructure_gameplay_state(Game.state, megastructure_id)
+	summary.add_child(_stat_card(I18n.core("megastructure.stat.status"), _status_text(megastructure_status), COLOR_GOOD if complete else COLOR_ACCENT))
+	summary.add_child(_stat_card(I18n.core("megastructure.stat.queue"), I18n.core("common.ratio") % [queue_used, queue_capacity], COLOR_WARN if queue_used >= queue_capacity else COLOR_TEXT))
+	summary.add_child(_stat_card(I18n.core("megastructure.stat.phase"), I18n.core("common.ratio") % [int(project.get("phase_index", 0)), phases.size()], COLOR_TEXT))
 	box.add_child(summary)
+	var stage_visual := MegastructureProgressViewScript.new()
+	stage_visual.configure(
+		int(project.get("phase_index", 0)),
+		phases.size(),
+		complete,
+		I18n.megastructure_stage(megastructure_id, int(project.get("phase_index", 0)), I18n.core("megastructure.stage_fallback"))
+	)
+	box.add_child(stage_visual)
 	box.add_child(_megastructure_phase_visual(definition, int(project.get("phase_index", 0)), complete))
 	if project.is_empty():
 		var site_card := _card()
-		site_card.add_child(_label("Phase 0 · 研发与选址", 18, COLOR_ACCENT))
-		site_card.add_child(_label("先完成恒星能源巨构计划，再用勘测舰将至少一个候选位置推进到深度勘测。区位差异来自真实太阳辐照、散热、维护与运输周期。", 13, COLOR_MUTED))
+		site_card.add_child(_label(I18n.core("megastructure.phase_label", "Phase %d · %s") % [0, I18n.megastructure_stage(megastructure_id, 0, "Research & Site Selection")], 18, COLOR_ACCENT))
+		site_card.add_child(_label(I18n.core("megastructure.site.instructions"), 13, COLOR_MUTED))
 		for candidate_value in definition.get("site_candidates", []):
 			var candidate_id := String(candidate_value)
 			var candidate: Dictionary = Game.state.location_state(candidate_id)
-			var environment: Dictionary = Game.content.regions.get(candidate_id, {}).get("environment", {})
+			var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, candidate_id)
+			var environment: Dictionary = intelligence.get("environment", {})
 			var row := HBoxContainer.new()
-			row.add_child(_label("%s · %s · 辐照 %.1f · 距离 %.1f · 维护 %.2f" % [_location_name(candidate_id), String(candidate.get("survey_state", LocationState.UNKNOWN)), float(environment.get("solar_flux", 0.0)), float(environment.get("transport_distance", 0.0)), float(environment.get("maintenance_severity", {}).get("electronics", 1.0))], 13, COLOR_TEXT))
+			var candidate_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
+			var intelligence_text := I18n.core("megastructure.site.unknown", "Data unknown")
+			if candidate_state == LocationState.DETECTED:
+				intelligence_text = I18n.core("megastructure.site.detected") % [_status_text(String(environment.get("transport_distance_band", "UNKNOWN"))), _status_text(String(environment.get("construction_difficulty_band", "UNKNOWN")))]
+			elif candidate_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
+				intelligence_text = I18n.core("megastructure.site.surveyed") % [float(environment.get("solar_flux", 0.0)), float(environment.get("transport_distance", 0.0)), float(environment.get("maintenance_severity", {}).get("electronics", 1.0))]
+			row.add_child(_label(I18n.core("megastructure.site.candidate") % [_location_name(candidate_id), _status_text(candidate_state), intelligence_text], 13, COLOR_TEXT))
 			var selectable := bool(Game.state.completed_projects.get("research_megastructures", false)) and String(candidate.get("survey_state", "")) == LocationState.DEEP_SURVEYED
-			var select_button := _button("选定工地", _command.bind("选定巨构工地", Game.select_megastructure_site.bind(megastructure_id, candidate_id)), not selectable, COLOR_GOOD)
+			var select_button := _button(I18n.core("megastructure.site.select"), _command.bind(I18n.core("command.megastructure.select_site"), Game.select_megastructure_site.bind(megastructure_id, candidate_id)), not selectable, COLOR_GOOD)
 			select_button.name = "SelectMegastructureSite_%s" % candidate_id
 			row.add_child(select_button)
 			site_card.add_child(row)
@@ -1555,32 +2108,36 @@ func _rebuild_megastructure() -> void:
 	var runtime := _construction_runtime_for_activity(activity_id)
 	var card := _card()
 	card.add_child(_label(("✓ " if complete else "") + _content_name(definition, megastructure_id), 18, COLOR_GOOD if complete else COLOR_TEXT))
-	card.add_child(_label("工地 · %s · 物资流 %s" % [_location_name(site_id), _status_text(String(project.get("material_flow_status", "AWAITING_NEXT_PHASE")))], 13, COLOR_ACCENT))
+	card.add_child(_label(I18n.core("megastructure.gameplay_state") % _status_text(megastructure_status), 14, COLOR_GOOD if complete else (COLOR_WARN if megastructure_status == "WAITING_MATERIAL" else COLOR_ACCENT)))
+	card.add_child(_label(I18n.core("megastructure.site.summary") % [_location_name(site_id), _status_text(String(project.get("material_flow_status", "AWAITING_NEXT_PHASE")))], 13, COLOR_ACCENT))
+	var worksite_button := _button(I18n.core("megastructure.open_worksite"), _open_location_section.bind(site_id, "projects"), not Game.state.has_location(site_id), COLOR_ACCENT)
+	worksite_button.name = "MegastructureOpenWorksite"
+	card.add_child(worksite_button)
 	card.add_child(_megastructure_progress(100 if complete else int(project.get("progress_percent", 0)), I18n.megastructure_stage(megastructure_id, current_index, String(current_phase.get("name", "Operational")))))
 	if complete:
-		card.add_child(_label("恒星能源系统已完成调试并投入运行。", 14, COLOR_GOOD))
-		card.add_child(_label("总材料：%s\n资本品：%s\n运输货量：%.1f freight units\n峰值建设吞吐：%.2f\n峰值功率需求：%.1f\n项目工期：%s\n主要供应地：%s" % [_quantity_map_text(project.get("total_materials_consumed", {})), _quantity_map_text(project.get("total_capital_goods", {})), float(project.get("total_cargo_transported", 0.0)), float(project.get("peak_construction_throughput", 0.0)), float(project.get("peak_power_demand", 0.0)), _format_ms(maxi(0, int(project.get("completed_at_ms", 0)) - int(project.get("started_at_ms", 0)))), _supplier_map_text(project.get("supplier_locations", {}))], 13, COLOR_TEXT))
+		card.add_child(_label(I18n.core("megastructure.completed"), 14, COLOR_GOOD))
+		card.add_child(_label(I18n.core("megastructure.completion.statistics") % [_quantity_map_text(project.get("total_materials_consumed", {})), _quantity_map_text(project.get("total_capital_goods", {})), float(project.get("total_cargo_transported", 0.0)), float(project.get("peak_construction_throughput", 0.0)), float(project.get("peak_power_demand", 0.0)), _format_ms(maxi(0, int(project.get("completed_at_ms", 0)) - int(project.get("started_at_ms", 0)))), _supplier_map_text(project.get("supplier_locations", {}))], 13, COLOR_TEXT))
 	elif not runtime.is_empty():
-		card.add_child(_label("%s\n已投入：%s" % [_project_summary(activity), _quantity_map_text(project.get("delivered_materials", {}))], 13, COLOR_MUTED))
+		card.add_child(_label(I18n.core("megastructure.phase.invested") % [_project_summary(activity), _quantity_map_text(project.get("delivered_materials", {}))], 13, COLOR_MUTED))
 		_add_blocker_label(card, runtime)
-		var cancel_button := _button("取消当前阶段", _command.bind("取消巨构阶段", Game.stop_construction_project.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
+		var cancel_button := _button(I18n.core("megastructure.phase.cancel"), _command.bind(I18n.core("command.megastructure.cancel_phase"), Game.stop_construction_project.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
 		cancel_button.name = "CancelMegastructure_%s" % megastructure_id
 		card.add_child(cancel_button)
 	else:
-		card.add_child(_label("下一阶段 BOM · " + _project_summary(activity), 13, COLOR_MUTED))
+		card.add_child(_label(I18n.core("megastructure.phase.next_bom") % _project_summary(activity), 13, COLOR_MUTED))
 		var blocker: Dictionary = Game.simulation.megastructure_site_requirement_blocker(Game.state, current_phase, site_id)
-		var start_button := _button("启动当前阶段", _command.bind("启动巨构阶段", Game.start_megastructure_phase.bind(megastructure_id, 90)), not blocker.is_empty(), COLOR_GOOD)
+		var start_button := _button(I18n.core("megastructure.phase.start"), _command.bind(I18n.core("command.megastructure.start_phase"), Game.start_megastructure_phase.bind(megastructure_id, 90)), not blocker.is_empty(), COLOR_GOOD)
 		start_button.name = "StartMegastructure_%s" % megastructure_id
 		card.add_child(start_button)
 		if not blocker.is_empty():
-			card.add_child(_label("工地阻塞 · " + _blocker_text(blocker), 13, COLOR_WARN))
+			card.add_child(_label(I18n.core("megastructure.site.blocked") % _blocker_text(blocker), 13, COLOR_WARN))
 	box.add_child(_wrap_card(card))
 
 
 func _megastructure_progress(percent: int, stage_name: String) -> Control:
 	var progress_box := VBoxContainer.new()
 	progress_box.add_theme_constant_override("separation", 3)
-	progress_box.add_child(_label("当前阶段 · %s · %d%%" % [stage_name, percent], 14, COLOR_ACCENT))
+	progress_box.add_child(_label(I18n.core("megastructure.progress.current") % [stage_name, percent], 14, COLOR_ACCENT))
 	var bar := ProgressBar.new()
 	bar.max_value = 100.0
 	bar.value = percent
@@ -1591,8 +2148,10 @@ func _megastructure_progress(percent: int, stage_name: String) -> Control:
 
 
 func _megastructure_phase_visual(definition: Dictionary, current_phase: int, complete: bool) -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
+	var row := GridContainer.new()
+	row.columns = 4
+	row.add_theme_constant_override("h_separation", 6)
+	row.add_theme_constant_override("v_separation", 6)
 	var megastructure_id := String(definition.get("id", ""))
 	var phases: Array = definition.get("phases", [])
 	for index in phases.size():
@@ -1601,48 +2160,50 @@ func _megastructure_phase_visual(definition: Dictionary, current_phase: int, com
 		var active := not complete and index == current_phase
 		var tile := _card()
 		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tile.add_child(_label("%s %d" % ["✓" if achieved else ("◆" if active else "○"), index], 13, COLOR_GOOD if achieved else (COLOR_ACCENT if active else COLOR_MUTED)))
-		tile.add_child(_label(I18n.megastructure_stage(megastructure_id, index, String(phase.get("name", "Phase"))), 10, COLOR_TEXT))
+		tile.add_child(_label(I18n.core("megastructure.phase.tile") % ["✓" if achieved else ("◆" if active else "○"), index], 14, COLOR_GOOD if achieved else (COLOR_ACCENT if active else COLOR_MUTED)))
+		var stage_label := _label(I18n.megastructure_stage(megastructure_id, index, String(phase.get("name", "Phase"))), 12, COLOR_TEXT)
+		stage_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		tile.add_child(stage_label)
 		row.add_child(tile)
 	return row
 
 
 func _supplier_map_text(values: Dictionary) -> String:
 	if values.is_empty():
-		return "本地建设"
+		return I18n.core("megastructure.supplier.local")
 	var parts: Array[String] = []
 	for location_id_value in values.keys():
-		parts.append("%s %.1f" % [_location_name(String(location_id_value)), float(values[location_id_value])])
+		parts.append(I18n.core("megastructure.supplier.entry") % [_location_name(String(location_id_value)), float(values[location_id_value])])
 	parts.sort()
-	return "、".join(parts)
+	return I18n.core("format.list_separator").join(parts)
 
 
 func _format_ms(milliseconds: int) -> String:
 	var seconds := maxi(0, milliseconds) / 1000
 	if seconds < 60:
-		return "%d 秒" % seconds
+		return I18n.t("format.duration_seconds") % seconds
 	var minutes := seconds / 60
 	if minutes < 60:
-		return "%d 分钟" % minutes
-	return "%d 小时 %d 分钟" % [minutes / 60, minutes % 60]
+		return I18n.t("format.duration_minutes") % [minutes, seconds % 60]
+	return I18n.t("format.duration_hours") % [minutes / 60, minutes % 60]
 
 
 func _quantity_map_text(values: Dictionary) -> String:
 	if values.is_empty():
-		return "尚未交付"
+		return I18n.core("megastructure.materials.none_delivered")
 	var parts: Array[String] = []
 	for item_id_value in values.keys():
 		var item_id := String(item_id_value)
 		var item := Game.content.items.get(item_id, {}) as Dictionary
-		parts.append("%s×%d" % [_content_name(item, item_id), int(values.get(item_id, 0))])
+		parts.append(I18n.t("format.item_quantity") % [_content_name(item, item_id), int(values.get(item_id, 0))])
 	parts.sort()
-	return "、".join(parts)
+	return I18n.core("format.list_separator").join(parts)
 
 
 func _construction_runtime_for_activity(activity_id: String) -> Dictionary:
 	for operation_value in Game.state.construction_operations:
 		var operation := operation_value as Dictionary
-		if String(operation.get("activity_id", "")) == activity_id and String(operation.get("status", "IDLE")) in ["RUNNING", "BLOCKED", "QUEUED"]:
+		if String(operation.get("activity_id", "")) == activity_id and String(operation.get("status", "IDLE")) in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
 			return operation
 	return {}
 
@@ -1650,44 +2211,62 @@ func _construction_runtime_for_activity(activity_id: String) -> Dictionary:
 func _rebuild_research() -> void:
 	var box: VBoxContainer = _pages["research"]
 	_clear(box)
-	box.add_child(_page_title("技术网络与研发项目", "研究容量是持续流量；项目阶段直接占用材料、制造、能源、设施、物流与真实舰船测试。"))
+	box.add_child(_page_title(I18n.core("research.title"), I18n.core("research.subtitle")))
+	_add_unlock_banner(box, "research")
 	var research_summary := HBoxContainer.new()
 	research_summary.add_theme_constant_override("separation", 8)
-	research_summary.add_child(_stat_card("已完成项目", str(Game.state.completed_projects.size()), COLOR_GOOD))
-	research_summary.add_child(_stat_card("技术/外溢成果", "%d / %d" % [Game.state.technologies.size(), Game.state.technology_spillovers.size()], COLOR_ACCENT))
-	research_summary.add_child(_stat_card("研究容量（流量）", "%.1f" % Game.simulation.research_capacity(Game.state), COLOR_GOOD if Game.simulation.research_capacity(Game.state) >= 1.0 else COLOR_WARN))
+	research_summary.add_child(_stat_card(I18n.core("research.stat.completed_programs"), str(Game.state.completed_projects.size()), COLOR_GOOD))
+	research_summary.add_child(_stat_card(I18n.core("research.stat.technologies_spillovers"), I18n.core("common.ratio") % [Game.state.technologies.size(), Game.state.technology_spillovers.size()], COLOR_ACCENT))
+	research_summary.add_child(_stat_card(I18n.core("research.stat.capacity"), "%.1f" % Game.simulation.research_capacity(Game.state), COLOR_GOOD if Game.simulation.research_capacity(Game.state) >= 1.0 else COLOR_WARN))
 	box.add_child(research_summary)
-	box.add_child(_section_title("长期技术能力域"))
+	box.add_child(_section_title(I18n.core("research.domains")))
 	var domains_row := HFlowContainer.new()
 	domains_row.add_theme_constant_override("h_separation", 8)
 	domains_row.add_theme_constant_override("v_separation", 8)
 	for domain_id_value in SpaceGameState.TECHNOLOGY_DOMAIN_IDS:
 		var domain_id := String(domain_id_value)
 		var domain: Dictionary = Game.state.technology_domains.get(domain_id, {"level":1, "xp":0.0})
-		domains_row.add_child(_stat_card(_technology_domain_name(domain_id), "Lv.%d · %.0f XP" % [int(domain.get("level", 1)), float(domain.get("xp", 0.0))], COLOR_TEXT))
+		var domain_card := _stat_card(_technology_domain_name(domain_id), I18n.core("research.domain.progress") % [int(domain.get("level", 1)), float(domain.get("xp", 0.0))], COLOR_TEXT)
+		domain_card.custom_minimum_size.x = 132
+		domains_row.add_child(domain_card)
 	box.add_child(domains_row)
 	var current_id := String(Game.state.research.get("project_id", ""))
 	if not current_id.is_empty():
 		var current := Game.content.research_projects.get(current_id, {}) as Dictionary
 		var current_stage := Game.simulation.research_stage_definition(Game.state, current, int(Game.state.research.get("stage_index", 0)), String(Game.state.research.get("route_id", "")))
 		var card := _card()
-		card.add_child(_label("当前项目 · " + _content_name(current, current_id), 17, COLOR_ACCENT))
-		card.add_child(_label("阶段 %d / %d · %s · %s%s" % [int(Game.state.research.get("stage_index", 0)) + 1, Game.simulation.research_stages(current).size(), _research_stage_kind_name(String(current_stage.get("kind", "THEORY"))), current_stage.get("name", current_stage.get("id", "")), " · 路线 " + String(Game.state.research.get("route_id", "")) if not String(Game.state.research.get("route_id", "")).is_empty() else ""], 14, COLOR_TEXT))
-		card.add_child(_operation_progress(Game.state.research, String(Game.state.research.get("status", "RUNNING"))))
+		card.add_child(_label(I18n.core("research.current_project") % _content_name(current, current_id), 17, COLOR_ACCENT))
+		var current_route_id := String(Game.state.research.get("route_id", ""))
+		var current_route_name := current_route_id
+		for route_value in current.get("routes", []):
+			var route := route_value as Dictionary
+			if String(route.get("id", "")) == current_route_id:
+				current_route_name = _research_route_name(route)
+				break
+		var current_stage_values := [int(Game.state.research.get("stage_index", 0)) + 1, Game.simulation.research_stages(current).size(), _research_stage_kind_name(String(current_stage.get("kind", "THEORY"))), _research_stage_name(current, current_stage)]
+		var current_stage_caption := I18n.core("research.current_stage") % current_stage_values
+		if not current_route_id.is_empty():
+			current_stage_values.append(current_route_name)
+			current_stage_caption = I18n.core("research.current_stage_route") % current_stage_values
+		card.add_child(_label(current_stage_caption, 14, COLOR_TEXT))
+		card.add_child(_operation_progress(Game.state.research, I18n.core("research.gameplay_state") % _status_text(Game.simulation.research_gameplay_state(Game.state))))
 		_add_blocker_label(card, Game.state.research)
 		var blocker_guidance := _research_blocker_guidance(Game.state.research.get("blocker", {}))
 		if not blocker_guidance.is_empty():
-			card.add_child(_label("处理建议：" + blocker_guidance, 13, COLOR_GOOD))
+			card.add_child(_label(I18n.core("research.guidance") % blocker_guidance, 13, COLOR_GOOD))
 		if not current_stage.get("costs", []).is_empty():
-			card.add_child(_label("本阶段工业供给：" + _research_stage_cost_progress(current_stage, Game.state.research), 13, COLOR_MUTED))
+			card.add_child(_label(I18n.core("research.stage_supply") % _research_stage_cost_progress(current_stage, Game.state.research), 13, COLOR_MUTED))
 		var stage_requirements: Array = current_stage.get("requirements", []) + current_stage.get("operating_conditions", [])
 		if not stage_requirements.is_empty():
 			card.add_child(_requirements_label(stage_requirements))
 		card.add_child(_label(_research_roadmap_text(current, int(Game.state.research.get("stage_index", 0))), 12, COLOR_MUTED))
-		card.add_child(_button("停止研究", _command.bind("停止研究", Game.stop_research), false, COLOR_WARN))
+		var research_paused := String(Game.state.research.get("status", "")) == "PAUSED"
+		var research_action := _button(I18n.core("research.action.resume") if research_paused else I18n.core("research.action.stop"), _command.bind(I18n.core("command.research.resume") if research_paused else I18n.core("command.research.stop"), Game.start_research_project.bind(current_id, current_route_id) if research_paused else Game.stop_research), false, COLOR_ACCENT if research_paused else COLOR_WARN)
+		research_action.name = "%sResearch_%s" % ["Resume" if research_paused else "Pause", current_id]
+		card.add_child(research_action)
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title("可见研发项目（路线与主要瓶颈预览）"))
+	box.add_child(_section_title(I18n.core("research.available_programs")))
 	for project_value in Game.content.research_projects.values():
 		var project := project_value as Dictionary
 		var project_id := String(project.get("id", ""))
@@ -1699,48 +2278,73 @@ func _rebuild_research() -> void:
 		card.add_child(_label(_content_name(project, project_id), 16, COLOR_TEXT))
 		card.add_child(_label(_project_summary(project), 13, COLOR_MUTED))
 		if not project.get("effect_tags", []).is_empty():
-			card.add_child(_label("成果标签：" + " + ".join(project.get("effect_tags", [])), 12, COLOR_ACCENT))
+			card.add_child(_label(I18n.core("research.outcome_tags") % I18n.core("format.plus_separator").join(project.get("effect_tags", [])), 12, COLOR_ACCENT))
 		card.add_child(_label(_research_roadmap_text(project, -1), 12, COLOR_MUTED))
 		var available := Game.simulation.research_project_available(Game.state, project)
 		var busy := not current_id.is_empty() and current_id != project_id
+		var research_unavailable_reason := _unmet_requirements(project.get("requirements", []))
+		if busy:
+			research_unavailable_reason = I18n.core("research.current_project") % _content_name(Game.content.research_projects.get(current_id, {}), current_id)
+		elif not available and research_unavailable_reason.is_empty():
+			research_unavailable_reason = I18n.core("block_reason.default")
 		var routes: Array = project.get("routes", [])
 		if routes.is_empty():
-			var start_button := _button("启动研发项目", _command.bind("开始研究", Game.start_research_project.bind(project_id)), not available or busy)
+			var start_button := _button(I18n.core("research.action.start_program"), _command.bind(I18n.t("button.start_research"), Game.start_research_project.bind(project_id)), not available or busy)
 			start_button.name = "StartResearch_%s" % project_id
+			if not available or busy:
+				start_button.tooltip_text = research_unavailable_reason
 			card.add_child(start_button)
 		else:
 			var route_actions := HFlowContainer.new()
 			for route_value in routes:
 				var route := route_value as Dictionary
 				var route_id := String(route.get("id", ""))
-				var route_button := _button("选择：%s" % route.get("name", route_id), _command.bind("开始研发路线", Game.start_research_project.bind(project_id, route_id)), not available or busy, COLOR_ACCENT)
-				route_button.tooltip_text = String(route.get("description", ""))
+				var route_button := _button(I18n.core("research.action.select_route") % _research_route_name(route), _command.bind(I18n.core("command.research.start_route"), Game.start_research_project.bind(project_id, route_id)), not available or busy, COLOR_ACCENT)
+				route_button.name = "StartResearch_%s_%s" % [project_id, route_id]
+				route_button.tooltip_text = research_unavailable_reason if not available or busy else _research_route_description(route)
 				route_actions.add_child(route_button)
 			card.add_child(route_actions)
 		if not available:
 			card.add_child(_requirements_label(project.get("requirements", [])))
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title("实验技术成熟度"))
+	box.add_child(_section_title(I18n.core("research.locked_programs")))
+	for project_value in Game.content.research_projects.values():
+		var project := project_value as Dictionary
+		var project_id := String(project.get("id", ""))
+		if bool(Game.state.completed_projects.get(project_id, false)) or Game.simulation.definition_revealed(Game.state, project):
+			continue
+		var locked_card := _card()
+		locked_card.add_child(_label(_content_name(project, project_id), 16, COLOR_MUTED))
+		locked_card.add_child(_label(_status_text("LOCKED"), 13, COLOR_WARN))
+		locked_card.add_child(_label(_project_summary(project), 13, COLOR_MUTED))
+		if not project.get("requirements", []).is_empty():
+			locked_card.add_child(_requirements_label(project.get("requirements", [])))
+		var guidance_button := _button(I18n.core("research.open_progression_objectives"), _switch_page.bind("system_map"), false, COLOR_ACCENT)
+		guidance_button.name = "ResearchUnlockGuidance_%s" % project_id
+		locked_card.add_child(guidance_button)
+		box.add_child(_wrap_card(locked_card))
+
+	box.add_child(_section_title(I18n.core("research.maturity")))
 	var maturity_lines: Array[String] = []
 	for item_id_value in Game.state.experimental_maturity.keys():
 		var item_id := String(item_id_value)
-		maturity_lines.append("%s · %s" % [_content_name(Game.content.items.get(item_id, {}), item_id), Game.state.experimental_maturity.get(item_id, "THEORY")])
+		maturity_lines.append(I18n.core("research.maturity.entry") % [_content_name(Game.content.items.get(item_id, {}), item_id), _research_stage_kind_name(String(Game.state.experimental_maturity.get(item_id, "THEORY")))])
 	maturity_lines.sort()
-	box.add_child(_card_text("\n".join(maturity_lines) if not maturity_lines.is_empty() else "尚无实验材料进入工程成熟流程。", COLOR_TEXT if not maturity_lines.is_empty() else COLOR_MUTED))
+	box.add_child(_card_text("\n".join(maturity_lines) if not maturity_lines.is_empty() else I18n.core("research.maturity.empty"), COLOR_TEXT if not maturity_lines.is_empty() else COLOR_MUTED))
 
-	box.add_child(_section_title("已掌握成果与可补研路线"))
+	box.add_child(_section_title(I18n.core("research.achievements")))
 	var technology_lines: Array[String] = []
 	for technology_id_value in Game.state.technologies.keys():
 		if not bool(Game.state.technologies.get(technology_id_value, false)):
 			continue
 		var technology_id := String(technology_id_value)
 		var technology := Game.content.technologies.get(technology_id, {}) as Dictionary
-		technology_lines.append("✓ %s%s" % [_content_name(technology, technology_id), "（技术外溢）" if bool(Game.state.technology_spillovers.get(technology_id, false)) else ""])
+		technology_lines.append((I18n.core("research.technology.completed_spillover") if bool(Game.state.technology_spillovers.get(technology_id, false)) else I18n.core("research.technology.completed")) % _content_name(technology, technology_id))
 	technology_lines.sort()
-	box.add_child(_card_text("\n".join(technology_lines) if not technology_lines.is_empty() else "尚未解锁技术。", COLOR_GOOD if not technology_lines.is_empty() else COLOR_MUTED))
+	box.add_child(_card_text("\n".join(technology_lines) if not technology_lines.is_empty() else I18n.core("research.technology.empty"), COLOR_GOOD if not technology_lines.is_empty() else COLOR_MUTED))
 
-	box.add_child(_section_title("已完成项目"))
+	box.add_child(_section_title(I18n.core("research.completed_programs")))
 	var completed_lines: Array[String] = []
 	for completed_id_value in Game.state.completed_projects.keys():
 		if not bool(Game.state.completed_projects.get(completed_id_value, false)):
@@ -1752,36 +2356,74 @@ func _rebuild_research() -> void:
 			var route := route_value as Dictionary
 			var route_id := String(route.get("id", ""))
 			if bool(Game.state.completed_research_routes.get(completed_id, {}).get(route_id, false)):
-				route_names.append(String(route.get("name", route_id)))
+				route_names.append(_research_route_name(route))
 			elif current_id.is_empty():
-				var supplemental := _button("补研路线：%s" % route.get("name", route_id), _command.bind("补研工程路线", Game.start_research_project.bind(completed_id, route_id)), not Game.simulation.research_project_available(Game.state, completed_project, route_id), COLOR_ACCENT)
+				var supplemental := _button(I18n.core("research.action.supplemental_route") % _research_route_name(route), _command.bind(I18n.core("command.research.supplemental_route"), Game.start_research_project.bind(completed_id, route_id)), not Game.simulation.research_project_available(Game.state, completed_project, route_id), COLOR_ACCENT)
 				box.add_child(supplemental)
-		completed_lines.append("✓ %s%s" % [_content_name(completed_project, completed_id), " · 已完成路线 " + " / ".join(route_names) if not route_names.is_empty() else ""])
+		completed_lines.append(I18n.core("research.completed.entry_routes") % [_content_name(completed_project, completed_id), I18n.core("format.slash_separator").join(route_names)] if not route_names.is_empty() else I18n.core("research.completed.entry") % _content_name(completed_project, completed_id))
 	completed_lines.sort()
-	box.add_child(_card_text("\n".join(completed_lines) if not completed_lines.is_empty() else "尚未完成研究项目。", COLOR_GOOD if not completed_lines.is_empty() else COLOR_MUTED))
+	box.add_child(_card_text("\n".join(completed_lines) if not completed_lines.is_empty() else I18n.core("research.completed.empty"), COLOR_GOOD if not completed_lines.is_empty() else COLOR_MUTED))
 
 
 func _technology_domain_name(domain_id: String) -> String:
-	return {"materials_science":"材料科学", "manufacturing":"制造与加工", "energy":"能源工程", "propulsion":"推进技术", "automation_computing":"自动化与计算", "ship_engineering":"舰船工程", "logistics":"物流与运输", "anomaly_science":"异常现象研究"}.get(domain_id, domain_id)
+	match domain_id:
+		"materials_science": return I18n.t("technology_domain.materials_science")
+		"manufacturing": return I18n.t("technology_domain.manufacturing")
+		"energy": return I18n.t("technology_domain.energy")
+		"propulsion": return I18n.t("technology_domain.propulsion")
+		"automation_computing": return I18n.t("technology_domain.automation_computing")
+		"ship_engineering": return I18n.t("technology_domain.ship_engineering")
+		"logistics": return I18n.t("technology_domain.logistics")
+		"anomaly_science": return I18n.t("technology_domain.anomaly_science")
+		_: return domain_id
 
 
 func _research_stage_kind_name(kind: String) -> String:
-	return {"THEORY":"理论研究", "EXPERIMENT":"实验验证", "ENGINEERING":"工程开发", "PROTOTYPE":"原型制造", "FIELD_TEST":"实地测试", "INDUSTRIALIZATION":"工业化"}.get(kind, kind)
+	match kind:
+		"THEORY": return I18n.core("research.stage_kind.THEORY")
+		"EXPERIMENT": return I18n.core("research.stage_kind.EXPERIMENT")
+		"ENGINEERING": return I18n.core("research.stage_kind.ENGINEERING")
+		"PROTOTYPE": return I18n.core("research.stage_kind.PROTOTYPE")
+		"FIELD_TEST": return I18n.core("research.stage_kind.FIELD_TEST")
+		"INDUSTRIALIZATION": return I18n.core("research.stage_kind.INDUSTRIALIZATION")
+		_: return kind
+
+
+func _research_stage_name(project: Dictionary, stage: Dictionary) -> String:
+	var project_id := String(project.get("id", ""))
+	var stage_id := String(stage.get("id", "research"))
+	var key := "research.stage_name.%s.%s" % [project_id, stage_id]
+	var translated := I18n.core(key)
+	if translated != key:
+		return translated
+	if stage_id == "research":
+		return I18n.core("research.stage_name.integrated", "Integrated Research")
+	return String(stage.get("name", stage_id.replace("_", " ").capitalize()))
+
+
+func _research_route_name(route: Dictionary) -> String:
+	var route_id := String(route.get("id", ""))
+	return I18n.core("research.route_name.%s" % route_id, String(route.get("name", route_id)))
+
+
+func _research_route_description(route: Dictionary) -> String:
+	var route_id := String(route.get("id", ""))
+	return I18n.core("research.route_description.%s" % route_id, String(route.get("description", "")))
 
 
 func _research_roadmap_text(project: Dictionary, active_stage_index: int) -> String:
-	var lines: Array[String] = ["研发路线（启动前可见主要需求）："]
+	var lines: Array[String] = [I18n.core("research.roadmap.title")]
 	for index in Game.simulation.research_stages(project).size():
 		var stage := Game.simulation.research_stages(project)[index] as Dictionary
 		var demands: Array[String] = []
 		if not stage.get("costs", []).is_empty():
-			demands.append("工业供给 " + _resource_list(stage.get("costs", [])))
+			demands.append(I18n.core("research.roadmap.industrial_supply") % _resource_list(stage.get("costs", [])))
 		for requirement_value in stage.get("requirements", []):
 			demands.append(Game.requirement_text(requirement_value as Dictionary))
 		for requirement_value in stage.get("operating_conditions", []):
 			demands.append(Game.requirement_text(requirement_value as Dictionary))
 		var marker := "▶" if index == active_stage_index else ("✓" if active_stage_index >= 0 and index < active_stage_index else "○")
-		lines.append("%s %s · %s%s" % [marker, _research_stage_kind_name(String(stage.get("kind", "THEORY"))), stage.get("name", stage.get("id", "")), " · " + "；".join(demands) if not demands.is_empty() else ""])
+		lines.append(I18n.core("research.roadmap.stage_demands") % [marker, _research_stage_kind_name(String(stage.get("kind", "THEORY"))), _research_stage_name(project, stage), I18n.core("format.requirement_separator").join(demands)] if not demands.is_empty() else I18n.core("research.roadmap.stage") % [marker, _research_stage_kind_name(String(stage.get("kind", "THEORY"))), _research_stage_name(project, stage)])
 	return "\n".join(lines)
 
 
@@ -1792,43 +2434,19 @@ func _research_stage_cost_progress(stage: Dictionary, runtime: Dictionary) -> St
 		var item_id := String(cost.get("item", ""))
 		var paid := int(runtime.get("stage_consumed", {}).get(item_id, 0))
 		var available := Game.state.item_quantity(item_id, String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
-		parts.append("%s 已投入 %d / %d · 本地库存 %d" % [_content_name(Game.content.items.get(item_id, {}), item_id), paid, int(cost.get("quantity", 0)), available])
-	return "；".join(parts)
+		parts.append(I18n.core("research.stage_cost_progress") % [_content_name(Game.content.items.get(item_id, {}), item_id), paid, int(cost.get("quantity", 0)), available])
+	return I18n.core("format.requirement_separator").join(parts)
 
 
 func _research_blocker_guidance(blocker: Dictionary) -> String:
-	if blocker.is_empty():
-		return ""
-	var requirement: Dictionary = blocker.get("requirement", {})
-	match String(requirement.get("type", "")):
-		"activity_complete":
-			var activity_id := String(requirement.get("id", ""))
-			return "到生产配方执行 %s；原型必须由真实工业产线制造。" % _content_name(Game.content.activities.get(activity_id, {}), activity_id)
-		"manufacturing_module_installed":
-			var module_id := String(requirement.get("id", ""))
-			var module: Dictionary = Game.content.process_modules.get(module_id, Game.content.universal_industry_plugins.get(module_id, {}))
-			return "到设施工艺页为指定设施安装 %s。" % _content_name(module, module_id)
-	match String(blocker.get("primary_reason", "")):
-		"INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD":
-			var item_id := String(blocker.get("item_id", ""))
-			return "到生产配方制造 %s；它是项目的真实工业供给。" % _content_name(Game.content.items.get(item_id, {}), item_id)
-		"FIELD_TEST_REQUIRED":
-			if String(requirement.get("type", "")) == "route_complete":
-				var route_id := String(requirement.get("id", ""))
-				return "到远征页执行 %s，倒计时不能替代这次测试。" % _content_name(Game.content.expedition_routes.get(route_id, {}), route_id)
-			if String(requirement.get("type", "")) == "own_facility":
-				return "到设施建设完成 %s，并让它真实投入运行。" % _content_name(Game.content.facilities.get(String(requirement.get("id", "")), {}), String(requirement.get("id", "")))
-		"MISSING_FACILITY":
-			return "到设施工艺页安装项目要求的实验/测试模块。"
-		"OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE":
-			return "扩建研究设施、电网、冷却或地点物流后，项目会自动继续。"
-	return "完成本阶段显示的唯一首要门槛后，项目会自动继续。"
+	return Game.research_blocker_resolution(blocker)
 
 
 func _rebuild_fleet() -> void:
 	var box: VBoxContainer = _pages["fleet"]
 	_clear(box)
-	box.add_child(_page_title("星港与舰队", "管理永久舰船实体、前列 / 中列 / 后列编队、补给、改装、建造和生命周期。"))
+	box.add_child(_page_title(I18n.core("ships.title"), I18n.core("ships.subtitle")))
+	_add_unlock_banner(box, "fleet")
 	var expedition_ids: Array = Game.state.fleet_ship_ids("expedition")
 	var command_used := Game.simulation.fleet_command_usage(Game.state, expedition_ids)
 	var command_capacity := Game.simulation.fleet_command_capacity(Game.state)
@@ -1836,20 +2454,23 @@ func _rebuild_fleet() -> void:
 	var repair_count := Game.state.ships.filter(func(ship): return String(ship.get("status", "")) == "REPAIRING").size()
 	var summary := HBoxContainer.new()
 	summary.add_theme_constant_override("separation", 8)
-	summary.add_child(_stat_card("舰船实体", str(Game.state.ships.size()), COLOR_TEXT))
-	summary.add_child(_stat_card("现役", str(active_count), COLOR_GOOD))
-	summary.add_child(_stat_card("维修中", str(repair_count), COLOR_WARN if repair_count > 0 else COLOR_MUTED))
-	summary.add_child(_stat_card("远征指挥", "%d / %d" % [command_used, command_capacity], COLOR_ACCENT))
+	summary.add_child(_stat_card(I18n.core("ships.stat.entities"), str(Game.state.ships.size()), COLOR_TEXT))
+	summary.add_child(_stat_card(I18n.core("status.ACTIVE"), str(active_count), COLOR_GOOD))
+	summary.add_child(_stat_card(I18n.core("status.REPAIRING"), str(repair_count), COLOR_WARN if repair_count > 0 else COLOR_MUTED))
+	summary.add_child(_stat_card(I18n.core("ships.stat.expedition_command"), I18n.core("common.ratio") % [command_used, command_capacity], COLOR_ACCENT))
 	box.add_child(summary)
 
 	var section_tabs := HFlowContainer.new()
 	section_tabs.add_theme_constant_override("h_separation", 6)
 	section_tabs.add_theme_constant_override("v_separation", 6)
-	for entry in [["roster", "舰船名册"], ["readiness", "编队与补给"], ["shipyard", "造船与改装"], ["archive", "维修与档案"]]:
+	for entry in [["roster", I18n.core("ships.tab.roster")], ["readiness", I18n.core("ships.tab.readiness")], ["shipyard", I18n.core("ships.tab.shipyard")], ["archive", I18n.core("ships.tab.archive")]]:
 		var section_id := String(entry[0])
 		var section_button := _button(String(entry[1]), _select_fleet_section.bind(section_id), section_id == _fleet_section, COLOR_ACCENT)
 		section_button.name = "FleetSection_%s" % section_id
 		section_tabs.add_child(section_button)
+	var missions_button := _button(I18n.core("ships.missions", "Missions"), _switch_page.bind("expedition"), false, COLOR_ACCENT)
+	missions_button.name = "ShipsMissions"
+	section_tabs.add_child(missions_button)
 	box.add_child(section_tabs)
 	match _fleet_section:
 		"readiness":
@@ -1864,29 +2485,36 @@ func _rebuild_fleet() -> void:
 
 func _select_fleet_section(section: String) -> void:
 	_fleet_section = section
+	_save_ui_preferences()
 	_rebuild_fleet()
 
 
 func _build_fleet_readiness(box: VBoxContainer) -> void:
 	var formation: Dictionary = Game.state.fleet_logistics_runtime("expedition").get("formation", {})
 	var formation_card := _card()
-	formation_card.add_child(_label("作战条令", 16, COLOR_ACCENT))
+	formation_card.add_child(_label(I18n.core("ships.readiness.doctrine"), 16, COLOR_ACCENT))
 	var doctrine_row := HFlowContainer.new()
 	doctrine_row.add_theme_constant_override("h_separation", 6)
 	doctrine_row.add_theme_constant_override("v_separation", 6)
 	for doctrine in ["HOLD_FORMATION", "AGGRESSIVE_PUSH", "MISSILE_SATURATION", "LONG_RANGE_ENGAGEMENT"]:
-		doctrine_row.add_child(_button(_status_text(doctrine), _command.bind("设置作战条令", Game.set_fleet_doctrine.bind(doctrine)), String(formation.get("doctrine", "HOLD_FORMATION")) == doctrine, COLOR_ACCENT))
+		var doctrine_button := _button(_status_text(doctrine), _command.bind(I18n.core("command.ships.set_doctrine"), Game.set_fleet_doctrine.bind(doctrine)), String(formation.get("doctrine", "HOLD_FORMATION")) == doctrine, COLOR_ACCENT)
+		doctrine_button.name = "FleetDoctrine_%s" % doctrine
+		doctrine_row.add_child(doctrine_button)
 	formation_card.add_child(doctrine_row)
 	var retreat_policy: Dictionary = formation.get("retreat_policy", {"mode":"HULL_THRESHOLD", "threshold":0.25})
-	formation_card.add_child(_label("撤退策略", 16, COLOR_ACCENT))
+	formation_card.add_child(_label(I18n.core("ships.readiness.retreat_policy"), 16, COLOR_ACCENT))
 	var retreat_row := HFlowContainer.new()
 	retreat_row.add_theme_constant_override("h_separation", 6)
 	retreat_row.add_theme_constant_override("v_separation", 6)
 	for threshold in [0.15, 0.25, 0.40]:
-		retreat_row.add_child(_button("船体 ≤ %.0f%%" % (threshold * 100.0), _command.bind("设置撤退策略", Game.set_fleet_retreat_policy.bind("HULL_THRESHOLD", threshold)), String(retreat_policy.get("mode", "")) == "HULL_THRESHOLD" and is_equal_approx(float(retreat_policy.get("threshold", 0.25)), threshold), COLOR_ACCENT))
-	retreat_row.add_child(_button("永不撤退", _command.bind("禁用撤退", Game.set_fleet_retreat_policy.bind("NEVER", 0.25)), String(retreat_policy.get("mode", "")) == "NEVER", COLOR_WARN))
+		var retreat_button := _button(I18n.core("ships.readiness.hull_threshold") % (threshold * 100.0), _command.bind(I18n.core("command.ships.set_retreat_policy"), Game.set_fleet_retreat_policy.bind("HULL_THRESHOLD", threshold)), String(retreat_policy.get("mode", "")) == "HULL_THRESHOLD" and is_equal_approx(float(retreat_policy.get("threshold", 0.25)), threshold), COLOR_ACCENT)
+		retreat_button.name = "FleetRetreatPolicy_HULL_THRESHOLD_%d" % int(round(threshold * 100.0))
+		retreat_row.add_child(retreat_button)
+	var never_retreat_button := _button(I18n.core("ships.readiness.never_retreat"), _command.bind(I18n.core("command.ships.disable_retreat"), Game.set_fleet_retreat_policy.bind("NEVER", 0.25)), String(retreat_policy.get("mode", "")) == "NEVER", COLOR_WARN)
+	never_retreat_button.name = "FleetRetreatPolicy_NEVER"
+	retreat_row.add_child(never_retreat_button)
 	formation_card.add_child(retreat_row)
-	formation_card.add_child(_label("三线编队", 16, COLOR_ACCENT))
+	formation_card.add_child(_label(I18n.core("ships.readiness.formation"), 16, COLOR_ACCENT))
 	var zone_columns := HBoxContainer.new()
 	zone_columns.add_theme_constant_override("separation", 8)
 	for zone in ["FRONT", "MID", "REAR"]:
@@ -1896,83 +2524,109 @@ func _build_fleet_readiness(box: VBoxContainer) -> void:
 			var ship_id := String(ship.get("instance_id", ""))
 			if Game.state.ship_fleet_domain(ship_id) == "expedition" and String(formation.get("ship_zones", {}).get(ship_id, "FRONT")) == zone:
 				names.append(String(ship.get("name", ship_id)))
-		var zone_card := _stat_card(_zone_text(zone), "\n".join(names) if not names.is_empty() else "未配置", COLOR_TEXT if not names.is_empty() else COLOR_MUTED)
+		var zone_card := _stat_card(_zone_text(zone), "\n".join(names) if not names.is_empty() else I18n.core("ships.readiness.unconfigured"), COLOR_TEXT if not names.is_empty() else COLOR_MUTED)
 		zone_columns.add_child(zone_card)
 	formation_card.add_child(zone_columns)
 	box.add_child(_wrap_card(formation_card))
 
-	box.add_child(_section_title("远征补给计划"))
+	box.add_child(_section_title(I18n.core("ships.readiness.supply_plan")))
 	var logistics: Dictionary = Game.state.fleet_logistics_runtime("expedition")
 	var plan: Dictionary = logistics.get("supply_plan", {})
 	for item_id in ["kinetic_munitions", "chemical_propellant", "repair_supplies"]:
 		var item := Game.content.items.get(item_id, {}) as Dictionary
 		var input := _number_input(int(plan.get(item_id, 0)), 0, 100000, 1)
-		var row := _labeled_control("%s · 当前携带 %d" % [_content_name(item, item_id), Game.state.fleet_supply_quantity(item_id)], input)
-		row.add_child(_button("保存目标", _save_fleet_supply_plan.bind(item_id, input)))
+		input.name = "FleetSupplyTarget_%s" % item_id
+		var row := _labeled_control(I18n.core("ships.readiness.carried") % [_content_name(item, item_id), Game.state.fleet_supply_quantity(item_id)], input)
+		var save_supply_button := _button(I18n.core("ships.readiness.save_target"), _save_fleet_supply_plan.bind(item_id, input))
+		save_supply_button.name = "SetFleetSupplyPlan_%s" % item_id
+		row.add_child(save_supply_button)
 		box.add_child(row)
-	box.add_child(_button("按计划从主基地自动补给", _command.bind("自动补给远征舰队", Game.auto_resupply_fleet), Game.state.fleet_ship_ids("expedition").is_empty(), COLOR_GOOD))
+	var expedition_fleet_empty := Game.state.fleet_ship_ids("expedition").is_empty()
+	var auto_resupply_button := _button(I18n.core("ships.readiness.auto_resupply"), _command.bind(I18n.core("command.ships.auto_resupply"), Game.auto_resupply_fleet), expedition_fleet_empty, COLOR_GOOD)
+	auto_resupply_button.name = "AutoResupplyFleet"
+	if expedition_fleet_empty:
+		auto_resupply_button.tooltip_text = I18n.t("notice.expedition_fleet_empty", "Assign ships to the Expedition Fleet at Starport first")
+	box.add_child(auto_resupply_button)
 
 
 func _save_fleet_supply_plan(item_id: String, input: SpinBox) -> void:
-	_command("保存舰队补给计划", Game.set_fleet_supply_plan.bind(item_id, int(input.value), "expedition"))
+	_command(I18n.core("command.ships.save_supply_plan"), Game.set_fleet_supply_plan.bind(item_id, int(input.value), "expedition"))
 
 
 func _build_fleet_roster(box: VBoxContainer) -> void:
-	box.add_child(_section_title("永久舰船名册"))
+	box.add_child(_section_title(I18n.core("ships.roster.title")))
 	var formation: Dictionary = Game.state.fleet_logistics_runtime("expedition").get("formation", {})
 	for ship_value in Game.state.ships:
 		var ship := ship_value as Dictionary
 		var ship_id := String(ship.get("instance_id", ""))
 		var blueprint := Game.content.ships.get(String(ship.get("blueprint_id", "")), {}) as Dictionary
 		var card := _card()
-		card.add_child(_label("%s · %s" % [String(ship.get("name", ship_id)), _content_name(blueprint, String(ship.get("blueprint_id", "")))], 18, COLOR_TEXT))
+		card.add_child(_label(I18n.core("ships.roster.identity") % [String(ship.get("name", ship_id)), _content_name(blueprint, String(ship.get("blueprint_id", "")))], 18, COLOR_TEXT))
 		var status_color := COLOR_WARN if String(ship.get("status", "")) in ["REPAIRING", "REFITTING", "REACTIVATING"] else COLOR_GOOD
-		card.add_child(_label("状态：%s  ·  调配：%s  ·  战位：%s" % [_status_text(String(ship.get("status", "DOCKED"))), _assignment_name(Game.state.ship_fleet_domain(ship_id)), _zone_text(String(Game.state.fleet_logistics_runtime("expedition").get("formation", {}).get("ship_zones", {}).get(ship_id, "FRONT")))], 14, status_color))
-		card.add_child(_label("维护：%s · 覆盖 %.0f%% · 欠账 %.1f" % [_status_text(String(ship.get("maintenance_state", "ACTIVE"))), float(ship.get("maintenance_coverage", 1.0)) * 100.0, float(ship.get("maintenance_debt", 0.0))], 13, COLOR_MUTED))
+		card.add_child(_label(I18n.core("ships.roster.status") % [_status_text(String(ship.get("status", "DOCKED"))), _assignment_name(Game.state.ship_fleet_domain(ship_id)), _zone_text(String(Game.state.fleet_logistics_runtime("expedition").get("formation", {}).get("ship_zones", {}).get(ship_id, "FRONT")))], 14, status_color))
+		card.add_child(_label(I18n.core("ships.roster.maintenance") % [_status_text(String(ship.get("maintenance_state", "ACTIVE"))), float(ship.get("maintenance_coverage", 1.0)) * 100.0, float(ship.get("maintenance_debt", 0.0))], 13, COLOR_MUTED))
 		var service_record: Dictionary = ship.get("service_record", {})
-		card.add_child(_label("服役记录：战斗 %d · %d胜/%d负 · 经验 %.1f · 伤害 %.1f" % [int(service_record.get("combat_deployments", 0)), int(service_record.get("victories", 0)), int(service_record.get("defeats", 0)), float(service_record.get("combat_experience", 0.0)), float(service_record.get("damage_dealt", 0.0))], 13, COLOR_MUTED))
-		card.add_child(_label("模块：" + _ship_modules_text(ship), 13, COLOR_MUTED))
-		card.add_child(_label("当前职责（由装配决定）：" + _ship_loadout_roles_text(ship), 13, COLOR_ACCENT))
-		card.add_child(_label("生命周期", 14, COLOR_ACCENT))
+		card.add_child(_label(I18n.core("ships.roster.service_record") % [int(service_record.get("combat_deployments", 0)), int(service_record.get("victories", 0)), int(service_record.get("defeats", 0)), float(service_record.get("combat_experience", 0.0)), float(service_record.get("damage_dealt", 0.0))], 13, COLOR_MUTED))
+		card.add_child(_label(I18n.core("ships.roster.modules") % _ship_modules_text(ship), 13, COLOR_MUTED))
+		card.add_child(_label(I18n.core("ships.roster.roles") % _ship_loadout_roles_text(ship), 13, COLOR_ACCENT))
+		card.add_child(_label(I18n.core("ships.roster.lifecycle"), 14, COLOR_ACCENT))
 		var maintenance_row := HFlowContainer.new()
 		maintenance_row.add_theme_constant_override("h_separation", 6)
 		maintenance_row.add_theme_constant_override("v_separation", 6)
 		var maintenance_state := String(ship.get("maintenance_state", "ACTIVE"))
 		if maintenance_state == "MOTHBALLED":
-			maintenance_row.add_child(_button("启动再服役工程", _command.bind("启动舰船再服役", Game.start_ship_reactivation.bind(ship_id)), String(ship.get("status", "")) != "DOCKED", COLOR_ACCENT))
+			maintenance_row.add_child(_button(I18n.core("ships.action.reactivate"), _command.bind(I18n.core("command.ships.reactivate"), Game.start_ship_reactivation.bind(ship_id)), String(ship.get("status", "")) != "DOCKED", COLOR_ACCENT))
 		else:
-			maintenance_row.add_child(_button("现役", _command.bind("设为现役", Game.set_ship_maintenance_state.bind(ship_id, "ACTIVE")), maintenance_state == "ACTIVE" or String(ship.get("status", "")) != "DOCKED"))
-			maintenance_row.add_child(_button("战备储备", _command.bind("转入战备储备", Game.set_ship_maintenance_state.bind(ship_id, "READY_RESERVE")), maintenance_state == "READY_RESERVE" or String(ship.get("status", "")) != "DOCKED"))
-			maintenance_row.add_child(_button("封存", _command.bind("封存舰船", Game.set_ship_maintenance_state.bind(ship_id, "MOTHBALLED")), String(ship.get("status", "")) != "DOCKED", COLOR_WARN))
+			maintenance_row.add_child(_button(I18n.core("status.ACTIVE"), _command.bind(I18n.core("command.ships.set_active"), Game.set_ship_maintenance_state.bind(ship_id, "ACTIVE")), maintenance_state == "ACTIVE" or String(ship.get("status", "")) != "DOCKED"))
+			maintenance_row.add_child(_button(I18n.core("status.READY_RESERVE"), _command.bind(I18n.core("command.ships.set_ready_reserve"), Game.set_ship_maintenance_state.bind(ship_id, "READY_RESERVE")), maintenance_state == "READY_RESERVE" or String(ship.get("status", "")) != "DOCKED"))
+			maintenance_row.add_child(_button(I18n.core("ships.action.mothball"), _command.bind(I18n.core("command.ships.mothball"), Game.set_ship_maintenance_state.bind(ship_id, "MOTHBALLED")), String(ship.get("status", "")) != "DOCKED", COLOR_WARN))
 		card.add_child(maintenance_row)
 
-		card.add_child(_label("舰队调配", 14, COLOR_ACCENT))
+		card.add_child(_label(I18n.core("ships.roster.assignment"), 14, COLOR_ACCENT))
 		var assignment_row := HFlowContainer.new()
 		assignment_row.add_theme_constant_override("h_separation", 6)
 		assignment_row.add_theme_constant_override("v_separation", 6)
-		var standby_button := _button("待命", _command.bind("舰船待命", Game.set_ship_fleet_assignment.bind(ship_id, "")), String(ship.get("status", "DOCKED")) != "DOCKED")
+		var ship_not_docked := String(ship.get("status", "DOCKED")) != "DOCKED"
+		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_fleet_assignment.bind(ship_id, "")), ship_not_docked)
 		standby_button.name = "AssignStandby_%s" % ship_id
+		if ship_not_docked: standby_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
 		assignment_row.add_child(standby_button)
-		var mining_button := _button("采矿舰队", _command.bind("调入采矿舰队", Game.set_ship_fleet_assignment.bind(ship_id, "mining")), String(ship.get("status", "DOCKED")) != "DOCKED")
+		var mining_button := _button(I18n.core("ships.assignment.mining"), _command.bind(I18n.core("command.ships.assign_mining"), Game.set_ship_fleet_assignment.bind(ship_id, "mining")), ship_not_docked)
 		mining_button.name = "AssignMining_%s" % ship_id
+		if ship_not_docked: mining_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
 		assignment_row.add_child(mining_button)
-		var expedition_button := _button("远征舰队", _command.bind("调入远征舰队", Game.set_ship_fleet_assignment.bind(ship_id, "expedition")), String(ship.get("status", "DOCKED")) != "DOCKED")
+		var expedition_button := _button(I18n.core("ships.assignment.expedition"), _command.bind(I18n.core("command.ships.assign_expedition"), Game.set_ship_fleet_assignment.bind(ship_id, "expedition")), ship_not_docked)
 		expedition_button.name = "AssignExpedition_%s" % ship_id
+		if ship_not_docked: expedition_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
 		assignment_row.add_child(expedition_button)
+		var construction_assignment: Dictionary = ship.get("assignment", {})
+		if String(construction_assignment.get("type", "")) == "CONSTRUCTION_SUPPORT":
+			var release_support := _button(I18n.core("ships.release_construction", "Release Construction Support"), _command.bind(I18n.core("command.ships.release_construction"), Game.release_ship_from_construction_support.bind(ship_id)), false, COLOR_WARN)
+			release_support.name = "ReleaseConstructionSupport_%s" % ship_id
+			assignment_row.add_child(release_support)
+		elif Game.simulation.ship_loadout_capability_value(Game.state, ship, "construction_support") > 0.0:
+			var support_location := String(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+			var assign_support := _button(I18n.core("ships.assign_construction", "Assign Construction Support"), _command.bind(I18n.core("command.ships.assign_construction"), Game.assign_ship_to_construction_support.bind(ship_id, support_location)), not Game.state.ship_is_unassigned_docked(ship_id), COLOR_ACCENT)
+			assign_support.name = "AssignConstructionSupport_%s" % ship_id
+			assignment_row.add_child(assign_support)
 		card.add_child(assignment_row)
-		card.add_child(_label("作战位置", 14, COLOR_ACCENT))
+		card.add_child(_label(I18n.core("ships.roster.combat_position"), 14, COLOR_ACCENT))
 		var zone_row := HFlowContainer.new()
 		zone_row.add_theme_constant_override("h_separation", 6)
 		zone_row.add_theme_constant_override("v_separation", 6)
 		var current_zone := String(formation.get("ship_zones", {}).get(ship_id, "FRONT"))
 		for zone in ["FRONT", "MID", "REAR"]:
-			zone_row.add_child(_button(_zone_text(zone), _command.bind("设置作战位置", Game.set_ship_combat_zone.bind(ship_id, zone)), current_zone == zone, COLOR_ACCENT))
+			var zone_button := _button(_zone_text(zone), _command.bind(I18n.core("command.ships.set_combat_position"), Game.set_ship_combat_zone.bind(ship_id, zone)), current_zone == zone, COLOR_ACCENT)
+			zone_button.name = "ShipCombatZone_%s_%s" % [ship_id, zone]
+			zone_row.add_child(zone_button)
 		card.add_child(zone_row)
-		card.add_child(_button("保存当前配置", _command.bind("保存舰船配置", Game.save_ship_loadout.bind(ship_id)), String(ship.get("status", "DOCKED")) != "DOCKED", COLOR_GOOD))
+		var save_loadout_button := _button(I18n.core("ships.action.save_configuration"), _command.bind(I18n.core("command.ships.save_configuration"), Game.save_ship_loadout.bind(ship_id)), String(ship.get("status", "DOCKED")) != "DOCKED", COLOR_GOOD)
+		save_loadout_button.name = "SaveShipLoadout_%s" % ship_id
+		card.add_child(save_loadout_button)
 		var matching_loadouts: Array = Game.state.saved_loadouts.values().filter(func(loadout): return String(loadout.get("blueprint_id", "")) == String(ship.get("blueprint_id", "")))
 		matching_loadouts.sort_custom(func(a, b): return String(a.get("name", a.get("id", ""))) < String(b.get("name", b.get("id", ""))))
 		if not matching_loadouts.is_empty():
-			card.add_child(_label("已保存配置", 14, COLOR_ACCENT))
+			card.add_child(_label(I18n.core("ships.saved_configuration"), 14, COLOR_ACCENT))
 		for loadout_value in matching_loadouts:
 			var loadout := loadout_value as Dictionary
 			var loadout_id := String(loadout.get("id", ""))
@@ -1980,109 +2634,164 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 			loadout_row.add_theme_constant_override("h_separation", 6)
 			loadout_row.add_theme_constant_override("v_separation", 6)
 			loadout_row.add_child(_label(String(loadout.get("name", loadout_id)), 13, COLOR_MUTED))
-			loadout_row.add_child(_button("应用", _command.bind("应用舰船配置", Game.apply_ship_loadout.bind(ship_id, loadout_id)), String(ship.get("status", "DOCKED")) != "DOCKED"))
-			loadout_row.add_child(_button("删除", _command.bind("删除舰船配置", Game.delete_ship_loadout.bind(loadout_id)), false, COLOR_WARN))
+			var apply_loadout_button := _button(I18n.core("common.apply"), _command.bind(I18n.core("command.ships.apply_configuration"), Game.apply_ship_loadout.bind(ship_id, loadout_id)), String(ship.get("status", "DOCKED")) != "DOCKED")
+			apply_loadout_button.name = "ApplyShipLoadout_%s_%s" % [ship_id, loadout_id]
+			loadout_row.add_child(apply_loadout_button)
+			var delete_loadout_button := _button(I18n.core("ships.action.delete"), _command.bind(I18n.core("command.ships.delete_configuration"), Game.delete_ship_loadout.bind(loadout_id)), false, COLOR_WARN)
+			delete_loadout_button.name = "DeleteShipLoadout_%s" % loadout_id
+			loadout_row.add_child(delete_loadout_button)
 			card.add_child(loadout_row)
 
 		var module_choices := _compatible_loadout_modules(ship)
 		if not module_choices.is_empty():
-			card.add_child(_label("可用装配方案（应用时制造并安装整套插件）", 14, COLOR_ACCENT))
+			card.add_child(_label(I18n.core("ships.roster.available_loadouts"), 14, COLOR_ACCENT))
 			for choice_value in module_choices:
 				var choice := choice_value as Dictionary
 				var new_id := String(choice.get("new_id", ""))
 				var old_id := String(choice.get("old_id", ""))
 				var module_def := Game.content.modules.get(new_id, {}) as Dictionary
 				var old_def := Game.content.modules.get(old_id, {}) as Dictionary
-				var button_text := "将 %s 替换为 %s" % [_content_name(old_def, old_id), _content_name(module_def, new_id)]
-				card.add_child(_button(button_text, _command.bind("开始改装", Game.replace_ship_module.bind(ship_id, old_id, new_id)), String(ship.get("status", "DOCKED")) != "DOCKED"))
+				var button_text := I18n.core("ships.action.replace_module") % [_content_name(old_def, old_id), _content_name(module_def, new_id)]
+				var replace_button := _button(button_text, _command.bind(I18n.core("command.ships.start_refit"), Game.replace_ship_module.bind(ship_id, old_id, new_id)), String(ship.get("status", "DOCKED")) != "DOCKED")
+				replace_button.name = "ReplaceModule_%s_%s_%s" % [ship_id, old_id, new_id]
+				if ship_not_docked: replace_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+				card.add_child(replace_button)
+		var install_choices := _installable_loadout_modules(ship)
+		if not install_choices.is_empty():
+			card.add_child(_label(I18n.core("ships.install_module", "Install into an empty slot"), 14, COLOR_ACCENT))
+			for module_id_value in install_choices:
+				var module_id := String(module_id_value)
+				var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
+				var install_button := _button(
+					I18n.core("ships.install_module_action", "Install %s") % _content_name(module_definition, module_id),
+					_command.bind(I18n.core("command.ships.install_module"), Game.install_ship_module.bind(ship_id, module_id)),
+					String(ship.get("status", "DOCKED")) != "DOCKED"
+				)
+				install_button.name = "InstallModule_%s_%s" % [ship_id, module_id]
+				if ship_not_docked: install_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+				card.add_child(install_button)
+		var installed_definitions: Array = Game.state.ship_module_definition_ids(ship)
+		if not installed_definitions.is_empty():
+			card.add_child(_label(I18n.core("ships.remove_module", "Remove an installed module"), 14, COLOR_ACCENT))
+			for module_id_value in installed_definitions:
+				var module_id := String(module_id_value)
+				var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
+				var remove_button := _button(
+					I18n.core("ships.remove_module_action", "Remove %s") % _content_name(module_definition, module_id),
+					_command.bind(I18n.core("command.ships.remove_module"), Game.remove_ship_module.bind(ship_id, module_id)),
+					String(ship.get("status", "DOCKED")) != "DOCKED",
+					COLOR_WARN
+				)
+				remove_button.name = "RemoveModule_%s_%s" % [ship_id, module_id]
+				if ship_not_docked: remove_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+				card.add_child(remove_button)
 		if String(ship.get("status", "")) == "DOCKED" and Game.state.ship_fleet_domain(ship_id).is_empty():
-			card.add_child(_button("拆解并写入海军档案（回收 40%）", _command.bind("拆解舰船", Game.scrap_ship.bind(ship_id)), false, COLOR_WARN))
+			card.add_child(_button(I18n.core("ships.action.scrap"), _command.bind(I18n.core("command.ships.scrap"), Game.scrap_ship.bind(ship_id)), false, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 	if Game.state.ships.is_empty():
-		box.add_child(_card_text("当前没有舰船实体。前往“造船与改装”下达建造订单。", COLOR_WARN))
+		box.add_child(_card_text(I18n.core("ships.roster.empty"), COLOR_WARN))
 
 
 func _ship_loadout_roles_text(ship: Dictionary) -> String:
 	var roles: Array[String] = []
 	var role_capabilities := {
-		"bulk_freight":"大宗货运",
-		"cryogenic_freight":"低温货运",
-		"repair_support":"维修支援",
-		"construction_support":"建设支援",
-		"survey_support":"深空勘测",
-		"mining":"采掘",
-		"armed":"战斗"
+		"bulk_freight":I18n.core("ships.role.bulk_freight"),
+		"cryogenic_freight":I18n.core("ships.role.cryogenic_freight"),
+		"repair_support":I18n.core("ships.role.repair_support"),
+		"construction_support":I18n.core("ships.role.construction_support"),
+		"survey_support":I18n.core("ships.role.survey_support"),
+		"mining":I18n.core("ships.role.mining"),
+		"armed":I18n.core("ships.role.armed")
 	}
 	for capability_id_value in role_capabilities.keys():
 		var capability_id := String(capability_id_value)
 		if Game.simulation.ship_loadout_capability_value(Game.state, ship, capability_id) > 0.0:
 			roles.append(String(role_capabilities[capability_id]))
-	return "、".join(roles) if not roles.is_empty() else "通用 / 未配置"
+	return I18n.core("format.list_separator").join(roles) if not roles.is_empty() else I18n.core("ships.role.general")
 
 
 func _build_fleet_archive(box: VBoxContainer) -> void:
 	if not Game.state.refit_projects.is_empty():
-		box.add_child(_section_title("装配制造与安装工程"))
+		box.add_child(_section_title(I18n.core("ships.archive.refit_projects")))
 		for project_value in Game.state.refit_projects:
 			var project := project_value as Dictionary
 			var project_card := _card()
-			project_card.add_child(_label("%s · %.0f%% · 制造＋安装合并计时 · 已投入 %s" % [String(project.get("ship_id", "")), float(project.get("completed_segments", 0)), _resource_dictionary(project.get("consumed_bom", {}))], 13, COLOR_MUTED))
-			project_card.add_child(_button("取消并恢复原装配（材料不返还）", _command.bind("取消舰船改装", Game.cancel_ship_refit.bind(String(project.get("project_id", "")))), false, COLOR_WARN))
+			var refit_ship := Game.state.ship_by_id(String(project.get("ship_id", "")))
+			project_card.add_child(_label(I18n.core("ships.archive.refit_progress") % [String(refit_ship.get("name", project.get("ship_id", ""))), float(project.get("completed_segments", 0)), _resource_dictionary(project.get("consumed_bom", {}))], 13, COLOR_MUTED))
+			var cancel_refit_button := _button(I18n.core("ships.archive.cancel_refit"), _command.bind(I18n.core("command.ships.cancel_refit"), Game.cancel_ship_refit.bind(String(project.get("project_id", "")))), false, COLOR_WARN)
+			cancel_refit_button.name = "CancelShipRefit_%s" % String(project.get("project_id", ""))
+			project_card.add_child(cancel_refit_button)
 			box.add_child(_wrap_card(project_card))
 	if not Game.state.ship_service_projects.is_empty():
-		box.add_child(_section_title("维修、改装与再服役工程"))
+		box.add_child(_section_title(I18n.core("ships.archive.service_projects")))
 		for project_value in Game.state.ship_service_projects:
 			var project := project_value as Dictionary
-			box.add_child(_card_text("%s · %s · %.0f%%" % [_status_text(String(project.get("project_kind", "SERVICE"))), String(project.get("ship_id", "")), 100.0 * float(project.get("progress_ms", 0.0)) / maxf(1.0, float(project.get("duration_ms", 1.0)))], COLOR_MUTED))
+			var service_ship := Game.state.ship_by_id(String(project.get("ship_id", "")))
+			box.add_child(_card_text(I18n.core("ships.archive.service_progress") % [_status_text(String(project.get("project_kind", "SERVICE"))), String(service_ship.get("name", project.get("ship_id", ""))), 100.0 * float(project.get("progress_ms", 0.0)) / maxf(1.0, float(project.get("duration_ms", 1.0)))], COLOR_MUTED))
 	else:
-		box.add_child(_card_text("当前没有船坞服务工程。战损舰会在返航后进入真实维修流程。", COLOR_MUTED))
-	box.add_child(_section_title("海军档案"))
+		box.add_child(_card_text(I18n.core("ships.archive.no_service_projects"), COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("ships.archive.title")))
 	if not Game.state.naval_archive.is_empty():
 		for archive_value in Game.state.naval_archive:
 			var archive := archive_value as Dictionary
-			box.add_child(_card_text("%s · %s · 服役于 %d · 拆解于 %d" % [String(archive.get("name", archive.get("ship_id", ""))), String(archive.get("blueprint_id", "")), int(archive.get("commissioned_at_ms", 0)), int(archive.get("scrapped_at_ms", 0))], COLOR_MUTED))
+			var archived_blueprint := Game.content.ships.get(String(archive.get("blueprint_id", "")), {}) as Dictionary
+			box.add_child(_card_text(I18n.core("ships.archive.entry") % [String(archive.get("name", archive.get("ship_id", ""))), _content_name(archived_blueprint, String(archive.get("blueprint_id", ""))), _format_ms(int(archive.get("commissioned_at_ms", 0))), _format_ms(int(archive.get("scrapped_at_ms", 0)))], COLOR_MUTED))
 	else:
-		box.add_child(_card_text("档案为空。拆解的永久舰船实体会保留在这里。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("ships.archive.empty"), COLOR_MUTED))
 
 
 func _build_fleet_shipyard(box: VBoxContainer) -> void:
-	box.add_child(_section_title("船坞建造队列"))
+	box.add_child(_section_title(I18n.core("ships.shipyard.queue")))
 	for order_index in Game.state.shipyard_queue.size():
 		var order_value = Game.state.shipyard_queue[order_index]
 		var order := order_value as Dictionary
 		var order_card := _card()
-		order_card.add_child(_label("%s · %s" % [String(order.get("plan_id", "订单")), _status_text(String(order.get("status", "QUEUED")))], 16, COLOR_TEXT))
-		order_card.add_child(_label("本舰 %.0f%% · 已完成 %d / %d · 剩余 %d" % [float(order.get("completed_segments", 0)), int(order.get("quantity_completed", 0)), int(order.get("quantity_total", 1)), int(order.get("quantity_remaining", 0))], 13, COLOR_MUTED))
+		var order_plan_id := String(order.get("plan_id", ""))
+		var order_plan := Game.content.ship_construction_projects.get(order_plan_id, {}) as Dictionary
+		order_card.add_child(_label(I18n.core("ships.shipyard.order_header") % [_content_name(order_plan, I18n.core("ships.shipyard.order")), _status_text(String(order.get("status", "QUEUED")))], 16, COLOR_TEXT))
+		order_card.add_child(_label(I18n.core("ships.shipyard.order_progress") % [float(order.get("completed_segments", 0)), int(order.get("quantity_completed", 0)), int(order.get("quantity_total", 1)), int(order.get("quantity_remaining", 0))], 13, COLOR_MUTED))
 		_add_blocker_label(order_card, order)
 		var queue_actions := HFlowContainer.new()
 		queue_actions.add_theme_constant_override("h_separation", 6)
-		queue_actions.add_child(_button("上移", _command.bind("调整造船顺序", Game.move_shipyard_project.bind(String(order.get("plan_id", "")), order_index - 1)), order_index <= 0))
-		queue_actions.add_child(_button("下移", _command.bind("调整造船顺序", Game.move_shipyard_project.bind(String(order.get("plan_id", "")), order_index + 1)), order_index >= Game.state.shipyard_queue.size() - 1))
-		queue_actions.add_child(_button("取消订单（已投入材料不返还）", _command.bind("取消造船订单", Game.cancel_shipyard_project.bind(String(order.get("project_id", "")))), false, COLOR_WARN))
+		var order_project_id := String(order.get("project_id", ""))
+		var move_up_button := _button(I18n.core("ships.shipyard.move_up"), _command.bind(I18n.core("command.ships.reorder_shipyard"), Game.move_shipyard_project.bind(String(order.get("plan_id", "")), order_index - 1)), order_index <= 0)
+		move_up_button.name = "ReorderShipBuildUp_%s" % order_project_id
+		queue_actions.add_child(move_up_button)
+		var move_down_button := _button(I18n.core("ships.shipyard.move_down"), _command.bind(I18n.core("command.ships.reorder_shipyard"), Game.move_shipyard_project.bind(String(order.get("plan_id", "")), order_index + 1)), order_index >= Game.state.shipyard_queue.size() - 1)
+		move_down_button.name = "ReorderShipBuildDown_%s" % order_project_id
+		queue_actions.add_child(move_down_button)
+		var cancel_order_button := _button(I18n.core("ships.shipyard.cancel_order"), _command.bind(I18n.core("command.ships.cancel_order"), Game.cancel_shipyard_project.bind(order_project_id)), false, COLOR_WARN)
+		cancel_order_button.name = "CancelShipBuild_%s" % order_project_id
+		queue_actions.add_child(cancel_order_button)
 		order_card.add_child(queue_actions)
 		box.add_child(_wrap_card(order_card))
 	if Game.state.shipyard_queue.is_empty():
-		box.add_child(_card_text("造船队列为空。批量订单会逐舰消耗物料清单，并生成独立舰船实体。", COLOR_MUTED))
-	box.add_child(_section_title("已解锁舰体计划"))
+		box.add_child(_card_text(I18n.core("ships.shipyard.empty"), COLOR_MUTED))
+	box.add_child(_section_title(I18n.core("ships.shipyard.unlocked_plans")))
 	for plan_value in Game.content.ship_construction_projects.values():
 		var plan := plan_value as Dictionary
 		var plan_id := String(plan.get("id", ""))
-		if not bool(Game.state.unlocked_ship_plans.get(plan_id, false)):
-			continue
+		var plan_unlocked := bool(Game.state.unlocked_ship_plans.get(plan_id, false))
 		var card := _card()
 		card.add_child(_label(_content_name(plan, plan_id), 16, COLOR_TEXT))
+		if not plan_unlocked:
+			card.add_child(_label(_status_text("LOCKED"), 13, COLOR_WARN))
+			if not plan.get("requirements", []).is_empty():
+				card.add_child(_requirements_label(plan.get("requirements", [])))
 		card.add_child(_label(_project_summary(plan), 13, COLOR_MUTED))
 		var starting_loadout: Array[String] = []
 		for module_id_value in plan.get("starting_modules", []):
 			var module_id := String(module_id_value)
 			starting_loadout.append(_content_name(Game.content.modules.get(module_id, {}), module_id))
-		card.add_child(_label("初始装配：%s（制造资源已计入整舰 BOM）" % " / ".join(starting_loadout), 13, COLOR_MUTED))
+		card.add_child(_label(I18n.core("ships.shipyard.starting_loadout") % I18n.core("format.slash_separator").join(starting_loadout), 13, COLOR_MUTED))
 		var batch_row := HFlowContainer.new()
 		batch_row.add_theme_constant_override("h_separation", 6)
 		batch_row.add_theme_constant_override("v_separation", 6)
 		for quantity in [1, 5, 20]:
-			var build_button := _button("建造 ×%d" % quantity, _command.bind("加入造船队列", Game.enqueue_unlocked_ship_plan.bind(plan_id, quantity)))
+			var build_button := _button(I18n.core("ships.shipyard.build_batch") % quantity, _command.bind(I18n.core("command.ships.enqueue"), Game.enqueue_unlocked_ship_plan.bind(plan_id, quantity)), not plan_unlocked)
 			build_button.name = "BuildShip_%s_%d" % [plan_id, quantity]
+			if not plan_unlocked:
+				build_button.tooltip_text = I18n.core("ships.shipyard.locked_reason")
 			batch_row.add_child(build_button)
 		card.add_child(batch_row)
 		box.add_child(_wrap_card(card))
@@ -2091,7 +2800,7 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 func _rebuild_expedition() -> void:
 	var box: VBoxContainer = _pages["expedition"]
 	_clear(box)
-	box.add_child(_page_title("远征", "远征需要专门调配的舰船、补给计划以及满足路线需求的战斗与航行能力。"))
+	box.add_child(_page_title(I18n.core("page.expedition"), I18n.core("expedition.subtitle")))
 
 	var expedition_ids: Array = Game.state.fleet_ship_ids("expedition")
 	var roster: Array[String] = []
@@ -2103,38 +2812,45 @@ func _rebuild_expedition() -> void:
 	var cargo_used := Game.simulation.fleet_cargo_used(Game.state)
 	var cargo_capacity := Game.simulation.fleet_cargo_capacity(Game.state, expedition_ids)
 	var ready := Game.fleet_ready("expedition")
-	box.add_child(_card_text("远征舰队 · %s\n舰船 %s\n指挥容量 %d / %d · 货舱 %d / %d" % ["就绪" if ready else "未就绪", "、".join(roster) if not roster.is_empty() else "尚未调配舰船", command_used, command_capacity, cargo_used, cargo_capacity], COLOR_GOOD if ready else COLOR_WARN))
+	box.add_child(_card_text(I18n.core("expedition.fleet_summary") % [I18n.core("status.READY") if ready else I18n.core("status.NOT_READY"), I18n.core("format.list_separator").join(roster) if not roster.is_empty() else I18n.core("expedition.fleet.empty"), command_used, command_capacity, cargo_used, cargo_capacity], COLOR_GOOD if ready else COLOR_WARN))
 	var fleet_actions := HFlowContainer.new()
 	fleet_actions.add_theme_constant_override("h_separation", 6)
-	fleet_actions.add_child(_button("自动补给远征舰队", _command.bind("自动补给", Game.auto_resupply_fleet), roster.is_empty()))
-	fleet_actions.add_child(_button("打开编队与补给", _open_fleet_section.bind("readiness"), false, COLOR_GOOD))
+	var expedition_resupply_button := _button(I18n.core("expedition.action.auto_resupply"), _command.bind(I18n.core("command.expedition.auto_resupply"), Game.auto_resupply_fleet), roster.is_empty())
+	expedition_resupply_button.name = "AutoResupplyExpeditionFleet"
+	fleet_actions.add_child(expedition_resupply_button)
+	fleet_actions.add_child(_button(I18n.core("expedition.action.open_readiness"), _open_fleet_section.bind("readiness"), false, COLOR_GOOD))
 	box.add_child(fleet_actions)
 
 	if not String(Game.state.active_expedition.get("route_id", "")).is_empty():
 		var route_id := String(Game.state.active_expedition.get("route_id", ""))
 		var route := Game.content.expedition_routes.get(route_id, {}) as Dictionary
 		var active := _card()
-		active.add_child(_label("当前远征 · " + _content_name(route, route_id), 17, COLOR_ACCENT))
-		active.add_child(_label("阶段：%s  ·  节点：%d" % [_status_text(String(Game.state.active_expedition.get("phase", ""))), int(Game.state.active_expedition.get("node_index", 0)) + 1], 14, COLOR_MUTED))
-		active.add_child(_operation_progress(Game.state.active_expedition, "航行进度"))
+		active.add_child(_label(I18n.core("expedition.active_route") % _content_name(route, route_id), 17, COLOR_ACCENT))
+		active.add_child(_label(I18n.core("expedition.route_progress") % [_status_text(String(Game.state.active_expedition.get("phase", ""))), int(Game.state.active_expedition.get("node_index", 0)) + 1], 14, COLOR_MUTED))
+		active.add_child(_operation_progress(Game.state.active_expedition, I18n.core("expedition.travel_progress")))
 		var combat_state: Dictionary = Game.state.active_expedition.get("combat_state", {})
 		if not combat_state.is_empty():
 			_add_combat_state_panel(active, combat_state)
+		var recall_route := _button(I18n.core("expedition.action.recall"), _command.bind(I18n.core("command.expedition.stop_action"), Game.stop_activity.bind("expedition")), false, COLOR_WARN)
+		recall_route.name = "RecallExpeditionRoute_%s" % route_id
+		active.add_child(recall_route)
 		box.add_child(_wrap_card(active))
 	var repeat_runtime: Dictionary = Game.runtime_for_domain("expedition")
 	if not String(repeat_runtime.get("activity_id", "")).is_empty():
 		var activity_id := String(repeat_runtime.get("activity_id", ""))
 		var activity := Game.content.activities.get(activity_id, {}) as Dictionary
 		var repeat_card := _card()
-		repeat_card.add_child(_label("当前行动 · %s" % _content_name(activity, activity_id), 17, COLOR_ACCENT))
+		repeat_card.add_child(_label(I18n.core("expedition.active_action") % _content_name(activity, activity_id), 17, COLOR_ACCENT))
 		repeat_card.add_child(_operation_progress(repeat_runtime, _status_text(String(repeat_runtime.get("status", "RUNNING")))))
 		var repeat_combat_state: Dictionary = repeat_runtime.get("combat_state", {})
 		if not repeat_combat_state.is_empty():
 			_add_combat_state_panel(repeat_card, repeat_combat_state)
-		repeat_card.add_child(_button("召回舰队", _command.bind("停止当前行动", Game.stop_activity.bind("expedition")), false, COLOR_WARN))
+		var recall_action := _button(I18n.core("expedition.action.recall"), _command.bind(I18n.core("command.expedition.stop_action"), Game.stop_activity.bind("expedition")), false, COLOR_WARN)
+		recall_action.name = "RecallExpeditionAction_%s" % activity_id
+		repeat_card.add_child(recall_action)
 		box.add_child(_wrap_card(repeat_card))
 
-	box.add_child(_section_title("可见路线"))
+	box.add_child(_section_title(I18n.core("expedition.visible_routes")))
 	for route_value in Game.content.expedition_routes.values():
 		var route := route_value as Dictionary
 		var route_id := String(route.get("id", ""))
@@ -2145,14 +2861,14 @@ func _rebuild_expedition() -> void:
 		card.add_child(_label(("✓ " if completed else "") + _content_name(route, route_id), 16, COLOR_GOOD if completed else COLOR_TEXT))
 		card.add_child(_label(_project_summary(route), 13, COLOR_MUTED))
 		var reason := _activity_block_reason("expedition", route_id)
-		var start_route_button := _button("开始远征", _command.bind("开始远征", Game.start_expedition_route.bind(route_id)), completed or not reason.is_empty() or roster.is_empty())
+		var start_route_button := _button(I18n.core("expedition.action.start_route"), _command.bind(I18n.core("command.expedition.start_route"), Game.start_expedition_route.bind(route_id)), completed or not reason.is_empty() or roster.is_empty())
 		start_route_button.name = "StartRoute_%s" % route_id
 		card.add_child(start_route_button)
 		if not reason.is_empty():
-			card.add_child(_label("尚不可用：" + reason, 13, COLOR_WARN))
+			card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title("可重复战斗行动"))
+	box.add_child(_section_title(I18n.core("expedition.repeatable_combat")))
 	var repeat_found := false
 	for activity_value in Game.content.activities.values():
 		var activity := activity_value as Dictionary
@@ -2165,17 +2881,17 @@ func _rebuild_expedition() -> void:
 		card.add_child(_label(_activity_summary(activity), 13, COLOR_MUTED))
 		var reason := _direct_activity_block_reason("expedition", activity)
 		var busy := not String(repeat_runtime.get("activity_id", "")).is_empty() or String(Game.state.active_expedition.get("status", "")) == "RUNNING"
-		var start_combat_button := _button("开始战斗行动", _command.bind("开始战斗行动", Game.start_activity.bind("expedition", activity_id)), busy or not reason.is_empty() or roster.is_empty())
+		var start_combat_button := _button(I18n.core("expedition.action.start_combat"), _command.bind(I18n.core("command.expedition.start_combat"), Game.start_activity.bind("expedition", activity_id)), busy or not reason.is_empty() or roster.is_empty())
 		start_combat_button.name = "StartCombat_%s" % activity_id
 		card.add_child(start_combat_button)
 		if not reason.is_empty():
-			card.add_child(_label("尚不可用：" + reason, 13, COLOR_WARN))
+			card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 	if not repeat_found:
-		box.add_child(_card_text("完成对应前线战役后会解锁可重复战斗行动。", COLOR_MUTED))
+		box.add_child(_card_text(I18n.core("expedition.repeatable_locked"), COLOR_MUTED))
 
 	if not Game.state.expedition_reports.is_empty():
-		box.add_child(_section_title("远征报告"))
+		box.add_child(_section_title(I18n.core("expedition.reports")))
 		var reports: Array = Game.state.expedition_reports.slice(maxi(0, Game.state.expedition_reports.size() - 5))
 		reports.reverse()
 		for report_value in reports:
@@ -2189,11 +2905,12 @@ func _open_fleet_section(section: String) -> void:
 
 
 func _add_combat_state_panel(parent: VBoxContainer, combat_state: Dictionary) -> void:
-	parent.add_child(_label("自动战斗 · %s · 阶段 %d / %d · 事件 %d" % [_status_text(String(combat_state.get("status", "RUNNING"))), int(combat_state.get("phase_index", 0)) + 1, int(combat_state.get("phase_count", 1)), int(combat_state.get("events", 0))], 15, COLOR_WARN))
-	parent.add_child(_label("舰队船体 %.0f / %.0f · 护盾 %.0f / %.0f\n敌方船体 %.0f / %.0f · 护盾 %.0f / %.0f" % [float(combat_state.get("fleet_hull", 0.0)), float(combat_state.get("fleet_max_hull", 0.0)), float(combat_state.get("fleet_shield", 0.0)), float(combat_state.get("fleet_max_shield", 0.0)), float(combat_state.get("enemy_hull", 0.0)), float(combat_state.get("enemy_max_hull", 0.0)), float(combat_state.get("enemy_shield", 0.0)), float(combat_state.get("enemy_max_shield", 0.0))], 13, COLOR_TEXT))
+	parent.add_child(_label(I18n.core("combat.state.summary") % [_status_text(String(combat_state.get("status", "RUNNING"))), int(combat_state.get("phase_index", 0)) + 1, int(combat_state.get("phase_count", 1)), int(combat_state.get("events", 0))], 15, COLOR_WARN))
+	parent.add_child(_label(I18n.core("combat.state.totals") % [float(combat_state.get("fleet_hull", 0.0)), float(combat_state.get("fleet_max_hull", 0.0)), float(combat_state.get("fleet_shield", 0.0)), float(combat_state.get("fleet_max_shield", 0.0)), float(combat_state.get("enemy_hull", 0.0)), float(combat_state.get("enemy_max_hull", 0.0)), float(combat_state.get("enemy_shield", 0.0)), float(combat_state.get("enemy_max_shield", 0.0))], 13, COLOR_TEXT))
 	for actor_value in combat_state.get("actors", []):
 		var actor := actor_value as Dictionary
-		parent.add_child(_label("%s · %s · 船体 %.0f / %.0f · 护盾 %.0f / %.0f" % [String(actor.get("ship_id", "舰船")), _zone_text(String(actor.get("zone", "FRONT"))), float(actor.get("hull", 0.0)), float(actor.get("max_hull", 0.0)), float(actor.get("shield", 0.0)), float(actor.get("max_shield", 0.0))], 12, COLOR_GOOD if float(actor.get("hull", 0.0)) > 0.0 else COLOR_BAD))
+		var actor_ship := Game.state.ship_by_id(String(actor.get("ship_id", "")))
+		parent.add_child(_label(I18n.core("combat.state.actor") % [String(actor_ship.get("name", I18n.core("ships.entity.fallback"))), _zone_text(String(actor.get("zone", "FRONT"))), float(actor.get("hull", 0.0)), float(actor.get("max_hull", 0.0)), float(actor.get("shield", 0.0)), float(actor.get("max_shield", 0.0))], 12, COLOR_GOOD if float(actor.get("hull", 0.0)) > 0.0 else COLOR_BAD))
 	var recent_log: Array = combat_state.get("log", []).slice(maxi(0, combat_state.get("log", []).size() - 4))
 	for event_value in recent_log:
 		var event := event_value as Dictionary
@@ -2205,17 +2922,21 @@ func _combat_report_card(report: Dictionary) -> VBoxContainer:
 	var combat: Dictionary = report.get("combat", {})
 	var result := String(report.get("result", "VICTORY" if bool(combat.get("victory", false)) else "DEFEAT"))
 	var route_id := String(report.get("route_id", report.get("activity_id", "ACTION")))
-	card.add_child(_label("%s · %s" % [route_id, _status_text(result)], 16, COLOR_GOOD if result in ["SUCCESS", "VICTORY"] or bool(combat.get("victory", false)) else COLOR_WARN))
-	card.add_child(_label("原因 %s · 战斗事件 %d · 舰队船体 %.0f · 敌方船体 %.0f" % [_status_text(String(report.get("reason", combat.get("reason", "COMPLETE")))), int(combat.get("events", 0)), float(combat.get("fleet_hull_remaining", 0.0)), float(combat.get("enemy_hull_remaining", 0.0))], 13, COLOR_MUTED))
+	var route_definition := Game.content.expedition_routes.get(route_id, Game.content.activities.get(route_id, {})) as Dictionary
+	card.add_child(_label(I18n.core("combat.report.header") % [_content_name(route_definition, route_id), _status_text(result)], 16, COLOR_GOOD if result in ["SUCCESS", "VICTORY"] or bool(combat.get("victory", false)) else COLOR_WARN))
+	card.add_child(_label(I18n.core("combat.report.summary") % [_status_text(String(report.get("reason", combat.get("reason", "COMPLETE")))), int(combat.get("events", 0)), float(combat.get("fleet_hull_remaining", 0.0)), float(combat.get("enemy_hull_remaining", 0.0))], 13, COLOR_MUTED))
 	for ship_result_value in combat.get("ship_results", []):
 		var ship_result := ship_result_value as Dictionary
-		card.add_child(_label("%s · %s · 造成 %.1f · 承受 %.1f · 剩余船体 %.1f" % [String(ship_result.get("ship_id", "舰船")), "失能" if bool(ship_result.get("disabled", false)) else "已回收", float(ship_result.get("damage_dealt", 0.0)), float(ship_result.get("damage_taken", 0.0)), float(ship_result.get("hull_remaining", 0.0))], 12, COLOR_BAD if bool(ship_result.get("disabled", false)) else COLOR_TEXT))
+		var result_ship := Game.state.ship_by_id(String(ship_result.get("ship_id", "")))
+		card.add_child(_label(I18n.core("combat.report.ship_result") % [String(result_ship.get("name", I18n.core("ships.entity.fallback"))), I18n.core("status.DISABLED") if bool(ship_result.get("disabled", false)) else I18n.core("status.RECOVERED"), float(ship_result.get("damage_dealt", 0.0)), float(ship_result.get("damage_taken", 0.0)), float(ship_result.get("hull_remaining", 0.0))], 12, COLOR_BAD if bool(ship_result.get("disabled", false)) else COLOR_TEXT))
 	return card
 
 
 func _combat_event_text(event: Dictionary) -> String:
 	if String(event.get("type", "")) == "ATTACK":
-		return "%s · %s · %s · 伤害 %.1f" % [String(event.get("source", "")), String(event.get("skill_id", "attack")), "命中" if bool(event.get("hit", false)) else "未命中", float(event.get("damage", 0.0))]
+		var source_ship := Game.state.ship_by_id(String(event.get("source", "")))
+		var skill_id := String(event.get("skill_id", "attack"))
+		return I18n.core("combat.event.attack") % [String(source_ship.get("name", event.get("source", ""))), skill_id.replace("_", " ").capitalize(), I18n.core("combat.event.hit") if bool(event.get("hit", false)) else I18n.core("combat.event.miss"), float(event.get("damage", 0.0))]
 	return _status_text(String(event.get("type", "EVENT")))
 
 
@@ -2223,202 +2944,36 @@ func _direct_activity_block_reason(domain_id: String, activity: Dictionary) -> S
 	if Game.can_start_activity(domain_id, activity):
 		return ""
 	var unmet := _unmet_requirements(activity.get("requirements", []))
-	return unmet if not unmet.is_empty() else "舰队状态、能力、补给或当前行动冲突"
+	return unmet if not unmet.is_empty() else I18n.core("expedition.blocker.fleet_conflict")
 
 
 func _open_next_flow_target() -> void:
-	var page := _next_flow_page()
+	var guidance: Dictionary = Game.guidance_snapshot()
+	var page := String(guidance.get("page", ""))
 	if page.is_empty():
 		return
-	var guidance: Dictionary = Game.guidance_snapshot()
-	if str(guidance.get("page", "")) == page:
-		var location_id := str(guidance.get("location_id", ""))
-		if not location_id.is_empty() and Game.state.has_location(location_id):
-			_selected_location_id = location_id
+	_record_telemetry("GuidanceClicked", {
+		"guidance_id":String(guidance.get("step_id", "")),
+		"reason":String(guidance.get("reason", "")),
+		"navigation_target":page
+	})
+	var location_id := str(guidance.get("location_id", ""))
+	if not location_id.is_empty() and Game.state.has_location(location_id):
+		_selected_location_id = location_id
 	if page == "industry":
-		# The bootstrap guide has finer material-aware routing than the broad goal
-		# contract, while the structured snapshot still supplies target location and
-		# machine-readable focus/acquisition data to diagnostics and external UI.
-		_industry_section = _next_flow_industry_section()
+		_industry_section = String(guidance.get("section", "production"))
 	_switch_page(page)
 	if page == "industry":
 		_rebuild_industry()
 
 
-func _next_flow_industry_section() -> String:
-	if int(Game.state.completed_activities.get("assemble_frame", 0)) <= 0:
-		return "production"
-	if "orbital_foundry" not in Game.state.facilities:
-		var foundry_runtime := _construction_runtime_for_activity("build_orbital_foundry")
-		if not foundry_runtime.is_empty():
-			return "production" if String(foundry_runtime.get("status", "")) == "BLOCKED" else "construction"
-		return "construction" if _activity_materials_available("build_orbital_foundry") else "production"
-	if "electronics_facility" not in Game.state.facilities or "research_complex" not in Game.state.facilities:
-		return "construction"
-	for goal_value in Game.content.goals.values():
-		var goal := goal_value as Dictionary
-		if not Game.simulation.definition_revealed(Game.state, goal) or _requirements_complete(goal.get("requirements", [])):
-			continue
-		for step_value in goal.get("steps", []):
-			var step := step_value as Dictionary
-			if not _requirements_complete(step.get("requirements", [])) and String(step.get("view", "")) == "infrastructure":
-				for requirement_value in step.get("requirements", []):
-					if String((requirement_value as Dictionary).get("type", "")) == "manufacturing_module_installed":
-						return "facilities"
-				return "construction"
-	return "production"
-
-
-func _activity_materials_available(activity_id: String) -> bool:
-	var activity: Dictionary = Game.content.activities.get(activity_id, {})
-	for cost_value in activity.get("costs", []):
-		var cost := cost_value as Dictionary
-		if Game.state.item_quantity(String(cost.get("item", "")), SpaceGameState.MAIN_BASE_LOCATION_ID) < int(cost.get("quantity", 0)):
-			return false
-	return not activity.is_empty()
-
-
-func _activity_material_progress(activity_id: String, runtime: Dictionary = {}) -> String:
-	var activity: Dictionary = Game.content.activities.get(activity_id, {})
-	var consumed: Dictionary = runtime.get("consumed", {})
-	var parts: Array[String] = []
-	for cost_value in activity.get("costs", []):
-		var cost := cost_value as Dictionary
-		var item_id := String(cost.get("item", ""))
-		var required := int(cost.get("quantity", 0))
-		var available := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
-		var accounted := mini(required, int(consumed.get(item_id, 0)) + available)
-		parts.append("%s %d/%d" % [_content_name(Game.content.items.get(item_id, {}), item_id), accounted, required])
-	return "、".join(parts)
-
-
 func _next_flow_step() -> String:
-	if int(Game.state.completed_activities.get("extract_earth_mixed_ore", 0)) <= 0:
-		if not _ship_has_module("mining_laser"):
-			return "初始采矿配置缺失。请点击“重开”生成新的采矿优先存档。"
-		if _ships_with_assignment("mining").is_empty():
-			return "1. 到“舰队”把初始勘探船调入采矿舰队。"
-		if not _has_active_mining():
-			return "2. 到“前线作业”启动近地永久采集点。\n\n提示：可用顶部 10× / 50× 加速。"
-	if int(Game.state.completed_activities.get("assemble_frame", 0)) <= 0:
-		var frame_progress := _activity_material_progress("assemble_frame")
-		if not _activity_materials_available("assemble_frame"):
-			return "3. 为第一套结构框架准备 2 铁锭 + 1 铜锭。\n当前：%s\n\n工程制造中心一次只能运行一种配方；分离或精炼完成后先停止，再切换下一项。" % frame_progress
-		return "4. 物料已齐：%s。到“生产配方”开始组装结构框架；完成一套后停止重复生产。" % frame_progress
-	if "orbital_foundry" not in Game.state.facilities:
-		var foundry_runtime := _construction_runtime_for_activity("build_orbital_foundry")
-		var foundry_progress := _activity_material_progress("build_orbital_foundry", foundry_runtime)
-		if not foundry_runtime.is_empty():
-			return "5. 轨道铸造厂已进入建造队列（%s）。\n物料进度：%s\n\n若显示受阻，先到“生产配方”补齐缺口；建造会自动继续。" % [_status_text(String(foundry_runtime.get("status", "QUEUED"))), foundry_progress]
-		if not _activity_materials_available("build_orbital_foundry"):
-			return "5. 建设轨道铸造厂需要 1 结构框架 + 4 铁锭 + 2 电子元件。\n当前：%s\n\n保留刚做好的结构框架，停止框架重复生产，继续分离并精炼铁锭。" % foundry_progress
-		return "5. 轨道铸造厂物料已齐：%s。点击“前往下一步”，将在“设施建设”中直接看到建造按钮。" % foundry_progress
-	if "research_complex" not in Game.state.facilities:
-		return "6. 建设电子设施和研究中心，开启科研链路。"
-	if not String(Game.state.research.get("project_id", "")).is_empty() and String(Game.state.research.get("status", "")) == "BLOCKED":
-		var project_id := String(Game.state.research.get("project_id", ""))
-		var project: Dictionary = Game.content.research_projects.get(project_id, {})
-		var blocker: Dictionary = Game.state.research.get("blocker", {})
-		if blocker.is_empty():
-			blocker = Game.simulation.blocker_diagnostic(Game.state, "research", Game.state.research)
-		return "%s · %s\n下一步：%s" % [_content_name(project, project_id), _blocker_text(blocker), _research_blocker_guidance(blocker)]
-	for goal_value in Game.content.goals.values():
-		var goal := goal_value as Dictionary
-		if not Game.simulation.definition_revealed(Game.state, goal) or _requirements_complete(goal.get("requirements", [])):
-			continue
-		for step_value in goal.get("steps", []):
-			var step := step_value as Dictionary
-			if not _requirements_complete(step.get("requirements", [])):
-				var step_id := String(step.get("id", "continue"))
-				return "%s\n下一步：%s" % [_content_name(goal, String(goal.get("id", "目标"))), I18n.goal_step(step_id, step_id.replace("_", " ").capitalize())]
-		return "%s\n需求：%s" % [_content_name(goal, String(goal.get("id", "目标"))), _unmet_requirements(goal.get("requirements", []))]
-	return "主流程目标均已完成。建议打开“工业建设 → 经济诊断与规划”，沿最短瓶颈链检查库存、维护、项目承诺与物流，再决定扩厂、扩能源、扩仓储或调整路线。"
+	var guidance: Dictionary = Game.guidance_snapshot()
+	return String(guidance.get("message", guidance.get("reason", "")))
 
 
 func _next_flow_page() -> String:
-	if int(Game.state.completed_activities.get("extract_earth_mixed_ore", 0)) <= 0:
-		if not _ship_has_module("mining_laser") or _ships_with_assignment("mining").is_empty():
-			return "fleet"
-		if not _has_active_mining():
-			return "frontier"
-	# Bootstrap milestones are permanent. Later consumption of the first iron or
-	# copper stock must not send the Guide back to an already completed opening step.
-	if int(Game.state.completed_activities.get("assemble_frame", 0)) <= 0:
-		return "industry"
-	if "orbital_foundry" not in Game.state.facilities or "research_complex" not in Game.state.facilities:
-		return "industry"
-	if not String(Game.state.research.get("project_id", "")).is_empty() and String(Game.state.research.get("status", "")) == "BLOCKED":
-		var blocker: Dictionary = Game.state.research.get("blocker", {})
-		if blocker.is_empty():
-			blocker = Game.simulation.blocker_diagnostic(Game.state, "research", Game.state.research)
-		var requirement: Dictionary = blocker.get("requirement", {})
-		if String(blocker.get("primary_reason", "")) == "FIELD_TEST_REQUIRED" and String(requirement.get("type", "")) == "route_complete":
-			return "expedition"
-		if String(blocker.get("primary_reason", "")) in ["INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD", "MISSING_FACILITY", "OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE"] or String(requirement.get("type", "")) in ["activity_complete", "own_facility", "manufacturing_module_installed"]:
-			return "industry"
-		return "research"
-	for goal_value in Game.content.goals.values():
-		var goal := goal_value as Dictionary
-		if not Game.simulation.definition_revealed(Game.state, goal) or _requirements_complete(goal.get("requirements", [])):
-			continue
-		for step_value in goal.get("steps", []):
-			var step := step_value as Dictionary
-			if _requirements_complete(step.get("requirements", [])):
-				continue
-			return _flow_view_to_page(String(step.get("view", "overview")))
-		for requirement_value in goal.get("requirements", []):
-			var requirement := requirement_value as Dictionary
-			if Game.simulation.requirement_met(Game.state, requirement):
-				continue
-			match String(requirement.get("type", "")):
-				"technology", "project_complete":
-					return "research"
-				"own_ship":
-					return "fleet"
-				"own_facility":
-					return "industry"
-				"megastructure":
-					return "megastructure"
-				_:
-					return "expedition"
-	return "overview"
-
-
-func _flow_view_to_page(view: String) -> String:
-	match view:
-		"mining":
-			return "frontier"
-		"ships":
-			return "fleet"
-		"infrastructure":
-			return "industry"
-		"regions":
-			return "system_map"
-		"research", "industry", "megastructure", "expedition", "location":
-			return view
-		_:
-			return "overview"
-
-
-func _active_operation_lines() -> Array[String]:
-	var lines: Array[String] = []
-	for operation_value in Game.state.mining_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("status", "")) == "RUNNING":
-			lines.append("• 采矿：%s" % String(operation.get("site_id", "")))
-	for operation_value in Game.state.industrial_operations:
-		var operation := operation_value as Dictionary
-		if not String(operation.get("activity_id", "")).is_empty():
-			lines.append("• 生产：%s" % String(operation.get("activity_id", "")))
-	for operation_value in Game.state.construction_operations:
-		var operation := operation_value as Dictionary
-		if not String(operation.get("activity_id", "")).is_empty():
-			lines.append("• 建造：%s" % String(operation.get("activity_id", "")))
-	if not String(Game.state.research.get("project_id", "")).is_empty():
-		lines.append("• 科研：%s" % String(Game.state.research.get("project_id", "")))
-	if String(Game.state.active_expedition.get("status", "")) == "RUNNING":
-		lines.append("• 远征：%s" % String(Game.state.active_expedition.get("route_id", "")))
-	return lines
+	return String(Game.guidance_snapshot().get("page", "system_map"))
 
 
 func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
@@ -2438,8 +2993,32 @@ func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
 				continue
 			var old_module := Game.content.modules[old_id] as Dictionary
 			if String(old_module.get("slot", "")) == String(new_module.get("slot", "")) and old_id != new_id:
-				result.append({"old_id": old_id, "new_id": new_id})
+				var desired := installed.duplicate()
+				desired[desired.find(old_id)] = new_id
+				if bool(Game.ship_loadout_availability(String(ship.get("instance_id", "")), desired).get("allowed", false)):
+					result.append({"old_id": old_id, "new_id": new_id})
 				break
+	return result
+
+
+func _installable_loadout_modules(ship: Dictionary) -> Array[String]:
+	# This view does not reproduce fitting rules: it asks the Content Database's
+	# canonical loadout validator for each prospective complete loadout.
+	var result: Array[String] = []
+	var installed: Array = Game.state.ship_module_definition_ids(ship)
+	for module_id_value in Game.content.modules.keys():
+		var module_id := String(module_id_value)
+		var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
+		if bool(module_definition.get("special_equipment", false)):
+			if Game.state.stored_equipment_ids(module_id).is_empty():
+				continue
+		elif not Game.simulation.module_design_available(Game.state, module_id):
+			continue
+		var desired := installed.duplicate()
+		desired.append(module_id)
+		if bool(Game.ship_loadout_availability(String(ship.get("instance_id", "")), desired).get("allowed", false)):
+			result.append(module_id)
+	result.sort()
 	return result
 
 
@@ -2453,35 +3032,6 @@ func _ship_modules_text(ship: Dictionary) -> String:
 	return " / ".join(names)
 
 
-func _ship_has_module(module_id: String) -> bool:
-	for ship_value in Game.state.ships:
-		var ship := ship_value as Dictionary
-		var installed: Array = Game.state.ship_module_definition_ids(ship)
-		if module_id in installed:
-			return true
-	return false
-
-
-func _ships_with_assignment(assignment: String) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for ship_value in Game.state.ships:
-		var ship := ship_value as Dictionary
-		if Game.state.ship_fleet_domain(String(ship.get("instance_id", ""))) == assignment:
-			result.append(ship)
-	return result
-
-
-func _has_active_mining() -> bool:
-	for operation_value in Game.state.mining_operations:
-		if String((operation_value as Dictionary).get("status", "")) == "RUNNING":
-			return true
-	for network_value in Game.state.extraction_network_states.values():
-		var network := network_value as Dictionary
-		if String(network.get("status", "")) == "RUNNING" and not network.get("integrated_site_ids", []).is_empty():
-			return true
-	return false
-
-
 func _mining_operation_for_site(site_id: String) -> Dictionary:
 	for operation_value in Game.state.mining_operations:
 		var operation := operation_value as Dictionary
@@ -2493,7 +3043,8 @@ func _mining_operation_for_site(site_id: String) -> Dictionary:
 func _industrial_runtime_for_facility(facility_id: String) -> Dictionary:
 	for operation_value in Game.state.industrial_operations:
 		var operation := operation_value as Dictionary
-		if String(operation.get("facility_id", "")) == facility_id:
+		if String(operation.get("facility_id", "")) == facility_id \
+			and String(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) == _selected_location_id:
 			return operation
 	return {}
 
@@ -2508,7 +3059,7 @@ func _activity_for_mining_site(site_id: String) -> Dictionary:
 
 func _activity_block_reason(domain_id: String, activity_id: String) -> String:
 	if activity_id.is_empty():
-		return "缺少活动定义"
+		return I18n.core("block_reason.missing_activity")
 	var activity := Game.content.activities.get(activity_id, {}) as Dictionary
 	if domain_id == "expedition":
 		activity = Game.content.expedition_routes.get(activity_id, {}) as Dictionary
@@ -2518,12 +3069,12 @@ func _activity_block_reason(domain_id: String, activity_id: String) -> String:
 	if not unmet.is_empty():
 		return unmet
 	if domain_id == "mining":
-		return "需要一艘已安装采矿模块、调入采矿舰队且处于停靠状态的飞船"
+		return I18n.core("block_reason.mining_ship")
 	if domain_id == "industry":
-		return "资源、设施或工艺能力不足"
+		return I18n.core("block_reason.industry")
 	if domain_id == "expedition":
-		return "路线需求、舰队能力或补给不足"
-	return "当前条件不足"
+		return I18n.core("block_reason.expedition")
+	return I18n.core("block_reason.default")
 
 
 func _construction_block_reason(activity_id: String) -> String:
@@ -2532,9 +3083,9 @@ func _construction_block_reason(activity_id: String) -> String:
 		return ""
 	var sponsor_facility_id := String(activity.get("facility", ""))
 	if not sponsor_facility_id.is_empty() and not Game.simulation.facility_available(Game.state, sponsor_facility_id):
-		return "需要先建成承建设施：%s" % _content_name(Game.content.facilities.get(sponsor_facility_id, {}), sponsor_facility_id)
+		return I18n.core("block_reason.sponsor_facility") % _content_name(Game.content.facilities.get(sponsor_facility_id, {}), sponsor_facility_id)
 	var unmet := _unmet_requirements(activity.get("requirements", []))
-	return unmet if not unmet.is_empty() else "资源、设施能力或建造队列不足"
+	return unmet if not unmet.is_empty() else I18n.core("block_reason.construction")
 
 
 func _unmet_requirements(requirements: Array) -> String:
@@ -2543,19 +3094,12 @@ func _unmet_requirements(requirements: Array) -> String:
 		var requirement := requirement_value as Dictionary
 		if not Game.simulation.requirement_met(Game.state, requirement):
 			lines.append(Game.requirement_text(requirement))
-	return "；".join(lines)
-
-
-func _requirements_complete(requirements: Array) -> bool:
-	for requirement_value in requirements:
-		if not Game.simulation.requirement_met(Game.state, requirement_value as Dictionary):
-			return false
-	return true
+	return I18n.core("format.requirement_separator").join(lines)
 
 
 func _requirements_label(requirements: Array) -> Label:
 	var reason := _unmet_requirements(requirements)
-	return _label("需求：" + (reason if not reason.is_empty() else "已满足"), 13, COLOR_WARN if not reason.is_empty() else COLOR_GOOD)
+	return _label(I18n.core("requirements.summary") % (reason if not reason.is_empty() else I18n.core("requirements.met")), 13, COLOR_WARN if not reason.is_empty() else COLOR_GOOD)
 
 
 func _activity_summary(activity: Dictionary) -> String:
@@ -2564,20 +3108,20 @@ func _activity_summary(activity: Dictionary) -> String:
 	var reward_text := _resource_list(activity.get("rewards", []))
 	var waste_text := _resource_list(activity.get("waste", []))
 	if not cost_text.is_empty():
-		parts.append("消耗 " + cost_text)
+		parts.append(I18n.core("activity.consumes") % cost_text)
 	if not reward_text.is_empty():
-		parts.append("产出 " + reward_text)
+		parts.append(I18n.core("activity.produces") % reward_text)
 	if not waste_text.is_empty():
-		parts.append("废料 " + waste_text)
+		parts.append(I18n.core("activity.waste") % waste_text)
 	if activity.has("production_energy_multiplier"):
-		parts.append("能耗 ×%.2f" % float(activity.get("production_energy_multiplier", 1.0)))
+		parts.append(I18n.core("activity.energy_multiplier") % float(activity.get("production_energy_multiplier", 1.0)))
 	if activity.has("work_required"):
-		parts.append("工作量 %.1f" % float(activity.get("work_required", 1.0)))
+		parts.append(I18n.core("activity.work_required") % float(activity.get("work_required", 1.0)))
 	var facility_id := String(activity.get("facility", ""))
 	if not facility_id.is_empty():
 		var facility := Game.content.facilities.get(facility_id, {}) as Dictionary
-		parts.append("设施 " + _content_name(facility, facility_id))
-	return "  ·  ".join(parts) if not parts.is_empty() else "无直接资源消耗"
+		parts.append(I18n.core("activity.facility") % _content_name(facility, facility_id))
+	return I18n.core("format.detail_separator").join(parts) if not parts.is_empty() else I18n.core("activity.no_direct_resources")
 
 
 func _project_summary(definition: Dictionary) -> String:
@@ -2588,11 +3132,11 @@ func _project_summary(definition: Dictionary) -> String:
 	if costs.is_empty():
 		costs = _resource_list(definition.get("cost", []))
 	if not costs.is_empty():
-		description += ("  ·  " if not description.is_empty() else "") + "消耗 " + costs
+		description += (I18n.core("format.detail_separator") if not description.is_empty() else "") + I18n.core("activity.consumes") % costs
 	var work_reduction := 1.0 - Game.simulation.research_knowledge_work_multiplier(Game.state, definition)
 	if work_reduction > 0.001:
-		description += ("  ·  " if not description.is_empty() else "") + "已有技术积累降低工程量 %.0f%%" % (work_reduction * 100.0)
-	return description if not description.is_empty() else "等待更多数据"
+		description += (I18n.core("format.detail_separator") if not description.is_empty() else "") + I18n.core("research.knowledge_reduction") % (work_reduction * 100.0)
+	return description if not description.is_empty() else I18n.core("research.awaiting_data")
 
 
 func _resource_list(entries: Array) -> String:
@@ -2602,13 +3146,13 @@ func _resource_list(entries: Array) -> String:
 		var item_id := String(entry.get("item", entry.get("item_id", "")))
 		var amount := int(entry.get("quantity", entry.get("amount", 0)))
 		var item := Game.content.items.get(item_id, {}) as Dictionary
-		parts.append("%s×%d" % [_content_name(item, item_id), amount])
-	return "、".join(parts)
+		parts.append(I18n.core("format.item_quantity") % [_content_name(item, item_id), amount])
+	return I18n.core("format.list_separator").join(parts)
 
 
 func _resource_dictionary(values: Dictionary) -> String:
 	if values.is_empty():
-		return "无"
+		return I18n.core("status.NONE")
 	var entries: Array = []
 	var item_ids: Array = values.keys()
 	item_ids.sort()
@@ -2618,23 +3162,19 @@ func _resource_dictionary(values: Dictionary) -> String:
 
 
 func _construction_project_type_name(project_type: String) -> String:
-	return {
-		"FACILITY_BUILD":"设施建造", "FACILITY_EXPANSION":"设施扩建", "SCALE_STAGE_UPGRADE":"工程规模升级",
-		"POWER_UPGRADE":"电力升级", "COOLING_UPGRADE":"冷却升级", "STRUCTURE_UPGRADE":"结构升级",
-		"STORAGE_UPGRADE":"仓储升级", "LOGISTICS_HUB_UPGRADE":"物流枢纽升级", "TRANSPORT_INFRASTRUCTURE":"运输基础设施",
-		"EXTRACTION_NETWORK":"采掘网络", "MEGASTRUCTURE":"巨型工程",
-		"INDUSTRIAL_TRANSFORMATION":"工业体系改造"
-	}.get(project_type, project_type.replace("_", " "))
+	var key := "construction.type.%s" % project_type
+	var translated := I18n.core(key)
+	return project_type.replace("_", " ").capitalize() if translated == key else translated
 
 
 func _construction_project_name(operation: Dictionary, definition: Dictionary) -> String:
 	if operation.get("project_definition", {}).is_empty():
-		return _content_name(definition, String(operation.get("activity_id", "建造项目")))
+		return _content_name(definition, String(operation.get("activity_id", I18n.core("construction.project_fallback"))))
 	var project_type := String(operation.get("project_type", ""))
 	var target_id := String(operation.get("target_id", ""))
 	if project_type == "FACILITY_EXPANSION":
-		return "%s扩建至工业等级 %d" % [_content_name(Game.content.facilities.get(target_id, {}), target_id), int(operation.get("target_level", 0))]
-	return "%s至 %d" % [_construction_project_type_name(project_type), int(operation.get("target_level", 0))]
+		return I18n.core("construction.facility_expansion_name") % [_content_name(Game.content.facilities.get(target_id, {}), target_id), int(operation.get("target_level", 0))]
+	return I18n.core("construction.target_level_name") % [_construction_project_type_name(project_type), int(operation.get("target_level", 0))]
 
 
 func _operation_progress(operation: Dictionary, caption: String) -> Control:
@@ -2651,7 +3191,7 @@ func _operation_progress(operation: Dictionary, caption: String) -> Control:
 		# active progress bar must display only the current stage's work.
 		var elapsed := float(operation.get("stage_progress_ms", operation.get("progress_ms", operation.get("cycle_progress_ms", operation.get("elapsed_ms", 0.0)))))
 		progress = clampf(elapsed / duration, 0.0, 1.0)
-	box.add_child(_label("%s · %.0f%%" % [caption, progress * 100.0], 13, COLOR_ACCENT))
+	box.add_child(_label(I18n.core("common.progress_label") % [caption, progress * 100.0], 13, COLOR_ACCENT))
 	var bar := ProgressBar.new()
 	bar.max_value = 1.0
 	bar.value = progress
@@ -2668,144 +3208,88 @@ func _content_name(definition: Dictionary, fallback: String) -> String:
 	return localized if not localized.is_empty() else String(definition.get("name", fallback))
 
 
+func _system_name(system_id: String) -> String:
+	var key := "system.%s" % system_id.to_lower()
+	var translated := I18n.core(key)
+	return system_id.capitalize() if translated == key else translated
+
+
 func _assignment_name(assignment: String) -> String:
 	match assignment:
-		"mining": return "采矿舰队"
-		"expedition": return "远征舰队"
-		_: return "待命"
+		"mining": return I18n.core("ships.assignment.mining")
+		"expedition": return I18n.core("ships.assignment.expedition")
+		_: return I18n.core("ships.assignment.standby")
 
 
 func _zone_text(zone: String) -> String:
 	match zone.to_upper():
-		"FRONT": return "前列"
-		"MID": return "中列"
-		"REAR": return "后列"
-		_: return "未配置"
+		"FRONT": return I18n.core("ships.zone.FRONT")
+		"MID": return I18n.core("ships.zone.MID")
+		"REAR": return I18n.core("ships.zone.REAR")
+		_: return I18n.core("status.NOT_CONFIGURED")
 
 
 func _logistics_mode_text(mode: String) -> String:
 	match mode.to_upper():
-		"SUPPLY": return "供给"
-		"DEMAND": return "需求"
-		"STORAGE": return "仓储"
-		_: return "未设置"
+		"SUPPLY": return I18n.core("logistics.mode.SUPPLY")
+		"DEMAND": return I18n.core("logistics.mode.DEMAND")
+		"STORAGE": return I18n.core("logistics.mode.STORAGE")
+		_: return I18n.core("status.NOT_CONFIGURED")
+
+
+func _logistics_priority_text(priority_id: String) -> String:
+	match priority_id:
+		"DEMAND_PRIORITY": return I18n.core("logistics.priority.DEMAND_PRIORITY")
+		"PRECISION_FIRST": return I18n.core("logistics.priority.PRECISION_FIRST")
+		"MAINTENANCE_FIRST": return I18n.core("logistics.priority.MAINTENANCE_FIRST")
+		"BULK_FIRST": return I18n.core("logistics.priority.BULK_FIRST")
+		_: return priority_id
+
+
+func _freight_class_text(freight_class: String) -> String:
+	var normalized := freight_class.strip_edges().to_upper()
+	return I18n.t("freight_class.%s" % normalized, normalized.replace("_", " ").capitalize())
+
+
+func _logistics_technology_name(technology_id: String) -> String:
+	if technology_id == "chemical_cargo":
+		return I18n.t("logistics_technology.chemical_cargo", "Chemical Cargo")
+	return _content_name(Game.content.technologies.get(technology_id, {"id":technology_id, "name":technology_id.replace("_", " ").capitalize()}), technology_id)
+
+
+func _automation_term(kind: String, term_id: String) -> String:
+	var normalized := term_id.strip_edges().to_upper()
+	return I18n.t("automation.%s.%s" % [kind, normalized], normalized.replace("_", " ").capitalize())
 
 
 func _status_text(status: String) -> String:
 	var normalized := status.strip_edges().to_upper().replace(" ", "_")
-	var status_key := "status.none" if normalized.is_empty() else "status.%s" % normalized
-	var translated := I18n.core(status_key, status_key)
-	if translated != status_key:
-		return translated
-	if not I18n.is_chinese():
-		return normalized.replace("_", " ").capitalize() if not normalized.is_empty() else I18n.core("status.none")
-	match normalized:
-		"": return "无"
-		"UNKNOWN": return "未知"
-		"UNDISCOVERED": return "未发现"
-		"DISCOVERED": return "已发现"
-		"UNSURVEYED": return "未勘测"
-		"DETECTED": return "已探测"
-		"SURVEYED": return "已勘测"
-		"DEEP_SURVEYED": return "深度勘测"
-		"PROSPECT": return "勘探点"
-		"MAIN_BASE": return "主基地"
-		"CELESTIAL_BODY": return "天体"
-		"ORBITAL_HABITAT": return "轨道居住地"
-		"NOT_AVAILABLE": return "不可用"
-		"NOT_CONNECTED": return "未接入"
-		"AVAILABLE": return "可用"
-		"ONLINE": return "在线"
-		"OFFLINE": return "离线"
-		"ACTIVE": return "现役"
-		"INACTIVE": return "未启用"
-		"IDLE": return "空闲"
-		"RUNNING": return "运行中"
-		"BLOCKED": return "受阻"
-		"BLOCKED_INPUT": return "输入受阻"
-		"BLOCKED_OUTPUT": return "满仓停机"
-		"POWER_LIMITED": return "能源限制"
-		"LOGISTICS_LIMITED": return "物流限制"
-		"QUEUED": return "队列中"
-		"COMPLETE", "COMPLETED": return "已完成"
-		"READY": return "就绪"
-		"PAUSED": return "已暂停"
-		"MANUAL": return "手动模式"
-		"PINNED": return "固定工艺"
-		"AUTO": return "授权自动切换"
-		"OFF": return "关闭"
-		"BULK": return "大宗仓储"
-		"COMPONENT": return "部件仓储"
-		"FLUID": return "流体仓储"
-		"SPECIAL": return "特殊仓储"
-		"STABLE": return "稳定"
-		"TIGHT": return "趋紧"
-		"SURPLUS": return "盈余"
-		"STORAGE_FULL": return "仓储已满"
-		"INPUT_SHORTAGE": return "输入短缺"
-		"NO_PRODUCTION_METHOD": return "无可用生产方式"
-		"MISSING_FACTORY": return "缺少工厂"
-		"FACTORY_SATURATED": return "工厂已饱和"
-		"CAPACITY_SHORTAGE": return "产能不足"
-		"CONSTRAINED": return "受限"
-		"RECEIVING": return "接收物资中"
-		"AWAITING_SHIPMENT": return "等待运输"
-		"PLANNED": return "规划中"
-		"FOUNDATION": return "基础施工"
-		"STRUCTURE": return "主体结构"
-		"SYSTEMS": return "系统安装"
-		"COMMISSIONING": return "试运行"
-		"OPERATIONAL": return "已投运"
-		"DOCKED": return "已停泊"
-		"REPAIRING", "REPAIR": return "维修中"
-		"REFITTING", "REFIT": return "改装中"
-		"REACTIVATING", "REACTIVATION": return "再服役中"
-		"READY_RESERVE": return "战备储备"
-		"MOTHBALLED": return "已封存"
-		"SERVICE": return "船坞服务"
-		"SUCCESS": return "成功"
-		"VICTORY": return "胜利"
-		"DEFEAT": return "失败"
-		"FAILED": return "失败"
-		"DISABLED": return "失能"
-		"RECOVERED": return "已回收"
-		"TRAVEL", "TRANSIT": return "航行中"
-		"COMBAT": return "战斗中"
-		"RETURN": return "返航中"
-		"ATTACK": return "攻击"
-		"EVENT": return "战斗事件"
-		"HOLD_FORMATION": return "保持阵型"
-		"AGGRESSIVE_PUSH": return "强攻推进"
-		"MISSILE_SATURATION": return "导弹饱和"
-		"LONG_RANGE_ENGAGEMENT": return "远程交战"
-		"CRITICAL": return "关键"
-		"HIGH": return "高"
-		"NORMAL": return "普通"
-		"LOW": return "低"
-		"MANAGED": return "受控生产"
-		"BACKGROUND": return "后台生产"
-		"CHEMICAL_CARGO", "CHEMICAL_CARGO_LOGISTICS": return "化学推进货运"
-		_: return "未知状态"
+	if normalized.is_empty():
+		return I18n.core("status.NONE")
+	var translated := I18n.status(normalized)
+	return normalized.replace("_", " ").capitalize() if translated == normalized else translated
 
 
 func _add_blocker_label(parent: Control, runtime: Dictionary) -> void:
 	var blocker: Dictionary = runtime.get("blocker", {})
-	if blocker.is_empty() and String(runtime.get("status", "")) in ["BLOCKED", "PAUSED"]:
+	if blocker.is_empty() and (String(runtime.get("status", "")) in ["BLOCKED", "PAUSED"] or String(runtime.get("operating_state", "")) in ["POWER_LIMITED", "COOLING_LIMITED", "LOGISTICS_LIMITED"]):
 		var domain_id := String(runtime.get("domain", ""))
 		if domain_id.is_empty():
 			domain_id = "shipyard" if runtime.has("plan_id") else ("research" if runtime.has("project_id") else "industry")
 		blocker = Game.simulation.blocker_diagnostic(Game.state, domain_id, runtime)
 	if not blocker.is_empty():
-		parent.add_child(_label("首要阻塞：" + _blocker_text(blocker), 13, COLOR_WARN))
+		parent.add_child(_label(I18n.core("blocker.primary") % _blocker_text(blocker), 13, COLOR_WARN))
 
 
 func _blocker_text(blocker: Dictionary) -> String:
+	if blocker.has("raw"):
+		blocker = blocker.get("raw", {}) as Dictionary
 	var reason := String(blocker.get("primary_reason", "BLOCKED"))
 	var requirement: Dictionary = blocker.get("requirement", {})
 	var item_id := String(blocker.get("item_id", ""))
 	var item_name := _content_name(Game.content.items.get(item_id, {}), item_id) if not item_id.is_empty() else ""
 	var shortage_name := item_name if not item_name.is_empty() else I18n.core("blocker.required_input")
-	var requirement_text := I18n.inline(Game.requirement_text(requirement))
+	var requirement_text := Game.requirement_text(requirement)
 	if String(requirement.get("type", "")) == "activity_complete":
 		return I18n.core("blocker.activity_complete") % requirement_text
 	match reason:
@@ -2819,35 +3303,78 @@ func _blocker_text(blocker: Dictionary) -> String:
 			return I18n.core("blocker.%s" % reason) % [shortage_name, blocker.get("available", 0), blocker.get("required", 0)]
 		"INPUT_IN_TRANSIT":
 			return I18n.core("blocker.INPUT_IN_TRANSIT") % [shortage_name, blocker.get("available", 0), blocker.get("required", 0), blocker.get("incoming", 0)]
-		"MISSING_TECH", "MISSING_FACILITY", "ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED", "POWER_SHORTAGE", "COOLING_SHORTAGE", "STORAGE_FULL", "MAINTENANCE_SHORTAGE", "CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL", "MANUALLY_PAUSED":
+		"MISSING_TECH", "MISSING_FACILITY", "PRODUCTION_DEVICE_UNAVAILABLE", "ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED", "POWER_SHORTAGE", "COOLING_SHORTAGE", "STORAGE_FULL", "MAINTENANCE_SHORTAGE", "CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL", "MANUALLY_PAUSED":
 			return I18n.core("blocker.%s" % reason)
 		_: return reason.replace("_", " ").capitalize()
 
 
+func _availability_reason(availability: Dictionary) -> String:
+	if bool(availability.get("allowed", false)):
+		return I18n.core("availability.ready", "Requirements met")
+	var reasons: Array[String] = []
+	for blocker_value in availability.get("blockers", []):
+		var blocker := blocker_value as Dictionary
+		var code := String(blocker.get("code", "UNKNOWN"))
+		if code == "INPUT_SHORTAGE":
+			var item_id := String(blocker.get("item_id", ""))
+			reasons.append(I18n.core("blocker.INPUT_SHORTAGE") % [_content_name(Game.content.items.get(item_id, {}), item_id), blocker.get("available", 0), blocker.get("required", 0)])
+		else:
+			reasons.append(I18n.core("availability.%s" % code, code.replace("_", " ").capitalize()))
+	return "\n".join(reasons)
+
+
 func _command(label_text: String, callable: Callable) -> void:
+	var previous_notice := Game.last_notice
 	var success: Variant = callable.call()
 	if success is bool and not success:
-		_append_log("失败 · %s · %s" % [label_text, Game.last_notice])
+		var reason := Game.last_notice
+		if reason.is_empty() or reason == previous_notice:
+			reason = I18n.core("command.failed_unknown", "The command could not be completed. Inspect the requirements and try again.")
+		_append_log(I18n.core("command.failed") % [label_text, reason])
+		_record_telemetry("PlayerAction", {"label":label_text, "screen":_active_page_key, "success":false, "reason":reason})
 	else:
-		_append_log("已执行 · " + label_text)
+		_append_log(I18n.core("command.executed") % label_text)
+		_record_telemetry("PlayerAction", {"label":label_text, "screen":_active_page_key, "success":true})
 	_dirty = true
 
 
 func _set_speed(speed: float) -> void:
 	Engine.time_scale = speed
-	_append_log("模拟速度：%s" % ("暂停" if speed == 0.0 else "%d×" % int(speed)))
+	_append_log(I18n.core("command.speed") % (I18n.core("command.speed_paused") if speed == 0.0 else I18n.core("command.speed_multiplier") % int(speed)))
+	_record_telemetry("PlayerAction", {"label":"SET_GAME_SPEED", "screen":_active_page_key, "success":true, "speed":speed})
 	_update_header()
 
 
 func _save_game() -> void:
-	_command("保存进度", Game.save_game)
+	_command(I18n.core("command.save_progress"), Game.save_game)
+
+
+func _request_reset_game() -> void:
+	var dialog := ConfirmationDialog.new()
+	dialog.name = "ResetConfirmation"
+	dialog.title = I18n.core("reset.title", "Start a new game?")
+	dialog.dialog_text = I18n.core("reset.description", "This deletes the current local save and starts from a fresh organization. This cannot be undone.")
+	dialog.ok_button_text = I18n.core("reset.confirm", "Delete save and restart")
+	dialog.cancel_button_text = I18n.core("reset.cancel", "Keep current game")
+	dialog.exclusive = true
+	dialog.confirmed.connect(_confirm_reset_game.bind(dialog))
+	dialog.canceled.connect(dialog.queue_free)
+	add_child(dialog)
+	dialog.popup_centered(Vector2i(520, 220))
+	dialog.get_cancel_button().call_deferred("grab_focus")
+
+
+func _confirm_reset_game(dialog: ConfirmationDialog) -> void:
+	if is_instance_valid(dialog):
+		dialog.queue_free()
+	_reset_game()
 
 
 func _reset_game() -> void:
 	Engine.time_scale = 1.0
 	Game.reset_game()
 	_event_log.clear()
-	_append_log("已重置为全新的核心玩法存档。")
+	_append_log(I18n.core("timeline.game_reset"))
 	_dirty = true
 
 
@@ -2862,7 +3389,18 @@ func _update_header() -> void:
 	var day := total_minutes / (24 * 60) + 1
 	var hour := (total_minutes / 60) % 24
 	var minute := total_minutes % 60
-	_header_status.text = I18n.core("header.clock") % [day, hour, minute, int(Game.state.progression_tier)]
+	var power := Game.simulation.civilization_power_state(Game.state)
+	# The header and bottom timeline describe the same active Alert collection.
+	# A second severity filter here would give the two surfaces different counts.
+	var blocked_count := _active_blocker_cache.size()
+	var project_count := Game.simulation.construction_queue_size(Game.state)
+	var research_status := _status_text(str(Game.state.research.get("status", "IDLE")))
+	var mega_status := "LOCKED"
+	if not Game.state.megastructure_projects.is_empty():
+		mega_status = str(Game.state.megastructure_projects.values()[0].get("status", "PLANNED"))
+	elif bool(Game.state.completed_projects.get("research_megastructures", false)):
+		mega_status = "AVAILABLE"
+	_header_status.text = "%s\n%s · %s %.0f/%.0f · %s %d · %s %d · %s %s · %s %s" % [I18n.core("header.clock") % [day, hour, minute, int(Game.state.progression_tier)], _location_name(_selected_location_id), I18n.core("header.power", "Power"), float(power.get("available_capacity", 0.0)), float(power.get("current_demand", 0.0)), I18n.core("header.alerts", "Alerts"), blocked_count, I18n.core("header.projects", "Projects"), project_count, I18n.core("header.research", "R&D"), research_status, I18n.core("header.megastructure", "Megastructure"), _status_text(mega_status)]
 	for speed_value in _speed_buttons.keys():
 		var button := _speed_buttons[speed_value] as Button
 		button.modulate = COLOR_ACCENT if is_equal_approx(float(speed_value), Engine.time_scale) else Color.WHITE
@@ -2871,12 +3409,55 @@ func _update_header() -> void:
 func _append_log(text_value: String) -> void:
 	var total_minutes := int(Game.state.total_elapsed_ms / 60000.0) if is_instance_valid(Game.state) else 0
 	var stamp := "%02d:%02d" % [(total_minutes / 60) % 24, total_minutes % 60] if is_instance_valid(Game.state) else "--:--"
-	_event_log.append("[%s] %s" % [stamp, text_value])
+	_event_log.append(I18n.core("timeline.entry") % [stamp, text_value])
 	if _event_log.size() > 40:
 		_event_log.pop_front()
 	if is_instance_valid(_notice_label):
-		_notice_label.text = I18n.inline(text_value)
+		_notice_label.text = I18n.core("bottom.timeline", "Timeline") + " · " + text_value
 	_dirty = true
+
+
+func telemetry_snapshot() -> Dictionary:
+	var screens := {}
+	var action_labels := {}
+	var blockers: Array[String] = []
+	var guidance: Array[String] = []
+	for event_value in _telemetry_events:
+		var event := event_value as Dictionary
+		match String(event.get("type", "")):
+			"ScreenOpen": screens[String(event.get("screen", ""))] = true
+			"PlayerAction": action_labels[String(event.get("label", ""))] = true
+			"BlockerSeen": blockers.append(String(event.get("code", "UNKNOWN")))
+			"GuidanceClicked": guidance.append(String(event.get("guidance_id", "")))
+	return {
+		"events":_telemetry_events.duplicate(true),
+		"screens_visited":screens.keys(),
+		"actions_exercised":action_labels.keys(),
+		"blockers_encountered":blockers,
+		"guidance_paths_used":guidance
+	}
+
+
+func _record_telemetry(event_type: String, payload: Dictionary = {}) -> void:
+	var event := payload.duplicate(true)
+	event["type"] = event_type
+	event["simulation_time_ms"] = int(Game.state.total_elapsed_ms) if is_instance_valid(Game.state) else 0
+	event["sequence"] = _telemetry_events.size()
+	_telemetry_events.append(event)
+
+
+func _update_bottom_bar() -> void:
+	if not is_instance_valid(_notice_label):
+		return
+	var alert_count := _active_blocker_cache.size()
+	var latest := String(_event_log.back()) if not _event_log.is_empty() else I18n.core("sidebar.none", "None")
+	var guidance := Game.guidance_snapshot()
+	var task_caption := String(guidance.get("message", guidance.get("reason", ""))).get_slice("\n", 0)
+	_notice_label.text = I18n.core("bottom.summary") % [
+		I18n.core("bottom.alerts", "Alerts"), alert_count,
+		I18n.core("bottom.task", "Task"), task_caption,
+		I18n.core("bottom.timeline", "Timeline"), latest
+	]
 
 
 func _on_state_changed() -> void:
@@ -2886,11 +3467,61 @@ func _on_state_changed() -> void:
 func _on_domain_event(event: Dictionary) -> void:
 	var event_type := String(event.get("type", "event"))
 	var event_id := String(event.get("activity_id", event.get("project_id", event.get("route_id", ""))))
-	_append_log("事件 · %s%s" % [event_type, (" · " + event_id) if not event_id.is_empty() else ""])
+	_append_log(I18n.core("timeline.domain_event") % [event_type, (I18n.core("format.inline_detail") % event_id) if not event_id.is_empty() else ""])
+	_record_telemetry("DomainEvent", {"event_type":event_type, "entity_id":event_id})
 
 
 func _on_command_rejected(reason: String) -> void:
-	_append_log("操作被拒绝 · " + reason)
+	_append_log(I18n.core("timeline.command_rejected") % reason)
+
+
+func _load_ui_preferences() -> void:
+	if not Game.persistence_enabled:
+		return
+	if _ui_config.load(UI_CONFIG_PATH) != OK:
+		return
+	_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
+	if _active_page_key == "overview":
+		_active_page_key = "system_map"
+	elif _active_page_key == "ships":
+		_active_page_key = "fleet"
+	elif _active_page_key == "survey":
+		_active_page_key = "frontier"
+	_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	if not Game.state.has_location(_selected_location_id):
+		_selected_location_id = SpaceGameState.MAIN_BASE_LOCATION_ID
+	_location_section = String(_ui_config.get_value("navigation", "location_section", "overview"))
+	_industry_section = String(_ui_config.get_value("navigation", "industry_section", "production"))
+	_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
+	_developer_details = bool(_ui_config.get_value("display", "developer_details", false))
+
+
+func _save_ui_preferences() -> void:
+	if not Game.persistence_enabled:
+		return
+	_ui_config.set_value("navigation", "active_page", _active_page_key)
+	_ui_config.set_value("navigation", "selected_location", _selected_location_id)
+	_ui_config.set_value("navigation", "location_section", _location_section)
+	_ui_config.set_value("navigation", "industry_section", _industry_section)
+	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
+	_ui_config.set_value("display", "developer_details", _developer_details)
+	_ui_config.save(UI_CONFIG_PATH)
+
+
+func _on_context_location_selected(index: int, location_ids: Array[String]) -> void:
+	if index < 0 or index >= location_ids.size():
+		return
+	_selected_location_id = location_ids[index]
+	_save_ui_preferences()
+	_dirty = true
+	_rebuild_active_page()
+
+
+func _toggle_developer_details() -> void:
+	_developer_details = not _developer_details
+	_save_ui_preferences()
+	_dirty = true
+	_rebuild_active_page()
 
 
 func _on_locale_changed(_locale: String) -> void:
@@ -2915,6 +3546,9 @@ func _refresh_shell_locale() -> void:
 	var pause_button := find_child("SpeedPause", true, false) as Button
 	if is_instance_valid(pause_button):
 		pause_button.text = I18n.core("shell.pause")
+	var fast_forward_button := find_child("Speed100", true, false) as Button
+	if is_instance_valid(fast_forward_button):
+		fast_forward_button.tooltip_text = I18n.core("shell.speed_100_tooltip", "Fast-forward 100× through the normal deterministic simulation; all costs and blockers still apply.")
 	var save_button := find_child("SaveButton", true, false) as Button
 	if is_instance_valid(save_button):
 		save_button.text = I18n.core("shell.save")
@@ -2926,8 +3560,9 @@ func _refresh_shell_locale() -> void:
 		locale_button.text = I18n.core("shell.locale_toggle")
 	for key_value in _nav_buttons.keys():
 		var key := String(key_value)
-		(_nav_buttons[key] as Button).text = I18n.core("nav.%s" % key)
-	var page_order := ["system_map", "location", "overview", "frontier", "industry", "research", "fleet", "expedition", "megastructure"]
+		(_nav_buttons[key] as Button).text = I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize())
+	_update_navigation_state()
+	var page_order := ["system_map", "location", "frontier", "industry", "research", "fleet", "expedition", "megastructure"]
 	for key_value in page_order:
 		var key := String(key_value)
 		var page := _page_controls.get(key) as Control
@@ -2981,6 +3616,16 @@ func _stat_card(title: String, value: String, color: Color) -> PanelContainer:
 	return card
 
 
+func _add_unlock_banner(parent: VBoxContainer, page_id: String) -> void:
+	var availability: Dictionary = Game.ui_navigation_availability(page_id)
+	if bool(availability.get("unlocked", true)):
+		return
+	var banner := _card()
+	banner.add_child(_label(I18n.core("nav.locked", "Locked"), 15, COLOR_WARN))
+	banner.add_child(_label(I18n.core(String(availability.get("condition_key", "")), "Progression requirement not met"), 12, COLOR_MUTED))
+	parent.add_child(_wrap_card(banner))
+
+
 func _page_title(title: String, subtitle: String) -> Control:
 	var box := VBoxContainer.new()
 	box.add_child(_label(title, 24, COLOR_TEXT))
@@ -2994,7 +3639,7 @@ func _section_title(text_value: String) -> Label:
 
 func _label(text_value: String, size: int = 15, color: Color = COLOR_TEXT) -> Label:
 	var value := Label.new()
-	value.text = I18n.inline(text_value)
+	value.text = text_value
 	value.add_theme_font_size_override("font_size", size)
 	value.add_theme_color_override("font_color", color)
 	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -3004,7 +3649,7 @@ func _label(text_value: String, size: int = 15, color: Color = COLOR_TEXT) -> La
 func _rich(text_value: String, color: Color = COLOR_TEXT) -> RichTextLabel:
 	var value := RichTextLabel.new()
 	value.bbcode_enabled = false
-	value.text = I18n.inline(text_value)
+	value.text = text_value
 	value.fit_content = true
 	value.scroll_active = false
 	value.add_theme_color_override("default_color", color)
@@ -3013,12 +3658,15 @@ func _rich(text_value: String, color: Color = COLOR_TEXT) -> RichTextLabel:
 
 func _button(text_value: String, callback: Callable, disabled := false, color: Color = COLOR_ACCENT) -> Button:
 	var value := Button.new()
-	value.text = I18n.inline(text_value)
+	value.text = text_value
 	value.disabled = disabled
 	value.custom_minimum_size.y = 34
 	value.add_theme_color_override("font_color", color)
 	value.add_theme_color_override("font_disabled_color", COLOR_MUTED.darkened(0.3))
-	value.pressed.connect(callback)
+	if disabled:
+		value.tooltip_text = I18n.core("common.disabled_gameplay_action")
+	if callback.is_valid():
+		value.pressed.connect(callback)
 	return value
 
 

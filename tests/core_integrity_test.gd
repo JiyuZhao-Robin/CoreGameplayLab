@@ -13,7 +13,10 @@ func _initialize() -> void:
 		_finish()
 		return
 	_test_schema_34_to_35_fixture()
+	_test_every_migratable_schema_entry()
+	_test_identity_serial_recovery()
 	_test_one_hour_batch_equivalence()
+	_test_maintenance_shortage_boundary_equivalence()
 	_test_full_storage_blocks_and_recovers_delivery()
 	_test_operations_maintenance_and_construction()
 	_test_offline_debt_survives_cap_and_round_trip()
@@ -53,6 +56,60 @@ func _test_schema_34_to_35_fixture() -> void:
 	var round_trip := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
 	_check(round_trip.aggregate_inventory() == state.aggregate_inventory() and round_trip.location_reserves("earth_orbit") == state.location_reserves("earth_orbit"), "schema-35 round trip conserves migrated inventory and reserves")
 	_check(round_trip.logistics_network.get("shipments", []) == state.logistics_network.get("shipments", []) and round_trip.retired_megastructure_archive == state.retired_megastructure_archive, "schema-35 round trip conserves in-transit cargo and retired projects")
+
+
+func _test_every_migratable_schema_entry() -> void:
+	_check(GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION == 24 and SpaceGameState.SAVE_VERSION == 35, "migration-chain test covers every published schema entry from 24 through 34")
+	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	seed.revision = 341
+	seed.parent_revision = 340
+	seed.add_item("iron_ore", 97, "earth_orbit")
+	seed.set_item_reserve("iron_ore", 13, "earth_orbit")
+	seed.add_item("electronics", 11, "lunar_space")
+	seed.set_item_reserve("electronics", 3, "lunar_space")
+	var seed_payload := seed.to_dictionary()
+	var sentinel_save_id := seed.save_id
+	var sentinel_ship_id := str(seed.ships[0].get("instance_id", ""))
+	var expected_earth_iron := seed.item_quantity("iron_ore", "earth_orbit")
+	var expected_lunar_electronics := seed.item_quantity("electronics", "lunar_space")
+
+	for entry_schema in range(GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION, SpaceGameState.SAVE_VERSION):
+		var entry_payload := seed_payload.duplicate(true)
+		entry_payload["save_version"] = entry_schema
+		var migrated_payload := SpaceGameState.migrate_save_dictionary(entry_payload)
+		_check(int(migrated_payload.get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d migration chain reaches schema 35" % entry_schema)
+		_check(str(migrated_payload.get("save_id", "")) == sentinel_save_id and int(migrated_payload.get("revision", -1)) == 341, "schema %d migration preserves Save identity and revision sentinels" % entry_schema)
+		var migrated_locations: Dictionary = migrated_payload.get("locations", {})
+		var migrated_earth: Dictionary = migrated_locations.get("earth_orbit", {})
+		var migrated_lunar: Dictionary = migrated_locations.get("lunar_space", {})
+		_check(int(migrated_earth.get("inventory", {}).get("iron_ore", 0)) == expected_earth_iron and int(migrated_lunar.get("inventory", {}).get("electronics", 0)) == expected_lunar_electronics, "schema %d migration preserves per-Location inventory sentinels" % entry_schema)
+
+		var restored := SpaceGameState.from_dictionary(entry_payload, database.domains.keys(), database.regions)
+		_check(restored != null and restored.save_id == sentinel_save_id and restored.revision == 341, "schema %d payload deserializes with stable Save identity" % entry_schema)
+		_check(restored.item_quantity("iron_ore", "earth_orbit") == expected_earth_iron and restored.item_quantity("electronics", "lunar_space") == expected_lunar_electronics, "schema %d deserialization preserves per-Location inventory" % entry_schema)
+		_check(int(restored.location_reserves("earth_orbit").get("iron_ore", 0)) == 13 and int(restored.location_reserves("lunar_space").get("electronics", 0)) == 3, "schema %d deserialization preserves Location reserve ownership" % entry_schema)
+		_check(not sentinel_ship_id.is_empty() and not restored.ship_by_id(sentinel_ship_id).is_empty(), "schema %d deserialization preserves stable Ship identity" % entry_schema)
+		_check(int(restored.to_dictionary().get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d deserialization reserializes only as current schema 35" % entry_schema)
+
+
+func _test_identity_serial_recovery() -> void:
+	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	var payload := seed.to_dictionary()
+	payload["next_ship_serial"] = 1
+	payload["ships"] = [{"instance_id":"SHIP-417", "name":"Identity Fixture", "blueprint_id":"patchwork_prospector", "status":"DOCKED", "condition":"OPERATIONAL", "assignment":{}, "modules":[], "service_record":{}}]
+	payload["next_equipment_serial"] = 1
+	payload["equipment_instances"] = {"EQUIP-000228":{"instance_id":"EQUIP-000228", "definition_id":"sensor_array", "status":"STORAGE", "installed_ship_id":""}}
+	payload["next_loadout_serial"] = 1
+	payload["saved_loadouts"] = {"LOADOUT-0088":{"id":"LOADOUT-0088", "blueprint_id":"patchwork_prospector", "name":"Identity Fixture", "modules":[]}}
+	payload["next_automation_rule_serial"] = 1
+	payload["automation_rules"] = [{"rule_id":"AUTOMATION-000077", "condition":{"type":"INVENTORY_STATE"}, "action":{"type":"PAUSE_FACTORY"}, "authorized":true}]
+	payload["next_survey_mission_serial"] = 1
+	payload["survey_mission"] = {"mission_id":"SURVEY-000066", "status":"IDLE"}
+	payload["logistics_network"]["next_shipment_serial"] = 1
+	payload["logistics_network"]["shipments"] = [{"id":"SHIPMENT-000055", "origin":"earth_orbit", "destination":"lunar_space", "cargo":{}, "status":"IN_TRANSIT", "remaining_ms":1.0}]
+	var restored := SpaceGameState.from_dictionary(payload, database.domains.keys(), database.regions)
+	_check(restored.next_ship_serial == 418 and restored.next_equipment_serial == 229 and restored.next_loadout_serial == 89, "load repairs Ship, equipment and Loadout serials above every persisted identity")
+	_check(restored.next_automation_rule_serial == 78 and restored.next_survey_mission_serial == 67 and int(restored.logistics_network.get("next_shipment_serial", 0)) == 56, "load repairs Automation, Survey and Shipment serials above every persisted identity")
 
 
 func _test_one_hour_batch_equivalence() -> void:
@@ -112,6 +169,26 @@ func _integrated_seed_state(simulation: SimulationEngine) -> SpaceGameState:
 	return state
 
 
+func _test_maintenance_shortage_boundary_equivalence() -> void:
+	var seed_simulation := SimulationEngine.new(database)
+	seed_simulation.set_simulation_profile("NORMAL_PROFILE")
+	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	seed_simulation.ensure_frontier_state(seed)
+	seed.facilities["energy_array"] = {"level":1, "status":"ACTIVE"}
+	seed.add_item("fusion_service_component", 2, "earth_orbit")
+	var batch := SpaceGameState.from_dictionary(seed.to_dictionary(), database.domains.keys(), database.regions)
+	var sliced := SpaceGameState.from_dictionary(seed.to_dictionary(), database.domains.keys(), database.regions)
+	var batch_simulation := SimulationEngine.new(database)
+	var sliced_simulation := SimulationEngine.new(database)
+	batch_simulation.set_simulation_profile("NORMAL_PROFILE")
+	sliced_simulation.set_simulation_profile("NORMAL_PROFILE")
+	batch_simulation.advance(batch, HOUR_MS)
+	for _minute in 60:
+		sliced_simulation.advance(sliced, 60000.0)
+	_compare_variants(batch.to_dictionary(), sliced.to_dictionary(), "maintenance shortage simulate(60min) vs 60x1min")
+	_check(is_equal_approx(float(batch.energy_system.get("maintenance_coverage", {}).get("energy_array", -1.0)), 0.0), "maintenance coverage changes at the real shortage boundary instead of averaging an entire batch")
+
+
 func _test_full_storage_blocks_and_recovers_delivery() -> void:
 	var simulation := SimulationEngine.new(database)
 	simulation.set_simulation_profile("NORMAL_PROFILE")
@@ -155,6 +232,21 @@ func _test_operations_maintenance_and_construction() -> void:
 	var maintenance_after := state.item_quantity("repair_material", "earth_orbit") + state.item_quantity("electronics", "earth_orbit")
 	_check(maintenance_after < maintenance_before and int(state.statistics.get("item_consumed_totals", {}).get("repair_material", 0)) > 0, "elapsed operation consumes and records real O&M products")
 	_check(state.demand_registry.get("sources", {}).values().any(func(row): return str((row as Dictionary).get("demand_kind", "")) == "CONTINUOUS"), "O&M remains visible as continuous Demand Registry sources")
+	var stocked_demand: Dictionary = {}
+	for demand_value in state.demand_registry.get("sources", {}).values():
+		var demand := demand_value as Dictionary
+		if str(demand.get("consumer_type", "")) == "facility_om" and str(demand.get("location_id", "")) == "earth_orbit":
+			stocked_demand = demand
+			break
+	_check(not stocked_demand.is_empty(), "O&M recovery regression has a real facility demand stream")
+	if not stocked_demand.is_empty():
+		var demand_id := str(stocked_demand.get("demand_id", ""))
+		var maintenance_item_id := str(stocked_demand.get("product_id", ""))
+		state.add_item(maintenance_item_id, 1, "earth_orbit")
+		state.operations_maintenance.get("coverage", {})[demand_id] = 0.0
+		state.operations_maintenance.get("fractional", {})[demand_id] = 0.0
+		simulation.advance(state, 1.0)
+		_check(is_equal_approx(float(state.operations_maintenance.get("coverage", {}).get(demand_id, 0.0)), 1.0), "restored physical O&M stock clears stale zero coverage before the next low-rate whole-item boundary")
 	_check(state.construction_history.any(func(row): return str((row as Dictionary).get("project_id", "")) == project_id), "Construction completes through normal simulation and enters persistent history")
 	_check(int(state.location_state("earth_orbit").get("logistics", {}).get("hub_throughput", 0)) >= 125, "completed Construction applies the requested physical Location capacity")
 

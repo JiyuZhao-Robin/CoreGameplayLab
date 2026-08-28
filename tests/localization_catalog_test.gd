@@ -18,6 +18,15 @@ func _ready() -> void:
 		_check(not String(chinese_core.get(key, "")).strip_edges().is_empty(), "Chinese core key has text: %s" % key)
 		_check(not _contains_cjk(String(english_core[key])), "English core key contains no CJK: %s" % key)
 	for required_key in [
+		"freight_class.BULK", "freight_class.STANDARD", "freight_class.PRECISION",
+		"freight_class.CRYOGENIC", "freight_class.HAZARDOUS", "freight_class.OVERSIZED",
+		"logistics_technology.chemical_cargo",
+		"industrial_transformation.precision_industry_network.name",
+		"industrial_transformation.precision_industry_network.description",
+		"industrial_transformation.high_power_industry_network.name",
+		"industrial_transformation.high_power_industry_network.description",
+		"automation.condition.STORAGE_UTILIZATION", "automation.operator.LT",
+		"automation.action.PAUSE_FACTORY", "automation.action.RESUME_FACTORY",
 		"notice.sponsor_facility", "technology_domain.materials_science",
 		"technology_domain.manufacturing", "technology_domain.energy",
 		"technology_domain.propulsion", "technology_domain.automation_computing",
@@ -34,6 +43,28 @@ func _ready() -> void:
 	]:
 		_check(english.get("ui", {}).has(required_key), "English UI catalog has %s" % required_key)
 		_check(chinese.get("ui", {}).has(required_key), "Chinese UI catalog has %s" % required_key)
+	for blocker_status in [
+		"MISSING_TECH", "MISSING_FACILITY", "MISSING_SCALE_STAGE",
+		"MISSING_CAPITAL_GOOD", "PRODUCTION_DEVICE_UNAVAILABLE", "KNOWLEDGE_GATE",
+		"RESEARCH_CAPACITY_SHORTAGE", "OPERATING_CONDITION", "FIELD_TEST_REQUIRED",
+		"INPUT_SHORTAGE", "INPUT_IN_TRANSIT", "ROUTE_UNAVAILABLE",
+		"TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED",
+		"POWER_SHORTAGE", "COOLING_SHORTAGE", "STORAGE_FULL",
+		"MAINTENANCE_SHORTAGE", "CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL",
+		"MANUALLY_PAUSED", "MEGASTRUCTURE_SITE_REQUIRED",
+		"MEGASTRUCTURE_PHASE_ORDER", "MEGASTRUCTURE_SITE_MISMATCH", "PROJECT_COMPLETE"
+	]:
+		var status_key := "status.%s" % blocker_status
+		_check(english_core.has(status_key), "English core UI has blocker title %s" % status_key)
+		_check(chinese_core.has(status_key), "Chinese core UI has blocker title %s" % status_key)
+		_check(not String(chinese_core.get(status_key, "")).contains(blocker_status.capitalize()), "Chinese blocker title is localized: %s" % status_key)
+	var state_registry := _read_catalog("res://data/ui_state_registry.json")
+	for definition_value in state_registry.get("definitions", []):
+		var state_id := String((definition_value as Dictionary).get("stateId", ""))
+		var state_leaf := state_id.get_slice(".", state_id.get_slice_count(".") - 1)
+		var state_key := "status.%s" % state_leaf
+		_check(english_core.has(state_key), "English core UI localizes registered Gameplay State %s" % state_key)
+		_check(chinese_core.has(state_key), "Chinese core UI localizes registered Gameplay State %s" % state_key)
 	var english_stages: Dictionary = english.get("megastructure_stages", {}).get("stellar_energy", {})
 	var chinese_stages: Dictionary = chinese.get("megastructure_stages", {}).get("stellar_energy", {})
 	_check(english_stages.size() == 9 and _sorted_keys(english_stages) == _sorted_keys(chinese_stages), "both catalogs cover all eight phases plus operational state")

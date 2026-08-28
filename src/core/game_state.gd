@@ -419,7 +419,7 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.manufacturing_modules_built = data.get("manufacturing_modules_built", {}).duplicate(true)
 	state.pinned_items = data.get("pinned_items", []).duplicate()
 	state.saved_loadouts = _normalized_saved_loadouts(data.get("saved_loadouts", {}))
-	state.next_loadout_serial = maxi(int(data.get("next_loadout_serial", state.saved_loadouts.size() + 1)), state.saved_loadouts.size() + 1)
+	state.next_loadout_serial = _serial_after_identifiers(int(data.get("next_loadout_serial", 1)), state.saved_loadouts.keys(), "LOADOUT-")
 	state.region_states = data.get("region_states", {}).duplicate(true)
 	state.mining_site_states = data.get("mining_site_states", {}).duplicate(true)
 	if int(data.get("save_version", 0)) <= 33:
@@ -431,9 +431,12 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.combat_area_states = data.get("combat_area_states", {}).duplicate(true)
 	state.extraction_network_states = data.get("extraction_network_states", {}).duplicate(true)
 	state.equipment_instances = data.get("equipment_instances", {}).duplicate(true)
-	state.next_equipment_serial = maxi(1, int(data.get("next_equipment_serial", 1)))
+	state.next_equipment_serial = _serial_after_identifiers(int(data.get("next_equipment_serial", 1)), state.equipment_instances.keys(), "EQUIP-")
 	state.asset_semantics_version = maxi(1, int(data.get("asset_semantics_version", 1)))
-	state.next_ship_serial = maxi(1, int(data.get("next_ship_serial", state.ships.size() + 1)))
+	var loaded_ship_ids: Array = []
+	for loaded_ship_value in state.ships:
+		loaded_ship_ids.append(str((loaded_ship_value as Dictionary).get("instance_id", "")))
+	state.next_ship_serial = _serial_after_identifiers(int(data.get("next_ship_serial", 1)), loaded_ship_ids, "SHIP-")
 	state.refit_projects = data.get("refit_projects", []).duplicate(true)
 	state.ship_service_projects = _normalized_ship_service_projects(data.get("ship_service_projects", []))
 	state.naval_archive = data.get("naval_archive", []).duplicate(true)
@@ -446,9 +449,12 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.planning_scenarios = data.get("planning_scenarios", {}).duplicate(true)
 	state.automation_rules = _normalized_automation_rules(data.get("automation_rules", []))
 	state.automation_audit = data.get("automation_audit", []).duplicate(true)
-	state.next_automation_rule_serial = maxi(1, int(data.get("next_automation_rule_serial", state.automation_rules.size() + 1)))
+	var automation_ids: Array = []
+	for loaded_rule_value in state.automation_rules:
+		automation_ids.append(str((loaded_rule_value as Dictionary).get("rule_id", "")))
+	state.next_automation_rule_serial = _serial_after_identifiers(int(data.get("next_automation_rule_serial", 1)), automation_ids, "AUTOMATION-")
 	state.survey_mission = _normalized_survey_mission(data.get("survey_mission", {}))
-	state.next_survey_mission_serial = maxi(1, int(data.get("next_survey_mission_serial", 1)))
+	state.next_survey_mission_serial = _serial_after_identifiers(int(data.get("next_survey_mission_serial", 1)), [str(state.survey_mission.get("mission_id", ""))], "SURVEY-")
 	var loaded_domains: Dictionary = data.get("domains", {})
 	for domain_id in domain_ids:
 		if loaded_domains.has(domain_id):
@@ -1055,11 +1061,31 @@ func remove_item(item_id: String, quantity: int, location_id: String = MAIN_BASE
 	if item_quantity(item_id, location_id) < quantity:
 		return false
 	location_inventory(location_id)[item_id] = item_quantity(item_id, location_id) - quantity
+	_record_item_consumed(item_id, quantity)
+	return true
+
+
+func transfer_inventory_to_fleet_supply(item_id: String, requested: int, fleet_id: String = "expedition", location_id: String = MAIN_BASE_LOCATION_ID) -> int:
+	if item_id.is_empty() or requested <= 0:
+		return 0
+	var transferred := mini(requested, available_item_quantity(item_id, location_id))
+	if transferred <= 0:
+		return 0
+	location_inventory(location_id)[item_id] = item_quantity(item_id, location_id) - transferred
+	var runtime := fleet_logistics_runtime(fleet_id)
+	var supplies: Dictionary = runtime.get("supplies", {})
+	supplies[item_id] = int(supplies.get(item_id, 0)) + transferred
+	runtime["supplies"] = supplies
+	return transferred
+
+
+func _record_item_consumed(item_id: String, quantity: int) -> void:
+	if item_id.is_empty() or quantity <= 0:
+		return
 	statistics["items_consumed"] = int(statistics.get("items_consumed", 0)) + quantity
 	var consumed_totals: Dictionary = statistics.get("item_consumed_totals", {})
 	consumed_totals[item_id] = int(consumed_totals.get(item_id, 0)) + quantity
 	statistics["item_consumed_totals"] = consumed_totals
-	return true
 
 
 func owns_ship_model(blueprint_id: String) -> bool:
@@ -1275,6 +1301,7 @@ func consume_fleet_supply(item_id: String, quantity: int, fleet_id: String = "ex
 		return false
 	supplies[item_id] = int(supplies.get(item_id, 0)) - quantity
 	runtime["supplies"] = supplies
+	_record_item_consumed(item_id, quantity)
 	return true
 
 
@@ -1283,17 +1310,6 @@ func add_recovered_cargo(item_id: String, quantity: int, fleet_id: String = "exp
 	var recovered: Dictionary = runtime.get("recovered", {})
 	recovered[item_id] = int(recovered.get(item_id, 0)) + quantity
 	runtime["recovered"] = recovered
-
-
-func unload_fleet_cargo(fleet_id: String = "expedition", unload_supplies: bool = false) -> void:
-	var runtime := fleet_logistics_runtime(fleet_id)
-	for item_id in runtime.get("recovered", {}):
-		add_item(str(item_id), int(runtime["recovered"][item_id]))
-	runtime["recovered"] = {}
-	if unload_supplies:
-		for item_id in runtime.get("supplies", {}):
-			add_item(str(item_id), int(runtime["supplies"][item_id]))
-		runtime["supplies"] = {}
 
 
 static func _empty_operation(index: int, domain_id: String) -> Dictionary:
@@ -1424,6 +1440,18 @@ static func _normalized_next_construction_project_serial(requested: int, project
 	return result
 
 
+static func _serial_after_identifiers(requested: int, identifiers: Array, prefix: String) -> int:
+	var result := maxi(1, requested)
+	for identifier_value in identifiers:
+		var identifier := str(identifier_value)
+		if not identifier.begins_with(prefix):
+			continue
+		var suffix := identifier.trim_prefix(prefix)
+		if suffix.is_valid_int():
+			result = maxi(result, int(suffix) + 1)
+	return result
+
+
 static func _normalized_industrial_operations(source: Array) -> Array:
 	var result: Array = []
 	for index in source.size():
@@ -1450,7 +1478,11 @@ static func _normalized_industrial_operations(source: Array) -> Array:
 		normalized["capacity_allocation"] = 100.0
 		normalized["priority"] = clampi(int(normalized.get("priority", 50)), 0, 100)
 		normalized["control_mode"] = str(normalized.get("control_mode", "PINNED"))
-		if normalized["control_mode"] not in ["PINNED", "AUTO", "OFF"]:
+		# Versioned compatibility: legacy AUTO never had distinct simulation
+		# semantics, so old saves migrate to the truthful PINNED state.
+		if normalized["control_mode"] == "AUTO":
+			normalized["control_mode"] = "PINNED"
+		if normalized["control_mode"] not in ["PINNED", "OFF"]:
 			normalized["control_mode"] = "PINNED"
 		normalized["manual_lock"] = bool(normalized.get("manual_lock", true))
 		normalized["production_device_id"] = str(normalized.get("production_device_id", ""))
@@ -1716,7 +1748,11 @@ static func _normalized_logistics_network(source: Dictionary) -> Dictionary:
 		result[key] = source[key].duplicate(true) if source[key] is Dictionary or source[key] is Array else source[key]
 	result["dispatch_interval_ms"] = maxf(100.0, float(result.get("dispatch_interval_ms", 5000.0)))
 	result["dispatch_progress_ms"] = maxf(0.0, float(result.get("dispatch_progress_ms", 0.0)))
-	result["next_shipment_serial"] = maxi(1, int(result.get("next_shipment_serial", 1)))
+	var shipment_ids: Array = []
+	for shipment_value in result.get("shipments", []):
+		if shipment_value is Dictionary:
+			shipment_ids.append(str((shipment_value as Dictionary).get("id", "")))
+	result["next_shipment_serial"] = _serial_after_identifiers(int(result.get("next_shipment_serial", 1)), shipment_ids, "SHIPMENT-")
 	return result
 
 
@@ -1813,6 +1849,31 @@ func _normalize_ship_assignments() -> void:
 func _normalize_activity_fleets() -> void:
 	var claimed: Array[String] = []
 	var logistics_assignments := {}
+	var survey_assignments := {}
+	var construction_assignments := {}
+	for ship_value in ships:
+		var construction_ship := ship_value as Dictionary
+		var construction_ship_id := str(construction_ship.get("instance_id", ""))
+		var construction_assignment: Dictionary = construction_ship.get("assignment", {})
+		if str(construction_assignment.get("type", "")) != "CONSTRUCTION_SUPPORT" or construction_ship_id.is_empty() or str(construction_ship.get("condition", "OPERATIONAL")) != "OPERATIONAL" or str(construction_ship.get("maintenance_state", "ACTIVE")) != "ACTIVE":
+			continue
+		claimed.append(construction_ship_id)
+		construction_assignments[construction_ship_id] = construction_assignment.duplicate(true)
+	if str(survey_mission.get("status", "IDLE")) == "RUNNING":
+		var normalized_survey_ship_ids: Array = []
+		for ship_id_value in survey_mission.get("assigned_ship_ids", []):
+			var ship_id := str(ship_id_value)
+			var candidate := ship_by_id(ship_id)
+			if ship_id.is_empty() or claimed.has(ship_id) or candidate.is_empty() or str(candidate.get("condition", "OPERATIONAL")) != "OPERATIONAL" or str(candidate.get("maintenance_state", "ACTIVE")) != "ACTIVE":
+				continue
+			normalized_survey_ship_ids.append(ship_id)
+			claimed.append(ship_id)
+			survey_assignments[ship_id] = {
+				"type":"SURVEY_MISSION",
+				"mission_id":str(survey_mission.get("mission_id", "")),
+				"target":str(survey_mission.get("target", ""))
+			}
+		survey_mission["assigned_ship_ids"] = normalized_survey_ship_ids
 	for service_value in logistics_network.get("services", {}).values():
 		if service_value is not Dictionary:
 			continue
@@ -1843,6 +1904,14 @@ func _normalize_activity_fleets() -> void:
 		if logistics_assignments.has(ship_id):
 			ship["status"] = "LOGISTICS_SERVICE"
 			ship["assignment"] = logistics_assignments[ship_id].duplicate(true)
+			continue
+		if survey_assignments.has(ship_id):
+			ship["status"] = "EXPEDITION"
+			ship["assignment"] = survey_assignments[ship_id].duplicate(true)
+			continue
+		if construction_assignments.has(ship_id):
+			ship["status"] = "CONSTRUCTION_SUPPORT"
+			ship["assignment"] = construction_assignments[ship_id].duplicate(true)
 			continue
 		var domain_id := ship_fleet_domain(ship_id)
 		ship["status"] = "DOCKED"

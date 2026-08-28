@@ -40,6 +40,15 @@ func _test_content_contract(database: ContentDatabase) -> void:
 		if str(mode.get("id", "")) != "general_cargo" and not bool(mode.get("infrastructure_service", false)):
 			_check(not bool(mode.get("public_base_capacity", false)) and float(mode.get("ship_capacity_multiplier", 0.0)) > 0.0, "specialist service %s derives capacity from physical ships" % mode.get("id", "?"))
 	_check(bool(database.transport_modes.get("general_cargo", {}).get("public_base_capacity", false)), "limited public General Cargo preserves multi-hop new-save bootstrap")
+	for project_value in database.research_projects.values():
+		var project := project_value as Dictionary
+		if not project.get("stages", []).is_empty():
+			_check(project.get("costs", []).is_empty(), "staged Research Program %s has one cost authority: stages[].costs" % project.get("id", "?"))
+	var megastructure_research: Dictionary = database.research_projects.get("research_megastructures", {})
+	var thermal_stage: Dictionary = (megastructure_research.get("stages", []) as Array).filter(func(value): return str((value as Dictionary).get("id", "")) == "thermal_routing")[0]
+	_check(_entry_quantity(thermal_stage.get("costs", []), "dark_matter") == 2, "Dark Matter is consumed by the real Megastructure thermal-routing Research stage")
+	var survey_deployment: Dictionary = database.survey_rules.get("deployment_package", {})
+	_check(str(survey_deployment.get("target_state", "")) == LocationState.SURVEYED and _entry_quantity(survey_deployment.get("costs", []), "industrial_machine_tools") > 0 and _entry_quantity(survey_deployment.get("costs", []), "structural_frame") > 0, "remote Survey staging is a committed pre-heavy-industry Capital Good deployment package")
 
 
 func _test_planner_contract(database: ContentDatabase) -> void:
@@ -50,6 +59,8 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	simulation.logistics.ensure_state(state)
 	var planner := simulation.economy_planner
 	var before: Dictionary = state.to_dictionary()
+	simulation.system_production_overview(state, SpaceGameState.SYSTEM_ID)
+	_check(state.to_dictionary() == before, "System production overview is a read-only query")
 	var ship_plan: Dictionary = database.ship_construction_projects["construct_bulk_freighter"]
 	var expected_ship_bom: Dictionary = simulation.ship_construction_material_totals(ship_plan)
 	for fixed_value in ship_plan.get("fixed_costs", []):
@@ -62,6 +73,14 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	_check(float(research_target.get("bom", {}).get("propulsion_test_article", 0.0)) == 1.0 and str(research_target.get("target_type", "")) == "RESEARCH_PHASE", "R&D phase planning exposes its real Experimental Article BOM")
 	var mega_target: Dictionary = planner.plan_megastructure_phase(state, "stellar_energy", "stellar_primary_frame", "earth_sun_lagrange")
 	_check(float(mega_target.get("bom", {}).get("steel_composite", 0.0)) > 0.0 and not mega_target.get("site_requirements", {}).is_empty() and str(mega_target.get("activity_id", "")) == "construct_stellar_primary_frame", "Megastructure phase planning exposes its real Construction BOM and site contract")
+	var thermal_phase: Dictionary = database.megastructures.get("stellar_energy", {}).get("phases", [])[4]
+	var base_site_requirements: Dictionary = simulation.megastructure_effective_site_requirements(state, thermal_phase)
+	state.technology_spillovers["stellar_thermal_routing"] = true
+	var routed_site_requirements: Dictionary = simulation.megastructure_effective_site_requirements(state, thermal_phase)
+	var routed_target: Dictionary = planner.plan_megastructure_phase(state, "stellar_energy", str(thermal_phase.get("id", "")), "earth_sun_lagrange")
+	_check(float(routed_site_requirements.get("power_capacity", 0.0)) < float(base_site_requirements.get("power_capacity", 0.0)) and float(routed_site_requirements.get("cooling_capacity", 0.0)) < float(base_site_requirements.get("cooling_capacity", 0.0)), "Stellar Thermal Routing has a real Power and Cooling implementation")
+	_check(routed_target.get("site_requirements", {}) == routed_site_requirements, "Megastructure Planner and runtime share effective site requirements")
+	state.technology_spillovers.erase("stellar_thermal_routing")
 	_check(state.to_dictionary() == before, "all target planners are read-only and do not mutate live state")
 
 	for location_id_value in state.locations.keys():

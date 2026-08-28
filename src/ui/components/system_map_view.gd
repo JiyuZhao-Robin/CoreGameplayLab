@@ -6,6 +6,7 @@ signal location_selected(location_id: String)
 const COLOR_SPACE := Color("070d14")
 const COLOR_GRID := Color(0.22, 0.45, 0.55, 0.24)
 const COLOR_ROUTE := Color(0.42, 0.60, 0.68, 0.62)
+const COLOR_ROUTE_SATURATED := Color("e1b85c")
 const COLOR_ROUTE_LOCKED := Color(0.24, 0.31, 0.36, 0.45)
 const COLOR_DISCOVERED := Color("58dce4")
 const COLOR_UNKNOWN := Color("6e7b86")
@@ -41,14 +42,21 @@ func configure(locations: Array[Dictionary], routes: Array[Dictionary], selected
 		var discovered := bool(location.get("discovered", false))
 		var button := Button.new()
 		button.name = "Location_%s" % location_id
-		button.text = "%s\n%s" % [String(location.get("name", location_id)), I18n.status(String(location.get("survey_state", "UNKNOWN")))]
-		button.disabled = false
+		var markers: Array[String] = []
+		if int(location.get("fleet_task_count", 0)) > 0:
+			markers.append(I18n.core("map.marker.fleet", "Fleet %d") % int(location.get("fleet_task_count", 0)))
+		if bool(location.get("megastructure", false)):
+			markers.append(I18n.core("map.marker.megastructure", "Megastructure"))
+		button.text = "%s\n%s%s" % [String(location.get("name", location_id)), I18n.status(String(location.get("survey_state", "UNKNOWN"))), (" · " + " / ".join(markers)) if not markers.is_empty() else ""]
+		button.disabled = not discovered
+		if not discovered:
+			button.tooltip_text = I18n.core("map.location_locked_tooltip", "Complete the preceding survey route to inspect this Location")
 		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.custom_minimum_size = NODE_SIZE
 		button.add_theme_font_size_override("font_size", 12)
 		button.add_theme_color_override("font_color", COLOR_DISCOVERED if discovered else COLOR_UNKNOWN)
 		button.add_theme_color_override("font_disabled_color", COLOR_UNKNOWN)
-		button.add_theme_stylebox_override("normal", _node_style(Color(0.02, 0.09, 0.12, 0.94), COLOR_SELECTED if location_id == _selected_location_id else COLOR_DISCOVERED))
+		button.add_theme_stylebox_override("normal", _node_style(Color(0.02, 0.09, 0.12, 0.94) if discovered else Color(0.02, 0.035, 0.05, 0.92), COLOR_SELECTED if location_id == _selected_location_id else (COLOR_DISCOVERED if discovered else COLOR_UNKNOWN)))
 		button.add_theme_stylebox_override("hover", _node_style(Color(0.03, 0.14, 0.18, 0.98), COLOR_SELECTED))
 		button.add_theme_stylebox_override("pressed", _node_style(Color(0.02, 0.18, 0.20, 1.0), COLOR_SELECTED))
 		button.add_theme_stylebox_override("disabled", _node_style(Color(0.02, 0.035, 0.05, 0.92), COLOR_UNKNOWN))
@@ -81,10 +89,50 @@ func _layout_nodes() -> void:
 		position.x = clampf(position.x, NODE_SIZE.x * 0.55 + 18.0, size.x - NODE_SIZE.x * 0.55 - 18.0)
 		position.y = clampf(position.y, NODE_SIZE.y * 0.55 + 18.0, size.y - NODE_SIZE.y * 0.55 - 18.0)
 		_positions[location_id] = position
+	_resolve_node_collisions()
+	for location_id_value in _positions.keys():
+		var location_id := String(location_id_value)
+		var position := _positions[location_id] as Vector2
 		var button := _node_buttons.get(location_id) as Button
 		if is_instance_valid(button):
 			button.position = position - NODE_SIZE * 0.5
 			button.size = NODE_SIZE
+
+
+func _resolve_node_collisions() -> void:
+	var ids: Array = _positions.keys()
+	var half := NODE_SIZE * 0.5
+	var minimum_gap := Vector2(18.0, 12.0)
+	for _iteration in 32:
+		var moved := false
+		for first_index in ids.size():
+			for second_index in range(first_index + 1, ids.size()):
+				var first_id := String(ids[first_index])
+				var second_id := String(ids[second_index])
+				var first := _positions[first_id] as Vector2
+				var second := _positions[second_id] as Vector2
+				var delta := second - first
+				var overlap_x := NODE_SIZE.x + minimum_gap.x - absf(delta.x)
+				var overlap_y := NODE_SIZE.y + minimum_gap.y - absf(delta.y)
+				if overlap_x <= 0.0 or overlap_y <= 0.0:
+					continue
+				moved = true
+				if overlap_x < overlap_y:
+					var direction_x := 1.0 if delta.x >= 0.0 else -1.0
+					first.x -= overlap_x * 0.52 * direction_x
+					second.x += overlap_x * 0.52 * direction_x
+				else:
+					var direction_y := 1.0 if delta.y >= 0.0 else -1.0
+					first.y -= overlap_y * 0.52 * direction_y
+					second.y += overlap_y * 0.52 * direction_y
+				first.x = clampf(first.x, half.x + 18.0, size.x - half.x - 18.0)
+				first.y = clampf(first.y, half.y + 18.0, size.y - half.y - 18.0)
+				second.x = clampf(second.x, half.x + 18.0, size.x - half.x - 18.0)
+				second.y = clampf(second.y, half.y + 18.0, size.y - half.y - 18.0)
+				_positions[first_id] = first
+				_positions[second_id] = second
+		if not moved:
+			break
 
 
 func _draw() -> void:
@@ -102,7 +150,11 @@ func _draw() -> void:
 		if not _positions.has(from_id) or not _positions.has(to_id):
 			continue
 		var active := bool(route.get("active", false))
-		draw_dashed_line(_positions[from_id], _positions[to_id], COLOR_ROUTE if active else COLOR_ROUTE_LOCKED, 2.0 if active else 1.0, 9.0, true)
+		if active:
+			var utilization := float(route.get("utilization", 0.0))
+			draw_line(_positions[from_id], _positions[to_id], COLOR_ROUTE_SATURATED if utilization >= 0.999 else COLOR_ROUTE, 3.0 if utilization >= 0.999 else 2.0, true)
+		else:
+			draw_dashed_line(_positions[from_id], _positions[to_id], COLOR_ROUTE_LOCKED, 1.0, 9.0, true)
 	_draw_star(center)
 	_draw_legend()
 

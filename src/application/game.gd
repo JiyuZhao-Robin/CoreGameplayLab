@@ -7,6 +7,9 @@ signal command_rejected(reason: String)
 const CONTENT_PATH := "res://data/content.json"
 const AUTOSAVE_INTERVAL_MS := 15000.0
 const SIMULATION_STEP_MS := 100.0
+const MAX_TIME_ORCHESTRATION_STEPS := 500000
+const MAX_ONLINE_FRAME_SIMULATION_MS := 15000.0
+const MIN_TIME_ORCHESTRATION_STEP_MS := 0.01
 
 var content := ContentDatabase.new()
 var state: SpaceGameState
@@ -39,11 +42,15 @@ func _process(delta: float) -> void:
 	_simulation_accumulator_ms += elapsed_ms
 	_autosave_accumulator_ms += elapsed_ms
 	if _simulation_accumulator_ms >= SIMULATION_STEP_MS:
-		var report := simulation.advance(state, _simulation_accumulator_ms)
-		_simulation_accumulator_ms = 0.0
+		# Keep high-speed online play responsive when many short economic
+		# boundaries are active. Any remainder stays as deterministic debt for the
+		# following frames; no time is discarded and explicit/offline simulation
+		# continues to use the full requested window.
+		var frame_request := minf(_simulation_accumulator_ms, MAX_ONLINE_FRAME_SIMULATION_MS)
+		var report := advance_game_time(frame_request)
+		_simulation_accumulator_ms = maxf(0.0, _simulation_accumulator_ms - frame_request + float(report.get("unprocessed_ms", 0.0)))
 		var events: Array = report.get("events", [])
 		_publish_events(events)
-		run_automation_rules()
 		if not events.is_empty():
 			state_changed.emit()
 	if persistence_enabled and _autosave_accumulator_ms >= AUTOSAVE_INTERVAL_MS:
@@ -117,7 +124,7 @@ func stop_activity(domain_id: String) -> bool:
 	runtime["status"] = "IDLE"
 	runtime["reserved_costs"] = {}
 	if domain_id == "expedition":
-		transaction.working_state.unload_fleet_cargo("expedition", false)
+		simulation.unload_fleet_cargo(transaction.working_state, "expedition", SpaceGameState.MAIN_BASE_LOCATION_ID, false)
 		runtime["phase"] = "IDLE"
 		runtime["route_id"] = ""
 		runtime["node_index"] = 0
@@ -132,15 +139,15 @@ func stop_activity(domain_id: String) -> bool:
 func set_ship_maintenance_state(instance_id: String, maintenance_state: String) -> bool:
 	var normalized := maintenance_state.to_upper()
 	if normalized not in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
-		return _reject("Invalid maintenance state")
+		return _reject(I18n.t("notice.maintenance_state_invalid", "Invalid maintenance state"))
 	var ship := state.ship_by_id(instance_id)
 	if ship.is_empty() or str(ship.get("status", "")) != "DOCKED" or str(ship.get("condition", "")) != "OPERATIONAL":
-		return _reject("The ship must be operational and docked before changing maintenance state")
+		return _reject(I18n.t("notice.maintenance_state_locked", "The ship must be operational and docked before changing maintenance state"))
 	var current := str(ship.get("maintenance_state", "ACTIVE"))
 	if current == normalized:
 		return true
 	if current == "MOTHBALLED":
-		return _reject("A Mothballed ship must complete a Starport reactivation project")
+		return _reject(I18n.t("notice.maintenance_reactivation_required", "A mothballed ship must complete a Starport reactivation project"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	for domain_id in ["mining", "expedition"]:
 		var roster := transaction.working_state.fleet_ship_ids(domain_id)
@@ -149,7 +156,7 @@ func set_ship_maintenance_state(instance_id: String, maintenance_state: String) 
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
 	working_ship["maintenance_state"] = normalized
 	working_ship["assignment"] = {}
-	last_notice = "Maintenance state changed: %s → %s" % [working_ship.get("name", instance_id), normalized]
+	last_notice = I18n.t("notice.maintenance_state_changed", "Maintenance state changed: %s → %s") % [working_ship.get("name", instance_id), I18n.status(normalized)]
 	transaction.record({"type":"ShipMaintenanceStateChanged", "ship_id":instance_id, "maintenance_state":normalized})
 	_commit_transaction(transaction)
 	return true
@@ -158,17 +165,17 @@ func set_ship_maintenance_state(instance_id: String, maintenance_state: String) 
 func start_ship_reactivation(instance_id: String) -> bool:
 	var ship := state.ship_by_id(instance_id)
 	if ship.is_empty() or str(ship.get("maintenance_state", "")) != "MOTHBALLED" or str(ship.get("status", "")) != "DOCKED":
-		return _reject("Only a docked Mothballed ship can be reactivated")
+		return _reject(I18n.t("notice.reactivation_ship_invalid", "Only a docked mothballed ship can be reactivated"))
 	var running_projects := state.ship_service_projects.filter(func(project): return str(project.get("status", "")) == "RUNNING").size()
 	if running_projects >= simulation.ship_service_capacity(state):
-		return _reject("Starport and repair-dock service capacity is fully committed")
+		return _reject(I18n.t("notice.ship_service_capacity_full", "Starport and repair-dock service capacity is fully committed"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
 	var costs := simulation.ship_reactivation_costs(working_ship)
 	var location_id := str(working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
 	for item_id in costs:
 		if transaction.working_state.available_item_quantity(str(item_id), location_id) < int(costs[item_id]):
-			return _reject("Reactivation materials are insufficient: %s × %d" % [item_id, int(costs[item_id])])
+			return _reject(I18n.t("notice.reactivation_materials", "Reactivation materials are insufficient: %s × %d") % [I18n.content(content.items.get(str(item_id), {"id":item_id, "name":item_id})), int(costs[item_id])])
 	for item_id in costs:
 		transaction.working_state.remove_item(str(item_id), int(costs[item_id]), location_id)
 	var project_id := "SERVICE-%06d" % (transaction.working_state.ship_service_projects.size() + int(transaction.working_state.statistics.get("ships_reactivated", 0)) + 1)
@@ -186,7 +193,7 @@ func start_ship_reactivation(instance_id: String) -> bool:
 	working_ship["status"] = "REACTIVATING"
 	working_ship["assignment"] = {"type":"STARPORT_REACTIVATION", "project_id":project_id}
 	transaction.working_state.statistics["ships_reactivated"] = int(transaction.working_state.statistics.get("ships_reactivated", 0)) + 1
-	last_notice = "Mothball reactivation started: %s" % working_ship.get("name", instance_id)
+	last_notice = I18n.t("notice.reactivation_started", "Mothball reactivation started: %s") % working_ship.get("name", instance_id)
 	transaction.record({"type":"ShipReactivationStarted", "project_id":project_id, "ship_id":instance_id, "costs":costs})
 	_commit_transaction(transaction)
 	return true
@@ -195,13 +202,15 @@ func start_ship_reactivation(instance_id: String) -> bool:
 func scrap_ship(instance_id: String) -> bool:
 	var ship := state.ship_by_id(instance_id)
 	if ship.is_empty() or str(ship.get("status", "")) != "DOCKED":
-		return _reject("Only an idle docked ship can be scrapped")
+		return _reject(I18n.t("notice.scrap_ship_invalid", "Only an idle docked ship can be scrapped"))
 	if not state.ship_fleet_domain(instance_id).is_empty() or state.refit_projects.any(func(project): return str(project.get("ship_id", "")) == instance_id) or state.ship_service_projects.any(func(project): return str(project.get("ship_id", "")) == instance_id):
-		return _reject("Remove the ship from fleets and finish all service projects before scrapping")
+		return _reject(I18n.t("notice.scrap_ship_assigned", "Remove the ship from fleets and finish all service projects before scrapping"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
 	var recovered := simulation.ship_scrap_recovery(working_ship)
 	var location_id := str(working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	if not simulation.storage_can_apply_transaction(transaction.working_state, location_id, recovered):
+		return _reject(I18n.t("notice.scrap_storage_full", "The ship cannot be scrapped because the recovered materials exceed available storage"))
 	var archive_entry := {
 		"ship_id":instance_id,
 		"name":str(working_ship.get("name", instance_id)),
@@ -229,7 +238,7 @@ func scrap_ship(instance_id: String) -> bool:
 		transaction.working_state.fleet_maintenance.get(field, {}).erase(instance_id)
 	transaction.working_state.naval_archive.append(archive_entry)
 	transaction.working_state.statistics["ships_scrapped"] = int(transaction.working_state.statistics.get("ships_scrapped", 0)) + 1
-	last_notice = "Ship scrapped and archived: %s" % archive_entry["name"]
+	last_notice = I18n.t("notice.ship_scrapped", "Ship scrapped and archived: %s") % archive_entry["name"]
 	transaction.record({"type":"ShipScrapped", "ship_id":instance_id, "recovered":recovered})
 	_commit_transaction(transaction)
 	return true
@@ -244,7 +253,7 @@ func set_ship_fleet_assignment(instance_id: String, domain_id: String) -> bool:
 	if not state.ship_is_docked(instance_id):
 		return _reject(I18n.t("notice.ship_assignment_locked", "The ship must be operational and docked before changing assignment"))
 	if not domain_id.is_empty() and (str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" or float(ship.get("maintenance_coverage", 1.0)) <= 0.0):
-		return _reject("Only a fully maintained Active ship can join an operational fleet")
+		return _reject(I18n.t("notice.fleet_ship_maintenance_required", "Only a fully maintained active ship can join an operational fleet"))
 	var current_domain := state.ship_fleet_domain(instance_id)
 	if current_domain == domain_id:
 		return true
@@ -312,6 +321,9 @@ func integrate_mining_site(site_id: String, network_id: String) -> bool:
 func set_fleet_supply_plan(item_id: String, quantity: int, fleet_id: String = "expedition") -> bool:
 	if not content.items.has(item_id) or quantity < 0:
 		return _reject(I18n.t("notice.supply_plan_invalid", "Invalid fleet supply plan"))
+	var current_plan: Dictionary = state.fleet_logistics_runtime(fleet_id).get("supply_plan", {})
+	if int(current_plan.get(item_id, 0)) == quantity:
+		return _reject(I18n.t("notice.supply_plan_unchanged", "The fleet supply target is already set to this quantity"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var logistics := transaction.working_state.fleet_logistics_runtime(fleet_id)
 	var plan: Dictionary = logistics.get("supply_plan", {})
@@ -325,7 +337,7 @@ func set_fleet_supply_plan(item_id: String, quantity: int, fleet_id: String = "e
 func set_ship_combat_zone(ship_id: String, zone: String, fleet_id: String = "expedition") -> bool:
 	var normalized_zone := zone.to_upper()
 	if normalized_zone not in ["FRONT", "MID", "REAR"] or state.ship_by_id(ship_id).is_empty():
-		return _reject("Invalid ship or combat zone")
+		return _reject(I18n.t("notice.combat_zone_invalid", "Invalid ship or combat zone"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var formation: Dictionary = transaction.working_state.fleet_logistics_runtime(fleet_id).get("formation", {})
 	var ship_zones: Dictionary = formation.get("ship_zones", {})
@@ -340,7 +352,7 @@ func set_ship_combat_zone(ship_id: String, zone: String, fleet_id: String = "exp
 func set_fleet_doctrine(doctrine: String, fleet_id: String = "expedition") -> bool:
 	var normalized := doctrine.to_upper()
 	if normalized not in ["HOLD_FORMATION", "AGGRESSIVE_PUSH", "MISSILE_SATURATION", "LONG_RANGE_ENGAGEMENT"]:
-		return _reject("Invalid fleet doctrine")
+		return _reject(I18n.t("notice.fleet_doctrine_invalid", "Invalid fleet doctrine"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var formation: Dictionary = transaction.working_state.fleet_logistics_runtime(fleet_id).get("formation", {})
 	formation["doctrine"] = normalized
@@ -353,7 +365,7 @@ func set_fleet_doctrine(doctrine: String, fleet_id: String = "expedition") -> bo
 func set_fleet_retreat_policy(mode: String, threshold: float = 0.25, fleet_id: String = "expedition") -> bool:
 	var normalized := mode.to_upper()
 	if normalized not in ["HULL_THRESHOLD", "NEVER"]:
-		return _reject("Invalid retreat policy")
+		return _reject(I18n.t("notice.retreat_policy_invalid", "Invalid retreat policy"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var formation: Dictionary = transaction.working_state.fleet_logistics_runtime(fleet_id).get("formation", {})
 	formation["retreat_policy"] = {"mode":normalized, "threshold":clampf(threshold, 0.05, 0.95)}
@@ -387,11 +399,11 @@ func start_survey_mission(target_location_id: String, target_state: String, ship
 				selected.append(ship_id)
 				break
 	if selected.is_empty():
-		return _reject("A docked Survey Vessel with the required Survey Module is required")
+		return _reject(I18n.t("notice.survey_vessel_required", "A docked survey vessel with the required survey module is required"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.start_survey_mission(transaction.working_state, target_location_id, target_state, selected, origin_location_id):
-		return _reject("Survey Mission cannot start: verify Survey State, vessel capability, fuel and maintenance supplies")
-	last_notice = "Survey Mission started: %s → %s" % [target_location_id, target_state]
+		return _reject(I18n.t("notice.survey_mission_blocked", "The survey mission cannot start; verify survey state, vessel capability, fuel and maintenance supplies"))
+	last_notice = I18n.t("notice.survey_mission_started", "Survey mission started: %s → %s") % [I18n.content(content.regions.get(target_location_id, {"id":target_location_id, "name":target_location_id})), I18n.status(target_state)]
 	transaction.record({"type":"SurveyMissionStarted", "target":target_location_id, "target_state":target_state, "origin":origin_location_id, "ship_ids":selected})
 	_commit_transaction(transaction)
 	return true
@@ -399,20 +411,16 @@ func start_survey_mission(target_location_id: String, target_state: String, ship
 
 func _auto_resupply_state(working: SpaceGameState, fleet_id: String, ship_ids: Array) -> void:
 	var logistics := working.fleet_logistics_runtime(fleet_id)
-	var supplies: Dictionary = logistics.get("supplies", {})
 	var available_space := maxi(0, simulation.fleet_cargo_capacity(working, ship_ids) - simulation.fleet_cargo_used(working, fleet_id))
 	for item_id in logistics.get("supply_plan", {}):
 		if available_space <= 0:
 			break
 		var desired := maxi(0, int(logistics["supply_plan"].get(item_id, 0)))
-		var missing := maxi(0, desired - int(supplies.get(item_id, 0)))
-		var transfer := mini(missing, mini(working.item_quantity(str(item_id)), available_space))
+		var missing := maxi(0, desired - working.fleet_supply_quantity(str(item_id), fleet_id))
+		var transfer := working.transfer_inventory_to_fleet_supply(str(item_id), mini(missing, available_space), fleet_id)
 		if transfer <= 0:
 			continue
-		working.remove_item(str(item_id), transfer)
-		supplies[str(item_id)] = int(supplies.get(str(item_id), 0)) + transfer
 		available_space -= transfer
-	logistics["supplies"] = supplies
 
 
 func start_extraction_operation(site_id: String, ship_ids: Array = [], preferred_slot: int = -1) -> bool:
@@ -537,9 +545,9 @@ func start_industry_operation(slot: int, activity_id: String) -> bool:
 	if not simulation.industry_recipe_capabilities_met(state, activity, location_id):
 		return _reject(I18n.t("notice.process_capability_missing", "Install the required process module before starting this recipe"))
 	if not bool(simulation.production_method_environment_eligibility(state, location_id, activity).get("eligible", false)):
-		return _reject("This Production Method is incompatible with the selected Location environment")
+		return _reject(I18n.t("notice.production_environment_incompatible", "This production method is incompatible with the selected location environment"))
 	if not simulation.production_method_available_at_scale(state, location_id, facility_id, activity):
-		return _reject("This Production Method requires a higher Industry Scale Stage")
+		return _reject(I18n.t("notice.production_scale_required", "This production method requires a higher industry scale stage"))
 	if not simulation.activity_available(state, activity, location_id):
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
 	if not simulation.costs_available_for_industry_slot(state, activity, slot):
@@ -566,22 +574,22 @@ func start_industry_operation(slot: int, activity_id: String) -> bool:
 
 func add_production_line(location_id: String, facility_id: String, activity_id: String, capacity_allocation: int = 100, priority: int = 50) -> bool:
 	if not state.has_location(location_id) or not content.facilities.has(facility_id) or not content.activities.has(activity_id):
-		return _reject("Invalid Production Line configuration")
+		return _reject(I18n.t("notice.production_line_invalid", "Invalid production line configuration"))
 	var activity: Dictionary = content.activities[activity_id]
 	if str(activity.get("domain", "")) != "industry" or simulation.is_construction_activity(activity) or str(activity.get("facility", "")) != facility_id:
-		return _reject("This recipe cannot run on the selected Production Line")
+		return _reject(I18n.t("notice.production_line_recipe_invalid", "This recipe cannot run on the selected production line"))
 	if not bool(simulation.production_method_environment_eligibility(state, location_id, activity).get("eligible", false)):
-		return _reject("This Production Method is incompatible with the selected Location environment")
+		return _reject(I18n.t("notice.production_environment_incompatible", "This production method is incompatible with the selected location environment"))
 	if state.production_lines_for(location_id, facility_id).size() >= simulation.max_production_lines(state, location_id, facility_id):
-		return _reject("The current Industry Scale Stage has no additional Production Line capacity")
+		return _reject(I18n.t("notice.production_line_capacity_full", "The current industry scale stage has no additional production line capacity"))
 	if not simulation.production_method_available_at_scale(state, location_id, facility_id, activity):
-		return _reject("This Production Method requires a higher Industry Scale Stage")
+		return _reject(I18n.t("notice.production_scale_required", "This production method requires a higher industry scale stage"))
 	if not simulation.industry_recipe_capabilities_met(state, activity, location_id) or not simulation.activity_available(state, activity, location_id):
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var runtime := transaction.working_state.create_production_line(location_id, facility_id)
 	if runtime.is_empty():
-		return _reject("Production Line limit reached")
+		return _reject(I18n.t("notice.production_line_limit", "Production line limit reached"))
 	# Schema compatibility accepts the old argument, but a real Factory now shares
 	# throughput automatically between its active Production Lines.
 	runtime["capacity_allocation"] = 100.0
@@ -597,7 +605,7 @@ func add_production_line(location_id: String, facility_id: String, activity_id: 
 	runtime["allowed_method_group"] = str(activity.get("production_method_group", activity.get("production_family", "")))
 	runtime["reserved_costs"] = simulation.industry_cycle_costs(transaction.working_state, runtime, activity, false)
 	runtime["input_commitments"] = runtime["reserved_costs"].duplicate(true)
-	last_notice = "Production Line added: %s / %s" % [I18n.content(content.facilities[facility_id]), I18n.content(activity)]
+	last_notice = I18n.t("notice.production_line_added", "Production line added: %s / %s") % [I18n.content(content.facilities[facility_id]), I18n.content(activity)]
 	transaction.record({"type":"ProductionLineAdded", "line_id":runtime.get("line_id", ""), "slot":runtime.get("slot", -1), "location_id":location_id, "facility_id":facility_id, "activity_id":activity_id})
 	_commit_transaction(transaction)
 	return true
@@ -605,42 +613,31 @@ func add_production_line(location_id: String, facility_id: String, activity_id: 
 
 func configure_production_line(slot: int, capacity_allocation: int, priority: int) -> bool:
 	if slot < 0 or slot >= state.industrial_operations.size() or capacity_allocation < 1 or capacity_allocation > 100 or priority < 0 or priority > 100:
-		return _reject("Invalid Production Line allocation or priority")
+		return _reject(I18n.t("notice.production_line_configuration_invalid", "Invalid production line allocation or priority"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var runtime: Dictionary = transaction.working_state.industrial_operations[slot]
 	runtime["capacity_allocation"] = 100.0
 	runtime["priority"] = priority
 	runtime["theoretical_rate"] = 0.0
 	runtime["actual_rate"] = 0.0
-	last_notice = "Production Line priority configured: %d" % priority
+	last_notice = I18n.t("notice.production_line_priority", "Production line priority configured: %d") % priority
 	transaction.record({"type":"ProductionLineConfigured", "line_id":runtime.get("line_id", ""), "slot":slot, "control_mode":runtime.get("control_mode", "PINNED"), "priority":priority})
 	_commit_transaction(transaction)
 	return true
 
 
 func set_production_line_control(slot: int, control_mode: String, manual_lock: bool = true) -> bool:
-	if slot < 0 or slot >= state.industrial_operations.size() or control_mode not in ["PINNED", "AUTO", "OFF"]:
-		return _reject("Invalid Production Line control mode")
+	# AUTO used to be a presentation-only alias for PINNED.  Keeping it as a
+	# player action made the UI promise an automation rule that did not exist.
+	# Real automation is expressed by the explicit, audited automation rules
+	# below, so production lines expose only the two mechanically distinct modes.
+	if slot < 0 or slot >= state.industrial_operations.size() or control_mode not in ["PINNED", "OFF"]:
+		return _reject(I18n.t("notice.production_line_control_invalid", "Invalid production line control mode"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	if not _set_production_line_control_in_state(transaction.working_state, slot, control_mode, manual_lock):
+		return _reject(I18n.t("notice.production_configuration_unavailable", "The production method, production device or location environment is unavailable"))
 	var runtime: Dictionary = transaction.working_state.industrial_operations[slot]
-	if str(runtime.get("activity_id", "")).is_empty():
-		return _reject("Production Line has no Production Method")
-	runtime["control_mode"] = control_mode
-	runtime["manual_lock"] = manual_lock
-	if control_mode == "OFF":
-		runtime["status"] = "PAUSED"
-		runtime["actual_rate"] = 0.0
-	else:
-		var activity: Dictionary = content.activities.get(str(runtime.get("activity_id", "")), {})
-		var location_id := str(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-		if activity.is_empty() or not simulation.industry_recipe_capabilities_met(transaction.working_state, activity, location_id):
-			return _reject("Production Method or Production Device is unavailable")
-		if not bool(simulation.production_method_environment_eligibility(transaction.working_state, location_id, activity).get("eligible", false)):
-			return _reject("This Production Method is incompatible with the selected Location environment")
-		runtime["production_device_id"] = simulation.production_device_id(transaction.working_state, activity, location_id)
-		runtime["status"] = "RUNNING"
-		runtime["blocked_reason"] = ""
-	last_notice = "Production Line control: %s" % control_mode
+	last_notice = I18n.t("notice.production_line_control", "Production line control: %s") % I18n.status(control_mode)
 	transaction.record({"type":"ProductionLineControlChanged", "line_id":runtime.get("line_id", ""), "slot":slot, "control_mode":control_mode, "manual_lock":manual_lock})
 	_commit_transaction(transaction)
 	return true
@@ -649,22 +646,68 @@ func set_production_line_control(slot: int, control_mode: String, manual_lock: b
 func add_automation_rule(condition: Dictionary, action: Dictionary, cooldown_ms: float = 30000.0, hysteresis: float = 0.05) -> bool:
 	var action_type := str(action.get("type", ""))
 	if action_type not in ["PAUSE_FACTORY", "RESUME_FACTORY", "ADJUST_ROUTE_POLICY", "ADJUST_PROJECT_PRIORITY"] or condition.is_empty():
-		return _reject("Automation supports only pre-authorized pause, resume, route policy and project priority actions")
+		return _reject(I18n.t("notice.automation_action_invalid", "Automation supports only pre-authorized pause, resume, route policy and project priority actions"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	var serial := int(transaction.working_state.next_automation_rule_serial)
-	transaction.working_state.next_automation_rule_serial = serial + 1
-	var rule := {
-		"rule_id":"AUTOMATION-%06d" % serial, "enabled":true, "paused":false,
+	var rule_id := _append_automation_rule_to_state(transaction.working_state, condition, action, cooldown_ms, hysteresis)
+	last_notice = I18n.t("notice.automation_rule_authorized", "Automation rule authorized: %s") % rule_id
+	transaction.record({"type":"AutomationRuleAuthorized", "rule_id":rule_id, "condition":condition, "action":action})
+	_commit_transaction(transaction)
+	return true
+
+
+func authorize_storage_guard(slot: int, location_id: String) -> bool:
+	if slot < 0 or slot >= state.industrial_operations.size() or not state.has_location(location_id):
+		return _reject(I18n.t("notice.production_line_location_invalid", "Invalid production line or location"))
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var control_mode := str(transaction.working_state.industrial_operations[slot].get("control_mode", "PINNED"))
+	if not _set_production_line_control_in_state(transaction.working_state, slot, control_mode, false):
+		return _reject(I18n.t("notice.production_configuration_unavailable", "The production method, production device or location environment is unavailable"))
+	var pause_condition := {"type":"STORAGE_UTILIZATION", "location_id":location_id, "operator":"GT", "threshold":0.95}
+	var resume_condition := {"type":"STORAGE_UTILIZATION", "location_id":location_id, "operator":"LT", "threshold":0.80}
+	var pause_id := _append_automation_rule_to_state(transaction.working_state, pause_condition, {"type":"PAUSE_FACTORY", "slot":slot}, 30000.0, 0.03)
+	var resume_id := _append_automation_rule_to_state(transaction.working_state, resume_condition, {"type":"RESUME_FACTORY", "slot":slot}, 30000.0, 0.03)
+	last_notice = I18n.t("notice.storage_guard_authorized", "Storage guard authorized: %s / %s") % [pause_id, resume_id]
+	transaction.record({"type":"StorageGuardAuthorized", "slot":slot, "location_id":location_id, "rule_ids":[pause_id, resume_id]})
+	_commit_transaction(transaction)
+	return true
+
+
+func _set_production_line_control_in_state(working_state: SpaceGameState, slot: int, control_mode: String, manual_lock: bool) -> bool:
+	if slot < 0 or slot >= working_state.industrial_operations.size() or control_mode not in ["PINNED", "OFF"]:
+		return false
+	var runtime: Dictionary = working_state.industrial_operations[slot]
+	if str(runtime.get("activity_id", "")).is_empty():
+		return false
+	runtime["control_mode"] = control_mode
+	runtime["manual_lock"] = manual_lock
+	if control_mode == "OFF":
+		runtime["status"] = "PAUSED"
+		runtime["actual_rate"] = 0.0
+		return true
+	var activity: Dictionary = content.activities.get(str(runtime.get("activity_id", "")), {})
+	var location_id := str(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	if activity.is_empty() or not simulation.industry_recipe_capabilities_met(working_state, activity, location_id):
+		return false
+	if not bool(simulation.production_method_environment_eligibility(working_state, location_id, activity).get("eligible", false)):
+		return false
+	runtime["production_device_id"] = simulation.production_device_id(working_state, activity, location_id)
+	runtime["status"] = "RUNNING"
+	runtime["blocked_reason"] = ""
+	return true
+
+
+func _append_automation_rule_to_state(working_state: SpaceGameState, condition: Dictionary, action: Dictionary, cooldown_ms: float, hysteresis: float) -> String:
+	var serial := int(working_state.next_automation_rule_serial)
+	working_state.next_automation_rule_serial = serial + 1
+	var rule_id := "AUTOMATION-%06d" % serial
+	working_state.automation_rules.append({
+		"rule_id":rule_id, "enabled":true, "paused":false,
 		"condition":condition.duplicate(true), "action":action.duplicate(true),
 		"cooldown_ms":maxf(0.0, cooldown_ms), "hysteresis":maxf(0.0, hysteresis),
 		"last_triggered_at_ms":-1, "last_condition_active":false, "authorized":true,
-		"created_at_ms":int(transaction.working_state.total_elapsed_ms)
-	}
-	transaction.working_state.automation_rules.append(rule)
-	last_notice = "Automation rule authorized: %s" % rule["rule_id"]
-	transaction.record({"type":"AutomationRuleAuthorized", "rule_id":rule["rule_id"], "condition":condition, "action":action})
-	_commit_transaction(transaction)
-	return true
+		"created_at_ms":int(working_state.total_elapsed_ms)
+	})
+	return rule_id
 
 
 func set_automation_rule_paused(rule_id: String, paused: bool) -> bool:
@@ -677,8 +720,8 @@ func set_automation_rule_paused(rule_id: String, paused: bool) -> bool:
 			found = true
 			break
 	if not found:
-		return _reject("Unknown Automation rule")
-	last_notice = "Automation rule %s: %s" % [rule_id, "PAUSED" if paused else "ACTIVE"]
+		return _reject(I18n.t("notice.automation_rule_unknown", "Unknown automation rule"))
+	last_notice = I18n.t("notice.automation_rule_state", "Automation rule %s: %s") % [rule_id, I18n.status("PAUSED" if paused else "ACTIVE")]
 	transaction.record({"type":"AutomationRulePauseChanged", "rule_id":rule_id, "paused":paused})
 	_commit_transaction(transaction)
 	return true
@@ -693,8 +736,8 @@ func revoke_automation_rule(rule_id: String) -> bool:
 			found = true
 			break
 	if not found:
-		return _reject("Unknown Automation rule")
-	last_notice = "Automation authorization revoked: %s" % rule_id
+		return _reject(I18n.t("notice.automation_rule_unknown", "Unknown automation rule"))
+	last_notice = I18n.t("notice.automation_rule_revoked", "Automation authorization revoked: %s") % rule_id
 	transaction.record({"type":"AutomationRuleRevoked", "rule_id":rule_id})
 	_commit_transaction(transaction)
 	return true
@@ -725,6 +768,39 @@ func run_automation_rules() -> int:
 				executed += 1
 		_record_automation_evaluation(rule_id, snapshot, result, active)
 	return executed
+
+
+func advance_game_time(elapsed_ms: float) -> Dictionary:
+	var requested := maxf(0.0, elapsed_ms)
+	var remaining := requested
+	var simulated := 0.0
+	var operations := 0
+	var events: Array = []
+	var steps := 0
+	while remaining > 0.001 and steps < MAX_TIME_ORCHESTRATION_STEPS:
+		var next_boundary := simulation.next_state_change_ms(state)
+		# SimulationEngine treats windows <= 0.001 ms as settled tolerance. Passing
+		# that exact value would process zero time and permanently retain the whole
+		# caller window whenever a ready Cycle reports the minimum boundary.
+		var step := remaining if next_boundary == INF else minf(remaining, maxf(MIN_TIME_ORCHESTRATION_STEP_MS, next_boundary))
+		var partial := simulation.advance(state, step)
+		var processed := float(partial.get("simulated_ms", 0.0))
+		if processed <= 0.0:
+			break
+		simulated += processed
+		remaining -= processed
+		operations += int(partial.get("operations", 0))
+		events.append_array(partial.get("events", []))
+		run_automation_rules()
+		steps += 1
+	return {
+		"simulated_ms":simulated,
+		"unprocessed_ms":maxf(0.0, remaining),
+		"operations":operations,
+		"events":events,
+		"orchestration_steps":steps,
+		"operation_limit_reached":steps >= MAX_TIME_ORCHESTRATION_STEPS
+	}
 
 
 func _automation_rule(rule_id: String) -> Dictionary:
@@ -868,7 +944,7 @@ func _record_automation_evaluation(rule_id: String, snapshot: Dictionary, result
 
 func expand_location_industry(location_id: String, facility_id: String, levels: int = 1) -> bool:
 	if levels not in [1, 5, 10] or not state.has_location(location_id) or not content.facilities.has(facility_id):
-		return _reject("Invalid Location Industry expansion")
+		return _reject(I18n.t("notice.industry_expansion_invalid", "Invalid location industry expansion"))
 	var current_level := int(state.location_industry(location_id, facility_id).get("level", 0))
 	return queue_facility_expansion(location_id, facility_id, current_level + levels)
 
@@ -876,8 +952,8 @@ func expand_location_industry(location_id: String, facility_id: String, levels: 
 func queue_facility_expansion(location_id: String, facility_id: String, target_level: int, priority: int = 50) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.queue_facility_expansion(transaction.working_state, location_id, facility_id, target_level, priority):
-		return _reject("Facility expansion cannot enter the Construction queue")
-	last_notice = "Facility expansion queued: %s / %s → Lv.%d" % [location_id, I18n.content(content.facilities[facility_id]), target_level]
+		return _reject(I18n.t("notice.facility_expansion_blocked", "The facility expansion cannot enter the construction queue"))
+	last_notice = I18n.t("notice.facility_expansion_queued", "Facility expansion queued: %s / %s → Tier %d") % [I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id})), I18n.content(content.facilities[facility_id]), target_level]
 	transaction.record({"type":"ConstructionProjectQueued", "project_type":"FACILITY_EXPANSION", "location_id":location_id, "facility_id":facility_id, "target_level":target_level, "priority":priority})
 	_commit_transaction(transaction)
 	return true
@@ -886,8 +962,8 @@ func queue_facility_expansion(location_id: String, facility_id: String, target_l
 func queue_scale_stage_upgrade(location_id: String, facility_id: String, priority: int = 50) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.queue_scale_stage_upgrade(transaction.working_state, location_id, facility_id, priority):
-		return _reject("Scale Stage upgrade cannot enter the Construction queue")
-	last_notice = "Scale Stage upgrade queued: %s / %s" % [location_id, I18n.content(content.facilities[facility_id])]
+		return _reject(I18n.t("notice.scale_stage_upgrade_blocked", "The scale stage upgrade cannot enter the construction queue"))
+	last_notice = I18n.t("notice.scale_stage_upgrade_queued", "Scale stage upgrade queued: %s / %s") % [I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id})), I18n.content(content.facilities[facility_id])]
 	transaction.record({"type":"ConstructionProjectQueued", "project_type":"SCALE_STAGE_UPGRADE", "location_id":location_id, "facility_id":facility_id, "priority":priority})
 	_commit_transaction(transaction)
 	return true
@@ -896,8 +972,8 @@ func queue_scale_stage_upgrade(location_id: String, facility_id: String, priorit
 func queue_location_specialization(location_id: String, specialization_id: String, priority: int = 50) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.queue_location_specialization(transaction.working_state, location_id, specialization_id, priority):
-		return _reject("Industry specialization requires an Industrial Complex and an open Construction slot")
-	last_notice = "Industry specialization queued: %s / %s" % [location_id, specialization_id]
+		return _reject(I18n.t("notice.industry_specialization_blocked", "Industry specialization requires an Industrial Complex and an open construction slot"))
+	last_notice = I18n.t("notice.industry_specialization_queued", "Industry specialization queued at %s") % I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id}))
 	transaction.record({"type":"ConstructionProjectQueued", "project_type":"INDUSTRY_SPECIALIZATION", "location_id":location_id, "specialization_id":specialization_id, "priority":priority})
 	_commit_transaction(transaction)
 	return true
@@ -906,8 +982,8 @@ func queue_location_specialization(location_id: String, specialization_id: Strin
 func queue_industrial_transformation(transformation_id: String, priority: int = 50) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.queue_industrial_transformation(transaction.working_state, transformation_id, priority):
-		return _reject("Industrial Transformation requires mastered SYSTEM technology, Capital Goods and an open Construction slot")
-	last_notice = "Industrial Transformation queued: %s" % transformation_id
+		return _reject(I18n.t("notice.industrial_transformation_blocked", "Industrial transformation requires mastered system technology, capital goods and an open construction slot"))
+	last_notice = I18n.t("notice.industrial_transformation_queued", "Industrial transformation queued")
 	transaction.record({"type":"ConstructionProjectQueued", "project_type":"INDUSTRIAL_TRANSFORMATION", "transformation_id":transformation_id, "priority":priority})
 	_commit_transaction(transaction)
 	return true
@@ -916,8 +992,8 @@ func queue_industrial_transformation(transformation_id: String, priority: int = 
 func queue_location_capacity_upgrade(location_id: String, project_type: String, target_value: int, priority: int = 50) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.queue_location_capacity_upgrade(transaction.working_state, location_id, project_type, target_value, priority):
-		return _reject("Capacity upgrade cannot enter the Construction queue")
-	last_notice = "Capacity project queued: %s / %s → %d" % [location_id, project_type, target_value]
+		return _reject(I18n.t("notice.capacity_upgrade_blocked", "The capacity upgrade cannot enter the construction queue"))
+	last_notice = I18n.t("notice.capacity_project_queued", "Capacity project queued at %s → %d") % [I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id})), target_value]
 	transaction.record({"type":"ConstructionProjectQueued", "project_type":project_type, "location_id":location_id, "target_value":target_value, "priority":priority})
 	_commit_transaction(transaction)
 	return true
@@ -926,8 +1002,8 @@ func queue_location_capacity_upgrade(location_id: String, project_type: String, 
 func queue_site_development(site_id: String, extraction_method_id: String, priority: int = 50) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.queue_site_development(transaction.working_state, site_id, extraction_method_id, priority):
-		return _reject("Site Development requires a Surveyed site, an eligible permanent Extraction Method and an open Construction slot")
-	last_notice = "Site Development queued: %s / %s" % [site_id, extraction_method_id]
+		return _reject(I18n.t("notice.site_development_blocked", "Site development requires a surveyed site, an eligible permanent extraction method and an open construction slot"))
+	last_notice = I18n.t("notice.site_development_queued", "Site development queued: %s") % I18n.content(content.regions.get(site_id, {"id":site_id, "name":site_id}))
 	transaction.record({"type":"ConstructionProjectQueued", "project_type":"SITE_DEVELOPMENT", "site_id":site_id, "extraction_method_id":extraction_method_id, "priority":priority})
 	_commit_transaction(transaction)
 	return true
@@ -935,7 +1011,7 @@ func queue_site_development(site_id: String, extraction_method_id: String, prior
 
 func set_location_industry_infrastructure(location_id: String, power_capacity: float, cooling_capacity: float, structural_capacity: float) -> bool:
 	if not state.has_location(location_id) or power_capacity < 0.0 or cooling_capacity < 0.0 or structural_capacity < 0.0:
-		return _reject("Invalid Location Industry infrastructure")
+		return _reject(I18n.t("notice.location_infrastructure_invalid", "Invalid location industry infrastructure"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var industry: Dictionary = transaction.working_state.location_state(location_id).get("industry", {})
 	var requested := {
@@ -952,15 +1028,15 @@ func set_location_industry_infrastructure(location_id: String, power_capacity: f
 	for project_type_value in requested.keys():
 		var project_type := str(project_type_value)
 		if int(requested[project_type]) < int(current[project_type]):
-			return _reject("Infrastructure capacity cannot be reduced by an upgrade command")
+			return _reject(I18n.t("notice.infrastructure_capacity_reduction", "Infrastructure capacity cannot be reduced by an upgrade command"))
 		if int(requested[project_type]) == int(current[project_type]):
 			continue
 		if not simulation.queue_location_capacity_upgrade(transaction.working_state, location_id, project_type, int(requested[project_type]), 50):
-			return _reject("Infrastructure upgrade cannot enter the Construction queue")
+			return _reject(I18n.t("notice.infrastructure_upgrade_blocked", "The infrastructure upgrade cannot enter the construction queue"))
 		queued_types.append(project_type)
 	if queued_types.is_empty():
-		return _reject("No infrastructure capacity increase requested")
-	last_notice = "Infrastructure capacity projects queued: %s" % location_id
+		return _reject(I18n.t("notice.infrastructure_capacity_unchanged", "No infrastructure capacity increase was requested"))
+	last_notice = I18n.t("notice.infrastructure_projects_queued", "Infrastructure capacity projects queued at %s") % I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id}))
 	transaction.record({"type":"LocationCapacityProjectsQueued", "location_id":location_id, "project_types":queued_types})
 	_commit_transaction(transaction)
 	return true
@@ -1006,6 +1082,8 @@ func start_megastructure_phase(megastructure_id: String, priority: int = 90) -> 
 	var phase_index := int(project.get("phase_index", 0))
 	if definition.is_empty() or project.is_empty() or phase_index <= 0 or phase_index >= phases.size():
 		return _reject(I18n.t("notice.megastructure_phase_unavailable", "No Megastructure phase is ready to start."))
+	if not str(project.get("active_project_id", "")).is_empty() or state.construction_operations.any(func(runtime): return str((runtime as Dictionary).get("megastructure_id", "")) == megastructure_id and str((runtime as Dictionary).get("status", "IDLE")) in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]):
+		return _reject(I18n.t("notice.megastructure_phase_active", "The current Megastructure phase is already in the Construction queue."))
 	var activity_id := str((phases[phase_index] as Dictionary).get("activity_id", ""))
 	return start_construction_project(activity_id, str(project.get("site_location_id", "")), priority)
 
@@ -1024,7 +1102,7 @@ func start_construction_project(activity_id: String, location_id: String = Space
 	if not simulation.activity_available(state, activity):
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
 	if not state.has_location(location_id):
-		return _reject("Unknown construction Location")
+		return _reject(I18n.t("notice.construction_location_unknown", "Unknown construction location"))
 	var megastructure_blocker := simulation.megastructure_phase_start_blocker(state, activity, location_id)
 	if not megastructure_blocker.is_empty():
 		return _reject(I18n.t("notice.megastructure_phase_blocked", "Megastructure phase is blocked: %s") % str(megastructure_blocker.get("primary_reason", "REQUIREMENTS")))
@@ -1053,7 +1131,7 @@ func stop_construction_project(slot: int) -> bool:
 		return _reject(I18n.t("notice.unknown_construction_slot", "Unknown construction queue position"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var runtime: Dictionary = transaction.working_state.construction_operations[slot]
-	if runtime.get("status", "IDLE") not in ["RUNNING", "BLOCKED", "QUEUED"]:
+	if runtime.get("status", "IDLE") not in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
 		return _reject(I18n.t("notice.no_active", "No construction project at this queue position"))
 	var cancellation_result := simulation.cancel_construction_project(transaction.working_state, runtime)
 	last_notice = I18n.t("notice.construction_removed", "Removed construction queue position %d") % [slot + 1]
@@ -1064,21 +1142,90 @@ func stop_construction_project(slot: int) -> bool:
 
 func set_construction_project_priority(project_id: String, priority: int) -> bool:
 	if priority < 0 or priority > 100:
-		return _reject("Construction priority must be between 0 and 100")
+		return _reject(I18n.t("notice.construction_priority_invalid", "Construction priority must be between 0 and 100"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var found := false
 	for runtime_value in transaction.working_state.construction_operations:
 		var runtime := runtime_value as Dictionary
-		if str(runtime.get("project_id", "")) != project_id or str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED", "QUEUED"]:
+		if str(runtime.get("project_id", "")) != project_id or str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
 			continue
 		runtime["priority"] = priority
 		found = true
 		break
 	if not found:
-		return _reject("Unknown active Construction project")
+		return _reject(I18n.t("notice.construction_project_unknown", "Unknown active construction project"))
 	simulation.normalize_construction_queue(transaction.working_state)
-	last_notice = "Construction priority updated: %s → %d" % [project_id, priority]
+	last_notice = I18n.t("notice.construction_priority_updated", "Construction priority updated: %s → %d") % [project_id, priority]
 	transaction.record({"type":"ConstructionProjectPriorityChanged", "project_id":project_id, "priority":priority})
+	_commit_transaction(transaction)
+	return true
+
+
+func survey_mission_availability(target_location_id: String, target_state: String, ship_ids: Array = [], origin_location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
+	var blockers: Array[Dictionary] = []
+	var selected := ship_ids.duplicate()
+	if str(state.survey_mission.get("status", "IDLE")) == "RUNNING":
+		blockers.append({"code":"SURVEY_MISSION_ACTIVE"})
+	var target := state.location_state(target_location_id)
+	if target.is_empty():
+		blockers.append({"code":"LOCATION_UNKNOWN"})
+	else:
+		var current_state := str(target.get("survey_state", LocationState.UNKNOWN))
+		if simulation.survey_state_rank(target_state) != simulation.survey_state_rank(current_state) + 1:
+			blockers.append({"code":"SURVEY_STATE_ORDER", "current":current_state, "required":target_state})
+		if not simulation.survey_target_accessible(state, target_location_id):
+			blockers.append({"code":"ROUTE_UNAVAILABLE", "location_id":target_location_id})
+	var capability := str(content.survey_rules.get("required_capabilities", {}).get(target_state, ""))
+	if selected.is_empty():
+		for ship_value in state.ships:
+			var ship := ship_value as Dictionary
+			var ship_id := str(ship.get("instance_id", ""))
+			if state.ship_is_docked(ship_id) and str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) == origin_location_id and simulation.capability_value_for_ships(state, capability, [ship_id]) >= 1.0:
+				selected.append(ship_id)
+				break
+	if selected.is_empty():
+		blockers.append({"code":"SURVEY_VESSEL_REQUIRED", "capability":capability})
+	else:
+		for ship_id_value in selected:
+			var ship_id := str(ship_id_value)
+			if not state.ship_is_docked(ship_id) or str(state.ship_by_id(ship_id).get("location_id", "")) != origin_location_id or simulation.capability_value_for_ships(state, capability, [ship_id]) < 1.0:
+				blockers.append({"code":"SURVEY_VESSEL_UNAVAILABLE", "ship_id":ship_id, "capability":capability})
+	var costs := simulation.survey_mission_costs(target_state)
+	for item_id_value in costs.keys():
+		var item_id := str(item_id_value)
+		var required := int(costs[item_id])
+		var available := state.available_item_quantity(item_id, origin_location_id)
+		if available < required:
+			blockers.append({"code":"INPUT_SHORTAGE", "item_id":item_id, "available":available, "required":required})
+	return {"allowed":blockers.is_empty(), "blockers":blockers, "selected_ship_ids":selected, "costs":costs}
+
+
+func set_construction_project_paused(project_id: String, paused: bool) -> bool:
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	if not simulation.set_construction_project_paused(transaction.working_state, project_id, paused):
+		return _reject(I18n.t("notice.construction_pause_blocked", "The construction project cannot change pause state"))
+	last_notice = I18n.t("notice.construction_pause_changed", "Construction project %s: %s") % [project_id, I18n.status("PAUSED" if paused else "RUNNING")]
+	transaction.record({"type":"ConstructionProjectPaused" if paused else "ConstructionProjectResumed", "project_id":project_id})
+	_commit_transaction(transaction)
+	return true
+
+
+func assign_ship_to_construction_support(instance_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> bool:
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	if not simulation.assign_construction_support(transaction.working_state, instance_id, location_id):
+		return _reject(I18n.t("notice.construction_support_required", "Construction support requires an unassigned operational ship fitted for construction at this location"))
+	last_notice = I18n.t("notice.construction_support_assigned", "Construction support assigned: %s") % str(transaction.working_state.ship_by_id(instance_id).get("name", instance_id))
+	transaction.record({"type":"ConstructionSupportAssigned", "ship_id":instance_id, "location_id":location_id})
+	_commit_transaction(transaction)
+	return true
+
+
+func release_ship_from_construction_support(instance_id: String) -> bool:
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	if not simulation.release_construction_support(transaction.working_state, instance_id):
+		return _reject(I18n.t("notice.construction_support_missing", "The ship is not assigned to construction support"))
+	last_notice = I18n.t("notice.construction_support_released", "Construction support released: %s") % str(transaction.working_state.ship_by_id(instance_id).get("name", instance_id))
+	transaction.record({"type":"ConstructionSupportReleased", "ship_id":instance_id})
 	_commit_transaction(transaction)
 	return true
 
@@ -1091,7 +1238,7 @@ func start_research_project(project_id: String, route_id: String = "") -> bool:
 	var project: Dictionary = content.research_projects[project_id]
 	var selected_route := route_id if not route_id.is_empty() else simulation.default_research_route_id(project)
 	if not selected_route.is_empty() and simulation.research_route(project, selected_route).is_empty():
-		return _reject("Unknown R&D engineering route")
+		return _reject(I18n.t("notice.research_route_unknown", "Unknown R&D engineering route"))
 	if not simulation.research_project_available(state, project, selected_route if bool(state.completed_projects.get(project_id, false)) else ""):
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
@@ -1142,12 +1289,12 @@ func enqueue_unlocked_ship_plan(plan_id: String, quantity: int = 1) -> bool:
 	if not content.ship_construction_projects.has(plan_id):
 		return _reject(I18n.t("notice.shipyard_plan_unknown", "Unknown ship construction plan"))
 	if quantity <= 0 or quantity > 100:
-		return _reject("Ship construction quantity must be between 1 and 100")
+		return _reject(I18n.t("notice.shipyard_quantity_invalid", "Ship construction quantity must be between 1 and 100"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not transaction.working_state.enqueue_ship_plan(plan_id, quantity):
 		return _reject(I18n.t("notice.shipyard_plan_unavailable", "Ship plan is locked, already queued, or already built"))
 	simulation.normalize_shipyard_queue(transaction.working_state)
-	last_notice = "%s × %d added to the Shipyard" % [I18n.content(content.ship_construction_projects[plan_id]), quantity]
+	last_notice = I18n.t("notice.shipyard_plan_queued", "%s × %d added to the Shipyard") % [I18n.content(content.ship_construction_projects[plan_id]), quantity]
 	transaction.record({"type":"ShipyardPlanQueued", "plan_id":plan_id, "quantity":quantity})
 	_commit_transaction(transaction)
 	return true
@@ -1162,7 +1309,7 @@ func cancel_shipyard_project(project_id: String) -> bool:
 			project_index = index
 			break
 	if project_index < 0:
-		return _reject("Shipyard project was not found")
+		return _reject(I18n.t("notice.shipyard_project_unknown", "Shipyard project was not found"))
 	var runtime: Dictionary = working.shipyard_queue[project_index]
 	working.shipyard_queue.remove_at(project_index)
 	simulation.normalize_shipyard_queue(working)
@@ -1176,7 +1323,7 @@ func set_inventory_reserve(item_id: String, quantity: int, location_id: String =
 	if not content.items.has(item_id):
 		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
 	if not state.has_location(location_id):
-		return _reject("Unknown Location")
+		return _reject(I18n.t("notice.location_unknown", "Unknown location"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	transaction.working_state.set_item_reserve(item_id, quantity, location_id)
 	transaction.record({"type":"InventoryReserveChanged", "location_id":location_id, "item_id":item_id, "quantity":maxi(0, quantity)})
@@ -1186,9 +1333,10 @@ func set_inventory_reserve(item_id: String, quantity: int, location_id: String =
 
 func set_location_logistics_policy(location_id: String, item_id: String, mode: String, reserve: int = 0, target: int = 0, priority: int = 50, dispatch_threshold: int = 1, source_lock: String = "", route_lock: String = "") -> bool:
 	if not state.has_location(location_id):
-		return _reject("Unknown Location")
+		return _reject(I18n.t("notice.location_unknown", "Unknown location"))
 	if not content.items.has(item_id):
 		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
+	var previous_policy: Dictionary = state.location_state(location_id).get("logistics", {}).get("policies", {}).get(item_id, {}).duplicate(true)
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var policy := {
 		"mode":mode,
@@ -1200,9 +1348,14 @@ func set_location_logistics_policy(location_id: String, item_id: String, mode: S
 		"route_lock":route_lock
 	}
 	if not simulation.logistics.configure_policy(transaction.working_state, location_id, item_id, policy):
-		return _reject("Invalid logistics policy")
+		return _reject(I18n.t("notice.logistics_policy_invalid", "Invalid logistics policy"))
+	var configured_policy: Dictionary = transaction.working_state.location_state(location_id).get("logistics", {}).get("policies", {}).get(item_id, {}).duplicate(true)
+	previous_policy.erase("blocker")
+	configured_policy.erase("blocker")
+	if not previous_policy.is_empty() and configured_policy == previous_policy:
+		return _reject(I18n.t("notice.logistics_policy_unchanged", "This logistics policy already has the requested values"))
 	_detach_template_policy(transaction.working_state, location_id, item_id)
-	last_notice = "Logistics policy updated: %s / %s / %s" % [I18n.content(content.regions.get(location_id, {"name":location_id})), I18n.content(content.items[item_id]), mode.to_upper()]
+	last_notice = I18n.t("notice.logistics_policy_updated", "Logistics policy updated: %s / %s / %s") % [I18n.content(content.regions.get(location_id, {"name":location_id})), I18n.content(content.items[item_id]), I18n.status(mode.to_upper())]
 	transaction.record({"type":"LocationLogisticsPolicyChanged", "location_id":location_id, "item_id":item_id, "policy":policy})
 	_commit_transaction(transaction)
 	return true
@@ -1210,26 +1363,42 @@ func set_location_logistics_policy(location_id: String, item_id: String, mode: S
 
 func configure_logistics_service(route_id: String, transport_mode_id: String, ship_ids: Array = [], priority_strategy: String = "DEMAND_PRIORITY") -> bool:
 	if not content.logistics_routes.has(route_id):
-		return _reject("Unknown logistics route")
+		return _reject(I18n.t("notice.logistics_route_unknown", "Unknown logistics route"))
 	if not content.transport_modes.has(transport_mode_id):
-		return _reject("Unknown Transport Mode")
+		return _reject(I18n.t("notice.transport_mode_unknown", "Unknown transport mode"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.logistics.configure_service(transaction.working_state, route_id, transport_mode_id, ship_ids, priority_strategy):
-		return _reject("Transport Mode requirements or assigned ships are not satisfied")
+		return _reject(I18n.t("notice.transport_service_blocked", "Transport mode requirements or assigned ships are not satisfied"))
 	var route: Dictionary = content.logistics_routes[route_id]
 	var mode: Dictionary = content.transport_modes[transport_mode_id]
-	last_notice = "Logistics service updated: %s / %s" % [I18n.content(route), I18n.content(mode)]
+	last_notice = I18n.t("notice.logistics_service_updated", "Logistics service updated: %s / %s") % [I18n.content(route), I18n.content(mode)]
 	transaction.record({"type":"LogisticsServiceConfigured", "route_id":route_id, "transport_mode_id":transport_mode_id, "ship_ids":ship_ids.duplicate(), "priority_strategy":priority_strategy})
 	_commit_transaction(transaction)
 	return true
 
 
+func set_logistics_service_paused(route_id: String, paused: bool) -> bool:
+	if not content.logistics_routes.has(route_id):
+		return _reject(I18n.t("notice.logistics_route_unknown", "Unknown logistics route"))
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	if not simulation.logistics.set_service_paused(transaction.working_state, route_id, paused):
+		return _reject(I18n.t("notice.logistics_service_state_invalid", "The logistics service state could not be changed"))
+	last_notice = I18n.t("notice.logistics_service_paused", "Logistics service paused: %s") % I18n.content(content.logistics_routes[route_id]) if paused else I18n.t("notice.logistics_service_resumed", "Logistics service resumed: %s") % I18n.content(content.logistics_routes[route_id])
+	transaction.record({"type":"LogisticsServicePauseChanged", "route_id":route_id, "paused":paused})
+	_commit_transaction(transaction)
+	return true
+
+
 func clear_location_logistics_policy(location_id: String, item_id: String) -> bool:
+	if state.has_location(location_id):
+		var policies: Dictionary = state.location_state(location_id).get("logistics", {}).get("policies", {})
+		if not policies.has(item_id):
+			return _reject(I18n.t("notice.logistics_policy_missing", "There is no logistics policy to clear for this item"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.logistics.clear_policy(transaction.working_state, location_id, item_id):
-		return _reject("Invalid logistics policy target")
+		return _reject(I18n.t("notice.logistics_policy_target_invalid", "Invalid logistics policy target"))
 	_detach_template_policy(transaction.working_state, location_id, item_id)
-	last_notice = "Logistics policy cleared: %s / %s" % [location_id, item_id]
+	last_notice = I18n.t("notice.logistics_policy_cleared", "Logistics policy cleared: %s / %s") % [I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id})), I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id}))]
 	transaction.record({"type":"LocationLogisticsPolicyCleared", "location_id":location_id, "item_id":item_id})
 	_commit_transaction(transaction)
 	return true
@@ -1237,25 +1406,25 @@ func clear_location_logistics_policy(location_id: String, item_id: String) -> bo
 
 func set_location_logistics_limits(location_id: String, storage_capacity: int, hub_throughput: int) -> bool:
 	if not state.has_location(location_id):
-		return _reject("Unknown Location")
+		return _reject(I18n.t("notice.location_unknown", "Unknown location"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var logistics_state: Dictionary = transaction.working_state.location_state(location_id).get("logistics", {})
 	var current_storage := int(logistics_state.get("storage_capacity", 0))
 	var current_throughput := int(logistics_state.get("hub_throughput", 0))
 	if storage_capacity < current_storage or hub_throughput < current_throughput:
-		return _reject("Logistics capacity cannot be reduced by an upgrade command")
+		return _reject(I18n.t("notice.logistics_capacity_reduction", "Logistics capacity cannot be reduced by an upgrade command"))
 	var queued_types: Array = []
 	if storage_capacity > current_storage:
 		if not simulation.queue_location_capacity_upgrade(transaction.working_state, location_id, "STORAGE_UPGRADE", storage_capacity, 50):
-			return _reject("Storage upgrade cannot enter the Construction queue")
+			return _reject(I18n.t("notice.storage_upgrade_blocked", "The storage upgrade cannot enter the construction queue"))
 		queued_types.append("STORAGE_UPGRADE")
 	if hub_throughput > current_throughput:
 		if not simulation.queue_location_capacity_upgrade(transaction.working_state, location_id, "LOGISTICS_HUB_UPGRADE", hub_throughput, 50):
-			return _reject("Logistics Hub upgrade cannot enter the Construction queue")
+			return _reject(I18n.t("notice.logistics_hub_upgrade_blocked", "The Logistics Hub upgrade cannot enter the construction queue"))
 		queued_types.append("LOGISTICS_HUB_UPGRADE")
 	if queued_types.is_empty():
-		return _reject("No Logistics capacity increase requested")
-	last_notice = "Logistics capacity projects queued: %s" % location_id
+		return _reject(I18n.t("notice.logistics_capacity_unchanged", "No logistics capacity increase was requested"))
+	last_notice = I18n.t("notice.logistics_projects_queued", "Logistics capacity projects queued at %s") % I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id}))
 	transaction.record({"type":"LocationCapacityProjectsQueued", "location_id":location_id, "project_types":queued_types})
 	_commit_transaction(transaction)
 	return true
@@ -1264,8 +1433,8 @@ func set_location_logistics_limits(location_id: String, storage_capacity: int, h
 func apply_location_industrial_template(location_id: String, template_id: String) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.apply_industrial_template(transaction.working_state, location_id, template_id):
-		return _reject("Invalid Industrial Template or Location")
-	last_notice = "Industrial Template applied: %s / %s" % [location_id, I18n.content(content.industrial_templates.get(template_id, {"name":template_id}))]
+		return _reject(I18n.t("notice.industrial_template_invalid", "Invalid industrial template or location"))
+	last_notice = I18n.t("notice.industrial_template_applied", "Industrial template applied: %s / %s") % [I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id})), I18n.content(content.industrial_templates.get(template_id, {"name":template_id}))]
 	transaction.record({"type":"LocationIndustrialTemplateApplied", "location_id":location_id, "template_id":template_id})
 	_commit_transaction(transaction)
 	return true
@@ -1274,8 +1443,8 @@ func apply_location_industrial_template(location_id: String, template_id: String
 func clear_location_industrial_template(location_id: String) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.clear_industrial_template(transaction.working_state, location_id):
-		return _reject("Unknown Location")
-	last_notice = "Industrial Template cleared: %s" % location_id
+		return _reject(I18n.t("notice.location_unknown", "Unknown location"))
+	last_notice = I18n.t("notice.industrial_template_cleared", "Industrial template cleared: %s") % I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id}))
 	transaction.record({"type":"LocationIndustrialTemplateCleared", "location_id":location_id})
 	_commit_transaction(transaction)
 	return true
@@ -1284,8 +1453,8 @@ func clear_location_industrial_template(location_id: String) -> bool:
 func configure_location_industrial_automation(location_id: String, enabled: bool, target_level: int) -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.configure_location_industrial_automation(transaction.working_state, location_id, enabled, target_level):
-		return _reject("Apply an Industrial Template with managed facilities first")
-	last_notice = "Location industrial auto-expansion %s · target Lv.%d" % ["enabled" if enabled else "paused", target_level]
+		return _reject(I18n.t("notice.industrial_template_required", "Apply an industrial template with managed facilities first"))
+	last_notice = I18n.t("notice.industrial_automation_changed", "Location industrial auto-expansion %s · target Tier %d") % [I18n.status("ACTIVE" if enabled else "PAUSED"), target_level]
 	transaction.record({"type":"LocationIndustrialAutomationChanged", "location_id":location_id, "enabled":enabled, "target_level":target_level})
 	_commit_transaction(transaction)
 	return true
@@ -1323,17 +1492,10 @@ func install_facility_module(facility_id: String, module_id: String) -> bool:
 	if not simulation.facility_module_available(state, facility_id, module_id):
 		return _reject(I18n.t("notice.facility_module_unavailable", "Module requirements, slot capacity or Strategic Inventory costs are not met"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	var previous_construction_active := simulation.active_construction_count(transaction.working_state)
-	var previous_construction_capacity := simulation.construction_capacity(transaction.working_state)
-	for cost in module.get("costs", []):
-		if not transaction.working_state.remove_item(str(cost.get("item", "")), int(cost.get("quantity", 0))):
-			return _reject(I18n.t("notice.resources", "Strategic Inventory cannot fund this installation"))
-	if not transaction.working_state.install_facility_module(facility_id, module_id):
-		return _reject(I18n.t("notice.facility_module_unavailable", "Module requirements, slot capacity or Strategic Inventory costs are not met"))
-	if facility_id == "orbital_construction_yard":
-		simulation.rebalance_construction_progress(transaction.working_state, previous_construction_active, previous_construction_capacity)
-	last_notice = I18n.t("notice.facility_module_installed", "Infrastructure module installed: %s → %s") % [I18n.content(facility), I18n.content(module)]
-	transaction.record({"type":"FacilityModuleInstalled", "facility_id":facility_id, "module_id":module_id})
+	if not simulation.queue_facility_module_installation(transaction.working_state, facility_id, module_id):
+		return _reject(I18n.t("notice.facility_module_unavailable", "Module requirements, slot capacity, Construction queue or Strategic Inventory costs are not met"))
+	last_notice = I18n.t("notice.facility_module_queued", "Infrastructure module entered the Construction queue: %s → %s") % [I18n.content(facility), I18n.content(module)]
+	transaction.record({"type":"ConstructionProjectQueued", "project_type":"FACILITY_MODULE_INSTALL", "facility_id":facility_id, "module_id":module_id})
 	_commit_transaction(transaction)
 	return true
 
@@ -1407,7 +1569,7 @@ func save_ship_loadout(instance_id: String, requested_name: String = "") -> bool
 	var blueprint_name := I18n.content(content.ships.get(blueprint_id, {"name":blueprint_id}))
 	transaction.working_state.saved_loadouts[loadout_id] = {
 		"id":loadout_id,
-		"name":requested_name if not requested_name.strip_edges().is_empty() else "%s Loadout %d" % [blueprint_name, existing_count + 1],
+		"name":requested_name if not requested_name.strip_edges().is_empty() else I18n.t("format.loadout_name", "%s Loadout %d") % [blueprint_name, existing_count + 1],
 		"blueprint_id":blueprint_id,
 		"modules":state.ship_module_definition_ids(ship),
 		"saved_at_ms":int(state.total_elapsed_ms)
@@ -1422,8 +1584,9 @@ func delete_ship_loadout(loadout_id: String) -> bool:
 	if not state.saved_loadouts.has(loadout_id):
 		return _reject(I18n.t("notice.loadout_missing", "Saved loadout was not found"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var loadout_name := str(transaction.working_state.saved_loadouts.get(loadout_id, {}).get("name", loadout_id))
 	transaction.working_state.saved_loadouts.erase(loadout_id)
-	last_notice = "Loadout deleted: %s" % loadout_id
+	last_notice = I18n.t("notice.loadout_deleted", "Loadout deleted: %s") % loadout_name
 	transaction.record({"type":"ShipLoadoutDeleted", "loadout_id":loadout_id})
 	_commit_transaction(transaction)
 	return true
@@ -1566,7 +1729,7 @@ func begin_ship_refit(instance_id: String, desired_module_definitions: Array, ta
 	for item_id_value in consumed_bom.keys():
 		var item_id := str(item_id_value)
 		if working.available_item_quantity(item_id, location_id) < int(consumed_bom[item_id]):
-			var missing_requirement := "%s × %d" % [I18n.content(content.items.get(item_id, {"name":item_id})), int(consumed_bom[item_id])]
+			var missing_requirement := I18n.t("format.item_quantity", "%s × %d") % [I18n.content(content.items.get(item_id, {"name":item_id})), int(consumed_bom[item_id])]
 			return _reject(I18n.t("notice.loadout_resources", "Missing full-loadout fabrication resources: %s") % missing_requirement)
 	for item_id_value in consumed_bom.keys():
 		var item_id := str(item_id_value)
@@ -1613,7 +1776,7 @@ func cancel_ship_refit(project_id: String) -> bool:
 			project_index = index
 			break
 	if project_index < 0:
-		return _reject("Refit project was not found")
+		return _reject(I18n.t("notice.refit_project_unknown", "Refit project was not found"))
 	var runtime: Dictionary = working.refit_projects[project_index]
 	var ship := working.ship_by_id(str(runtime.get("ship_id", "")))
 	if ship.is_empty():
@@ -1678,6 +1841,64 @@ func replace_ship_module(instance_id: String, old_module_id: String, new_module_
 	return begin_ship_refit(instance_id, candidate)
 
 
+func ship_loadout_availability(instance_id: String, desired_module_definitions: Array) -> Dictionary:
+	var ship := state.ship_by_id(instance_id)
+	if ship.is_empty():
+		return {"allowed":false, "reason_code":"SHIP_MISSING", "reason":I18n.t("notice.ship_missing", "Ship instance was not found")}
+	if not state.ship_can_refit(instance_id):
+		return {"allowed":false, "reason_code":"REFIT_LOCKED", "reason":I18n.t("notice.refit_locked", "The ship must be operational and docked before refitting")}
+	var desired: Array = []
+	for module_id_value in desired_module_definitions:
+		var module_id := str(module_id_value)
+		if not content.modules.has(module_id):
+			return {"allowed":false, "reason_code":"MODULE_UNKNOWN", "reason":I18n.t("notice.module_unknown", "Unknown ship module")}
+		if not bool(content.modules[module_id].get("special_equipment", false)) and not simulation.module_design_available(state, module_id):
+			return {"allowed":false, "reason_code":"MODULE_DESIGN_LOCKED", "reason":I18n.t("notice.module_missing", "The module blueprint is unavailable")}
+		desired.append(module_id)
+	var validation := _validate_loadout_modules(str(ship.get("blueprint_id", "")), desired)
+	if not validation.is_empty():
+		return {"allowed":false, "reason_code":"INVALID_LOADOUT", "reason":validation, "desired_modules":desired}
+	var available_special_counts := {}
+	for installed_module_value in ship.get("modules", []):
+		var installed_module_id := str(installed_module_value)
+		if state.equipment_instances.has(installed_module_id):
+			var installed_definition_id := state.equipment_definition_id(installed_module_id)
+			available_special_counts[installed_definition_id] = int(available_special_counts.get(installed_definition_id, 0)) + 1
+	var initialized_special_counts := {}
+	for module_id_value in desired:
+		var module_id := str(module_id_value)
+		if not bool(content.modules[module_id].get("special_equipment", false)):
+			continue
+		if not initialized_special_counts.has(module_id):
+			available_special_counts[module_id] = int(available_special_counts.get(module_id, 0)) + state.stored_equipment_ids(module_id).size()
+			initialized_special_counts[module_id] = true
+		available_special_counts[module_id] = int(available_special_counts[module_id]) - 1
+		if int(available_special_counts[module_id]) < 0:
+			return {"allowed":false, "reason_code":"EQUIPMENT_UNAVAILABLE", "reason":I18n.t("notice.equipment_unavailable", "The unique equipment asset is not available in storage"), "desired_modules":desired}
+	var location_id := str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	var fabrication_costs := simulation.loadout_fabrication_costs(desired)
+	var missing_costs: Array = []
+	for item_id_value in fabrication_costs.keys():
+		var item_id := str(item_id_value)
+		var required := int(fabrication_costs[item_id])
+		var available := state.available_item_quantity(item_id, location_id)
+		if available < required:
+			missing_costs.append({"item_id":item_id, "required":required, "available":available, "missing":required - available})
+	if not missing_costs.is_empty():
+		var first_missing := missing_costs[0] as Dictionary
+		var first_item_id := str(first_missing.get("item_id", ""))
+		var missing_requirement := I18n.t("format.item_quantity", "%s × %d") % [I18n.content(content.items.get(first_item_id, {"name":first_item_id})), int(first_missing.get("missing", 0))]
+		return {"allowed":false, "reason_code":"FABRICATION_INPUT_SHORTAGE", "reason":I18n.t("notice.loadout_resources", "Missing full-loadout fabrication resources: %s") % missing_requirement, "desired_modules":desired, "fabrication_costs":fabrication_costs, "missing_costs":missing_costs}
+	return {
+		"allowed":true,
+		"reason_code":"READY",
+		"reason":"",
+		"desired_modules":desired,
+		"fabrication_costs":fabrication_costs,
+		"missing_costs":[]
+	}
+
+
 func _ship_fitting_valid(blueprint: Dictionary, module_ids: Array) -> bool:
 	return content.ship_loadout_valid(str(blueprint.get("id", "")), module_ids)
 
@@ -1737,7 +1958,7 @@ func activity_duration(domain_id: String, activity: Dictionary, runtime: Diction
 
 func save_game() -> bool:
 	if not persistence_enabled:
-		return true
+		return _reject(I18n.t("notice.persistence_unavailable", "Saving is unavailable in this session"))
 	if state == null:
 		return false
 	return saves.save_state(state, content.version, [content.pack_metadata])
@@ -1754,6 +1975,9 @@ func reset_game() -> void:
 
 
 func guidance_snapshot() -> Dictionary:
+	var bootstrap := _bootstrap_guidance_snapshot()
+	if not bootstrap.is_empty():
+		return bootstrap
 	for goal_value in content.goals.values():
 		var goal := goal_value as Dictionary
 		if not simulation.definition_revealed(state, goal) or _requirements_met(goal.get("requirements", [])):
@@ -1777,6 +2001,7 @@ func guidance_snapshot() -> Dictionary:
 				"location_id":location_id,
 				"focus_entity_id":str(requirement.get("id", step.get("id", ""))),
 				"reason":requirement_text(requirement),
+				"message":"%s\n%s" % [I18n.content(goal), I18n.goal_step(str(step.get("id", "continue")), str(step.get("id", "continue")).replace("_", " ").capitalize())],
 				"requirement":requirement.duplicate(true),
 				"acquisition_path":_guidance_acquisition_path(requirement)
 			}
@@ -1788,9 +2013,339 @@ func guidance_snapshot() -> Dictionary:
 		"location_id":SpaceGameState.MAIN_BASE_LOCATION_ID,
 		"focus_entity_id":"current_economy_analysis",
 		"reason":I18n.t("guidance.core_complete", "Core progression is complete; review diagnostics and the industrial ledger."),
+		"message":I18n.t("guidance.core_complete", "Core progression is complete; review diagnostics and the industrial ledger."),
 		"requirement":{},
 		"acquisition_path":[]
 	}
+
+
+func _bootstrap_guidance_snapshot() -> Dictionary:
+	var base := {
+		"goal_id":"establish_industry",
+		"location_id":SpaceGameState.MAIN_BASE_LOCATION_ID,
+		"acquisition_path":[]
+	}
+	if int(state.completed_activities.get("extract_earth_mixed_ore", 0)) <= 0:
+		if not _guidance_ship_has_module("mining_laser"):
+			return _guidance_result(base, "restore_starter_ship", "fleet", "roster", "patchwork_prospector", I18n.core("guidance.restore_starter_ship", "The initial mining configuration is missing. Use Restart to create a fresh mining-priority save."))
+		if state.fleet_ship_ids("mining").is_empty():
+			return _guidance_result(base, "assign_starter_miner", "fleet", "roster", "patchwork_prospector", I18n.core("guidance.assign_starter_miner", "1. Open Ships and assign the starter survey vessel to the Mining Fleet."))
+		if not _guidance_has_active_mining():
+			return _guidance_result(base, "extract_mixed_ore", "frontier", "", "earth_resource_cluster_prospect", I18n.core("guidance.extract_mixed_ore", "2. Open Survey and start the permanent near-Earth extraction site.\n\nTip: use 5× / 10× in the top bar."))
+	if int(state.completed_activities.get("assemble_frame", 0)) <= 0:
+		var frame_progress := _guidance_material_progress("assemble_frame")
+		if not _guidance_activity_materials_available("assemble_frame"):
+			return _guidance_result(base, "prepare_first_frame", "industry", "production", "assemble_frame", I18n.core("guidance.prepare_first_frame", "3. Prepare 2 Iron Ingots and 1 Copper Ingot for the first Structural Frame.\nCurrent: %s\n\nThe workshop runs one method at a time; stop a completed separation or refining run before switching.") % frame_progress)
+		return _guidance_result(base, "assemble_first_frame", "industry", "production", "assemble_frame", I18n.core("guidance.assemble_first_frame", "4. Materials are ready: %s. Start Structural Frame assembly in Production, then stop repeat production after one unit.") % frame_progress)
+	if "orbital_foundry" not in state.facilities:
+		var foundry_runtime := _guidance_construction_runtime("build_orbital_foundry")
+		var foundry_progress := _guidance_material_progress("build_orbital_foundry", foundry_runtime)
+		if not foundry_runtime.is_empty():
+			var section := "production" if str(foundry_runtime.get("status", "")) == "BLOCKED" else "construction"
+			return _guidance_result(base, "commission_foundry", "industry", section, "build_orbital_foundry", I18n.core("guidance.foundry_queued", "5. The Orbital Foundry is in the Construction queue (%s).\nMaterial progress: %s\n\nIf blocked, replenish the shortage in Production; Construction resumes automatically.") % [I18n.status(str(foundry_runtime.get("status", "QUEUED"))), foundry_progress])
+		if not _guidance_activity_materials_available("build_orbital_foundry"):
+			return _guidance_result(base, "supply_foundry", "industry", "production", "build_orbital_foundry", I18n.core("guidance.supply_foundry", "5. The Orbital Foundry needs 1 Structural Frame, 4 Iron Ingots and 2 Electronic Components.\nCurrent: %s\n\nKeep the completed frame, stop repeat assembly and refine the remaining inputs.") % foundry_progress)
+		return _guidance_result(base, "commission_foundry", "industry", "construction", "build_orbital_foundry", I18n.core("guidance.commission_foundry", "5. Orbital Foundry materials are ready: %s. Open Construction and queue the facility.") % foundry_progress)
+	var has_blocked_research := not str(state.research.get("project_id", "")).is_empty() and str(state.research.get("status", "")) == "BLOCKED"
+	if ("electronics_facility" not in state.facilities or "research_complex" not in state.facilities) and not has_blocked_research:
+		return _guidance_result(base, "commission_research", "industry", "construction", "build_research_complex", I18n.core("guidance.commission_research", "6. Build the High-Energy Systems Facility and Research Complex to open the industrial R&D chain."))
+	if has_blocked_research:
+		var blocker: Dictionary = state.research.get("blocker", {})
+		if blocker.is_empty():
+			blocker = simulation.blocker_diagnostic(state, "research", state.research)
+		var requirement: Dictionary = blocker.get("requirement", {})
+		var page := "research"
+		var section := ""
+		if str(blocker.get("primary_reason", "")) == "FIELD_TEST_REQUIRED" and str(requirement.get("type", "")) == "route_complete":
+			page = "expedition"
+		elif str(blocker.get("primary_reason", "")) in ["INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD", "MISSING_FACILITY", "OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE"] or str(requirement.get("type", "")) in ["activity_complete", "own_facility", "manufacturing_module_installed"]:
+			page = "industry"
+			section = "facilities" if str(requirement.get("type", "")) == "manufacturing_module_installed" else "production"
+		var project_id := str(state.research.get("project_id", ""))
+		var resolution := _guidance_research_blocker_resolution(blocker)
+		var result := _guidance_result(base, "research_blocker", page, section, str(requirement.get("id", project_id)), I18n.core("guidance.research_blocker", "%s · %s\nNext step: %s") % [I18n.content(content.research_projects.get(project_id, {"id":project_id, "name":project_id})), requirement_text(requirement), resolution])
+		result["requirement"] = requirement.duplicate(true)
+		result["acquisition_path"] = _guidance_acquisition_path(requirement)
+		return result
+	return {}
+
+
+func _guidance_result(base: Dictionary, step_id: String, page: String, section: String, focus_entity_id: String, message: String) -> Dictionary:
+	var result := base.duplicate(true)
+	result.merge({
+		"step_id":step_id,
+		"page":page,
+		"section":section,
+		"focus_entity_id":focus_entity_id,
+		"reason":message,
+		"message":message,
+		"requirement":{}
+	}, true)
+	return result
+
+
+func _guidance_ship_has_module(module_id: String) -> bool:
+	for ship_value in state.ships:
+		if module_id in state.ship_module_definition_ids(ship_value as Dictionary):
+			return true
+	return false
+
+
+func _guidance_has_active_mining() -> bool:
+	for operation_value in state.mining_operations:
+		if str((operation_value as Dictionary).get("status", "")) in ["RUNNING", "BLOCKED"]:
+			return true
+	for runtime_value in state.extraction_network_states.values():
+		if str((runtime_value as Dictionary).get("status", "")) in ["RUNNING", "BLOCKED_OUTPUT"]:
+			return true
+	return false
+
+
+func _guidance_activity_materials_available(activity_id: String) -> bool:
+	var activity: Dictionary = content.activities.get(activity_id, {})
+	return not activity.is_empty() and simulation.costs_available(state, activity)
+
+
+func _guidance_construction_runtime(activity_id: String) -> Dictionary:
+	for operation_value in state.construction_operations:
+		var operation := operation_value as Dictionary
+		if str(operation.get("activity_id", "")) == activity_id and str(operation.get("status", "")) in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
+			return operation
+	return {}
+
+
+func _guidance_material_progress(activity_id: String, runtime: Dictionary = {}) -> String:
+	var activity: Dictionary = content.activities.get(activity_id, {})
+	var consumed: Dictionary = runtime.get("consumed", {})
+	var parts: Array[String] = []
+	for cost_value in activity.get("costs", []):
+		var cost := cost_value as Dictionary
+		var item_id := str(cost.get("item", ""))
+		var required := int(cost.get("quantity", 0))
+		var available := state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
+		parts.append(I18n.t("format.item_progress", "%s %d/%d") % [I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), mini(required, int(consumed.get(item_id, 0)) + available), required])
+	return ", ".join(parts)
+
+
+func _guidance_research_blocker_resolution(blocker: Dictionary) -> String:
+	var requirement: Dictionary = blocker.get("requirement", {})
+	match str(requirement.get("type", "")):
+		"activity_complete":
+			var activity_id := str(requirement.get("id", ""))
+			return I18n.core("guidance.research.activity_complete", "Manufacture %s in Production; the prototype must come from a real industrial line.") % I18n.content(content.activities.get(activity_id, {"id":activity_id, "name":activity_id}))
+		"manufacturing_module_installed":
+			var module_id := str(requirement.get("id", ""))
+			var module: Dictionary = content.process_modules.get(module_id, content.universal_industry_plugins.get(module_id, {}))
+			return I18n.core("guidance.research.install_module", "Install %s on the specified facility in Facility Configuration.") % I18n.content(module)
+	match str(blocker.get("primary_reason", "")):
+		"INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD":
+			var item_id := str(blocker.get("item_id", ""))
+			return I18n.core("guidance.research.input_shortage", "Manufacture %s in Production; it is a physical industrial input.") % I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id}))
+		"FIELD_TEST_REQUIRED":
+			if str(requirement.get("type", "")) == "route_complete":
+				var route_id := str(requirement.get("id", ""))
+				return I18n.core("guidance.research.field_test", "Run %s from Missions; elapsed time cannot substitute for this Field Test.") % I18n.content(content.expedition_routes.get(route_id, {"id":route_id, "name":route_id}))
+			if str(requirement.get("type", "")) == "own_facility":
+				var facility_id := str(requirement.get("id", ""))
+				return I18n.core("guidance.research.build_facility", "Build and commission %s through Construction.") % I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))
+		"MISSING_FACILITY": return I18n.core("guidance.research.missing_facility", "Install the required experimental or test module in Facility Configuration.")
+		"OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE": return I18n.core("guidance.research.operating_condition", "Expand research, power, cooling or Location logistics; the program resumes automatically.")
+	return I18n.core("guidance.research.default", "Resolve the single primary requirement shown for this milestone; the program then resumes automatically.")
+
+
+func research_blocker_resolution(blocker: Dictionary) -> String:
+	return _guidance_research_blocker_resolution(blocker)
+
+
+func ui_navigation_availability(page_id: String) -> Dictionary:
+	# This read-only query is the single authority for progression-gated UI
+	# navigation. Screens remain discoverable while the result explains why a
+	# workspace is not yet actionable.
+	var unlocked := true
+	var condition_key := ""
+	match page_id:
+		"research":
+			unlocked = simulation.facility_available(state, "research_complex") or not state.completed_projects.is_empty() or not str(state.research.get("project_id", "")).is_empty()
+			condition_key = "unlock.research"
+		"fleet":
+			unlocked = not state.ships.is_empty() or simulation.facility_available(state, "orbital_starport")
+			condition_key = "unlock.ships"
+		"frontier":
+			unlocked = not state.ships.is_empty()
+			condition_key = "unlock.survey"
+		"megastructure":
+			unlocked = bool(state.completed_projects.get("research_megastructures", false)) or not state.megastructure_projects.is_empty()
+			condition_key = "unlock.megastructure"
+		_:
+			unlocked = true
+	return {
+		"page_id":page_id,
+		"unlocked":unlocked,
+		"condition_key":condition_key
+	}
+
+
+func active_blockers(location_id: String = "") -> Array[Dictionary]:
+	var raw_blockers: Array[Dictionary] = []
+	for runtime_value in state.mining_operations:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "")) in ["BLOCKED", "PAUSED"]:
+			_append_blocker(raw_blockers, simulation.blocker_diagnostic(state, "mining", runtime), location_id)
+	for network_id_value in state.extraction_network_states.keys():
+		var network_id := str(network_id_value)
+		var network_runtime: Dictionary = state.extraction_network_states.get(network_id, {})
+		if str(network_runtime.get("status", "")) != "BLOCKED_OUTPUT":
+			continue
+		var network_location_id := SpaceGameState.MAIN_BASE_LOCATION_ID
+		if not network_runtime.get("integrated_site_ids", []).is_empty():
+			var site: Dictionary = content.mining_sites.get(str(network_runtime.get("integrated_site_ids", [""])[0]), {})
+			var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
+			network_location_id = str(mining_location.get("region", network_location_id))
+		_append_blocker(raw_blockers, {"status":"BLOCKED", "primary_reason":"STORAGE_FULL", "domain":"mining", "location_id":network_location_id, "network_id":network_id}, location_id)
+	for runtime_value in state.industrial_operations:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "")) in ["BLOCKED", "PAUSED"] or str(runtime.get("operating_state", "RUNNING")) in ["POWER_LIMITED", "COOLING_LIMITED", "LOGISTICS_LIMITED"]:
+			_append_blocker(raw_blockers, simulation.blocker_diagnostic(state, "industry", runtime), location_id)
+	for runtime_value in state.construction_operations:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "")) in ["BLOCKED", "PAUSED"]:
+			_append_blocker(raw_blockers, simulation.blocker_diagnostic(state, "construction", runtime), location_id)
+	for runtime_value in state.shipyard_queue:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "")) in ["BLOCKED", "PAUSED"]:
+			_append_blocker(raw_blockers, simulation.blocker_diagnostic(state, "shipyard", runtime), location_id)
+	if str(state.research.get("status", "")) in ["BLOCKED", "PAUSED"]:
+		_append_blocker(raw_blockers, simulation.blocker_diagnostic(state, "research", state.research), location_id)
+	for location_id_value in state.locations.keys():
+		var policy_location_id := str(location_id_value)
+		for policy_value in state.location_state(policy_location_id).get("logistics", {}).get("policies", {}).values():
+			var policy := policy_value as Dictionary
+			var policy_blocker := policy.get("blocker", {}) as Dictionary
+			if policy_blocker.is_empty():
+				continue
+			var policy_info: Dictionary = logistics_policy_blocker_info(policy_blocker)
+			_append_blocker(raw_blockers, policy_info.get("raw", {}), location_id)
+	for route_value in content.logistics_routes.values():
+		var route := route_value as Dictionary
+		var route_id := str(route.get("id", ""))
+		var snapshot: Dictionary = simulation.logistics.service_snapshot(state, route_id)
+		if float(snapshot.get("utilization", 0.0)) < 0.999:
+			continue
+		var route_location := str(route.get("to", SpaceGameState.MAIN_BASE_LOCATION_ID))
+		_append_blocker(raw_blockers, {
+			"status":"BLOCKED", "primary_reason":"ROUTE_CONGESTED", "domain":"logistics",
+			"location_id":route_location, "route_id":route_id,
+			"required":float(snapshot.get("demand_per_minute", snapshot.get("capacity_per_minute", 0.0))),
+			"available":float(snapshot.get("capacity_per_minute", 0.0))
+		}, location_id)
+	var result: Array[Dictionary] = []
+	var seen := {}
+	for raw in raw_blockers:
+		var info: Dictionary = blocker_info(raw)
+		var signature := "%s|%s|%s|%s|%s" % [info.get("code", ""), info.get("domain", ""), info.get("location_id", ""), info.get("source_entity", {}).get("id", ""), info.get("missing_requirement", {}).get("item_id", "")]
+		if seen.has(signature):
+			continue
+		seen[signature] = true
+		result.append(info)
+	result.sort_custom(func(a, b): return _blocker_severity_rank(str((a as Dictionary).get("severity", "INFO"))) > _blocker_severity_rank(str((b as Dictionary).get("severity", "INFO"))))
+	return result
+
+
+func blocker_info(raw_blocker: Dictionary) -> Dictionary:
+	var code := str(raw_blocker.get("primary_reason", "UNKNOWN"))
+	var domain_id := str(raw_blocker.get("domain", "unknown"))
+	var location_id := str(raw_blocker.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	var item_id := str(raw_blocker.get("item_id", ""))
+	var entity_id := str(raw_blocker.get("project_id", raw_blocker.get("activity_id", raw_blocker.get("route_id", raw_blocker.get("facility_id", "")))))
+	var target_screen := "industry"
+	if not item_id.is_empty():
+		target_screen = "inventory"
+	elif code in ["ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED"]:
+		target_screen = "logistics"
+	elif code in ["CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL", "MISSING_CAPITAL_GOOD"]:
+		target_screen = "construction"
+	elif code in ["POWER_SHORTAGE", "COOLING_SHORTAGE", "MAINTENANCE_SHORTAGE", "STORAGE_FULL"]:
+		target_screen = "location"
+	elif domain_id == "research":
+		target_screen = "research"
+	elif domain_id == "shipyard":
+		target_screen = "fleet"
+	var severity := "CRITICAL"
+	if code == "MANUALLY_PAUSED":
+		severity = "INFO"
+	elif code in ["POWER_SHORTAGE", "COOLING_SHORTAGE", "HANDLING_CONGESTED", "ROUTE_CONGESTED", "INPUT_IN_TRANSIT"]:
+		severity = "WARNING"
+	var upstream := _blocker_upstream_cause(location_id, item_id)
+	return {
+		"code":code,
+		"primary_reason":code,
+		"severity":severity,
+		"title_key":"blocker.%s" % code,
+		"description_key":"blocker.%s.description" % code,
+		"domain":domain_id,
+		"location_id":location_id,
+		"source_entity":{"kind":domain_id, "id":entity_id},
+		"missing_requirement":{"item_id":item_id, "requirement":raw_blocker.get("requirement", {}).duplicate(true)},
+		"current_value":raw_blocker.get("available", 0),
+		"required_value":raw_blocker.get("required", 0),
+		"incoming_value":raw_blocker.get("incoming", 0),
+		"upstream_cause":upstream,
+		"navigation_target":{"screen":target_screen, "location_id":location_id, "entity_id":entity_id, "item_id":item_id},
+		"raw":raw_blocker.duplicate(true)
+	}
+
+
+func logistics_policy_blocker_info(policy_blocker: Dictionary) -> Dictionary:
+	var code_map := {
+		"NO_SUPPLY_SOURCE":"INPUT_SHORTAGE",
+		"ROUTE_LOCK_UNAVAILABLE":"ROUTE_UNAVAILABLE",
+		"TRANSPORT_MODE_UNAVAILABLE":"TRANSPORT_MODE_UNAVAILABLE",
+		"ROUTE_CONGESTION":"ROUTE_CONGESTED",
+		"LOGISTICS_OPERATING_COST":"MAINTENANCE_SHORTAGE"
+	}
+	var raw := {
+		"primary_reason":str(code_map.get(str(policy_blocker.get("code", "")), "ROUTE_UNAVAILABLE")),
+		"domain":"logistics",
+		"location_id":policy_blocker.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID),
+		"item_id":policy_blocker.get("item_id", ""),
+		"policy_code":policy_blocker.get("code", ""),
+		"policy_message":policy_blocker.get("message", "")
+	}
+	return blocker_info(raw)
+
+
+func _append_blocker(target: Array[Dictionary], blocker: Dictionary, location_filter: String) -> void:
+	if blocker.is_empty():
+		return
+	if not location_filter.is_empty() and str(blocker.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != location_filter:
+		return
+	target.append(blocker)
+
+
+func _blocker_upstream_cause(location_id: String, item_id: String) -> Dictionary:
+	if item_id.is_empty():
+		return {}
+	for route_value in content.logistics_routes.values():
+		var route := route_value as Dictionary
+		if str(route.get("to", "")) != location_id:
+			continue
+		var source: Dictionary = state.location_state(str(route.get("from", "")))
+		var policy := source.get("logistics", {}).get("policies", {}).get(item_id, {}) as Dictionary
+		if str(policy.get("mode", "")) != "SUPPLY":
+			continue
+		var snapshot: Dictionary = simulation.logistics.service_snapshot(state, str(route.get("id", "")))
+		if float(snapshot.get("utilization", 0.0)) >= 0.999:
+			return {
+				"code":"ROUTE_CONGESTED",
+				"route_id":route.get("id", ""),
+				"location_id":location_id,
+				"navigation_target":{"screen":"logistics", "location_id":location_id, "entity_id":route.get("id", ""), "item_id":item_id}
+			}
+	return {}
+
+
+func _blocker_severity_rank(severity: String) -> int:
+	return {"INFO":1, "WARNING":2, "CRITICAL":3}.get(severity, 0)
 
 
 func _requirements_met(requirements: Array) -> bool:
@@ -1993,7 +2548,7 @@ func _start_industry(working: SpaceGameState, activity: Dictionary) -> bool:
 	if not simulation.industry_recipe_capabilities_met(working, activity, location_id):
 		return _reject(I18n.t("notice.process_capability_missing", "Install the required process module before starting this recipe"))
 	if not simulation.production_method_available_at_scale(working, location_id, facility_id, activity):
-		return _reject("This Production Method requires a higher Industry Scale Stage")
+		return _reject(I18n.t("notice.production_scale_required", "This production method requires a higher industry scale stage"))
 	_assign_runtime(runtime, activity, [])
 	runtime["method_id"] = str(activity.get("id", ""))
 	runtime["product_family_id"] = simulation.production_family_id(activity)
@@ -2103,7 +2658,7 @@ func _load_or_create_state() -> void:
 		var before_research: Dictionary = state.research.duplicate(true)
 		var before_ships: Array = state.ships.duplicate(true)
 		var previous_reports := state.expedition_reports.size()
-		offline_report = simulation.advance(state, float(elapsed))
+		offline_report = advance_game_time(float(elapsed))
 		state.offline_time_debt_ms = maxf(0.0, float(offline_report.get("unprocessed_ms", 0.0)))
 		_enrich_offline_report(offline_report, int(elapsed), before_inventory, before_research, before_ships)
 		if state.expedition_reports.size() > previous_reports and state.expedition_reports[-1].get("result", "") == "FAILED":
@@ -2176,7 +2731,9 @@ func _reject(reason: String) -> bool:
 
 
 func _commit_transaction(transaction: GameStateTransaction) -> void:
-	state = transaction.commit()
+	var committed_state := transaction.commit()
+	simulation.refresh_demand_registry(committed_state)
+	state = committed_state
 	_publish_events(transaction.events)
 	state_changed.emit()
 
@@ -2184,7 +2741,7 @@ func _commit_transaction(transaction: GameStateTransaction) -> void:
 func _format_duration(milliseconds: int) -> String:
 	var seconds := milliseconds / 1000
 	if seconds < 60:
-		return "%ds" % seconds
+		return I18n.t("format.duration_seconds", "%ds") % seconds
 	if seconds < 3600:
-		return "%dm %02ds" % [seconds / 60, seconds % 60]
-	return "%dh %02dm" % [seconds / 3600, (seconds % 3600) / 60]
+		return I18n.t("format.duration_minutes", "%dm %02ds") % [seconds / 60, seconds % 60]
+	return I18n.t("format.duration_hours", "%dh %02dm") % [seconds / 3600, (seconds % 3600) / 60]

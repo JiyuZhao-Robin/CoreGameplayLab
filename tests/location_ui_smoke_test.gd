@@ -33,6 +33,11 @@ func _run() -> void:
 	logistics_tab.pressed.emit()
 	await _redraw()
 	_check(_has_text_fragment(main, "供给 / 需求策略"), "Logistics exposes configurable policy controls")
+	var advanced_policy_toggle := main.find_child("LogisticsPolicyAdvancedToggle", true, false) as Button
+	_check(advanced_policy_toggle != null, "Logistics keeps per-product administration behind an explicit Advanced Policy Exceptions control")
+	if advanced_policy_toggle != null:
+		advanced_policy_toggle.pressed.emit()
+		await _redraw()
 	_check(main.find_child("LogisticsItemSelector", true, false) != null, "Logistics can add a policy for any content item")
 	_check(not _has_text_fragment(main, "Shipment is intentionally not implemented"), "Logistics no longer renders the Phase 1 placeholder")
 	var projects_tab := main.find_child("LocationTab_projects", true, false) as Button
@@ -44,6 +49,7 @@ func _run() -> void:
 
 func _redraw() -> void:
 	await get_tree().process_frame
+	await get_tree().create_timer(0.21).timeout
 	await get_tree().process_frame
 	RenderingServer.force_draw(false)
 	await get_tree().process_frame

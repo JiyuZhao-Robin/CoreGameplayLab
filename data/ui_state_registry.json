@@ -1,0 +1,487 @@
+{
+  "schemaVersion": 1,
+  "registryId": "core-gameplay-ui-states",
+  "coverageClaim": "CONTRACT_ONLY",
+  "runtimeCoverage": "UNVERIFIED",
+  "notes": "This registry declares the required player-facing state contract. It does not claim that the current UI renders or tests every state.",
+  "definitions": [
+    {
+      "stateId": "PRODUCTION.RUNNING",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_refresh_industry_operating_states", "selector":"runtime.operating_state == RUNNING"},
+      "affectedScreens": ["location.industry", "industry.production", "diagnostics"],
+      "playerMeaning": "The production line has a method, device, inputs, output space and sufficient infrastructure to operate at its current actual rate.",
+      "requiredVisualFeedback": ["RUNNING status badge", "actual and theoretical throughput", "current method and device"],
+      "requiredExplanation": ["Show the factors determining the actual rate."],
+      "requiredPossibleAction": ["Open the production line", "pause the line", "inspect its product flow"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.BLOCKED_INPUT",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_refresh_industry_operating_states", "selector":"runtime.operating_state == BLOCKED_INPUT"},
+      "affectedScreens": ["location.industry", "industry.production", "inventory", "diagnostics"],
+      "playerMeaning": "The line cannot start its next cycle because a required physical input is unavailable.",
+      "requiredVisualFeedback": ["BLOCKED_INPUT status badge", "missing item and quantity", "actual throughput of zero"],
+      "requiredExplanation": ["Show required, available, reserved and incoming quantities.", "Show the first upstream supply cause."],
+      "requiredPossibleAction": ["Open the missing item", "open its upstream production chain", "open a relevant logistics route"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.BLOCKED_OUTPUT",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_refresh_industry_operating_states", "selector":"runtime.operating_state == BLOCKED_OUTPUT"},
+      "affectedScreens": ["location.industry", "industry.production", "inventory", "diagnostics"],
+      "playerMeaning": "The line or extraction network cannot place its output into the owning location's storage.",
+      "requiredVisualFeedback": ["BLOCKED_OUTPUT status badge", "full storage class", "affected output"],
+      "requiredExplanation": ["Show used and total capacity for the matching storage class."],
+      "requiredPossibleAction": ["Open storage", "queue the correct storage upgrade", "open export logistics"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.POWER_LIMITED",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_refresh_industry_operating_states", "selector":"runtime.operating_state == POWER_LIMITED"},
+      "affectedScreens": ["location.overview", "location.industry", "industry.production", "diagnostics"],
+      "playerMeaning": "Available power is reducing the production line's achievable throughput.",
+      "requiredVisualFeedback": ["POWER_LIMITED status badge", "actual versus theoretical rate", "power demand and capacity"],
+      "requiredExplanation": ["Show the line's location and its contribution to the power shortfall."],
+      "requiredPossibleAction": ["Open the affected location", "queue a power-capacity project", "pause lower-priority demand"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.COOLING_LIMITED",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_refresh_industry_operating_states", "selector":"runtime.operating_state == COOLING_LIMITED"},
+      "affectedScreens": ["location.overview", "location.industry", "industry.production", "diagnostics"],
+      "playerMeaning": "Available cooling is reducing the production line's achievable throughput.",
+      "requiredVisualFeedback": ["COOLING_LIMITED status badge", "actual versus theoretical rate", "cooling demand and capacity"],
+      "requiredExplanation": ["Show the line's location and its contribution to the cooling shortfall."],
+      "requiredPossibleAction": ["Open the affected location", "queue a cooling-capacity project", "pause lower-priority demand"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.LOGISTICS_LIMITED",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_refresh_industry_operating_states", "selector":"runtime.operating_state == LOGISTICS_LIMITED"},
+      "affectedScreens": ["location.industry", "industry.production", "logistics", "diagnostics"],
+      "playerMeaning": "Local or inter-location cargo throughput is reducing the production line's achievable throughput.",
+      "requiredVisualFeedback": ["LOGISTICS_LIMITED status badge", "actual versus theoretical rate", "throughput demand and capacity"],
+      "requiredExplanation": ["Identify the constrained hub or route and the affected cargo."],
+      "requiredPossibleAction": ["Open the constrained route", "assign transport capacity", "queue a logistics-hub upgrade"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.PAUSED",
+      "systemId": "production",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"industrial_operations", "selector":"runtime.status == PAUSED or runtime.control_mode == OFF"},
+      "affectedScreens": ["location.industry", "industry.production", "diagnostics"],
+      "playerMeaning": "The player or an authorized policy has stopped this line intentionally.",
+      "requiredVisualFeedback": ["PAUSED status badge", "zero actual throughput", "manual or policy owner"],
+      "requiredExplanation": ["Distinguish a manual pause from an automation action."],
+      "requiredPossibleAction": ["Resume the line", "inspect the controlling policy"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.BUILDING",
+      "systemId": "production",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"construction_operations", "selector":"active facility build or expansion targets this production facility"},
+      "affectedScreens": ["location.industry", "industry.production", "construction"],
+      "playerMeaning": "The factory or production capacity exists as an active construction commitment but is not operational yet.",
+      "requiredVisualFeedback": ["BUILDING status badge", "project progress", "project ETA and material state"],
+      "requiredExplanation": ["Link the planned facility to its authoritative construction project."],
+      "requiredPossibleAction": ["Open the construction project", "change project priority", "inspect missing materials"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "PRODUCTION.DISABLED",
+      "systemId": "production",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"facility_available and industry_recipe_capabilities_met", "selector":"facility, production device or method is not operational"},
+      "affectedScreens": ["location.industry", "industry.production", "diagnostics"],
+      "playerMeaning": "A built line cannot operate because its facility, device or selected method is unavailable or incompatible.",
+      "requiredVisualFeedback": ["DISABLED status badge", "missing or incompatible facility/device/method"],
+      "requiredExplanation": ["Name the failed capability or environment condition."],
+      "requiredPossibleAction": ["Open facility configuration", "install the required device", "select a compatible method"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+
+    {
+      "stateId": "CONSTRUCTION.WAITING_MATERIAL",
+      "systemId": "construction",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"blocker_diagnostic", "selector":"runtime.status == BLOCKED and blocker is INPUT_SHORTAGE, INPUT_IN_TRANSIT or MISSING_CAPITAL_GOOD"},
+      "affectedScreens": ["location.projects", "construction", "inventory", "diagnostics"],
+      "playerMeaning": "The project is committed but cannot perform its next work cycle until physical materials arrive.",
+      "requiredVisualFeedback": ["WAITING_MATERIAL status badge", "material plan, consumed, reserved and incoming quantities"],
+      "requiredExplanation": ["Name the first missing material and its upstream cause."],
+      "requiredPossibleAction": ["Open the missing material", "open its route", "change project priority", "cancel under domain rules"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "CONSTRUCTION.WAITING_CAPACITY",
+      "systemId": "construction",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_validate_construction_commitments and blocker_diagnostic", "selector":"runtime.status == QUEUED or blocker is CONSTRUCTION_CAPACITY_FULL/PROJECT_SLOT_FULL"},
+      "affectedScreens": ["location.projects", "construction", "diagnostics"],
+      "playerMeaning": "Materials may be available, but queue position, structural capacity or construction throughput prevents work.",
+      "requiredVisualFeedback": ["WAITING_CAPACITY status badge", "queue position", "required and available capacity"],
+      "requiredExplanation": ["Identify the exact capacity kind and competing projects."],
+      "requiredPossibleAction": ["Change priority", "pause a competing project", "queue a capacity upgrade"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "CONSTRUCTION.BUILDING",
+      "systemId": "construction",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"construction_operations", "selector":"runtime.status == RUNNING"},
+      "affectedScreens": ["location.projects", "construction", "megastructure"],
+      "playerMeaning": "The project is consuming committed materials and construction throughput.",
+      "requiredVisualFeedback": ["BUILDING status badge", "phase progress", "construction throughput and ETA"],
+      "requiredExplanation": ["Show how current throughput determines progress."],
+      "requiredPossibleAction": ["Pause", "change priority", "cancel under domain rules"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "CONSTRUCTION.PAUSED",
+      "systemId": "construction",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"construction_operations", "selector":"runtime.status == PAUSED"},
+      "affectedScreens": ["location.projects", "construction", "diagnostics"],
+      "playerMeaning": "The project retains its domain commitments but performs no construction work.",
+      "requiredVisualFeedback": ["PAUSED status badge", "retained reservations", "paused owner"],
+      "requiredExplanation": ["Explain that consumed materials remain consumed and reservations remain governed by the domain."],
+      "requiredPossibleAction": ["Resume", "change priority", "cancel under domain rules"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "CONSTRUCTION.COMPLETED",
+      "systemId": "construction",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"construction_history", "selector":"history.status == COMPLETE"},
+      "affectedScreens": ["location.projects", "construction", "diagnostics"],
+      "playerMeaning": "The project finished and its capacity or asset effect has been applied.",
+      "requiredVisualFeedback": ["COMPLETED status badge", "completion timestamp", "delivered effect and consumed materials"],
+      "requiredExplanation": ["Show which facility, capacity or phase changed."],
+      "requiredPossibleAction": ["Open the resulting asset", "inspect project history"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "CONSTRUCTION.CANCELLED",
+      "systemId": "construction",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"construction_history", "selector":"history.status == CANCELLED"},
+      "affectedScreens": ["location.projects", "construction", "inventory"],
+      "playerMeaning": "The project was cancelled and the domain cancellation transaction determined every returned or lost asset.",
+      "requiredVisualFeedback": ["CANCELLED status badge", "returned, retained and lost material summary"],
+      "requiredExplanation": ["Explain the authoritative cancellation result without UI-side refund arithmetic."],
+      "requiredPossibleAction": ["Inspect project history", "open returned inventory", "start a new valid project"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+
+    {
+      "stateId": "RESEARCH.AVAILABLE",
+      "systemId": "research",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"research_project_available", "selector":"project is revealed, incomplete and all start requirements are met"},
+      "affectedScreens": ["research", "guidance"],
+      "playerMeaning": "The program can be committed through a normal research command.",
+      "requiredVisualFeedback": ["AVAILABLE status badge", "start action", "first milestone preview"],
+      "requiredExplanation": ["Show industrial, facility and knowledge requirements before commitment."],
+      "requiredPossibleAction": ["Start the program", "select an engineering route"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.LOCKED",
+      "systemId": "research",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"definition_revealed and research_project_available", "selector":"project is known but start requirements are unmet"},
+      "affectedScreens": ["research", "guidance", "diagnostics"],
+      "playerMeaning": "The player can see the program but cannot commit it yet.",
+      "requiredVisualFeedback": ["LOCKED status badge", "disabled action with visible reason", "unmet requirements"],
+      "requiredExplanation": ["Name every start prerequisite using domain query results."],
+      "requiredPossibleAction": ["Open the first unmet prerequisite", "inspect the roadmap"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.ACTIVE",
+      "systemId": "research",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"research", "selector":"research.status == RUNNING"},
+      "affectedScreens": ["research", "header", "guidance"],
+      "playerMeaning": "The committed program is consuming research capacity and milestone inputs.",
+      "requiredVisualFeedback": ["ACTIVE status badge", "milestone and program progress", "actual research rate and ETA"],
+      "requiredExplanation": ["Show the active stage, route, capacity and industrial inputs."],
+      "requiredPossibleAction": ["Pause the program", "inspect future milestones"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.WAITING_MATERIAL",
+      "systemId": "research",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"blocker_diagnostic", "selector":"research.status == BLOCKED and blocker is INPUT_SHORTAGE, INPUT_IN_TRANSIT or MISSING_CAPITAL_GOOD"},
+      "affectedScreens": ["research", "inventory", "diagnostics", "guidance"],
+      "playerMeaning": "The active milestone cannot continue until a real industrial input is supplied.",
+      "requiredVisualFeedback": ["WAITING_MATERIAL status badge", "missing item, consumed and incoming quantities"],
+      "requiredExplanation": ["Name the industrial producer and first upstream cause."],
+      "requiredPossibleAction": ["Open the material", "open its production method", "open its logistics path"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.WAITING_FACILITY",
+      "systemId": "research",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"blocker_diagnostic", "selector":"research.status == BLOCKED and blocker.primary_reason == MISSING_FACILITY"},
+      "affectedScreens": ["research", "construction", "industry.facilities", "diagnostics", "guidance"],
+      "playerMeaning": "The milestone requires a facility or installed process capability that is not operational.",
+      "requiredVisualFeedback": ["WAITING_FACILITY status badge", "required facility or module"],
+      "requiredExplanation": ["Name the exact facility/module and owning location."],
+      "requiredPossibleAction": ["Open facility construction", "open facility configuration"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.WAITING_PROTOTYPE",
+      "systemId": "research",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"blocker_diagnostic", "selector":"research stage requirement is an incomplete prototype fabrication activity"},
+      "affectedScreens": ["research", "industry.production", "diagnostics", "guidance"],
+      "playerMeaning": "The program is waiting for a physical prototype made by the industrial chain.",
+      "requiredVisualFeedback": ["WAITING_PROTOTYPE status badge", "prototype asset or recipe", "required quantity"],
+      "requiredExplanation": ["Show the real fabrication method and its missing inputs."],
+      "requiredPossibleAction": ["Open the prototype recipe", "open its upstream chain"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.WAITING_FIELD_TEST",
+      "systemId": "research",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"blocker_diagnostic", "selector":"research.status == BLOCKED and blocker.primary_reason == FIELD_TEST_REQUIRED"},
+      "affectedScreens": ["research", "ships", "survey", "expedition", "diagnostics", "guidance"],
+      "playerMeaning": "The program requires a real ship, route, survey or facility validation rather than more elapsed time.",
+      "requiredVisualFeedback": ["WAITING_FIELD_TEST status badge", "required mission and asset"],
+      "requiredExplanation": ["Name the exact field test and why current assets do not satisfy it."],
+      "requiredPossibleAction": ["Open the required mission", "open the required ship/facility"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.PAUSED",
+      "systemId": "research",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"research", "selector":"research.status == PAUSED"},
+      "affectedScreens": ["research", "header", "guidance"],
+      "playerMeaning": "The committed program is paused and retains its authoritative progress and material history.",
+      "requiredVisualFeedback": ["PAUSED status badge", "retained milestone progress and consumed materials"],
+      "requiredExplanation": ["Explain that pausing does not cancel committed work."],
+      "requiredPossibleAction": ["Resume the same program"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "RESEARCH.COMPLETED",
+      "systemId": "research",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"completed_projects and research_program_history", "selector":"completed_projects[project_id] == true"},
+      "affectedScreens": ["research", "guidance", "diagnostics"],
+      "playerMeaning": "The program completed every milestone and applied its technology, spillover or ship-plan effects.",
+      "requiredVisualFeedback": ["COMPLETED status badge", "completion effects and selected route"],
+      "requiredExplanation": ["Show the capabilities and content unlocked by completion."],
+      "requiredPossibleAction": ["Open unlocked content", "start an available supplemental route"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+
+    {
+      "stateId": "LOGISTICS.ACTIVE",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"service_snapshot", "selector":"service.status == ACTIVE and capacity_per_dispatch > 0"},
+      "affectedScreens": ["system", "location.logistics", "logistics", "diagnostics"],
+      "playerMeaning": "The route service has a compatible mode and usable transport capacity.",
+      "requiredVisualFeedback": ["ACTIVE status badge", "actual flow, capacity, utilization and travel time"],
+      "requiredExplanation": ["Show the assigned transport source and supported freight classes."],
+      "requiredPossibleAction": ["Open route details", "change transport mode", "assign transport assets"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "LOGISTICS.UNDERUTILIZED",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"service_snapshot", "selector":"service is active and utilization is below the configured healthy band"},
+      "affectedScreens": ["system", "location.logistics", "logistics", "diagnostics"],
+      "playerMeaning": "The route has unused capacity; this is informative unless upstream or downstream demand is blocked.",
+      "requiredVisualFeedback": ["UNDERUTILIZED status badge", "utilization and unused capacity"],
+      "requiredExplanation": ["Distinguish low demand from blocked source/destination flow."],
+      "requiredPossibleAction": ["Inspect source supply", "inspect destination demand", "reassign excess transport assets"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "LOGISTICS.SATURATED",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"service_snapshot and demand policy blocker", "selector":"utilization is at capacity and unmet demand remains"},
+      "affectedScreens": ["system", "location.logistics", "logistics", "diagnostics", "alerts"],
+      "playerMeaning": "The route or handling hub is using all available throughput while cargo demand remains unmet.",
+      "requiredVisualFeedback": ["SATURATED status badge", "capacity, attempted flow and unmet demand"],
+      "requiredExplanation": ["Identify the exact constrained route segment or handling hub."],
+      "requiredPossibleAction": ["Assign more transport assets", "change transport mode", "queue route or hub capacity"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "LOGISTICS.BLOCKED_SOURCE",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"_dispatch", "selector":"demand blocker is NO_SUPPLY_SOURCE or LOGISTICS_OPERATING_COST"},
+      "affectedScreens": ["location.logistics", "logistics", "inventory", "diagnostics", "alerts"],
+      "playerMeaning": "No eligible source can release cargo or pay the route's operating costs.",
+      "requiredVisualFeedback": ["BLOCKED_SOURCE status badge", "cargo and source candidates"],
+      "requiredExplanation": ["Name the missing source stock, reserve, propellant, maintenance material or energy."],
+      "requiredPossibleAction": ["Open source inventory", "open source production", "open operating-cost supply"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "LOGISTICS.BLOCKED_DESTINATION",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"settle_ready", "selector":"shipment.status == BLOCKED_OUTPUT"},
+      "affectedScreens": ["location.logistics", "logistics", "inventory", "diagnostics", "alerts"],
+      "playerMeaning": "Cargo remains in transit ownership because the destination cannot accept it.",
+      "requiredVisualFeedback": ["BLOCKED_DESTINATION status badge", "shipment cargo", "destination storage class and capacity"],
+      "requiredExplanation": ["Show why unloading failed without treating cargo as lost."],
+      "requiredPossibleAction": ["Open destination storage", "queue storage capacity", "reduce destination stock"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "LOGISTICS.NO_TRANSPORT",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"configure_service and _dispatch", "selector":"no compatible mode, service capacity or eligible assigned ship exists"},
+      "affectedScreens": ["location.logistics", "logistics", "ships", "diagnostics"],
+      "playerMeaning": "A path may exist, but no valid transport service can move this freight.",
+      "requiredVisualFeedback": ["NO_TRANSPORT status badge", "required freight class and capability"],
+      "requiredExplanation": ["Name the unavailable mode, ship capability, facility or technology."],
+      "requiredPossibleAction": ["Open transport assets", "build or configure a compatible ship", "open required technology/facility"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "LOGISTICS.PAUSED",
+      "systemId": "logistics",
+      "domainSource": {"owner":"LogisticsEngine", "path":"res://src/core/logistics_engine.gd", "symbol":"service_for_route", "selector":"service.status == PAUSED"},
+      "affectedScreens": ["system", "location.logistics", "logistics", "diagnostics"],
+      "playerMeaning": "The route service is intentionally disabled and dispatches no new cargo.",
+      "requiredVisualFeedback": ["PAUSED status badge", "zero dispatch capacity", "pause owner"],
+      "requiredExplanation": ["Distinguish intentional pause from missing transport."],
+      "requiredPossibleAction": ["Resume the route service"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+
+    {
+      "stateId": "SURVEY.UNKNOWN",
+      "systemId": "survey",
+      "domainSource": {"owner":"LocationState", "path":"res://src/core/location_state.gd", "symbol":"SURVEY_STATE_ORDER", "selector":"location.survey_state == UNKNOWN"},
+      "affectedScreens": ["system", "location.overview", "location.resources", "survey"],
+      "playerMeaning": "Only the celestial location identity is known; industrial environment and resource data remain hidden.",
+      "requiredVisualFeedback": ["UNKNOWN status badge", "hidden environment and resource values", "next survey level"],
+      "requiredExplanation": ["Explain what detection will reveal and what vessel/cost it requires."],
+      "requiredPossibleAction": ["Assign an eligible survey vessel", "open survey ship requirements"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "SURVEY.DETECTED",
+      "systemId": "survey",
+      "domainSource": {"owner":"LocationState", "path":"res://src/core/location_state.gd", "symbol":"SURVEY_STATE_ORDER", "selector":"location.survey_state == DETECTED"},
+      "affectedScreens": ["system", "location.overview", "location.resources", "survey"],
+      "playerMeaning": "Broad environment and resource categories are known, but exact grade, potential and byproducts remain hidden.",
+      "requiredVisualFeedback": ["DETECTED status badge", "coarse environment bands", "resource category and potential band"],
+      "requiredExplanation": ["Identify which values remain uncertain until Surveyed."],
+      "requiredPossibleAction": ["Assign an eligible survey vessel for investment-grade survey"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "SURVEY.SURVEYED",
+      "systemId": "survey",
+      "domainSource": {"owner":"LocationState", "path":"res://src/core/location_state.gd", "symbol":"SURVEY_STATE_ORDER", "selector":"location.survey_state == SURVEYED"},
+      "affectedScreens": ["system", "location.overview", "location.resources", "survey", "construction"],
+      "playerMeaning": "The location has investment-grade environment, grade range, extraction potential and method information.",
+      "requiredVisualFeedback": ["SURVEYED status badge", "grade range and sustainable potential", "eligible site-development methods"],
+      "requiredExplanation": ["Show which exact details still require Deep Survey."],
+      "requiredPossibleAction": ["Develop the site", "assign a vessel for Deep Survey", "inspect method requirements"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "SURVEY.DEEP_SURVEYED",
+      "systemId": "survey",
+      "domainSource": {"owner":"LocationState", "path":"res://src/core/location_state.gd", "symbol":"SURVEY_STATE_ORDER", "selector":"location.survey_state == DEEP_SURVEYED"},
+      "affectedScreens": ["system", "location.overview", "location.resources", "survey", "megastructure"],
+      "playerMeaning": "Exact resource grade, advanced potential and known byproducts are available for high-risk investment and megastructure siting.",
+      "requiredVisualFeedback": ["DEEP_SURVEYED status badge", "exact grade, advanced potential and byproducts"],
+      "requiredExplanation": ["Show how the deep-survey data changes valid methods or site selection."],
+      "requiredPossibleAction": ["Develop the site", "select an eligible megastructure site", "inspect extraction planning"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+
+    {
+      "stateId": "MEGASTRUCTURE.LOCKED",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"completed_projects and megastructure_projects", "selector":"research program unavailable or not yet revealed"},
+      "affectedScreens": ["megastructure", "research", "guidance"],
+      "playerMeaning": "The endgame project is visible but its engineering program is not yet available.",
+      "requiredVisualFeedback": ["LOCKED status badge", "endgame silhouette", "unlock condition"],
+      "requiredExplanation": ["Name the progression condition that reveals the engineering program."],
+      "requiredPossibleAction": ["Open the relevant progression or research prerequisite"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.RESEARCH_REQUIRED",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"completed_projects", "selector":"research_megastructures is incomplete"},
+      "affectedScreens": ["megastructure", "research", "guidance"],
+      "playerMeaning": "The megastructure is known, but its multi-stage engineering program must be completed before site commitment.",
+      "requiredVisualFeedback": ["RESEARCH_REQUIRED status badge", "research program progress and blocker"],
+      "requiredExplanation": ["Show the exact research milestone currently preventing site commitment."],
+      "requiredPossibleAction": ["Open the megastructure research program"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.SITE_PREPARATION",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"megastructure_phase_start_blocker", "selector":"research complete and no valid deep-surveyed site is committed"},
+      "affectedScreens": ["megastructure", "system", "location", "survey", "guidance"],
+      "playerMeaning": "Engineering is complete, but the player must deeply survey and commit one legal construction site.",
+      "requiredVisualFeedback": ["SITE_PREPARATION status badge", "candidate comparison", "survey and selection blockers"],
+      "requiredExplanation": ["Show each candidate's legal survey and site requirements."],
+      "requiredPossibleAction": ["Open candidate location", "assign survey vessel", "commit an eligible site"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.WAITING_MATERIAL",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"blocker_diagnostic and _sync_megastructure_project", "selector":"active phase is blocked by material or in-transit supply"},
+      "affectedScreens": ["megastructure", "construction", "inventory", "logistics", "diagnostics", "alerts"],
+      "playerMeaning": "The current physical phase cannot continue until its real materials and capital goods reach the worksite.",
+      "requiredVisualFeedback": ["WAITING_MATERIAL status badge", "phase BOM", "delivered, reserved, missing and incoming quantities"],
+      "requiredExplanation": ["Trace the top missing input through producer and route to the worksite."],
+      "requiredPossibleAction": ["Open missing material", "open supplier production", "open constrained route"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.BUILDING",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SimulationEngine", "path":"res://src/core/simulation_engine.gd", "symbol":"_sync_megastructure_project", "selector":"project.status == BUILDING and current phase is a construction phase"},
+      "affectedScreens": ["megastructure", "construction", "system", "header"],
+      "playerMeaning": "The current megastructure phase is consuming materials, power and construction throughput at the selected site.",
+      "requiredVisualFeedback": ["BUILDING status badge", "phase and overall progress", "construction visual layer", "actual throughput and ETA"],
+      "requiredExplanation": ["Show the active phase and current limiting throughput."],
+      "requiredPossibleAction": ["Open construction project", "change priority", "pause or cancel under domain rules"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.INTEGRATION",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"megastructure_projects", "selector":"current phase id == stellar_grid_integration"},
+      "affectedScreens": ["megastructure", "construction", "system", "diagnostics"],
+      "playerMeaning": "The structure exists at system scale and is being connected to the industrial and energy network.",
+      "requiredVisualFeedback": ["INTEGRATION status badge", "integration visual layer", "power, cooling, logistics and construction requirements"],
+      "requiredExplanation": ["Show the exact integration capacity shortfall, if any."],
+      "requiredPossibleAction": ["Open the constrained site capacity", "open logistics", "open construction"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.COMMISSIONING",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"megastructure_projects", "selector":"current phase id == stellar_commissioning"},
+      "affectedScreens": ["megastructure", "construction", "system", "diagnostics", "alerts"],
+      "playerMeaning": "The completed physical systems are undergoing final power, cooling, logistics and maintenance validation.",
+      "requiredVisualFeedback": ["COMMISSIONING status badge", "near-complete visual layer", "all commissioning requirements and top blocker"],
+      "requiredExplanation": ["Show current versus required commissioning values, including maintenance coverage."],
+      "requiredPossibleAction": ["Open the exact failed requirement", "start or resume commissioning"],
+      "runtimeCoverage": "UNVERIFIED"
+    },
+    {
+      "stateId": "MEGASTRUCTURE.COMPLETED",
+      "systemId": "megastructure",
+      "domainSource": {"owner":"SpaceGameState", "path":"res://src/core/game_state.gd", "symbol":"megastructures and game_complete", "selector":"megastructures[stellar_energy] == true and game_complete == true"},
+      "affectedScreens": ["megastructure", "system", "header", "guidance"],
+      "playerMeaning": "All eight physical phases and final commissioning are complete.",
+      "requiredVisualFeedback": ["COMPLETED status badge", "complete visual state", "phase history and total industrial contribution"],
+      "requiredExplanation": ["Summarize materials, capital goods, cargo, construction throughput and completion time."],
+      "requiredPossibleAction": ["Inspect the completed project ledger and system outcome"],
+      "runtimeCoverage": "UNVERIFIED"
+    }
+  ]
+}

@@ -277,6 +277,9 @@ func validate() -> void:
 			errors.append("%s must declare system_id" % region_label)
 		if str(region.get("location_type", "")) not in [LocationState.NATURAL, LocationState.ARTIFICIAL]:
 			errors.append("%s has invalid location_type" % region_label)
+		var access_region := str(region.get("access_region", ""))
+		if not access_region.is_empty() and (not regions.has(access_region) or access_region == str(region.get("id", ""))):
+			errors.append("%s references an invalid access_region '%s'" % [region_label, access_region])
 	for activity in activities.values():
 		var label := "activity '%s'" % activity.get("id", "?")
 		if not domains.has(str(activity.get("domain", ""))):
@@ -413,6 +416,8 @@ func validate() -> void:
 		if effect_tags.any(func(tag): return str(tag) not in ["UNLOCK", "METHOD", "SYSTEM"]):
 			errors.append("%s has an invalid R&D effect tag" % project_label)
 		var stages: Array = project.get("stages", [])
+		if not stages.is_empty() and not project.get("costs", []).is_empty():
+			errors.append("%s defines ambiguous top-level costs; staged programs must use stages[].costs as the only runtime cost authority" % project_label)
 		if bool(project.get("major_program", false)) and (stages.size() < 3 or stages.size() > 5):
 			errors.append("%s must contain 3-5 meaningful stages" % project_label)
 		var stage_ids := {}
@@ -952,6 +957,17 @@ func _validate_eighth_phase_geography_contract() -> void:
 		if float(survey_rules.get("mission_work_ms", {}).get(survey_state, 0.0)) <= 0.0 or str(survey_rules.get("required_capabilities", {}).get(survey_state, "")).is_empty():
 			errors.append("Survey mission '%s' must define work and a ship capability" % survey_state)
 		_validate_item_entries(survey_rules.get("base_costs", {}).get(survey_state, []), "Survey mission '%s'" % survey_state)
+	var deployment_package: Dictionary = survey_rules.get("deployment_package", {})
+	if str(deployment_package.get("target_state", "")) != "SURVEYED":
+		errors.append("Survey deployment package must be committed by the SURVEYED mission")
+	_validate_item_entries(deployment_package.get("costs", []), "Survey deployment package")
+	var deployment_effects: Dictionary = deployment_package.get("site_effects", {})
+	for field in ["structural_capacity", "construction_capacity", "hub_throughput", "local_throughput_capacity"]:
+		if float(deployment_effects.get(field, 0.0)) <= 0.0:
+			errors.append("Survey deployment package must define positive %s" % field)
+	for storage_class in ["BULK", "COMPONENT", "FLUID", "SPECIAL"]:
+		if int(deployment_effects.get("storage_capacities", {}).get(storage_class, 0)) <= 0:
+			errors.append("Survey deployment package must define positive %s storage" % storage_class)
 	_validate_item_entries(survey_rules.get("site_development", {}).get("costs", []), "Site Development")
 	if float(survey_rules.get("site_development", {}).get("work_required", 0.0)) <= 0.0:
 		errors.append("Site Development must define positive work")
