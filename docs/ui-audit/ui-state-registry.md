@@ -1,8 +1,8 @@
 # UI State Registry
 
-`data/ui_state_registry.json` is the stable machine-readable contract for 43 player-facing core gameplay states. `tests/ui_state_coverage_test.gd` generates separate runtime evidence so a passing schema check cannot be mistaken for a working gameplay/UI journey.
+`data/ui_state_registry.json` is the stable machine-readable contract for 43 player-facing core gameplay states. Its top-level `coverageClaim=CONTRACT_ONLY` and `runtimeCoverage=UNVERIFIED` are intentional: `tests/ui_state_coverage_test.gd` generates separate runtime evidence so a passing schema check cannot be mistaken for a working gameplay/UI journey. The final certification RunId is intentionally not assigned in this registry document.
 
-Latest runtime result: **43 / 43 VERIFIED**. The generated evidence is `artifacts/test-results/ui-state-coverage.json`, with one result row for every registry definition. The test never assigns a runtime status/blocker, edits a control's text, or treats a snapshot filename as proof of its contents.
+The current generated artifact records **43 / 43 VERIFIED**. Its path is `artifacts/test-results/ui-state-coverage.json`, with one result row for every registry definition. The test never assigns a runtime status/blocker, edits a control's text, or treats a snapshot filename as proof of its contents. Final certification must regenerate this artifact on the certified commit.
 
 ## Evidence threshold
 
@@ -72,4 +72,4 @@ Construction history is now covered: legal `COMPLETE` and `CANCELLED` rows are v
 & 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/ui_state_coverage_test.tscn -- --no-persistence
 ```
 
-The final run exits `0` with no `SCRIPT ERROR`, prints `UI_STATE_COVERAGE=43/43`, and is captured in `.audit-logs/ui-state-coverage-final43.log`. The artifact retains all 43 rows and independent evidence flags. The registry's static `runtimeCoverage: UNVERIFIED` values remain conservative; only the generated result claims the 43 runtime/UI proofs.
+A successful run exits `0`, prints `UI_STATE_COVERAGE=43/43`, and rewrites the machine artifact with all 43 rows and independent evidence flags. The registry's static `runtimeCoverage: UNVERIFIED` values remain conservative; only a generated test result may claim runtime/UI proofs. Whole-game Fresh Save Journey evidence remains a separate acceptance gate.

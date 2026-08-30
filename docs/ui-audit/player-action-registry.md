@@ -1,6 +1,6 @@
 # Player Action Registry
 
-`data/player_action_registry.json` is the machine-readable inventory of player actions audited across `src/ui/main.gd` and `src/application/game.gd`. It records the player-facing entry point, Domain command, required context, unlock conditions, persistence relevance, and explicit success/failure contracts.
+`data/player_action_registry.json` is the machine-readable inventory of player actions audited across `src/ui/main.gd` and `src/application/game.gd`. The current file declares **73 total actions**, of which **57 are core gameplay actions**. It records the player-facing entry point, Domain command, required context, unlock conditions, persistence relevance, and explicit success/failure contracts. This document describes that current registry and its dedicated evidence harness; the final certification RunId is intentionally not assigned here.
 
 ## Coverage boundary
 
@@ -11,7 +11,7 @@ For a core action, `verified: true` means static source tracing found both:
 1. A concrete player-facing `Control` callback in `src/ui/main.gd` that references the action's `Game.*` command.
 2. A matching command function in `src/application/game.gd` plus non-empty success and failure contracts in the registry.
 
-It does **not** mean a runtime UI Journey was executed. Top-level `uiJourneyCoverage` therefore remains `UNVERIFIED`. A future Journey may claim runtime coverage only when it instantiates the real UI, reaches the control by normal navigation, executes it against a legal Domain scenario, observes the gameplay result and rejection feedback, and performs save/load checks where applicable.
+It does **not** mean a runtime UI Journey was executed. Top-level `uiJourneyCoverage` therefore remains `UNVERIFIED`: the static registry is not allowed to self-certify. Runtime action evidence lives in `tests/ui_action_coverage_test.gd` and `artifacts/test-results/ui-action-coverage.json`; whole-game Fresh Save evidence is a separate `full-gameplay-ui.json` artifact.
 
 `tests/player_action_registry_test.gd` is intentionally a static contract/source test. It prevents missing or relabelled core actions, dead Domain symbols, empty entry points, empty outcome contracts, and accidental runtime-verification claims. It does not simulate clicks or claim visual/interaction coverage.
 
@@ -21,16 +21,16 @@ It does **not** mean a runtime UI Journey was executed. Top-level `uiJourneyCove
 
 `SET_PRODUCTION_CONTROL_AUTO` is not a player action and is absent from the registry.
 
-- The UI only builds `PINNED` and `OFF` controls at `src/ui/main.gd:604-607`.
-- `Game.set_production_line_control()` explicitly accepts only `PINNED` and `OFF` at `src/application/game.gd:619-625`.
+- The UI only builds `PINNED` and `OFF` controls in `_build_location_industry()`.
+- `Game.set_production_line_control()` explicitly accepts only `PINNED` and `OFF`.
 - Authorized automation uses normal pause/resume commands and does not restore an `AUTO` alias.
 
 ### Ship-module install and removal
 
 Both actions have real player-facing controls and are statically verified:
 
-- `INSTALL_SHIP_MODULE`: the Fleet roster builds named `InstallModule_*` buttons and binds `Game.install_ship_module` at `src/ui/main.gd:2160-2172`; the command is defined at `src/application/game.gd:1695-1703`.
-- `REMOVE_SHIP_MODULE`: the Fleet roster builds named `RemoveModule_*` buttons and binds `Game.remove_ship_module` at `src/ui/main.gd:2173-2186`; the command is defined at `src/application/game.gd:1706-1716`.
+- `INSTALL_SHIP_MODULE`: `_build_fleet_roster()` builds named `InstallModule_*` buttons and binds `Game.install_ship_module`; button availability/reason comes from `Game.ship_loadout_availability()`.
+- `REMOVE_SHIP_MODULE`: `_build_fleet_roster()` builds named `RemoveModule_*` buttons and binds `Game.remove_ship_module`.
 
 The separate runtime harness now verifies both named actions against real Starport refit projects. This static section remains intentionally distinct from runtime evidence.
 
@@ -67,9 +67,9 @@ Support actions such as game speed, reset, maintenance state, loadout naming/del
 | `coreGameplay` | Membership in the fixed 57-action core inventory. |
 | `verified` | Static UI-to-Domain source trace only. |
 
-## Runtime UI Journey requirements
+## Runtime UI evidence requirements
 
-A future action Journey must:
+The dedicated runtime action harness must:
 
 1. Build a legal scenario through ordinary Domain setup and commands.
 2. Instantiate the actual game shell and navigate to the registered surface.
@@ -92,7 +92,7 @@ Directly invoking a target action through `Game.*`, assigning runtime state, man
 
 For ordinary gameplay actions, the fourth gate is deliberately labelled `DOMAIN_SERIALIZE_DESERIALIZE_ONLY` in `artifacts/test-results/ui-action-coverage.json`; it is not a disk Save/Load claim. `SAVE_GAME` is the sole exception: its Success, Consequence, and Persistence gates are imported only from the separately passed `artifacts/test-results/ui-persistence-audit.json`, whose writer and reader run with uniquely redirected `APPDATA` / `LOCALAPPDATA`. That evidence proves the visible `SaveButton` wrote the isolated `LocalSaveRepository`, startup restored the same save identity/revision, and the UI-created fleet assignment was present in the loaded Domain state and visible Ships page. The no-persistence action suite independently proves Save's structured unavailable failure and never writes `user://`. Golden Scenario checkpoints are likewise only legal, invariant-preserving test setup; they are not counted as Fresh Save Journey coverage.
 
-The current bounded suite verifies all **57 / 57** core actions. Every row has independent Success, player-visible Failure, authoritative Consequence, and Persistence evidence. Static mappings are not counted, and the machine artifact retains each quadrant rather than only the aggregate number. Locked Ship plans provide a visible disabled failure surface while repeat production of an unlocked plan remains legal. Project-style actions use rapid duplicate submissions to receive structured rejections and assert that only one physical project was created.
+The current bounded action artifact records **57 / 57** core actions. Every row has independent Success, player-visible Failure, authoritative Consequence, and Persistence evidence. Static mappings are not counted, and the machine artifact retains each quadrant rather than only the aggregate number. Locked Ship plans provide a visible disabled failure surface while repeat production of an unlocked plan remains legal. Project-style actions use rapid duplicate submissions to receive structured rejections and assert that only one physical project was created. Final certification must rerun this suite on the certified commit; this document does not substitute its historical artifact for that final RunId.
 
 Round 6 adds real MainScene evidence for the production and extraction controls. Permanent extraction proves exclusive physical-ship ownership and release; Production start/stop proves real device/input commitments and their release; Production control and priority use their visible selected-state disabled controls as failure surfaces; Factory expansion proves the UI queues a `FACILITY_EXPANSION` Construction runtime with a non-empty material plan and does not increase Factory level before completion.
 
@@ -127,4 +127,11 @@ Transport Mode coverage clicks the localized live mode control, observes the rou
 
 Fleet supply is also fully covered. `SET_FLEET_SUPPLY_PLAN` changes a named `FleetSupplyTarget_*` through `SetFleetSupplyPlan_*`, rejects the same quantity as an unchanged intent, and round-trips the target. `RESUPPLY_FLEET` moves real owned inventory into fleet supply, proves aggregate conservation and round-trip, while an empty Expedition roster leaves the named action visible and disabled with an explicit reason.
 
-Round 4b independently established **10 / 56** before `SET_ROUTE_PAUSED` joined the inventory. Round 5 established **14 / 57**; Round 6 established **22 / 57**; Round 7 established **31 / 57**; Round 8f established **39 / 57**; Round 9a established **51 / 57**. Round10d is the final **57 / 57 PASS** in `.audit-logs/ui-action-coverage-round10d.log`, with Godot exit code 0, zero `SCRIPT ERROR`, zero `FAIL:`, and no residual Godot process. The current machine result is `artifacts/test-results/ui-action-coverage.json`; isolated disk persistence evidence is `artifacts/test-results/ui-persistence-audit.json`. This percentage is strict action-runtime evidence only and must not be substituted for Fresh Save Journey Coverage.
+The current machine result is `artifacts/test-results/ui-action-coverage.json`; isolated disk persistence evidence is `artifacts/test-results/ui-persistence-audit.json`. The action numerator must never be substituted for Fresh Save Journey Coverage.
+
+Reproduce the static and runtime contracts with:
+
+```powershell
+& 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/player_action_registry_test.tscn -- --no-persistence
+& 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/ui_action_coverage_test.tscn -- --no-persistence --locale=en
+```

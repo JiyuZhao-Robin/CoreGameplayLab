@@ -1,119 +1,133 @@
-# UI→Domain 完整性独立审查（UI-E）
+# UI → Domain 完整性独立审查（UI-E）
 
-初审日期：2026-08-28  
-修复复核日期：2026-08-28  
-审查范围：`src/ui/**/*.gd`、`src/application/game.gd` 与现有 UI 测试；生产源码仅只读复核。  
-结论口径：源码追踪与静态守卫，不等同于真实鼠标/键盘 UI Journey。
+静态复核：2026-08-31。范围为 `src/ui/**/*.gd`、`src/application/game.gd`、`tests/ui_domain_integrity_test.gd` 与 Fresh Save harness 源码。本文只给源码契约结论；最终严格运行结果留给最终认证。
 
-## 复核结论
+## 当前结论
 
-**生产 UI→Domain 静态边界：PASS。综合验证完整性：仍未关闭（0 个 P0、1 个 P1、4 个 P2）。**
+**未发现生产 UI 直接修改核心状态或直接推进 Simulation 的 P0。先前记录的 UI/Domain P1 已在当前源码中关闭；最终 PASS 仍需在 certified commit 上重跑静态守卫和完整 Journey。**
 
-初审的三个生产边界 P1 已关闭：仓储自动化授权改为单一原子应用命令，舰装替换/安装候选统一查询应用层 availability，next-flow 的里程碑规则全部移入 `Game.guidance_snapshot()`。独立重跑 `tests/ui_domain_integrity_test.tscn` 得到 Exit 0 与：
+当前边界为：
 
 ```text
-PASS: UI Domain integrity static guard (source contracts only; no UI Journey claim)
+UI query
+  <- Game / Simulation snapshot / availability / blocker / guidance
+
+Player intent
+  -> visible Control callback
+  -> _command(label, Game.*)
+  -> bool command result
+  -> GameStateTransaction / Simulation
+  -> state_changed / domain_event / command_rejected
+  -> UI rebuild
 ```
 
-这项 PASS 只证明静态源码契约。现有 playflow 仍依靠直接推进模拟、写入状态和调用私有 helper，因此不能把项目整体标记为 UI Journey verified。
+## P0 扫描结果
 
-## P0
+`tests/ui_domain_integrity_test.gd` 对四个生产 UI source 扫描以下危险模式：
 
-未发现 P0。生产 UI 未发现 `Game.state.foo = ...`、状态容器 `merge/append/remove_at(...)`、`Game.state.add_item/remove_item(...)` 或 `Game.simulation.advance(...)`。
+- `Game.state.* =`、算术赋值和容器 mutator；
+- 通过 `Game.state` 别名进行嵌套赋值或容器修改；
+- `Game.state.add_item/remove_item/...` 等 mutable state API；
+- `Game.simulation.advance/tick/process_boundary/...`；
+- localized/display text 反查或绑定 Domain identity；
+- 启用状态但 callback 为无效 `Callable()` 的按钮；
+- `_command()` 调用不返回 `bool` 的 `Game.*` 方法。
 
-## 未关闭 P1
+当前源码未发现这些 P0 模式。System Map 在 `configure()` 中对 Location/Route snapshots 执行 `duplicate(true)`；舰装候选对已安装 module definitions 使用 `.duplicate()` 后再构造 prospective loadout，避免 UI 对 Domain Array 的别名写入。
 
-### P1-1：现有 playflow 是 hybrid integration，不是端到端 UI Journey
+## 已关闭的 P1
 
-- `tests/ui_playflow_test.gd:60-71` 直接调用 `Game.simulation.advance`，直接修改 operation 与 extraction network 字典。
-- `tests/ui_playflow_test.gd:81-100` 直接移除/添加库存并写 `completed_activities`；`tests/ui_playflow_test.gd:124-142` 直接写 facilities/research，并调用 UI 私有 next-flow wrapper。
-- 这些写入适合构造跨阶段测试夹具，但绕过真实控件、应用事务和玩家可见失败反馈，不能由末尾的 playflow PASS 外推成所有核心动作的真实 UI Journey 覆盖。
-- 关闭标准：保留并明确标注 hybrid test；另建只通过控件输入、等待真实应用/模拟边界，并同时断言成功与失败反馈的 journey suite。
+### 原子 automation 命令
 
-## 已关闭的初审 P1
+`_authorize_storage_guard()` 只调用 `Game.authorize_storage_guard()`。应用层在一个 `GameStateTransaction.working_state` 内校验、写入 production control 与 automation rules，最后只 commit 一次；不存在“前一半已提交、后一半失败”的 UI 编排路径。
 
-### 已关闭：有限自动化授权的部分提交风险
+### Guidance 单一权威
 
-- UI `src/ui/main.gd:1758-1759` 的 `_authorize_storage_guard()` 现在只调用一次 `Game.authorize_storage_guard(...)`。
-- 应用层 `src/application/game.gd:648-662` 在同一个 `GameStateTransaction.working_state` 上校验生产线、修改 control、添加 pause/resume 两条规则，最后只有一次 `_commit_transaction(transaction)`。
-- 结论：第二/第三个独立提交失败导致“授权一半”的路径已消失，原 P1 关闭。
+`_next_flow_step()` 和 `_next_flow_page()` 只消费 `Game.guidance_snapshot()`。UI 不读取 `completed_activities`、facilities 或 costs 来重建 progression milestone。`guidance_snapshot()` 返回 message/page/section/location/focus/acquisition 等 navigation data，UI 只展示、记录 telemetry 并跳转。
 
-### 已关闭：替换舰装候选的结构校验双规则源
+### 舰装 availability 与真实 BOM
 
-- 替换候选 `src/ui/main.gd:2653-2675` 构造完整 prospective loadout 后调用 `Game.ship_loadout_availability(...)`；安装候选 `2678-2696` 使用同一查询。
-- 应用层查询 `src/application/game.gd:1806-1828` 统一校验舰船可改装状态、模块/特殊装备/设计可用性，并复用 `_validate_loadout_modules(...)`。
-- 结论：UI 仅按 slot 自行推导、Domain 再拒绝结构非法装配的问题已关闭。完整 BOM 可执行性仍有一个 P2，见下文。
+`Game.ship_loadout_availability()` 当前统一处理：
 
-### 已关闭：next-flow 双权威
+- Ship 是否 operational+docked；
+- module definition / technology 可用性；
+- canonical full-loadout structure；
+- unique equipment 物理库存；
+- `loadout_fabrication_costs()`；
+- 每项 `required/available/missing` 与玩家可见 reason。
 
-- 应用层 `src/application/game.gd:1906-1948` 的 `guidance_snapshot()` 统一返回 `message/page/section/location_id/focus_entity_id/requirement/acquisition_path`；bootstrap 里程碑集中在 `1951+`。
-- UI `src/ui/main.gd:2603-2629` 只读取 snapshot，负责 telemetry、导航状态与展示，不再读取 `completed_activities/facilities/costs` 推导下一步。
-- 结论：新增里程碑或 requirement routing 不再需要同步修改 UI 规则，原 P1 关闭。
+`begin_ship_refit()` 使用相同结构与完整 BOM 语义执行真实 transaction。Fleet renderer 保留结构合法的 install option，并用 authoritative availability 决定 disabled state 与 tooltip，不再把资源不足误表现成“模块不存在”。连续 Remove → Install 的 focused probe 位于 `tests/ui_endgame_scenario_test.gd --outer-titan-exotic-refit-probe`。
 
-## P2
+### Fresh Save harness 不再是 hybrid playflow
 
-### P2-1：舰装 availability 尚未覆盖 full-loadout BOM
+旧 `ui_playflow_test.gd` 仍可作为 bounded/hybrid smoke，但它不再承担最终 Journey 认证。`tests/full_gameplay_ui_test.gd` 是单独的严格 harness；静态 guard 禁止其：
 
-- `Game.ship_loadout_availability()`（`src/application/game.gd:1806-1828`）覆盖状态、设计、特殊装备与装配结构，但未计算/检查 `loadout_fabrication_costs`。
-- 真正命令 `begin_ship_refit()` 在 `src/application/game.gd:1690-1695` 仍会因 full-loadout fabrication resources 不足拒绝。
-- 因此一个结构合法候选可能显示为可用，点击后才报告资源不足。建议 availability 返回 BOM、逐项缺口和与命令一致的 `allowed`，或将当前字段明确命名为 `structurally_allowed`。
+- 写 `Game.state` 或 state container；
+- 调用 mutable `SpaceGameState` API；
+- 直接推进 Simulation；
+- 直接调用 gameplay `Game.*` 命令（只允许只读查询白名单）。
 
-### P2-2：进度公式仍由 UI 解释原始 runtime 字段
+关键操作必须由真实 MainScene Control 触发；时间加速必须点击正常 speed control。是否完整跑到终局由 Fresh Save runtime artifact 判定，不能由本段源码检查提前确认。
 
-- `src/ui/main.gd:2864-2877` 在 UI 内区分 construction/non-construction，并重算 `completed_work + cycle_progress` 或 `elapsed / duration`。
-- 这不是状态写入，但字段语义演进时可能造成显示漂移。建议 Domain/read model 返回统一的 `progress_ratio` 与 `progress_caption_key`。
+### 地图锁定语义
 
-### P2-3：禁用 Button 被用作纯状态文本
+`SystemMapView.configure()` 当前设置 `button.disabled = not discovered`，并为未知节点提供 survey prerequisite tooltip。UI 文案和交互不再出现“未知地点不可操作但节点仍可点击”的冲突。
 
-- `src/ui/main.gd:579` 用 `Callable(), true` 创建 “No eligible Survey Vessel”。它不是 dead enabled control，但视觉语义仍像不可用操作。
-- 建议改为 warning Label/empty-state card。
+## Single Source of Truth 复核
 
-### P2-4：地图文案与交互语义不一致
+| 数据/规则 | UI 使用方式 | 权威来源 |
+| --- | --- | --- |
+| Production status / rate / blocker | 渲染 runtime 和 normalized blocker | `SimulationEngine` queries |
+| Inventory available/reserved/flow | 渲染 location snapshots | `SpaceGameState` / Simulation snapshots |
+| Logistics utilization / blocker | 渲染 service snapshot；command 改 policy/mode/ship | Logistics Simulation + `Game.*` |
+| Construction eligibility / queue | availability + command | `Game.can_start_construction_project()` / Construction runtime |
+| Research eligibility / stage blocker | availability + command | `Game` / Research Simulation |
+| Ship fitting / BOM | availability + refit command | `Game.ship_loadout_availability()` / `begin_ship_refit()` |
+| Guidance | 只读 snapshot | `Game.guidance_snapshot()` |
+| Diagnostics | 只读 normalized blockers | `Game.active_blockers()` / `Game.blocker_info()` |
+| Megastructure state / BOM | read model + normal Construction command | Simulation / Content / `Game.start_megastructure_phase()` |
 
-- `src/ui/main.gd:445` 声称“未知地点不可操作”；`src/ui/components/system_map_view.gd:42-61` 却让 discovered/undiscovered 节点都 `disabled = false` 并发送稳定的 `location_id`。
-- `_open_location()` 在 `src/ui/main.gd:510-517` 只检查 location 是否存在。若产品意图是允许查看并发起勘测，应把文案改为“可查看、工业操作未解锁”；否则应真正禁用节点。
+## 保留的 P2 架构风险
 
-## 已通过的边界检查
+### P2-DI-1：进度比例仍在 UI 解释原始 runtime 字段
 
-### 无直接状态/资源/进度写入
+`src/ui/main.gd:_operation_progress()` 在 UI 内区分 construction 与其他 operation，再从 `completed_work/cycle_progress` 或 `stage_progress_ms/progress_ms/...` 计算 ratio。它不写 Domain，也没有形成 P0/P1，但 runtime schema 演进可能让显示与 Simulation 漂移。建议由 read model 返回统一 `progress_ratio`、`progress_caption_key`。
 
-- 扫描 `src/ui/**/*.gd` 未发现 `Game.state` 直接/别名写入、状态容器 mutator、资源可变 API 或直接 simulation advance。
-- `SystemMapView.configure()` 在 `src/ui/components/system_map_view.gd:30-33` 对输入执行 `duplicate(true)`，组件不会持有 Domain snapshot 的可变别名。
+### P2-DI-2：替换模块的发现性仍可与 availability 分离
 
-### 命令成功/失败契约一致
+`_installable_loadout_modules()` 会保留结构合法但因 BOM/ship state 暂不可执行的选项，再用 authoritative reason 禁用；`_compatible_loadout_modules()` 目前只保留 `ship_loadout_availability().allowed=true` 的 replacement。后者可能在资源短缺时把合法替换完全隐藏。Domain 安全性不受影响，但玩家可能看不到需要补什么资源。建议 replacement 与 install 使用同一“结构可见、availability 决定 disabled/reason”呈现策略。
 
-- `src/ui/main.gd:3067+` 的 `_command()` 以 `bool false` 记录失败和失败 telemetry。
-- 静态枚举的所有 `_command(... Game.*)` 目标均在 `src/application/game.gd` 声明 `-> bool`；守卫会阻止 void/Dictionary 命令被误记为“已执行”。
+### P2-DI-3：应用/表现集中在单一 UI 脚本
 
-### display name 没有充当 identity
+`main.gd` 超过 3.7k 行。虽然静态 guard 能阻止直接 state mutation，页面 builder、query formatting 与 callback 数量继续增长会提高漏检和 review 成本。应在不复制 gameplay rules 的前提下，按 Surface 拆 presenter/view builder，并保持 `Game.*`/Simulation read model 为唯一规则源。
 
-- 地点 selector 在 `src/ui/main.gd:371-383` 绑定 `location_ids`，回调在 `3248+` 由 index 取稳定 ID。
-- 物流 item/source/route selectors 在 `src/ui/main.gd:914-1042` 分别保留 `item_ids`、`source_ids`、`route_ids`。
-- 舰船 UI 展示 `ship.name`，命令绑定 `instance_id`；saved loadout 展示 `name`，命令绑定 `loadout_id`。
-- 未发现 `get_item_text()`、`find_key()` 或将 `_content_name()/I18n` 结果传给 `Game.*.bind(...)`。
+## Stable identity
 
-### Dead UI 扫描
+- Location OptionButton 绑定平行 `location_ids`，不使用显示文本反查。
+- Logistics selectors 分别保留 `item_ids/source_ids/route_ids`。
+- Ship UI 显示 `name`，命令绑定 `instance_id`。
+- Saved Loadout 显示 `name`，命令绑定 `loadout_id`。
+- 未发现 `get_item_text()`、`find_key()` 或把 `_content_name()/I18n` 结果传入 `Game.*.bind(...)`。
 
-- 除 Godot 生命周期回调和对测试暴露的只读 `telemetry_snapshot()` 外，`main.gd` 本地 helper 均有调用点或 signal/callback 引用。
-- 工业模板应用 helper 已由 `ApplyIndustrialTemplate` 接通（`src/ui/main.gd:687-688,805+`）。
-- 未发现启用状态下 callback 为无效 `Callable()` 的 `_button`；P2-3 是禁用 empty-state 控件，不是假命令。
+## 失败反馈与 Developer Details
 
-## 静态守卫
+`_command()` 读取命令返回值；`false` 时使用 `Game.last_notice`，若没有新 structured notice 则显示本地化通用失败文本。成功与失败都写入 Timeline 和 `PlayerAction` telemetry。普通玩家不看到 stack/exception；Developer Details 可显示内部 ID/state code 等审计信息。
 
-`tests/ui_domain_integrity_test.tscn` 独立读取 UI 与应用层源码，不依赖 `player_action_registry.json`。它检查：
+## 可复现验证
 
-1. `Game.state` 直接/别名写入、容器 mutator、资源 API 和直接 simulation advance；
-2. display name 反查/绑定 identity；
-3. 无回调的启用按钮与未引用私有 UI helper；
-4. `_command` 目标必须为 `Game.* -> bool`；
-5. storage guard 不得在 UI 编排多个可部分提交的写命令；
-6. 舰装候选必须走 canonical availability；
-7. next-flow UI 不得拥有 progression milestone 规则。
-
-复核命令：
+静态 Domain guard：
 
 ```powershell
 & 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/ui_domain_integrity_test.tscn -- --no-persistence
 ```
 
-复核结果：**PASS，Exit 0**。该结果是静态架构守卫结论，不宣称运行时 UI Journey 覆盖；P1-1 仍需单独关闭。
+相关 runtime contracts：
+
+```powershell
+& 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/ui_action_coverage_test.tscn -- --no-persistence --locale=en
+& 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/ui_state_coverage_test.tscn -- --no-persistence --locale=en
+& 'D:\Godot\godot.exe' --headless --path 'D:\Projects\standalone\core_gameplay_lab' res://tests/ui_endgame_scenario_test.tscn -- --no-persistence --locale=en --scenario=open_deep --outer-titan-exotic-refit-probe
+& .\tools\run_full_gameplay_ui.ps1 -RunId '<unique-run-id>' -TimeoutSeconds 28800 -CleanEvidence
+```
+
+最终认证需要把以上结果绑定到同一提交与 final strict RunId，并同时通过 Fresh Save、Save/Load、Offline、Localization 和 screenshot gates；本文不单独发布 `CORE UI VERIFIED`。
