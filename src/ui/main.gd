@@ -15,6 +15,8 @@ const COLOR_GOOD := UiTokens.COLOR_RUNNING
 const COLOR_WARN := UiTokens.COLOR_WARNING
 const COLOR_BAD := UiTokens.COLOR_CRITICAL
 const UI_CONFIG_PATH := "user://core_gameplay_ui.cfg"
+const INTERACTIVE_REFRESH_INTERVAL_MS := 250
+const SIMULATION_REFRESH_INTERVAL_MS := 1000
 const NAV_TRANSLATION_KEYS := {
 	"system_map":"nav.system_map", "location":"nav.location", "industry":"nav.industry",
 	"inventory":"nav.inventory", "logistics":"nav.logistics", "construction":"nav.construction",
@@ -29,6 +31,8 @@ var _header_status: Label
 var _notice_label: Label
 var _event_log: Array[String] = []
 var _dirty := true
+var _immediate_refresh_requested := false
+var _rebuild_in_progress := false
 var _last_refresh_ms := 0
 var _last_header_ms := 0
 var _speed_buttons: Dictionary = {}
@@ -83,8 +87,20 @@ func _process(_delta: float) -> void:
 		_last_header_ms = now
 	var focused := get_viewport().gui_get_focus_owner()
 	var editing_text := focused is LineEdit or focused is TextEdit
-	if not editing_text and _dirty and now - _last_refresh_ms >= 180:
+	var refresh_interval := SIMULATION_REFRESH_INTERVAL_MS if Engine.time_scale >= 5.0 else INTERACTIVE_REFRESH_INTERVAL_MS
+	var refresh_due := _immediate_refresh_requested or now - _last_refresh_ms >= refresh_interval
+	if not editing_text and _dirty and refresh_due and not _rebuild_in_progress:
+		_immediate_refresh_requested = false
 		_rebuild_active_page()
+
+
+func _request_active_page_refresh(immediate: bool) -> void:
+	_dirty = true
+	if immediate:
+		# Rebuild on the next process frame, after the current Control signal has
+		# returned. This keeps player actions responsive without destroying the
+		# button tree from inside its own pressed callback.
+		_immediate_refresh_requested = true
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -247,8 +263,7 @@ func _switch_page(key: String, record_history: bool = true) -> void:
 	_tabs.current_tab = page.get_index()
 	_active_page_key = key
 	_save_ui_preferences()
-	_dirty = true
-	_rebuild_active_page()
+	_request_active_page_refresh(true)
 	_update_navigation_state()
 	_record_telemetry("ScreenOpen", {"screen":key})
 
@@ -370,8 +385,12 @@ func _rebuild_all() -> void:
 
 
 func _rebuild_active_page() -> void:
+	if _rebuild_in_progress:
+		_request_active_page_refresh(true)
+		return
 	if not is_instance_valid(Game.state) or not is_instance_valid(Game.content) or not is_instance_valid(_tabs):
 		return
+	_rebuild_in_progress = true
 	var focused := get_viewport().gui_get_focus_owner()
 	var focused_name := String(focused.name) if is_instance_valid(focused) and is_ancestor_of(focused) else ""
 	var page_before: Control = _tabs.get_current_tab_control()
@@ -400,6 +419,7 @@ func _rebuild_active_page() -> void:
 	_update_navigation_state()
 	_dirty = false
 	_last_refresh_ms = Time.get_ticks_msec()
+	_rebuild_in_progress = false
 	call_deferred("_restore_rebuilt_page_context", focused_name, key, scroll_before)
 
 
@@ -571,7 +591,6 @@ func _open_location(location_id: String) -> void:
 	_location_section = "overview"
 	_save_ui_preferences()
 	_switch_page("location")
-	_rebuild_location()
 
 
 func _open_location_section(location_id: String, section: String) -> void:
@@ -581,13 +600,12 @@ func _open_location_section(location_id: String, section: String) -> void:
 	_location_section = section
 	_save_ui_preferences()
 	_switch_page("location")
-	_rebuild_location()
 
 
 func _select_location_section(section: String) -> void:
 	_location_section = section
 	_save_ui_preferences()
-	_rebuild_location()
+	_request_active_page_refresh(true)
 
 
 func _rebuild_location() -> void:
@@ -1176,7 +1194,7 @@ func _on_logistics_item_selected(index: int, item_ids: Array) -> void:
 
 func _toggle_logistics_advanced() -> void:
 	_logistics_advanced = not _logistics_advanced
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _add_selected_logistics_policy(mode: String, selector: OptionButton, item_ids: Array) -> void:
@@ -1465,7 +1483,7 @@ func _rebuild_inventory() -> void:
 
 func _on_inventory_search_changed(value: String) -> void:
 	_inventory_search_text = value
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _open_product_diagnostics(product_id: String) -> void:
@@ -1610,7 +1628,7 @@ func _rebuild_industry() -> void:
 func _select_industry_section(section: String) -> void:
 	_industry_section = section
 	_save_ui_preferences()
-	_rebuild_industry()
+	_request_active_page_refresh(true)
 
 
 func _open_production_construction(_project_id: String) -> void:
@@ -1963,7 +1981,7 @@ func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_inpu
 	_planner_result = Game.simulation.target_throughput_plan(Game.state, {_planner_product_id:_planner_target_rate}, _selected_location_id)
 	_planner_result["target_type"] = "PRODUCT_RATE"
 	_planner_target_label = I18n.core("planner.product_rate_label") % [_content_name(Game.content.items.get(_planner_product_id, {}), _planner_product_id), _planner_target_rate]
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _run_ship_read_only_plan(selector: OptionButton, ship_plan_ids: Array, target_input: SpinBox) -> void:
@@ -1972,7 +1990,7 @@ func _run_ship_read_only_plan(selector: OptionButton, ship_plan_ids: Array, targ
 	var ship_plan_id := String(ship_plan_ids[selector.selected])
 	_planner_target_label = I18n.core("planner.ship_rate_label") % [_content_name(Game.content.ship_construction_projects.get(ship_plan_id, {}), ship_plan_id), float(target_input.value)]
 	_planner_result = Game.simulation.ship_per_month_plan(Game.state, ship_plan_id, float(target_input.value), _selected_location_id)
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _run_research_read_only_plan(selector: OptionButton, research_targets: Array) -> void:
@@ -1983,7 +2001,7 @@ func _run_research_read_only_plan(selector: OptionButton, research_targets: Arra
 	var phase_id := String(target.get("phase_id", ""))
 	_planner_target_label = I18n.core("planner.target_label") % [_content_name(Game.content.research_projects.get(project_id, {}), project_id), phase_id]
 	_planner_result = Game.simulation.research_phase_plan(Game.state, project_id, phase_id, _selected_location_id)
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _run_mega_read_only_plan(selector: OptionButton, mega_targets: Array) -> void:
@@ -1994,7 +2012,7 @@ func _run_mega_read_only_plan(selector: OptionButton, mega_targets: Array) -> vo
 	var phase_id := String(target.get("phase_id", ""))
 	_planner_target_label = I18n.core("planner.target_label") % [_content_name(Game.content.megastructures.get(megastructure_id, {}), megastructure_id), phase_id]
 	_planner_result = Game.simulation.megastructure_phase_plan(Game.state, megastructure_id, phase_id)
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _build_read_only_plan_result(box: VBoxContainer, plan: Dictionary) -> void:
@@ -2490,7 +2508,7 @@ func _rebuild_fleet() -> void:
 func _select_fleet_section(section: String) -> void:
 	_fleet_section = section
 	_save_ui_preferences()
-	_rebuild_fleet()
+	_request_active_page_refresh(true)
 
 
 func _build_fleet_readiness(box: VBoxContainer) -> void:
@@ -2598,7 +2616,6 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		var assignment_row := HFlowContainer.new()
 		assignment_row.add_theme_constant_override("h_separation", 6)
 		assignment_row.add_theme_constant_override("v_separation", 6)
-		var ship_not_docked := String(ship.get("status", "DOCKED")) != "DOCKED"
 		var standby_availability := Game.ship_fleet_assignment_availability(ship_id, "")
 		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_fleet_assignment.bind(ship_id, "")), not bool(standby_availability.get("allowed", false)))
 		standby_button.name = "AssignStandby_%s" % ship_id
@@ -2645,12 +2662,16 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		for loadout_value in matching_loadouts:
 			var loadout := loadout_value as Dictionary
 			var loadout_id := String(loadout.get("id", ""))
+			var loadout_modules: Array = loadout.get("modules", []).duplicate()
+			var loadout_availability: Dictionary = Game.ship_loadout_availability(ship_id, loadout_modules)
 			var loadout_row := HFlowContainer.new()
 			loadout_row.add_theme_constant_override("h_separation", 6)
 			loadout_row.add_theme_constant_override("v_separation", 6)
 			loadout_row.add_child(_label(String(loadout.get("name", loadout_id)), 13, COLOR_MUTED))
-			var apply_loadout_button := _button(I18n.core("common.apply"), _command.bind(I18n.core("command.ships.apply_configuration"), Game.apply_ship_loadout.bind(ship_id, loadout_id)), String(ship.get("status", "DOCKED")) != "DOCKED")
+			var apply_loadout_button := _button(I18n.core("common.apply"), _command.bind(I18n.core("command.ships.apply_configuration"), Game.apply_ship_loadout.bind(ship_id, loadout_id)), not bool(loadout_availability.get("allowed", false)))
 			apply_loadout_button.name = "ApplyShipLoadout_%s_%s" % [ship_id, loadout_id]
+			if apply_loadout_button.disabled:
+				apply_loadout_button.tooltip_text = String(loadout_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 			loadout_row.add_child(apply_loadout_button)
 			var delete_loadout_button := _button(I18n.core("ships.action.delete"), _command.bind(I18n.core("command.ships.delete_configuration"), Game.delete_ship_loadout.bind(loadout_id)), false, COLOR_WARN)
 			delete_loadout_button.name = "DeleteShipLoadout_%s" % loadout_id
@@ -2667,9 +2688,15 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 				var module_def := Game.content.modules.get(new_id, {}) as Dictionary
 				var old_def := Game.content.modules.get(old_id, {}) as Dictionary
 				var button_text := I18n.core("ships.action.replace_module") % [_content_name(old_def, old_id), _content_name(module_def, new_id)]
-				var replace_button := _button(button_text, _command.bind(I18n.core("command.ships.start_refit"), Game.replace_ship_module.bind(ship_id, old_id, new_id)), String(ship.get("status", "DOCKED")) != "DOCKED")
+				var replacement_modules: Array = Game.state.ship_module_definition_ids(ship).duplicate()
+				var replacement_index := replacement_modules.find(old_id)
+				if replacement_index >= 0:
+					replacement_modules[replacement_index] = new_id
+				var replacement_availability: Dictionary = Game.ship_loadout_availability(ship_id, replacement_modules)
+				var replace_button := _button(button_text, _command.bind(I18n.core("command.ships.start_refit"), Game.replace_ship_module.bind(ship_id, old_id, new_id)), not bool(replacement_availability.get("allowed", false)))
 				replace_button.name = "ReplaceModule_%s_%s_%s" % [ship_id, old_id, new_id]
-				if ship_not_docked: replace_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+				if replace_button.disabled:
+					replace_button.tooltip_text = String(replacement_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 				card.add_child(replace_button)
 		var install_choices := _installable_loadout_modules(ship)
 		if not install_choices.is_empty():
@@ -2695,14 +2722,20 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 			for module_id_value in installed_definitions:
 				var module_id := String(module_id_value)
 				var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
+				var removal_modules: Array = installed_definitions.duplicate()
+				var removal_index := removal_modules.find(module_id)
+				if removal_index >= 0:
+					removal_modules.remove_at(removal_index)
+				var removal_availability: Dictionary = Game.ship_loadout_availability(ship_id, removal_modules)
 				var remove_button := _button(
 					I18n.core("ships.remove_module_action", "Remove %s") % _content_name(module_definition, module_id),
 					_command.bind(I18n.core("command.ships.remove_module"), Game.remove_ship_module.bind(ship_id, module_id)),
-					String(ship.get("status", "DOCKED")) != "DOCKED",
+					not bool(removal_availability.get("allowed", false)),
 					COLOR_WARN
 				)
 				remove_button.name = "RemoveModule_%s_%s" % [ship_id, module_id]
-				if ship_not_docked: remove_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+				if remove_button.disabled:
+					remove_button.tooltip_text = String(removal_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 				card.add_child(remove_button)
 		if String(ship.get("status", "")) == "DOCKED" and Game.state.ship_fleet_domain(ship_id).is_empty():
 			card.add_child(_button(I18n.core("ships.action.scrap"), _command.bind(I18n.core("command.ships.scrap"), Game.scrap_ship.bind(ship_id)), false, COLOR_WARN))
@@ -2920,7 +2953,6 @@ func _rebuild_expedition() -> void:
 func _open_fleet_section(section: String) -> void:
 	_fleet_section = section
 	_switch_page("fleet")
-	_rebuild_fleet()
 
 
 func _add_combat_state_panel(parent: VBoxContainer, combat_state: Dictionary) -> void:
@@ -2982,8 +3014,6 @@ func _open_next_flow_target() -> void:
 	if page == "industry":
 		_industry_section = String(guidance.get("section", "production"))
 	_switch_page(page)
-	if page == "industry":
-		_rebuild_industry()
 
 
 func _next_flow_step() -> String:
@@ -2998,6 +3028,7 @@ func _next_flow_page() -> String:
 func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var installed: Array = Game.state.ship_module_definition_ids(ship)
+	var blueprint_id := String(ship.get("blueprint_id", ""))
 	for new_id_value in Game.content.modules.keys():
 		var new_id := String(new_id_value)
 		var new_module := Game.content.modules.get(new_id, {}) as Dictionary
@@ -3014,7 +3045,9 @@ func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
 			if String(old_module.get("slot", "")) == String(new_module.get("slot", "")) and old_id != new_id:
 				var desired := installed.duplicate()
 				desired[desired.find(old_id)] = new_id
-				if bool(Game.ship_loadout_availability(String(ship.get("instance_id", "")), desired).get("allowed", false)):
+				# Keep valid choices visible while unavailable. The card renderer asks
+				# the authoritative Domain query for disabled state and explanation.
+				if Game.content.ship_loadout_valid(blueprint_id, desired):
 					result.append({"old_id": old_id, "new_id": new_id})
 				break
 	return result
@@ -3358,7 +3391,7 @@ func _command(label_text: String, callable: Callable) -> void:
 	else:
 		_append_log(I18n.core("command.executed") % label_text)
 		_record_telemetry("PlayerAction", {"label":label_text, "screen":_active_page_key, "success":true})
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _set_speed(speed: float) -> void:
@@ -3398,7 +3431,7 @@ func _reset_game() -> void:
 	Game.reset_game()
 	_event_log.clear()
 	_append_log(I18n.core("timeline.game_reset"))
-	_dirty = true
+	_request_active_page_refresh(true)
 
 
 func _toggle_locale() -> void:
@@ -3437,7 +3470,7 @@ func _append_log(text_value: String) -> void:
 		_event_log.pop_front()
 	if is_instance_valid(_notice_label):
 		_notice_label.text = I18n.core("bottom.timeline", "Timeline") + " · " + text_value
-	_dirty = true
+	_request_active_page_refresh(false)
 
 
 func telemetry_snapshot() -> Dictionary:
@@ -3484,7 +3517,7 @@ func _update_bottom_bar() -> void:
 
 
 func _on_state_changed() -> void:
-	_dirty = true
+	_request_active_page_refresh(false)
 
 
 func _on_domain_event(event: Dictionary) -> void:
@@ -3536,21 +3569,18 @@ func _on_context_location_selected(index: int, location_ids: Array[String]) -> v
 		return
 	_selected_location_id = location_ids[index]
 	_save_ui_preferences()
-	_dirty = true
-	_rebuild_active_page()
+	_request_active_page_refresh(true)
 
 
 func _toggle_developer_details() -> void:
 	_developer_details = not _developer_details
 	_save_ui_preferences()
-	_dirty = true
-	_rebuild_active_page()
+	_request_active_page_refresh(true)
 
 
 func _on_locale_changed(_locale: String) -> void:
 	_refresh_shell_locale()
-	_dirty = true
-	call_deferred("_rebuild_active_page")
+	_request_active_page_refresh(true)
 
 
 func _refresh_shell_locale() -> void:

@@ -934,6 +934,17 @@ func _verify_shipyard_queue_actions() -> void:
 func _verify_ship_module_install_and_cancel_actions() -> void:
 	var scenario_id := "open_deep"
 	_check(_activate_scenario(scenario_id), "%s activates for a normal Ship-module installation refit" % scenario_id)
+	# The renderer now consumes the same full-loadout availability query as the
+	# command. Fund the invariant-valid scenario before creating the UI so the
+	# visible Remove control is authoritatively enabled.
+	var reinstall_target := _removable_reinstall_target()
+	var ship_id := String(reinstall_target.get("shipId", ""))
+	var module_id := String(reinstall_target.get("moduleId", ""))
+	var setup_desired := Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id))
+	var setup_remove_index := setup_desired.find(module_id)
+	if setup_remove_index >= 0:
+		setup_desired.remove_at(setup_remove_index)
+	_fund_ship_refit_setup(ship_id, setup_desired)
 	await _spawn_main()
 	_check(await _press_named("Navigation_ships"), "Ships is reachable for module installation")
 	var roster_tab := main.find_child("FleetSection_roster", true, false) as Button
@@ -943,16 +954,8 @@ func _verify_ship_module_install_and_cancel_actions() -> void:
 	# The legal checkpoint's commissioned hulls are all full. Form an empty slot
 	# through the public Remove control and normal refit completion; no ship,
 	# module, project or status field is assigned by the test.
-	var reinstall_target := _removable_reinstall_target()
-	var ship_id := String(reinstall_target.get("shipId", ""))
-	var module_id := String(reinstall_target.get("moduleId", ""))
 	var setup_remove_control := "RemoveModule_%s_%s" % [ship_id, module_id]
 	var setup_remove_button := main.find_child(setup_remove_control, true, false) as Button
-	var setup_desired := Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id))
-	var setup_remove_index := setup_desired.find(module_id)
-	if setup_remove_index >= 0:
-		setup_desired.remove_at(setup_remove_index)
-	_fund_ship_refit_setup(ship_id, setup_desired)
 	if _button_usable(setup_remove_button):
 		setup_remove_button.pressed.emit()
 	var setup_refit := _active_refit_for_ship(ship_id)
@@ -1018,6 +1021,11 @@ func _verify_ship_module_remove_action() -> void:
 	var ship_id := "SHIP-004"
 	var module_id := "cargo_expansion"
 	_check(_activate_scenario(scenario_id), "%s reactivates for a normal Ship-module removal refit" % scenario_id)
+	var desired_modules := Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id))
+	var remove_index := desired_modules.find(module_id)
+	if remove_index >= 0:
+		desired_modules.remove_at(remove_index)
+	var funded_bom := _fund_ship_refit_setup(ship_id, desired_modules)
 	await _spawn_main()
 	_check(await _press_named("Navigation_ships"), "Ships is reachable for module removal")
 	var roster_tab := main.find_child("FleetSection_roster", true, false) as Button
@@ -1026,11 +1034,6 @@ func _verify_ship_module_remove_action() -> void:
 		await _settle_ui()
 	var control_name := "RemoveModule_%s_%s" % [ship_id, module_id]
 	var remove_button := main.find_child(control_name, true, false) as Button
-	var desired_modules := Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id))
-	var remove_index := desired_modules.find(module_id)
-	if remove_index >= 0:
-		desired_modules.remove_at(remove_index)
-	var funded_bom := _fund_ship_refit_setup(ship_id, desired_modules)
 	var result := await _double_submit_with_structured_rejection(remove_button, func() -> bool:
 		return _active_refit_matches(ship_id, desired_modules)
 	)

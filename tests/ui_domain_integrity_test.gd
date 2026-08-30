@@ -139,6 +139,10 @@ func _guard_canonical_loadout_candidates(main_source: String) -> void:
 	if body.is_empty():
 		return
 	_check(body.contains("ship_loadout_valid(") or body.contains("loadout_availability("), "replacement-module buttons must use the canonical complete-loadout validator/availability query")
+	var roster_body := _function_body(main_source, "_build_fleet_roster")
+	_check(roster_body.count("Game.ship_loadout_availability(") >= 4, "apply/replace/install/remove refit surfaces all consume the authoritative loadout availability query")
+	for control_prefix in ["ApplyShipLoadout_", "ReplaceModule_", "InstallModule_", "RemoveModule_"]:
+		_check(control_prefix in roster_body, "%s refit surface remains represented in the roster" % control_prefix)
 
 
 func _guard_single_guidance_authority(main_source: String) -> void:
