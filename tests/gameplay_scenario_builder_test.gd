@@ -7,7 +7,7 @@ func _ready() -> void:
 	var builder := Builder.new(Game.content)
 	var scenarios := builder.available_scenarios()
 	if OS.get_cmdline_user_args().has("--require-generated-scenarios"):
-		var required := ["establish_industry", "prototype_complete", "megastructure_phase_1", "megastructure_phase_5", "megastructure_phase_8"]
+		var required := ["establish_industry", "maintenance_backlog", "prototype_complete", "megastructure_phase_1", "megastructure_phase_5", "megastructure_phase_8"]
 		for scenario_id in required:
 			if scenario_id not in scenarios or builder.load_state(scenario_id) == null:
 				push_error("FAIL: missing or invalid generated Scenario: %s" % scenario_id)

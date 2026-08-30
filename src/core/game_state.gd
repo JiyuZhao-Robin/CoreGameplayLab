@@ -120,7 +120,7 @@ var next_ship_serial := 1
 var refit_projects: Array = []
 var ship_service_projects: Array = []
 var naval_archive: Array = []
-var fleet_maintenance := {"fractional":{}, "debt":{}, "coverage":{}}
+var fleet_maintenance := {"fractional":{}, "debt":{}, "coverage":{}, "consumption_totals":{}}
 var fleet_logistics := {
 	"expedition":{
 		"command_capacity":100,
@@ -466,6 +466,7 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 			}
 	state._enforce_unique_ships()
 	state._normalize_ship_assignments()
+	state._reconcile_fleet_maintenance()
 	state._normalize_activity_fleets()
 	state._normalize_location_ownership()
 	return state
@@ -1215,6 +1216,13 @@ func ship_is_docked(instance_id: String) -> bool:
 	return not ship.is_empty() and ship.get("status", "") == "DOCKED" and ship.get("condition", "") == "OPERATIONAL" and str(ship.get("maintenance_state", "ACTIVE")) != "MOTHBALLED"
 
 
+func ship_is_deployment_ready(instance_id: String) -> bool:
+	var ship := ship_by_id(instance_id)
+	return ship_is_docked(instance_id) \
+		and str(ship.get("maintenance_state", "ACTIVE")) == "ACTIVE" \
+		and float(ship.get("maintenance_coverage", 1.0)) > 0.0
+
+
 func ship_is_unassigned_docked(instance_id: String) -> bool:
 	var ship := ship_by_id(instance_id)
 	return ship_is_docked(instance_id) and ship.get("assignment", {}).is_empty()
@@ -1559,7 +1567,7 @@ static func _normalized_ship_service_projects(source: Array) -> Array:
 
 
 static func _normalized_fleet_maintenance(source: Dictionary) -> Dictionary:
-	var result := {"fractional":{}, "debt":{}, "coverage":{}}
+	var result := {"fractional":{}, "debt":{}, "coverage":{}, "consumption_totals":{}}
 	for key in result:
 		if source.get(key, null) is Dictionary:
 			result[key] = source[key].duplicate(true)
@@ -1844,6 +1852,26 @@ func _normalize_ship_assignments() -> void:
 		var service_record: Dictionary = ship.get("service_record", {})
 		service_record.merge({"extraction_cycles":0, "combat_deployments":0, "discoveries":0, "victories":0, "defeats":0, "damage_dealt":0.0, "combat_experience":0.0}, false)
 		ship["service_record"] = service_record
+
+
+func _reconcile_fleet_maintenance() -> void:
+	var debts: Dictionary = fleet_maintenance.get("debt", {})
+	var coverage: Dictionary = fleet_maintenance.get("coverage", {})
+	for ship_value in ships:
+		var ship := ship_value as Dictionary
+		var ship_id := str(ship.get("instance_id", ""))
+		if ship_id.is_empty():
+			continue
+		# Older saves could carry one side of this mirrored UI/cache field only.
+		# Preserve the larger liability so migration can never erase real debt.
+		var canonical_debt := maxf(maxf(0.0, float(debts.get(ship_id, 0.0))), maxf(0.0, float(ship.get("maintenance_debt", 0.0))))
+		debts[ship_id] = canonical_debt
+		ship["maintenance_debt"] = canonical_debt
+		var canonical_coverage := clampf(float(coverage.get(ship_id, ship.get("maintenance_coverage", 1.0))), 0.0, 1.0)
+		coverage[ship_id] = canonical_coverage
+		ship["maintenance_coverage"] = canonical_coverage
+	fleet_maintenance["debt"] = debts
+	fleet_maintenance["coverage"] = coverage
 
 
 func _normalize_activity_fleets() -> void:

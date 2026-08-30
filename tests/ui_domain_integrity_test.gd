@@ -168,7 +168,7 @@ func _guard_full_gameplay_harness() -> void:
 		_check(simulation_mutation.search(line) == null, "%s:%d must not advance or mutate Simulation directly" % [FULL_GAMEPLAY_HARNESS_PATH, line_index + 1])
 		for call_match in direct_game_call.search_all(line):
 			var method_name := call_match.get_string(1)
-			_check(method_name in ["get", "can_start_activity", "is_processing"], "%s:%d must not call gameplay command Game.%s directly" % [FULL_GAMEPLAY_HARNESS_PATH, line_index + 1, method_name])
+			_check(method_name in ["get", "can_start_activity", "extraction_operation_availability", "is_processing"], "%s:%d must not call gameplay command Game.%s directly" % [FULL_GAMEPLAY_HARNESS_PATH, line_index + 1, method_name])
 
 
 func _function_body(source: String, function_name: String) -> String:

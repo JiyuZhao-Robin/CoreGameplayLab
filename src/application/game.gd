@@ -244,21 +244,37 @@ func scrap_ship(instance_id: String) -> bool:
 	return true
 
 
-func set_ship_fleet_assignment(instance_id: String, domain_id: String) -> bool:
+func ship_fleet_assignment_availability(instance_id: String, domain_id: String) -> Dictionary:
 	if domain_id not in ["", "mining", "expedition"]:
-		return _reject(I18n.t("notice.ship_assignment_unknown", "Unknown ship assignment"))
+		return {"allowed":false, "reason_code":"UNKNOWN_ASSIGNMENT", "reason":I18n.t("notice.ship_assignment_unknown", "Unknown ship assignment")}
 	var ship: Dictionary = state.ship_by_id(instance_id)
 	if ship.is_empty():
-		return _reject(I18n.t("notice.ship_missing", "Ship instance was not found"))
+		return {"allowed":false, "reason_code":"SHIP_MISSING", "reason":I18n.t("notice.ship_missing", "Ship instance was not found")}
 	if not state.ship_is_docked(instance_id):
-		return _reject(I18n.t("notice.ship_assignment_locked", "The ship must be operational and docked before changing assignment"))
+		return {"allowed":false, "reason_code":"SHIP_NOT_DOCKED", "reason":I18n.t("notice.ship_assignment_locked", "The ship must be operational and docked before changing assignment")}
 	if not domain_id.is_empty() and (str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" or float(ship.get("maintenance_coverage", 1.0)) <= 0.0):
-		return _reject(I18n.t("notice.fleet_ship_maintenance_required", "Only a fully maintained active ship can join an operational fleet"))
+		return {"allowed":false, "reason_code":"MAINTENANCE_REQUIRED", "reason":I18n.t("notice.fleet_ship_maintenance_required", "Only a fully maintained active ship can join an operational fleet")}
+	var current_domain := state.ship_fleet_domain(instance_id)
+	if current_domain == domain_id:
+		return {"allowed":true, "reason_code":"ALREADY_ASSIGNED", "reason":""}
+	if (current_domain == "expedition" and fleet_is_active("expedition")) or (domain_id == "expedition" and fleet_is_active("expedition")):
+		return {"allowed":false, "reason_code":"FLEET_ACTIVE", "reason":I18n.t("notice.fleet_active", "Recall or stop the active fleet before changing its roster")}
+	if domain_id == "expedition":
+		var projected_roster := state.fleet_ship_ids("expedition")
+		projected_roster.erase(instance_id)
+		projected_roster.append(instance_id)
+		if simulation.fleet_command_usage(state, projected_roster) > simulation.fleet_command_capacity(state):
+			return {"allowed":false, "reason_code":"COMMAND_CAPACITY", "reason":I18n.t("notice.command_capacity", "Fleet Command Capacity would be exceeded")}
+	return {"allowed":true, "reason_code":"READY", "reason":""}
+
+
+func set_ship_fleet_assignment(instance_id: String, domain_id: String) -> bool:
+	var availability := ship_fleet_assignment_availability(instance_id, domain_id)
+	if not bool(availability.get("allowed", false)):
+		return _reject(str(availability.get("reason", I18n.t("notice.ship_assignment_unknown", "Unknown ship assignment"))))
 	var current_domain := state.ship_fleet_domain(instance_id)
 	if current_domain == domain_id:
 		return true
-	if (current_domain == "expedition" and fleet_is_active("expedition")) or (domain_id == "expedition" and fleet_is_active("expedition")):
-		return _reject(I18n.t("notice.fleet_active", "Recall or stop the active fleet before changing its roster"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	for candidate_domain in ["mining", "expedition"]:
 		var roster := transaction.working_state.fleet_ship_ids(candidate_domain)
@@ -267,8 +283,6 @@ func set_ship_fleet_assignment(instance_id: String, domain_id: String) -> bool:
 	if not domain_id.is_empty():
 		var target_roster := transaction.working_state.fleet_ship_ids(domain_id)
 		target_roster.append(instance_id)
-		if domain_id == "expedition" and simulation.fleet_command_usage(transaction.working_state, target_roster) > simulation.fleet_command_capacity(transaction.working_state):
-			return _reject(I18n.t("notice.command_capacity", "Fleet Command Capacity would be exceeded"))
 		transaction.working_state.set_fleet_ship_ids(domain_id, target_roster)
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
 	working_ship["assignment"] = {} if domain_id.is_empty() else {"domain":domain_id, "fleet":"default"}
@@ -389,17 +403,10 @@ func auto_resupply_fleet(fleet_id: String = "expedition", ship_ids: Array = []) 
 
 func start_survey_mission(target_location_id: String, target_state: String, ship_ids: Array = [], origin_location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> bool:
 	simulation.ensure_frontier_state(state)
-	var selected := ship_ids.duplicate()
-	var capability := str(content.survey_rules.get("required_capabilities", {}).get(target_state, ""))
-	if selected.is_empty():
-		for ship_value in state.ships:
-			var ship := ship_value as Dictionary
-			var ship_id := str(ship.get("instance_id", ""))
-			if state.ship_is_docked(ship_id) and str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) == origin_location_id and simulation.capability_value_for_ships(state, capability, [ship_id]) >= 1.0:
-				selected.append(ship_id)
-				break
-	if selected.is_empty():
-		return _reject(I18n.t("notice.survey_vessel_required", "A docked survey vessel with the required survey module is required"))
+	var availability := survey_mission_availability(target_location_id, target_state, ship_ids, origin_location_id)
+	if not bool(availability.get("allowed", false)):
+		return _reject(I18n.t("notice.survey_mission_blocked", "The survey mission cannot start; verify survey state, vessel capability, fuel and maintenance supplies"))
+	var selected: Array = availability.get("selected_ship_ids", []).duplicate()
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	if not simulation.start_survey_mission(transaction.working_state, target_location_id, target_state, selected, origin_location_id):
 		return _reject(I18n.t("notice.survey_mission_blocked", "The survey mission cannot start; verify survey state, vessel capability, fuel and maintenance supplies"))
@@ -423,6 +430,104 @@ func _auto_resupply_state(working: SpaceGameState, fleet_id: String, ship_ids: A
 		available_space -= transfer
 
 
+func _auto_select_extraction_ship(working: SpaceGameState, activity: Dictionary) -> Dictionary:
+	var has_mining_fleet_ship := false
+	var has_extraction_equipment := false
+	var has_site_capable_ship := false
+	var has_maintained_site_capable_ship := false
+	var has_available_site_capable_ship := false
+	var active_ids := simulation.active_extraction_ship_ids(working)
+	for ship_id_value in working.fleet_ship_ids("mining"):
+		var ship_id := str(ship_id_value)
+		var candidate_ids := [ship_id]
+		var ship: Dictionary = working.ship_by_id(ship_id)
+		has_mining_fleet_ship = true
+		# Equipment identity and operational output are deliberately separate.
+		# Mining output is maintenance-weighted, so using it to detect a fitted
+		# drill misreports a service-starved miner as having no equipment.
+		if ship.is_empty() or simulation.ship_loadout_capability_value(working, ship, "mining") <= 0.0:
+			continue
+		has_extraction_equipment = true
+		if not simulation.activity_requirements_met_for_ships(working, activity, candidate_ids):
+			continue
+		has_site_capable_ship = true
+		if str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" or float(ship.get("maintenance_coverage", 1.0)) <= 0.0:
+			continue
+		has_maintained_site_capable_ship = true
+		if not working.ship_is_docked(ship_id):
+			continue
+		has_available_site_capable_ship = true
+		if simulation.extraction_command_usage(working, active_ids + candidate_ids) > simulation.extraction_command_capacity(working):
+			continue
+		return {"ship_id":ship_id, "reason_code":"READY"}
+	if not has_mining_fleet_ship or not has_extraction_equipment:
+		return {"ship_id":"", "reason_code":"SHIP_REQUIRED"}
+	if not has_site_capable_ship:
+		return {"ship_id":"", "reason_code":"SHIP_REQUIREMENTS"}
+	if not has_maintained_site_capable_ship:
+		return {"ship_id":"", "reason_code":"MAINTENANCE_REQUIRED"}
+	if not has_available_site_capable_ship:
+		return {"ship_id":"", "reason_code":"SHIP_UNAVAILABLE"}
+	return {"ship_id":"", "reason_code":"COMMAND_CAPACITY"}
+
+
+func _extraction_selection_reason(reason_code: String) -> String:
+	match reason_code:
+		"MAINTENANCE_REQUIRED":
+			return I18n.t("notice.fleet_ship_maintenance_required", "Only a fully maintained active ship can join an operational fleet")
+		"SHIP_REQUIREMENTS":
+			return I18n.t("notice.extraction_ship_requirements", "Each selected ship must satisfy the site's deterministic operating requirements")
+		"SHIP_UNAVAILABLE", "SHIP_WRONG_FLEET":
+			return I18n.t("notice.extraction_ship_unavailable", "Every selected ship must be operational, available and fitted with extraction equipment")
+		"COMMAND_CAPACITY":
+			return I18n.t("notice.extraction_command_capacity", "Extraction Command Capacity would be exceeded")
+	return I18n.t("notice.extraction_ship_required", "Choose at least one operational ship fitted with extraction equipment")
+
+
+func _extraction_operation_availability_for_state(working: SpaceGameState, site_id: String, ship_ids: Array = []) -> Dictionary:
+	if not working.mining_site_available(site_id):
+		return {"allowed":false, "reason_code":"MINING_SITE_UNAVAILABLE", "reason":I18n.t("notice.mining_site_unavailable", "This permanent mining site is unavailable"), "selected_ship_ids":[]}
+	var activity: Dictionary = content.get_mining_activity_for_site(site_id)
+	if activity.is_empty() or not simulation.activity_available(working, activity):
+		return {"allowed":false, "reason_code":"INVALID_MINING_SITE", "reason":I18n.t("notice.invalid_mining_site", "This permanent mining site is not available"), "selected_ship_ids":[]}
+	var selected: Array = ship_ids.duplicate()
+	if selected.is_empty():
+		var auto_selection := _auto_select_extraction_ship(working, activity)
+		var auto_ship_id := str(auto_selection.get("ship_id", ""))
+		if auto_ship_id.is_empty():
+			var auto_reason_code := str(auto_selection.get("reason_code", "SHIP_REQUIRED"))
+			return {"allowed":false, "reason_code":auto_reason_code, "reason":_extraction_selection_reason(auto_reason_code), "selected_ship_ids":[]}
+		selected = [auto_ship_id]
+	var unique_selected: Array = []
+	for ship_id_value in selected:
+		var ship_id := str(ship_id_value)
+		var ship: Dictionary = working.ship_by_id(ship_id)
+		if unique_selected.has(ship_id):
+			continue
+		if working.ship_fleet_domain(ship_id) != "mining":
+			return {"allowed":false, "reason_code":"SHIP_WRONG_FLEET", "reason":_extraction_selection_reason("SHIP_WRONG_FLEET"), "selected_ship_ids":[]}
+		if ship.is_empty() or simulation.ship_loadout_capability_value(working, ship, "mining") <= 0.0:
+			return {"allowed":false, "reason_code":"SHIP_REQUIRED", "reason":_extraction_selection_reason("SHIP_REQUIRED"), "selected_ship_ids":[]}
+		if not simulation.activity_requirements_met_for_ships(working, activity, [ship_id]):
+			return {"allowed":false, "reason_code":"SHIP_REQUIREMENTS", "reason":_extraction_selection_reason("SHIP_REQUIREMENTS"), "selected_ship_ids":[]}
+		if str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" or float(ship.get("maintenance_coverage", 1.0)) <= 0.0:
+			return {"allowed":false, "reason_code":"MAINTENANCE_REQUIRED", "reason":_extraction_selection_reason("MAINTENANCE_REQUIRED"), "selected_ship_ids":[]}
+		if not working.ship_is_docked(ship_id):
+			return {"allowed":false, "reason_code":"SHIP_UNAVAILABLE", "reason":_extraction_selection_reason("SHIP_UNAVAILABLE"), "selected_ship_ids":[]}
+		unique_selected.append(ship_id)
+	var projected_ids := simulation.active_extraction_ship_ids(working).duplicate()
+	for ship_id_value in unique_selected:
+		if not projected_ids.has(ship_id_value):
+			projected_ids.append(ship_id_value)
+	if simulation.extraction_command_usage(working, projected_ids) > simulation.extraction_command_capacity(working):
+		return {"allowed":false, "reason_code":"COMMAND_CAPACITY", "reason":_extraction_selection_reason("COMMAND_CAPACITY"), "selected_ship_ids":[]}
+	return {"allowed":true, "reason_code":"READY", "reason":"", "selected_ship_ids":unique_selected, "activity_id":str(activity.get("id", "")), "site_id":site_id}
+
+
+func extraction_operation_availability(site_id: String, ship_ids: Array = []) -> Dictionary:
+	return _extraction_operation_availability_for_state(state, site_id, ship_ids)
+
+
 func start_extraction_operation(site_id: String, ship_ids: Array = [], preferred_slot: int = -1) -> bool:
 	simulation.ensure_frontier_state(state)
 	if not state.mining_site_available(site_id):
@@ -433,31 +538,10 @@ func start_extraction_operation(site_id: String, ship_ids: Array = [], preferred
 	var activity := content.get_mining_activity_for_site(site_id)
 	if activity.is_empty() or not simulation.activity_available(state, activity):
 		return _reject(I18n.t("notice.invalid_mining_site", "This permanent mining site is not available"))
-	var selected: Array = ship_ids.duplicate()
-	if selected.is_empty():
-		for ship_id in state.fleet_ship_ids("mining"):
-			if state.ship_is_docked(str(ship_id)):
-				selected = [str(ship_id)]
-				break
-	if selected.is_empty():
-		return _reject(I18n.t("notice.extraction_ship_required", "Choose at least one operational ship fitted with extraction equipment"))
-	var unique_selected: Array = []
-	for ship_id in selected:
-		var id := str(ship_id)
-		if unique_selected.has(id):
-			continue
-		if not state.ship_is_docked(id) or simulation.mining_power(state, [id]) <= 0.0:
-			return _reject(I18n.t("notice.extraction_ship_unavailable", "Every selected ship must be operational, available and fitted with extraction equipment"))
-		for requirement in activity.get("requirements", []):
-			if requirement.get("type", "") == "capability" and simulation.capability_value_for_ships(state, str(requirement.get("id", "")), [id]) < float(requirement.get("value", 1)):
-				return _reject(I18n.t("notice.requirements", "Each selected ship must satisfy the site's deterministic operating requirements"))
-		unique_selected.append(id)
-	selected = unique_selected
-	var active_ids := simulation.active_extraction_ship_ids(state)
-	var command_candidate := active_ids.duplicate()
-	command_candidate.append_array(selected)
-	if simulation.extraction_command_usage(state, command_candidate) > simulation.extraction_command_capacity(state):
-		return _reject(I18n.t("notice.extraction_command_capacity", "Extraction Command Capacity would be exceeded"))
+	var availability := extraction_operation_availability(site_id, ship_ids)
+	if not bool(availability.get("allowed", false)):
+		return _reject(str(availability.get("reason", _extraction_selection_reason(str(availability.get("reason_code", "SHIP_REQUIRED"))))))
+	var selected: Array = availability.get("selected_ship_ids", []).duplicate()
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var runtime: Dictionary = {}
 	for operation in transaction.working_state.mining_operations:
@@ -1176,20 +1260,35 @@ func survey_mission_availability(target_location_id: String, target_state: Strin
 		if not simulation.survey_target_accessible(state, target_location_id):
 			blockers.append({"code":"ROUTE_UNAVAILABLE", "location_id":target_location_id})
 	var capability := str(content.survey_rules.get("required_capabilities", {}).get(target_state, ""))
+	var inactive_candidate: Dictionary = {}
 	if selected.is_empty():
 		for ship_value in state.ships:
 			var ship := ship_value as Dictionary
 			var ship_id := str(ship.get("instance_id", ""))
-			if state.ship_is_docked(ship_id) and str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) == origin_location_id and simulation.capability_value_for_ships(state, capability, [ship_id]) >= 1.0:
+			if not state.ship_is_docked(ship_id) or str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != origin_location_id or simulation.capability_value_for_ships(state, capability, [ship_id]) < 1.0:
+				continue
+			if state.ship_is_deployment_ready(ship_id):
 				selected.append(ship_id)
 				break
+			if inactive_candidate.is_empty():
+				inactive_candidate = ship
 	if selected.is_empty():
-		blockers.append({"code":"SURVEY_VESSEL_REQUIRED", "capability":capability})
+		if not inactive_candidate.is_empty():
+			blockers.append({
+				"code":"SURVEY_VESSEL_UNAVAILABLE",
+				"ship_id":str(inactive_candidate.get("instance_id", "")),
+				"capability":capability,
+				"maintenance_state":str(inactive_candidate.get("maintenance_state", "ACTIVE")),
+				"maintenance_coverage":float(inactive_candidate.get("maintenance_coverage", 1.0))
+			})
+		else:
+			blockers.append({"code":"SURVEY_VESSEL_REQUIRED", "capability":capability})
 	else:
 		for ship_id_value in selected:
 			var ship_id := str(ship_id_value)
-			if not state.ship_is_docked(ship_id) or str(state.ship_by_id(ship_id).get("location_id", "")) != origin_location_id or simulation.capability_value_for_ships(state, capability, [ship_id]) < 1.0:
-				blockers.append({"code":"SURVEY_VESSEL_UNAVAILABLE", "ship_id":ship_id, "capability":capability})
+			var ship := state.ship_by_id(ship_id)
+			if not state.ship_is_deployment_ready(ship_id) or str(ship.get("location_id", "")) != origin_location_id or simulation.capability_value_for_ships(state, capability, [ship_id]) < 1.0:
+				blockers.append({"code":"SURVEY_VESSEL_UNAVAILABLE", "ship_id":ship_id, "capability":capability, "maintenance_state":str(ship.get("maintenance_state", "ACTIVE")), "maintenance_coverage":float(ship.get("maintenance_coverage", 0.0))})
 	var costs := simulation.survey_mission_costs(target_state)
 	for item_id_value in costs.keys():
 		var item_id := str(item_id_value)
@@ -1642,7 +1741,7 @@ func start_expedition_route(route_id: String, ship_ids: Array = []) -> bool:
 		return _reject(I18n.t("notice.expedition_fleet_empty", "Assign ships to the Expedition Fleet at Starport first"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	for ship_id in selected:
-		if not transaction.working_state.ship_is_docked(str(ship_id)) or transaction.working_state.ship_fleet_domain(str(ship_id)) != "expedition":
+		if not transaction.working_state.ship_is_deployment_ready(str(ship_id)) or transaction.working_state.ship_fleet_domain(str(ship_id)) != "expedition":
 			return _reject(I18n.t("notice.expedition_fleet_unavailable", "Every Expedition Fleet ship must be operational and docked"))
 	if simulation.fleet_command_usage(transaction.working_state, selected) > simulation.fleet_command_capacity(transaction.working_state):
 		return _reject(I18n.t("notice.command_capacity", "Fleet Command Capacity would be exceeded"))
@@ -1918,16 +2017,7 @@ func can_start_activity(domain_id: String, activity: Dictionary) -> bool:
 		return false
 	match domain_id:
 		"mining":
-			if not state.mining_site_available(str(activity.get("site", ""))):
-				return false
-			for ship_id in state.fleet_ship_ids("mining"):
-				if (
-					state.ship_is_docked(str(ship_id))
-					and simulation.mining_power(state, [ship_id]) > 0.0
-					and simulation.extraction_command_usage(state, simulation.active_extraction_ship_ids(state) + [ship_id]) <= simulation.extraction_command_capacity(state)
-				):
-					return true
-			return false
+			return bool(extraction_operation_availability(str(activity.get("site", ""))).get("allowed", false))
 		"industry":
 			var facility_id := str(activity.get("facility", ""))
 			var runtime := simulation.industry_runtime_for_facility(state, facility_id)
@@ -2257,11 +2347,13 @@ func blocker_info(raw_blocker: Dictionary) -> Dictionary:
 	var location_id := str(raw_blocker.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
 	var item_id := str(raw_blocker.get("item_id", ""))
 	var entity_id := str(raw_blocker.get("project_id", raw_blocker.get("activity_id", raw_blocker.get("route_id", raw_blocker.get("facility_id", "")))))
+	if domain_id == "logistics" and not str(raw_blocker.get("route_id", "")).is_empty():
+		entity_id = str(raw_blocker.get("route_id", ""))
 	var target_screen := "industry"
-	if not item_id.is_empty():
-		target_screen = "inventory"
-	elif code in ["ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED"]:
+	if code in ["ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED"]:
 		target_screen = "logistics"
+	elif not item_id.is_empty():
+		target_screen = "inventory"
 	elif code in ["CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL", "MISSING_CAPITAL_GOOD"]:
 		target_screen = "construction"
 	elif code in ["POWER_SHORTAGE", "COOLING_SHORTAGE", "MAINTENANCE_SHORTAGE", "STORAGE_FULL"]:
@@ -2289,8 +2381,12 @@ func blocker_info(raw_blocker: Dictionary) -> Dictionary:
 		"current_value":raw_blocker.get("available", 0),
 		"required_value":raw_blocker.get("required", 0),
 		"incoming_value":raw_blocker.get("incoming", 0),
+		"freight_class":raw_blocker.get("freight_class", ""),
+		"route_id":raw_blocker.get("route_id", ""),
+		"transport_mode_id":raw_blocker.get("transport_mode_id", ""),
+		"supported_freight_classes":raw_blocker.get("supported_freight_classes", []).duplicate() if raw_blocker.get("supported_freight_classes", null) is Array else [],
 		"upstream_cause":upstream,
-		"navigation_target":{"screen":target_screen, "location_id":location_id, "entity_id":entity_id, "item_id":item_id},
+		"navigation_target":raw_blocker.get("navigation_target", {"screen":target_screen, "location_id":location_id, "entity_id":entity_id, "item_id":item_id}).duplicate(true),
 		"raw":raw_blocker.duplicate(true)
 	}
 
@@ -2325,6 +2421,9 @@ func _append_blocker(target: Array[Dictionary], blocker: Dictionary, location_fi
 func _blocker_upstream_cause(location_id: String, item_id: String) -> Dictionary:
 	if item_id.is_empty():
 		return {}
+	var transport_mode_blocker: Dictionary = simulation.logistics.demand_transport_mode_blocker(state, location_id, item_id)
+	if not transport_mode_blocker.is_empty():
+		return transport_mode_blocker
 	for route_value in content.logistics_routes.values():
 		var route := route_value as Dictionary
 		if str(route.get("to", "")) != location_id:
@@ -2504,14 +2603,11 @@ func _start_mining(working: SpaceGameState, activity: Dictionary) -> bool:
 	var site_id := str(activity.get("site", ""))
 	if not working.mining_site_available(site_id):
 		return _reject(I18n.t("notice.mining_site_unavailable", "This permanent mining site is unavailable"))
-	var selected_ship_id := ""
-	for ship_id in working.fleet_ship_ids("mining"):
-		var candidate_ids := simulation.active_extraction_ship_ids(working) + [ship_id]
-		if working.ship_is_docked(str(ship_id)) and simulation.mining_power(working, [ship_id]) > 0.0 and simulation.extraction_command_usage(working, candidate_ids) <= simulation.extraction_command_capacity(working):
-			selected_ship_id = str(ship_id)
-			break
-	if selected_ship_id.is_empty():
-		return _reject(I18n.t("notice.extraction_ship_required", "Assign an available ship with extraction equipment within Command Capacity"))
+	var availability := _extraction_operation_availability_for_state(working, site_id)
+	var selected_ids: Array = availability.get("selected_ship_ids", [])
+	if not bool(availability.get("allowed", false)) or selected_ids.is_empty():
+		return _reject(str(availability.get("reason", _extraction_selection_reason(str(availability.get("reason_code", "SHIP_REQUIRED"))))))
+	var selected_ship_id := str(selected_ids[0])
 	var runtime: Dictionary = {}
 	for operation in working.mining_operations:
 		if str(operation.get("status", "IDLE")) == "RUNNING" and str(operation.get("site_id", "")) == site_id:
@@ -2564,7 +2660,7 @@ func _start_expedition(working: SpaceGameState, activity: Dictionary) -> bool:
 	if ship_ids.is_empty():
 		return _reject(I18n.t("notice.expedition_fleet_empty", "Assign ships to the Expedition Fleet at Starport first"))
 	for ship_id in ship_ids:
-		if not working.ship_is_docked(str(ship_id)):
+		if not working.ship_is_deployment_ready(str(ship_id)):
 			return _reject(I18n.t("notice.expedition_fleet_unavailable", "Every Expedition Fleet ship must be operational and docked"))
 	if simulation.fleet_command_usage(working, ship_ids) > simulation.fleet_command_capacity(working):
 		return _reject(I18n.t("notice.command_capacity", "Fleet Command Capacity would be exceeded"))

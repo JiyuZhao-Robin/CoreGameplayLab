@@ -47,6 +47,8 @@ func _run_golden_path() -> void:
 	var pathfinder_id := _ship_id("lunar_pathfinder")
 	_route("asteroid_route", [pathfinder_id])
 	_snapshot("reach_asteroid")
+	_emit_maintenance_backlog_scenario()
+	if _failed(): return
 	# Build a visible O&M buffer before the fleet and remote industry expand. This
 	# prevents long R&D/material campaigns from silently grounding every extractor.
 	_ensure_item("repair_material", 1000)
@@ -163,7 +165,16 @@ func _ensure_item(item_id: String, target_quantity: int) -> void:
 	var producer := _available_industry_producer(item_id)
 	if producer.is_empty():
 		production_stack.pop_back()
-		_fail("no currently executable deterministic producer for %s (need %d, have %d)" % [item_id, target_quantity, Game.state.item_quantity(item_id, MAIN_LOCATION)])
+		_fail("no currently executable deterministic producer for %s (need %d, have %d, player_reserve=%d, research=%d, industry=%d, construction=%d, shipyard=%d)" % [
+			item_id,
+			target_quantity,
+			Game.state.item_quantity(item_id, MAIN_LOCATION),
+			int(Game.state.location_reserves(MAIN_LOCATION).get(item_id, 0)),
+			Game.state.research_committed_quantity(item_id, MAIN_LOCATION),
+			Game.state.industrial_committed_quantity(item_id, -1, MAIN_LOCATION),
+			Game.state.construction_committed_quantity(item_id, -1, MAIN_LOCATION),
+			Game.state.shipyard_committed_quantity(item_id, "", MAIN_LOCATION),
+		])
 		return
 	var reward_quantity := maxi(1, _entry_amount(producer.get("rewards", []), item_id))
 	for _attempt in 8:
@@ -430,7 +441,16 @@ func _research(project_id: String) -> void:
 		if stage.is_empty():
 			_advance(1.0)
 			continue
+		var observed_stage_id := str(stage.get("id", ""))
 		_capture_research_state_scenario()
+		# Capturing a real state scenario advances simulation. That boundary can
+		# complete the program or move to the next stage, so never act on the stale
+		# stage snapshot captured before the advance.
+		if bool(Game.state.completed_projects.get(project_id, false)):
+			break
+		if str(Game.state.research.get("project_id", "")) != project_id \
+				or str(Game.state.research.get("stage_id", "")) != observed_stage_id:
+			continue
 		for requirement_value in stage.get("requirements", []):
 			var requirement := requirement_value as Dictionary
 			if Game.simulation.requirement_met(Game.state, requirement):
@@ -492,6 +512,9 @@ func _develop_ship(project_id: String) -> void:
 		var item_id := str(fixed.get("item", ""))
 		ship_costs[item_id] = int(ship_costs.get(item_id, 0)) + int(fixed.get("quantity", 0))
 	_ensure_costs(ship_costs)
+	if not Game.state.owns_ship_model(ship_model) and Game.simulation.shipyard_queue_index(Game.state, plan_id) < 0:
+		if not _command(Game.enqueue_unlocked_ship_plan(plan_id), "explicitly queue researched Shipyard plan %s" % plan_id):
+			return
 	if Game.simulation.shipyard_queue_index(Game.state, plan_id) > 0:
 		_command(Game.move_shipyard_project(plan_id, 0), "prioritize required Shipyard plan %s" % plan_id)
 	for _attempt in 5:
@@ -920,6 +943,66 @@ func _emit_scenario(scenario_id: String) -> void:
 	print("SCENARIO_SAVED: res://artifacts/ui-scenarios/%s.json" % scenario_id)
 
 
+func _emit_maintenance_backlog_scenario() -> void:
+	if not OS.get_cmdline_user_args().has("--emit-scenarios"):
+		return
+	# Derive a focused checkpoint from the invariant-valid reach_asteroid state
+	# without perturbing the Golden Path that follows. The branch starts from a
+	# normal serialize/deserialize boundary; every subsequent state transition is
+	# an ordinary Domain command or Simulation advance.
+	var original_state := Game.state
+	var derived_state := SpaceGameState.from_dictionary(
+		original_state.to_dictionary(),
+		Game.content.domains.keys(),
+		Game.content.regions
+	)
+	if derived_state == null:
+		_fail("maintenance backlog Scenario could not clone the valid reach_asteroid checkpoint")
+		return
+	Game.state = derived_state
+	Game.simulation.ensure_frontier_state(Game.state)
+	Game.simulation.refresh_location_summaries(Game.state)
+
+	var formation_error := ""
+	if not Game.integrate_mining_site("earth_resource_cluster_prospect", "earth_extraction_network"):
+		formation_error = "maintenance backlog Scenario could not integrate the eligible Earth extraction site"
+	else:
+		# No Repair Material recipe may mask the natural liability formation. Stop
+		# through the same Domain command used by the player-facing Industry control;
+		# never assign a runtime status or inventory quantity in the fixture.
+		for slot in Game.state.industrial_operations.size():
+			var runtime: Dictionary = Game.state.industrial_operations[slot]
+			if str(runtime.get("status", "")) in ["RUNNING", "BLOCKED"]:
+				Game.stop_industry_operation(slot)
+		var formed := false
+		for _hour in 256:
+			Game.simulation.advance(Game.state, 60.0 * 60.0 * 1000.0)
+			var recovery := Game.simulation.maintenance_recovery_requirement(
+				Game.state,
+				MAIN_LOCATION,
+				"repair_material",
+				20,
+				0.0
+			)
+			if Game.state.available_item_quantity("repair_material", MAIN_LOCATION) == 0 \
+					and float(recovery.get("fleet_debt", 0.0)) >= 8.0:
+				formed = true
+				break
+		if not formed:
+			formation_error = "maintenance backlog Scenario did not form a real fleet liability within 256 simulated hours"
+		else:
+			_emit_scenario("maintenance_backlog")
+
+	# Restore the exact pre-branch Golden state. This pointer swap is a checkpoint
+	# boundary only; the emitted state itself was formed exclusively by the normal
+	# integration transaction and maintenance simulation above.
+	Game.state = original_state
+	Game.simulation.ensure_frontier_state(Game.state)
+	Game.simulation.refresh_location_summaries(Game.state)
+	if not formation_error.is_empty():
+		_fail(formation_error)
+
+
 func _requirements_complete(values: Array) -> bool:
 	for requirement_value in values:
 		if not Game.simulation.requirement_met(Game.state, requirement_value as Dictionary):
@@ -947,25 +1030,33 @@ func _ensure_costs(costs: Dictionary) -> void:
 
 func _ensure_research_stage_costs(costs: Dictionary) -> void:
 	if _failed(): return
+	var project_id := str(Game.state.research.get("project_id", ""))
+	var stage_id := str(Game.state.research.get("stage_id", ""))
 	for _attempt in 32:
+		# Producing a missing stage input also advances Research. It may complete or
+		# change the stage while this helper is manufacturing another input.
+		if project_id.is_empty() or bool(Game.state.completed_projects.get(project_id, false)) \
+				or str(Game.state.research.get("project_id", "")) != project_id \
+				or str(Game.state.research.get("stage_id", "")) != stage_id:
+			return
 		var complete := true
 		for item_id_value in costs.keys():
 			var item_id := str(item_id_value)
 			var required := int(costs[item_id_value])
-			# The active stage's own reservation is usable by that stage. Only other
-			# queues and player reserves reduce the stock available to this R&D gate.
-			var usable := (
-				Game.state.item_quantity(item_id, MAIN_LOCATION)
-				- int(Game.state.location_reserves(MAIN_LOCATION).get(item_id, 0))
-				- Game.state.industrial_committed_quantity(item_id, -1, MAIN_LOCATION)
-				- Game.state.construction_committed_quantity(item_id, -1, MAIN_LOCATION)
-				- Game.state.shipyard_committed_quantity(item_id, "", MAIN_LOCATION)
-			)
-			if usable >= required:
+			# Materials already consumed by the active stage are progress, not a new
+			# stock target. This matters for finite bootstrap rewards whose repeatable
+			# producer is unlocked by the research currently consuming them.
+			var outstanding := maxi(0, required - int(Game.state.research.get("stage_consumed", {}).get(item_id, 0)))
+			var usable := Game.state.available_item_quantity_for_research(item_id, MAIN_LOCATION)
+			if usable >= outstanding:
 				continue
 			complete = false
-			_ensure_item(item_id, Game.state.item_quantity(item_id, MAIN_LOCATION) + required - usable)
+			_ensure_item(item_id, Game.state.item_quantity(item_id, MAIN_LOCATION) + outstanding - usable)
 			if _failed(): return
+			if bool(Game.state.completed_projects.get(project_id, false)) \
+					or str(Game.state.research.get("project_id", "")) != project_id \
+					or str(Game.state.research.get("stage_id", "")) != stage_id:
+				return
 		if complete:
 			return
 	_fail("could not supply active R&D stage costs: %s" % str(costs))

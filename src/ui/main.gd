@@ -1228,7 +1228,11 @@ func _eligible_logistics_ship_ids(mode: Dictionary, service: Dictionary) -> Arra
 		var ship_id := String(ship.get("instance_id", ""))
 		var assignment: Dictionary = ship.get("assignment", {})
 		var belongs_here := String(assignment.get("domain", "")) == "logistics" and String(assignment.get("service_id", "")) == String(service.get("id", ""))
-		if (Game.state.ship_is_unassigned_docked(ship_id) or belongs_here) and Game.simulation.logistics.ship_eligible_for_mode(Game.state, ship_id, String(mode.get("id", ""))):
+		var lifecycle_ready := Game.state.ship_is_deployment_ready(ship_id) if not belongs_here else (
+			String(ship.get("condition", "")) == "OPERATIONAL" \
+			and String(ship.get("maintenance_state", "ACTIVE")) == "ACTIVE" \
+			and float(ship.get("maintenance_coverage", 1.0)) > 0.0)
+		if lifecycle_ready and (Game.state.ship_is_unassigned_docked(ship_id) or belongs_here) and Game.simulation.logistics.ship_eligible_for_mode(Game.state, ship_id, String(mode.get("id", ""))):
 			result.append(ship_id)
 	return result
 
@@ -2575,11 +2579,19 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		maintenance_row.add_theme_constant_override("v_separation", 6)
 		var maintenance_state := String(ship.get("maintenance_state", "ACTIVE"))
 		if maintenance_state == "MOTHBALLED":
-			maintenance_row.add_child(_button(I18n.core("ships.action.reactivate"), _command.bind(I18n.core("command.ships.reactivate"), Game.start_ship_reactivation.bind(ship_id)), String(ship.get("status", "")) != "DOCKED", COLOR_ACCENT))
+			var reactivate_button := _button(I18n.core("ships.action.reactivate"), _command.bind(I18n.core("command.ships.reactivate"), Game.start_ship_reactivation.bind(ship_id)), String(ship.get("status", "")) != "DOCKED", COLOR_ACCENT)
+			reactivate_button.name = "ReactivateShip_%s" % ship_id
+			maintenance_row.add_child(reactivate_button)
 		else:
-			maintenance_row.add_child(_button(I18n.core("status.ACTIVE"), _command.bind(I18n.core("command.ships.set_active"), Game.set_ship_maintenance_state.bind(ship_id, "ACTIVE")), maintenance_state == "ACTIVE" or String(ship.get("status", "")) != "DOCKED"))
-			maintenance_row.add_child(_button(I18n.core("status.READY_RESERVE"), _command.bind(I18n.core("command.ships.set_ready_reserve"), Game.set_ship_maintenance_state.bind(ship_id, "READY_RESERVE")), maintenance_state == "READY_RESERVE" or String(ship.get("status", "")) != "DOCKED"))
-			maintenance_row.add_child(_button(I18n.core("ships.action.mothball"), _command.bind(I18n.core("command.ships.mothball"), Game.set_ship_maintenance_state.bind(ship_id, "MOTHBALLED")), String(ship.get("status", "")) != "DOCKED", COLOR_WARN))
+			var active_button := _button(I18n.core("status.ACTIVE"), _command.bind(I18n.core("command.ships.set_active"), Game.set_ship_maintenance_state.bind(ship_id, "ACTIVE")), maintenance_state == "ACTIVE" or String(ship.get("status", "")) != "DOCKED")
+			active_button.name = "SetShipActive_%s" % ship_id
+			maintenance_row.add_child(active_button)
+			var reserve_button := _button(I18n.core("status.READY_RESERVE"), _command.bind(I18n.core("command.ships.set_ready_reserve"), Game.set_ship_maintenance_state.bind(ship_id, "READY_RESERVE")), maintenance_state == "READY_RESERVE" or String(ship.get("status", "")) != "DOCKED")
+			reserve_button.name = "SetShipReadyReserve_%s" % ship_id
+			maintenance_row.add_child(reserve_button)
+			var mothball_button := _button(I18n.core("ships.action.mothball"), _command.bind(I18n.core("command.ships.mothball"), Game.set_ship_maintenance_state.bind(ship_id, "MOTHBALLED")), String(ship.get("status", "")) != "DOCKED", COLOR_WARN)
+			mothball_button.name = "MothballShip_%s" % ship_id
+			maintenance_row.add_child(mothball_button)
 		card.add_child(maintenance_row)
 
 		card.add_child(_label(I18n.core("ships.roster.assignment"), 14, COLOR_ACCENT))
@@ -2587,17 +2599,20 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		assignment_row.add_theme_constant_override("h_separation", 6)
 		assignment_row.add_theme_constant_override("v_separation", 6)
 		var ship_not_docked := String(ship.get("status", "DOCKED")) != "DOCKED"
-		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_fleet_assignment.bind(ship_id, "")), ship_not_docked)
+		var standby_availability := Game.ship_fleet_assignment_availability(ship_id, "")
+		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_fleet_assignment.bind(ship_id, "")), not bool(standby_availability.get("allowed", false)))
 		standby_button.name = "AssignStandby_%s" % ship_id
-		if ship_not_docked: standby_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+		if standby_button.disabled: standby_button.tooltip_text = String(standby_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 		assignment_row.add_child(standby_button)
-		var mining_button := _button(I18n.core("ships.assignment.mining"), _command.bind(I18n.core("command.ships.assign_mining"), Game.set_ship_fleet_assignment.bind(ship_id, "mining")), ship_not_docked)
+		var mining_availability := Game.ship_fleet_assignment_availability(ship_id, "mining")
+		var mining_button := _button(I18n.core("ships.assignment.mining"), _command.bind(I18n.core("command.ships.assign_mining"), Game.set_ship_fleet_assignment.bind(ship_id, "mining")), not bool(mining_availability.get("allowed", false)))
 		mining_button.name = "AssignMining_%s" % ship_id
-		if ship_not_docked: mining_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+		if mining_button.disabled: mining_button.tooltip_text = String(mining_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 		assignment_row.add_child(mining_button)
-		var expedition_button := _button(I18n.core("ships.assignment.expedition"), _command.bind(I18n.core("command.ships.assign_expedition"), Game.set_ship_fleet_assignment.bind(ship_id, "expedition")), ship_not_docked)
+		var expedition_availability := Game.ship_fleet_assignment_availability(ship_id, "expedition")
+		var expedition_button := _button(I18n.core("ships.assignment.expedition"), _command.bind(I18n.core("command.ships.assign_expedition"), Game.set_ship_fleet_assignment.bind(ship_id, "expedition")), not bool(expedition_availability.get("allowed", false)))
 		expedition_button.name = "AssignExpedition_%s" % ship_id
-		if ship_not_docked: expedition_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+		if expedition_button.disabled: expedition_button.tooltip_text = String(expedition_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 		assignment_row.add_child(expedition_button)
 		var construction_assignment: Dictionary = ship.get("assignment", {})
 		if String(construction_assignment.get("type", "")) == "CONSTRUCTION_SUPPORT":
@@ -2606,7 +2621,7 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 			assignment_row.add_child(release_support)
 		elif Game.simulation.ship_loadout_capability_value(Game.state, ship, "construction_support") > 0.0:
 			var support_location := String(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-			var assign_support := _button(I18n.core("ships.assign_construction", "Assign Construction Support"), _command.bind(I18n.core("command.ships.assign_construction"), Game.assign_ship_to_construction_support.bind(ship_id, support_location)), not Game.state.ship_is_unassigned_docked(ship_id), COLOR_ACCENT)
+			var assign_support := _button(I18n.core("ships.assign_construction", "Assign Construction Support"), _command.bind(I18n.core("command.ships.assign_construction"), Game.assign_ship_to_construction_support.bind(ship_id, support_location)), not Game.state.ship_is_unassigned_docked(ship_id) or not Game.state.ship_is_deployment_ready(ship_id), COLOR_ACCENT)
 			assign_support.name = "AssignConstructionSupport_%s" % ship_id
 			assignment_row.add_child(assign_support)
 		card.add_child(assignment_row)
@@ -2662,13 +2677,17 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 			for module_id_value in install_choices:
 				var module_id := String(module_id_value)
 				var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
+				var desired_modules: Array = Game.state.ship_module_definition_ids(ship).duplicate()
+				desired_modules.append(module_id)
+				var availability: Dictionary = Game.ship_loadout_availability(ship_id, desired_modules)
 				var install_button := _button(
 					I18n.core("ships.install_module_action", "Install %s") % _content_name(module_definition, module_id),
 					_command.bind(I18n.core("command.ships.install_module"), Game.install_ship_module.bind(ship_id, module_id)),
-					String(ship.get("status", "DOCKED")) != "DOCKED"
+					not bool(availability.get("allowed", false))
 				)
 				install_button.name = "InstallModule_%s_%s" % [ship_id, module_id]
-				if ship_not_docked: install_button.tooltip_text = I18n.core("ships.disabled.must_be_docked")
+				if install_button.disabled:
+					install_button.tooltip_text = String(availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 				card.add_child(install_button)
 		var installed_definitions: Array = Game.state.ship_module_definition_ids(ship)
 		if not installed_definitions.is_empty():
@@ -3002,10 +3021,13 @@ func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
 
 
 func _installable_loadout_modules(ship: Dictionary) -> Array[String]:
-	# This view does not reproduce fitting rules: it asks the Content Database's
-	# canonical loadout validator for each prospective complete loadout.
+	# Keep structurally valid, revealed module choices visible even when the
+	# authoritative transaction is currently blocked by resources or ship state.
+	# The renderer asks ship_loadout_availability for disabled state and reason;
+	# fitting rules still remain in the Content Database / Domain query.
 	var result: Array[String] = []
 	var installed: Array = Game.state.ship_module_definition_ids(ship)
+	var blueprint_id := String(ship.get("blueprint_id", ""))
 	for module_id_value in Game.content.modules.keys():
 		var module_id := String(module_id_value)
 		var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
@@ -3016,7 +3038,7 @@ func _installable_loadout_modules(ship: Dictionary) -> Array[String]:
 			continue
 		var desired := installed.duplicate()
 		desired.append(module_id)
-		if bool(Game.ship_loadout_availability(String(ship.get("instance_id", "")), desired).get("allowed", false)):
+		if Game.content.ship_loadout_valid(blueprint_id, desired):
 			result.append(module_id)
 	result.sort()
 	return result
@@ -3065,11 +3087,12 @@ func _activity_block_reason(domain_id: String, activity_id: String) -> String:
 		activity = Game.content.expedition_routes.get(activity_id, {}) as Dictionary
 	if not activity.is_empty() and Game.can_start_activity(domain_id, activity):
 		return ""
+	if domain_id == "mining":
+		var availability := Game.extraction_operation_availability(String(activity.get("site", "")))
+		return String(availability.get("reason", I18n.core("block_reason.mining_ship")))
 	var unmet := _unmet_requirements(activity.get("requirements", []))
 	if not unmet.is_empty():
 		return unmet
-	if domain_id == "mining":
-		return I18n.core("block_reason.mining_ship")
 	if domain_id == "industry":
 		return I18n.core("block_reason.industry")
 	if domain_id == "expedition":

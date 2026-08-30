@@ -109,7 +109,10 @@ func configure_service(state: SpaceGameState, route_id: String, mode_id: String,
 		var ship: Dictionary = state.ship_by_id(ship_id)
 		var old_assignment: Dictionary = ship.get("assignment", {})
 		var belongs_here := str(old_assignment.get("domain", "")) == "logistics" and str(old_assignment.get("service_id", "")) == "SERVICE-%s" % route_id.to_upper()
-		if ship.is_empty() or (not state.ship_is_unassigned_docked(ship_id) and not belongs_here) or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE":
+		if ship.is_empty() \
+				or (not state.ship_is_unassigned_docked(ship_id) and not belongs_here) \
+				or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" \
+				or float(ship.get("maintenance_coverage", 1.0)) <= 0.0:
 			return false
 		if not ship_eligible_for_mode(state, ship_id, mode_id):
 			return false
@@ -190,7 +193,11 @@ func service_capacity(state: SpaceGameState, route_id: String) -> float:
 	var result := corridor_capacity * float(mode.get("capacity_multiplier", 1.0)) if bool(mode.get("public_base_capacity", false)) or bool(mode.get("infrastructure_service", false)) else 0.0
 	for ship_id_value in service.get("assigned_ship_ids", []):
 		var ship: Dictionary = state.ship_by_id(str(ship_id_value))
-		if ship.is_empty() or str(ship.get("assignment", {}).get("service_id", "")) != str(service.get("id", "")):
+		if ship.is_empty() \
+				or str(ship.get("assignment", {}).get("service_id", "")) != str(service.get("id", "")) \
+				or str(ship.get("condition", "")) != "OPERATIONAL" \
+				or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" \
+				or float(ship.get("maintenance_coverage", 1.0)) <= 0.0:
 			continue
 		result += float(_ship_cargo_capacity(state, ship)) * float(mode.get("ship_capacity_multiplier", 0.0)) * float(technology_profile(state).get("freight_capacity_multiplier", 1.0))
 	return maxf(0.0, result)
@@ -894,6 +901,105 @@ func _service_supports_item(state: SpaceGameState, route_id: String, item_id: St
 		return false
 	var freight_class := str(content.item_freight_profile(item_id).get("freight_class", "STANDARD"))
 	return mode.get("supported_freight_classes", []).has(freight_class)
+
+
+# Construction demand is derived from live projects rather than stored as a
+# player policy. Keep its transport diagnosis derived as well: callers receive
+# an authoritative snapshot without mutating a Project, Service or Save schema.
+func construction_transport_blocker(state: SpaceGameState, project: Dictionary) -> Dictionary:
+	if str(project.get("status", "")) not in ["RUNNING", "BLOCKED", "QUEUED"]:
+		return {}
+	var destination := str(project.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	if destination == SpaceGameState.MAIN_BASE_LOCATION_ID or not state.has_location(destination):
+		return {}
+	var material_plan: Dictionary = project.get("material_plan", {})
+	var consumed: Dictionary = project.get("consumed", {})
+	var project_slot := int(project.get("slot", -1))
+	var item_ids: Array = material_plan.keys()
+	item_ids.sort()
+	for item_id_value in item_ids:
+		var item_id := str(item_id_value)
+		var remaining := maxi(0, int(material_plan.get(item_id, 0)) - int(consumed.get(item_id, 0)))
+		if remaining <= 0:
+			continue
+		var tranche_target := mini(remaining, maxi(1, ceili(float(material_plan.get(item_id, 0)) * 0.05)))
+		# Only stock spendable by this project can satisfy its next transport
+		# tranche. Player reserves and commitments owned by other projects or
+		# systems must not hide an incompatible or missing freight path.
+		var spendable_here := state.available_item_quantity_for_construction(item_id, project_slot, destination)
+		if spendable_here + incoming_quantity(state, destination, item_id) >= tranche_target:
+			continue
+		var blocker := demand_transport_mode_blocker(state, destination, item_id)
+		if not blocker.is_empty():
+			blocker["project_id"] = project.get("project_id", "")
+			blocker["project_type"] = project.get("project_type", "")
+			return blocker
+	return {}
+
+
+func demand_transport_mode_blocker(state: SpaceGameState, destination: String, item_id: String, source_lock: String = "", route_lock: String = "") -> Dictionary:
+	if not state.has_location(destination) or not content.items.has(item_id):
+		return {}
+	var freight_class := str(content.item_freight_profile(item_id).get("freight_class", "STANDARD"))
+	var first_incompatible := {}
+	for supplier_value in _supplier_rows(state, item_id, source_lock):
+		var supplier := supplier_value as Dictionary
+		var origin := str(supplier.get("location_id", ""))
+		if origin == destination or _supply_available(state, origin, item_id, int(supplier.get("reserve", 0))) <= 0:
+			continue
+		if not _shortest_path(state, origin, destination, item_id, route_lock).is_empty():
+			return {}
+		var structural_routes := _structural_route_path(state, origin, destination, route_lock)
+		for route_id_value in structural_routes:
+			var route_id := str(route_id_value)
+			var service := service_for_route(state, route_id)
+			var mode_id := str(service.get("transport_mode_id", ""))
+			var mode: Dictionary = content.transport_modes.get(mode_id, {})
+			if mode.is_empty() or mode.get("supported_freight_classes", []).has(freight_class):
+				continue
+			if first_incompatible.is_empty():
+				first_incompatible = {
+					"code":"TRANSPORT_MODE_UNAVAILABLE",
+					"primary_reason":"TRANSPORT_MODE_UNAVAILABLE",
+					"domain":"logistics",
+					"location_id":destination,
+					"source_location_id":origin,
+					"item_id":item_id,
+					"freight_class":freight_class,
+					"route_id":route_id,
+					"transport_mode_id":mode_id,
+					"supported_freight_classes":mode.get("supported_freight_classes", []).duplicate(),
+					"navigation_target":{"screen":"logistics", "location_id":destination, "entity_id":route_id, "route_id":route_id, "item_id":item_id}
+				}
+			break
+	return first_incompatible
+
+
+func _structural_route_path(state: SpaceGameState, origin: String, destination: String, route_lock: String = "") -> Array:
+	if origin == destination:
+		return []
+	var pending: Array = [{"location_id":origin, "route_ids":[], "nodes":[origin]}]
+	while not pending.is_empty():
+		var candidate := pending.pop_front() as Dictionary
+		var current := str(candidate.get("location_id", ""))
+		var edges := _edges_from(state, current)
+		edges.sort_custom(func(a, b): return str((a as Dictionary).get("route_id", "")) < str((b as Dictionary).get("route_id", "")))
+		for edge_value in edges:
+			var edge := edge_value as Dictionary
+			var route_id := str(edge.get("route_id", ""))
+			var next_node := str(edge.get("to", ""))
+			if candidate.get("route_ids", []).has(route_id) or candidate.get("nodes", []).has(next_node) or service_capacity(state, route_id) <= 0.0:
+				continue
+			var route_ids: Array = candidate.get("route_ids", []).duplicate()
+			route_ids.append(route_id)
+			var nodes: Array = candidate.get("nodes", []).duplicate()
+			nodes.append(next_node)
+			if next_node == destination:
+				if route_lock.is_empty() or route_ids.has(route_lock):
+					return route_ids
+				continue
+			pending.append({"location_id":next_node, "route_ids":route_ids, "nodes":nodes})
+	return []
 
 
 func _service_supports_direction(state: SpaceGameState, route_id: String, forward: bool) -> bool:

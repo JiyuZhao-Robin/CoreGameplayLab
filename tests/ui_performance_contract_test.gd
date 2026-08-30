@@ -11,7 +11,7 @@ func _init() -> void:
 	_expect(not process_body.is_empty(), "Main UI defines an explicit refresh scheduler", failures)
 	_expect("_dirty" in process_body and "_last_refresh_ms" in process_body, "UI refreshes are dirty/coalesced instead of unconditional per-frame rebuilds", failures)
 	_expect("_rebuild_active_page" in process_body and "_rebuild_all" not in process_body, "A simulation event rebuilds only the active workspace", failures)
-	_expect("match _active_page_key" in active_rebuild_body, "Active workspace refresh is selected by the current page", failures)
+	_expect("_tabs.get_current_tab_control()" in active_rebuild_body and "match key:" in active_rebuild_body, "Active workspace refresh is selected by the current page", failures)
 	_expect("_rebuild_inventory" in active_rebuild_body and "_rebuild_logistics" in active_rebuild_body, "Inventory and Logistics participate in the active-only refresh contract", failures)
 	_expect("_rebuild_all()" not in active_rebuild_body, "Active refresh never recursively requests a full hidden-screen rebuild", failures)
 	if failures.is_empty():

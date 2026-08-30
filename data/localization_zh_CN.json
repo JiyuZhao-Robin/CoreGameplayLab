@@ -1064,6 +1064,7 @@
     "notice.frontier_ready": "舰船是永久实体资产。请将每艘可用舰船投入开采或远征舰队。",
     "notice.extraction_ship_required": "请选择至少一艘正常且具备开采能力的舰船。",
     "notice.extraction_ship_unavailable": "所选舰船必须正常停泊、当前可用且具备开采能力。",
+    "notice.extraction_ship_requirements": "每艘所选舰船都必须满足该采掘点的开采设备要求。",
     "notice.extraction_started": "前沿开采已开始：%s",
     "notice.extraction_stopped": "开采作业舰船已召回。",
     "operation.idle": "空闲——请选择作业",

@@ -154,6 +154,7 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 		rows[product_id]["demand_sources"].append(demand.duplicate(true))
 		if str(demand.get("demand_kind", "")) == "CONTINUOUS":
 			rows[product_id]["continuous_demand_rate"] = float(rows[product_id].get("continuous_demand_rate", 0.0)) + float(demand.get("rate_per_hour", 0.0))
+			rows[product_id]["committed_demand"] = float(rows[product_id].get("committed_demand", 0.0)) + float(demand.get("backlog_quantity", 0.0))
 		else:
 			rows[product_id]["committed_demand"] = float(rows[product_id].get("committed_demand", 0.0)) + float(demand.get("quantity", 0.0))
 	for shipment_value in state.logistics_network.get("shipments", []):

@@ -1207,9 +1207,15 @@ func _verify_ship_assignment_and_expedition_actions() -> void:
 
 func _verify_construction_support_actions() -> void:
 	var scenario_id := "open_deep"
-	var ship_id := "SHIP-007"
+	var ship_id := ""
 	var location_id := SpaceGameState.MAIN_BASE_LOCATION_ID
 	_check(_activate_scenario(scenario_id), "%s activates for physical Construction Support" % scenario_id)
+	for ship_value in Game.state.ships:
+		var candidate := ship_value as Dictionary
+		if String(candidate.get("blueprint_id", "")) == "mobile_constructor":
+			ship_id = String(candidate.get("instance_id", ""))
+			break
+	_check(not ship_id.is_empty(), "%s contains a stable-identity Mobile Constructor" % scenario_id)
 	await _spawn_main()
 	_check(await _press_named("Navigation_ships"), "Ships is reachable for Construction Support")
 	var roster_tab := main.find_child("FleetSection_roster", true, false) as Button

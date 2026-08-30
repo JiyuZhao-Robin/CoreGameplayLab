@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(60, 3600)]
+    [ValidateRange(60, 28800)]
     [int]$DefaultTimeoutSeconds = 360,
 
     [switch]$SkipGolden,
@@ -10,6 +10,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($SkipGolden) {
+    throw "-SkipGolden is not permitted by the full certification runner."
+}
 
 $GodotPath = "D:\Godot\godot.exe"
 $ProjectPath = "D:\Projects\standalone\core_gameplay_lab"
@@ -92,9 +96,10 @@ Add-AuditTest "ui-playflow" "res://tests/ui_playflow_test.tscn" $false @("--no-p
 Add-AuditTest "localization-catalog" "res://tests/localization_catalog_test.tscn" $false @("--no-persistence", "--locale=zh_CN")
 Add-AuditTest "journey-registry" "res://tests/gameplay_journey_registry_test.tscn" $false @("--no-persistence")
 if (-not $SkipGolden) {
-    Add-AuditTest "golden-path" "res://tests/golden_path_test.tscn" $false @("--no-persistence", "--emit-scenarios") 1800
-    Add-AuditTest "scenario-builder" "res://tests/gameplay_scenario_builder_test.tscn" $false @("--no-persistence", "--require-generated-scenarios")
+	Add-AuditTest "golden-path" "res://tests/golden_path_test.tscn" $false @("--no-persistence", "--emit-scenarios") 1800
+	Add-AuditTest "scenario-builder" "res://tests/gameplay_scenario_builder_test.tscn" $false @("--no-persistence", "--require-generated-scenarios")
 }
+Add-AuditTest "construction-transport-blocker" "res://tests/construction_transport_blocker_test.tscn" $false @("--no-persistence", "--locale=en")
 Add-AuditTest "player-action-registry" "res://tests/player_action_registry_test.tscn" $false @("--no-persistence")
 Add-AuditTest "ui-action-coverage" "res://tests/ui_action_coverage_test.tscn" $false @("--no-persistence", "--locale=en") 900
 Add-AuditTest "ui-state-registry" "res://tests/ui_state_registry_test.tscn" $false @("--no-persistence")
@@ -105,7 +110,17 @@ Add-AuditTest "ui-localization-audit" "res://tests/ui_localization_audit_test.ts
 Add-AuditTest "ui-zh" "res://tests/ui_chinese_localization_smoke_test.tscn" $false @("--no-persistence", "--locale=zh_CN")
 Add-AuditTest "ui-en" "res://tests/ui_english_localization_smoke_test.tscn" $false @("--no-persistence", "--locale=en")
 Add-AuditTest "ui-endgame-scenario" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=megastructure_phase_7") 1800
-Add-AuditTest "full-gameplay-ui" "res://tests/full_gameplay_ui_test.tscn" $false @("--no-persistence", "--locale=en", "--evidence-run-id=$RunId") 3600
+Add-AuditTest "ui-mining-ship-selection" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--mining-start-probe") 600
+Add-AuditTest "ui-local-bootstrap-recovery" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--local-bootstrap-probe") 600
+Add-AuditTest "ui-local-bootstrap-fail-closed" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--local-bootstrap-failure-probe") 600
+Add-AuditTest "ui-maintenance-backlog-recovery" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=maintenance_backlog", "--maintenance-backlog-probe") 600
+Add-AuditTest "ui-streaming-gas-logistics" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_jovian", "--streaming-gas-probe") 1800
+Add-AuditTest "ui-running-mining-location" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_jovian", "--running-mining-location-probe") 300
+Add-AuditTest "ui-reserve-mission-lifecycle" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=prototype_complete", "--reserve-mission-probe") 900
+Add-AuditTest "ui-outer-titan-commission" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_outer", "--outer-titan-commission-probe") 3600
+Add-AuditTest "ui-outer-titan-exotic-refit" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--outer-titan-exotic-refit-probe") 900
+Add-AuditTest "ui-spendable-production-budget" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=maintenance_backlog", "--spendable-production-probe") 300
+Add-AuditTest "full-gameplay-ui" "res://tests/full_gameplay_ui_test.tscn" $false @("--no-persistence", "--locale=en", "--evidence-run-id=$RunId") 28800
 Add-AuditTest "economy-audit" "res://tools/economy_audit.gd" $true @("--no-persistence")
 Add-AuditTest "ui-performance-contract" "res://tests/ui_performance_contract_test.gd" $true @("--no-persistence")
 

@@ -509,7 +509,7 @@ func start_survey_mission(state: SpaceGameState, target_location_id: String, tar
 		return false
 	for ship_id_value in ship_ids:
 		var ship_id := str(ship_id_value)
-		if not state.ship_is_docked(ship_id) or str(state.ship_by_id(ship_id).get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != origin_location_id:
+		if not state.ship_is_deployment_ready(ship_id) or str(state.ship_by_id(ship_id).get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != origin_location_id:
 			return false
 	var costs := survey_mission_costs(target_state)
 	for item_id_value in costs.keys():
@@ -1784,7 +1784,11 @@ func location_construction_capacity(state: SpaceGameState, location_id: String) 
 	for ship_value in state.ships:
 		var ship := ship_value as Dictionary
 		var assignment: Dictionary = ship.get("assignment", {})
-		if str(ship.get("status", "")) != "CONSTRUCTION_SUPPORT" or str(assignment.get("type", "")) != "CONSTRUCTION_SUPPORT" or str(assignment.get("location_id", "")) != location_id:
+		if str(ship.get("status", "")) != "CONSTRUCTION_SUPPORT" \
+				or str(assignment.get("type", "")) != "CONSTRUCTION_SUPPORT" \
+				or str(assignment.get("location_id", "")) != location_id \
+				or str(ship.get("condition", "")) != "OPERATIONAL" \
+				or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE":
 			continue
 		capacity += maxf(0.0, ship_loadout_capability_value(state, ship, "construction_support")) * 8.0 * clampf(float(ship.get("maintenance_coverage", 1.0)), 0.0, 1.0)
 	return capacity
@@ -1792,7 +1796,7 @@ func location_construction_capacity(state: SpaceGameState, location_id: String) 
 
 func assign_construction_support(state: SpaceGameState, ship_id: String, location_id: String) -> bool:
 	var ship := state.ship_by_id(ship_id)
-	if ship.is_empty() or not state.has_location(location_id) or not state.ship_is_unassigned_docked(ship_id):
+	if ship.is_empty() or not state.has_location(location_id) or not state.ship_is_unassigned_docked(ship_id) or not state.ship_is_deployment_ready(ship_id):
 		return false
 	if str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != location_id or ship_loadout_capability_value(state, ship, "construction_support") <= 0.0:
 		return false
@@ -3412,6 +3416,7 @@ func _progress_fleet_maintenance(state: SpaceGameState, elapsed_ms: float) -> vo
 	var fractions: Dictionary = maintenance.get("fractional", {})
 	var debts: Dictionary = maintenance.get("debt", {})
 	var coverage: Dictionary = maintenance.get("coverage", {})
+	var totals: Dictionary = maintenance.get("consumption_totals", {})
 	var item_id := str(content.fleet_rules.get("maintenance_item", "repair_material"))
 	var per_command_hour := maxf(0.0, float(content.fleet_rules.get("maintenance_material_per_command_hour", 0.02)))
 	var rates: Dictionary = content.fleet_rules.get("maintenance_rates", {})
@@ -3431,6 +3436,7 @@ func _progress_fleet_maintenance(state: SpaceGameState, elapsed_ms: float) -> vo
 		var consumed := mini(whole_units, state.available_item_quantity(item_id, location_id))
 		if consumed > 0:
 			state.remove_item(item_id, consumed, location_id)
+			totals[item_id] = int(totals.get(item_id, 0)) + consumed
 		var unpaid := whole_units - consumed
 		fractions[ship_id] = maxf(0.0, owed - float(whole_units))
 		debts[ship_id] = float(unpaid)
@@ -3441,6 +3447,7 @@ func _progress_fleet_maintenance(state: SpaceGameState, elapsed_ms: float) -> vo
 	maintenance["fractional"] = fractions
 	maintenance["debt"] = debts
 	maintenance["coverage"] = coverage
+	maintenance["consumption_totals"] = totals
 	state.fleet_maintenance = maintenance
 
 
@@ -3448,17 +3455,55 @@ func fleet_maintenance_snapshot(state: SpaceGameState) -> Array:
 	var result: Array = []
 	for ship_value in state.ships:
 		var ship := ship_value as Dictionary
+		var ship_id := str(ship.get("instance_id", ""))
 		var blueprint: Dictionary = content.ships.get(str(ship.get("blueprint_id", "")), {})
 		var maintenance_state := str(ship.get("maintenance_state", "ACTIVE"))
 		var rate := float(content.fleet_rules.get("maintenance_rates", {}).get(maintenance_state, 1.0))
+		var canonical_debt := maxf(
+			maxf(0.0, float(state.fleet_maintenance.get("debt", {}).get(ship_id, 0.0))),
+			maxf(0.0, float(ship.get("maintenance_debt", 0.0)))
+		)
 		result.append({
-			"ship_id":str(ship.get("instance_id", "")),
+			"ship_id":ship_id,
+			"location_id":str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)),
 			"maintenance_state":maintenance_state,
 			"demand_per_hour":float(blueprint.get("command_cost", 1.0)) * float(content.fleet_rules.get("maintenance_material_per_command_hour", 0.02)) * rate,
 			"coverage":float(ship.get("maintenance_coverage", 1.0)),
-			"debt":float(ship.get("maintenance_debt", 0.0))
+			"debt":canonical_debt
 		})
 	return result
+
+
+func maintenance_recovery_requirement(state: SpaceGameState, location_id: String, item_id: String, spendable_target: int, horizon_ms: float = 0.0) -> Dictionary:
+	var debt := 0.0
+	var continuous_rate_per_hour := 0.0
+	var fleet_item_id := str(content.fleet_rules.get("maintenance_item", "repair_material"))
+	if item_id == fleet_item_id:
+		for row_value in fleet_maintenance_snapshot(state):
+			var row := row_value as Dictionary
+			if str(row.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != location_id:
+				continue
+			debt += maxf(0.0, float(row.get("debt", 0.0)))
+	for demand_value in state.demand_registry.get("sources", {}).values():
+		var demand := demand_value as Dictionary
+		if str(demand.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != location_id \
+				or str(demand.get("product_id", "")) != item_id \
+				or str(demand.get("demand_kind", "")) != "CONTINUOUS":
+			continue
+		continuous_rate_per_hour += maxf(0.0, float(demand.get("rate_per_hour", 0.0)))
+	var horizon_quantity := continuous_rate_per_hour * maxf(0.0, horizon_ms) / 3600000.0
+	var recovery_quantity := ceili(debt + horizon_quantity - 0.000001)
+	return {
+		"item_id":item_id,
+		"location_id":location_id,
+		"spendable_target":maxi(0, spendable_target),
+		"fleet_debt":debt,
+		"continuous_rate_per_hour":continuous_rate_per_hour,
+		"horizon_ms":maxf(0.0, horizon_ms),
+		"horizon_quantity":horizon_quantity,
+		"recovery_quantity":maxi(0, recovery_quantity),
+		"gross_production_target":maxi(0, spendable_target) + maxi(0, recovery_quantity)
+	}
 
 
 func refresh_demand_registry(state: SpaceGameState) -> void:
@@ -3473,8 +3518,10 @@ func refresh_demand_registry(state: SpaceGameState) -> void:
 			"demand_id":"maintenance:fleet:%s" % row.get("ship_id", ""),
 			"product_id":str(content.fleet_rules.get("maintenance_item", "repair_material")),
 			"demand_kind":"CONTINUOUS", "rate_per_hour":float(row.get("demand_per_hour", 0.0)),
+			"quantity":ceili(maxf(0.0, float(row.get("debt", 0.0))) - 0.000001),
+			"backlog_quantity":maxf(0.0, float(row.get("debt", 0.0))),
 			"source_type":"fleet_operation", "source_id":row.get("ship_id", ""),
-			"location_id":str(state.ship_by_id(str(row.get("ship_id", ""))).get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)),
+			"location_id":str(row.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)),
 			"priority":80, "consumer_type":"fleet_maintenance"
 		})
 	for row_value in _energy_maintenance_snapshot(state):
@@ -4006,6 +4053,13 @@ func _settle_extraction_network_cycle(state: SpaceGameState, network_id: String)
 			output_totals[item_id] = int(output_totals.get(item_id, 0)) + quantity
 	runtime["production_totals"] = totals
 	emitted_events.append({"type":"ExtractionNetworkCycleCompleted", "network_id":network_id, "outputs":output_totals})
+	return true
+
+
+func activity_requirements_met_for_ships(state: SpaceGameState, activity: Dictionary, ship_ids: Array) -> bool:
+	for requirement_value in activity.get("requirements", []):
+		if not _requirement_met_for_ships(state, requirement_value as Dictionary, ship_ids):
+			return false
 	return true
 
 
@@ -4886,7 +4940,10 @@ func _apply_effect(state: SpaceGameState, effect: Dictionary) -> void:
 		"unlock_ship_plan":
 			var plan_id := str(effect.get("id", ""))
 			var newly_unlocked := state.unlock_ship_plan(plan_id)
-			if bool(effect.get("auto_enqueue", true)):
+			# Unlocking a player-facing hull is not a Build command. Content that
+			# deliberately grants an automatic restoration must opt in explicitly;
+			# otherwise the visible Shipyard Build action would create a duplicate.
+			if bool(effect.get("auto_enqueue", false)):
 				state.enqueue_ship_plan(plan_id)
 			normalize_shipyard_queue(state)
 			if newly_unlocked:
@@ -5282,9 +5339,9 @@ func _complete_research_program(state: SpaceGameState, project: Dictionary) -> b
 		state.technologies[technology_id] = true
 	var ship_plan_id := str(project.get("grants_ship_plan", ""))
 	if not supplemental and not ship_plan_id.is_empty():
-		state.unlock_ship_plan(ship_plan_id)
-		state.enqueue_ship_plan(ship_plan_id)
-		normalize_shipyard_queue(state)
+		var newly_unlocked := state.unlock_ship_plan(ship_plan_id)
+		if newly_unlocked:
+			emitted_events.append({"type":"ShipPlanUnlocked", "plan_id":ship_plan_id})
 	if not supplemental:
 		for effect in project.get("effects", []):
 			_apply_effect(state, effect)

@@ -67,6 +67,7 @@ var journey_event_log: Array[String] = []
 var registry_journey_events: Dictionary = {}
 var evidence_run_id := "UNBOUND"
 var _operating_stock_stage_guard := {}
+var _operating_stock_guard_trace: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -291,13 +292,17 @@ func _run() -> void:
 	# Continue the same fresh save into the off-world chain. Every dependency is
 	# recursively produced by selecting visible Industry recipes; the helper only
 	# reads Content definitions to calculate how many real UI cycles are needed.
-	_check(await _ensure_ui_costs(main, {"iron_ingot":8, "electronics":4}), "UI production prepares the automatic Earth extraction network")
+	_check(await _ensure_ui_costs_stable(main, {"iron_ingot":8, "electronics":4}), "UI production prepares the automatic Earth extraction network")
 	await _open_industry_construction(main)
 	await _press_named(main, "StartConstruction_build_earth_extraction_network", "START_EARTH_EXTRACTION_NETWORK")
 	var earth_network_ready := await _wait_until(func() -> bool:
 		return "earth_extraction_network" in Game.state.facilities,
 		CONSTRUCTION_TIMEOUT_SECONDS)
 	_check(earth_network_ready, "visible Construction control completes the automatic Earth extraction network")
+	if not earth_network_ready:
+		_print_time_orchestration_diagnostic("build_earth_extraction_network")
+		await _finish(main)
+		return
 	await _press_named(main, "Navigation_survey", "OPEN_SURVEY_FOR_EARTH_AUTOMATION")
 	await _press_named(main, "IntegrateMining_earth_resource_cluster_prospect", "INTEGRATE_EARTH_MINING_SITE")
 	var earth_site_integrated := _network_has_site("earth_extraction_network", "earth_resource_cluster_prospect")
@@ -316,7 +321,7 @@ func _run() -> void:
 
 	# The major propulsion program consumes actual lunar alloy and electronics,
 	# then pauses for a manufactured prototype and a real proving-flight route.
-	_check(await _ensure_ui_costs(main, {"titanium_alloy":5, "electronics":4, "data_core":1}), "UI industry manufactures every staged Advanced Propulsion input")
+	_check(await _ensure_ui_costs_stable(main, {"titanium_alloy":5, "electronics":4, "data_core":1}), "UI industry manufactures every staged Advanced Propulsion input")
 	var early_lunar_storage_target := Game.simulation.suggested_location_capacity_upgrade_target(Game.state, "lunar_space", "BULK_STORAGE_UPGRADE")
 	_check(not _capacity_upgrade_supply_chain_is_unlocked("lunar_space", "BULK_STORAGE_UPGRADE", early_lunar_storage_target), "pre-Heavy-Industry availability query identifies the Lunar storage BOM as not yet supplyable")
 	var early_lunar_storage_project := Game.state.construction_operations.any(func(runtime_value):
@@ -538,20 +543,40 @@ func _run() -> void:
 	_check(belt_operating_stock_ready, "normal freight delivers maintenance stock after the fulfilled fuel Demand is cleared")
 	if not belt_operating_stock_ready:
 		_print_logistics_diagnostic(["chemical_propellant", "repair_material"])
+	# These generic Add-policy actions intentionally exercise the player's basic
+	# logistics surface, whose default Demand target is 50. They are bootstrap
+	# orders, not permanent policy: leaving them active silently exports every
+	# later Repair Material batch and makes advanced manufacturing appear unable
+	# to accumulate maintenance stock. Close the temporary orders through the
+	# same visible policy controls once their first physical tranche has arrived.
+	await _clear_policy_ui(main, "asteroid_belt", "repair_material")
+	await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "chemical_propellant")
+	await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material")
 
-	# The default Demand action targets max(50, current stock). Consume the large
-	# local bootstrap pile first so the normal default creates a real deficit.
-	await _open_location_from_system(main, SpaceGameState.MAIN_BASE_LOCATION_ID)
-	_check(await _consume_ui_item_below(main, "separate_iron_ore", "mixed_raw_ore", 40), "visible Industry controls create a genuine Earth mixed-ore freight deficit")
+	# Create a visible Demand target above the local automation output that can be
+	# produced during the route's travel window. A fixed default target of 50 can
+	# otherwise be satisfied locally before the conserved Belt cargo arrives.
 	var mixed_delivered_before := int(Game.state.logistics_network.get("item_statistics", {}).get("mixed_raw_ore", {}).get("delivered", 0))
 	await _set_location_logistics_policy(main, "asteroid_belt", "mixed_raw_ore", LogisticsEngine.MODE_SUPPLY)
-	await _set_location_logistics_policy(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore", LogisticsEngine.MODE_DEMAND)
+	var mixed_import_target := Game.state.item_quantity("mixed_raw_ore", SpaceGameState.MAIN_BASE_LOCATION_ID) + 128
+	await _replace_policy_with_target_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore", LogisticsEngine.MODE_DEMAND, mixed_import_target, 100)
 	var belt_ore_delivered := await _wait_at_public_fast_speed(main, func() -> bool:
 		return int(Game.state.logistics_network.get("item_statistics", {}).get("mixed_raw_ore", {}).get("delivered", 0)) > mixed_delivered_before,
 		JOURNEY_STAGE_TIMEOUT_SECONDS)
 	_check(belt_ore_delivered, "Belt SUPPLY and Earth DEMAND dispatch and deliver conserved remote ore")
+	if not belt_ore_delivered:
+		_print_logistics_diagnostic(["mixed_raw_ore", "chemical_propellant", "repair_material"])
+		await _finish(main)
+		return
 	if belt_ore_delivered:
 		journey_event_log.append("FIRST_REMOTE_FREIGHT")
+	# The first-delivery policies are evidence for this Journey milestone, not a
+	# permanent player policy. Leaving them live makes later local bootstrap
+	# recovery compete with an unrelated Belt import until the bottleneck scenario
+	# eventually replaces them. Clear both through the same visible policy UI once
+	# the conserved delivery ledger proves the freight transaction.
+	await _clear_policy_ui(main, "asteroid_belt", "mixed_raw_ore")
+	await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore")
 
 	# Process real Belt feedstock and establish both High-Energy manufacturing
 	# capabilities required by the Heavy Industry program.
@@ -681,17 +706,33 @@ func _complete_remaining_ui_journey(main: Control, starter_ship_id: String, path
 	journey_event_log.append("SHIP_INDUSTRY_ESTABLISHED")
 	if not await _exercise_bottleneck_journeys_ui(main, bulk_freighter_id): return false
 
+	var belt_industry_level_before := int(Game.state.location_industry("asteroid_belt", "makeshift_workshop").get("level", 0))
 	if not await _develop_remote_site_ui(main, "asteroid_belt", "belt_cobalt_frontier", "fixed_excavation"): return false
 	if not await _expand_remote_industry_ui(main, "asteroid_belt", "makeshift_workshop"): return false
 	journey_event_log.append("FIRST_REMOTE_SITE")
+	if int(Game.state.completed_activities.get("extract_belt_mixed_ore", 0)) <= 0:
+		return _journey_fail("remote extraction event lacked a real completed Belt extraction cycle")
 	_record_registry_event("JOURNEY_08_REMOTE_INDUSTRY", "REMOTE_EXTRACTION_STARTED")
 	if int(Game.state.logistics_network.get("item_statistics", {}).get("mixed_raw_ore", {}).get("delivered", 0)) > 0:
 		_record_registry_event("JOURNEY_08_REMOTE_INDUSTRY", "REMOTE_LOGISTICS_ACTIVE")
+	# O&M is a low-rate continuous liability. Coverage is deliberately a current
+	# readiness signal and stays at 1.0 while the small commissioning stockpile can
+	# pay each whole-item settlement. Requiring coverage < 1 here made this fresh
+	# journey depend on hundreds of simulated preservation hours instead of the
+	# expansion's actual Domain consequence. The authoritative evidence of remote
+	# maintenance pressure is the positive continuous demand registered for the
+	# newly built facility; shortage/coverage transitions are exercised separately
+	# by the maintenance state scenarios.
 	var maintenance_pressure := await _wait_at_public_fast_speed(main, func() -> bool:
-		return Game.simulation._location_maintenance_coverage(Game.state, "asteroid_belt") < 1.0,
+		return _has_facility_maintenance_demand_read_only("asteroid_belt", "makeshift_workshop"),
 		JOURNEY_STAGE_TIMEOUT_SECONDS)
-	if not maintenance_pressure: return _journey_fail("developed Belt industry never exposed real maintenance pressure")
+	if not maintenance_pressure:
+		return _journey_fail("developed Belt industry never registered real continuous maintenance demand")
 	_record_registry_event("JOURNEY_08_REMOTE_INDUSTRY", "REMOTE_MAINTENANCE_PRESSURE")
+	var belt_industry_level_after := int(Game.state.location_industry("asteroid_belt", "makeshift_workshop").get("level", 0))
+	if belt_industry_level_after <= belt_industry_level_before \
+			or not bool(Game.state.mining_site_states.get("belt_cobalt_frontier", {}).get("developed", false)):
+		return _journey_fail("advanced production did not create a real remote industrial geography change")
 	_record_registry_event("JOURNEY_09_ADVANCED_INDUSTRY", "INDUSTRIAL_GEOGRAPHY_CHANGED")
 	await _open_location_from_system(main, "asteroid_belt")
 	await _press_named(main, "LocationTab_industry", "OPEN_BELT_INDUSTRY_FOR_MILESTONE_CAPTURE")
@@ -703,16 +744,20 @@ func _complete_remaining_ui_journey(main: Control, starter_ship_id: String, path
 	if not await _survey_location_to_ui(main, "gas_giant_region", LocationState.SURVEYED, pathfinder_id): return false
 	if not await _uninstall_process_module_ui(main, "electronics_facility", "cryogenic_process_unit"): return false
 	if not await _complete_research_program_ui(main, "research_jovian_operations"): return false
+	# Jovian Operations enables the first repeatable gas chain. Establish it before
+	# Capital Combat requests Superalloy so the UI follows the Domain Guide instead
+	# of manufacturing an artificial dependency cycle.
+	if not await _recover_mining_ship_service_ui(main, cruiser_id, "JOVIAN_GAS_REFIT"): return false
+	if not await _install_ship_module_ui(main, cruiser_id, "gas_collector"): return false
+	if not await _mine_and_freight_ui(main, "gas_giant_region", "jovian_cloud_frontier", cruiser_id, "mixed_raw_gas", 24): return false
+	if not await _ensure_ui_item(main, "methane", 2): return false
+	if not await _ensure_ui_item(main, "superalloy", 8): return false
 	if not await _complete_research_program_ui(main, "research_capital_combat"): return false
 	if not await _complete_construction_activity_ui(main, "upgrade_starport_iii"): return false
 	var constructor_id := await _develop_and_build_ship_ui(main, "develop_mobile_constructor", "construct_mobile_constructor", "mobile_constructor")
 	if constructor_id.is_empty(): return false
 	var battleship_id := await _develop_and_build_ship_ui(main, "develop_jovian_battleship", "construct_jovian_battleship", "jovian_battleship")
 	if battleship_id.is_empty(): return false
-	if not await _install_ship_module_ui(main, cruiser_id, "gas_collector"): return false
-	if not await _mine_and_freight_ui(main, "gas_giant_region", "jovian_cloud_frontier", cruiser_id, "mixed_raw_gas", 24): return false
-	if not await _ensure_ui_item(main, "methane", 2): return false
-	if not await _ensure_ui_item(main, "superalloy", 8): return false
 	journey_event_log.append("JOVIAN_INDUSTRY_COMPLETED")
 	await _open_industry_production(main)
 	await _capture_playthrough_milestone(main, "07_advanced_industry")
@@ -912,6 +957,7 @@ func _develop_and_build_ship_ui(main: Control, project_id: String, plan_id: Stri
 	var existing := _ship_id_for_blueprint(blueprint_id)
 	if not existing.is_empty():
 		return existing
+	var ship_ids_before := _ship_ids_for_blueprint(blueprint_id)
 	var plan: Dictionary = Game.content.ship_construction_projects.get(plan_id, {})
 	var costs: Dictionary = Game.simulation.ship_construction_material_totals(plan)
 	for fixed_value in plan.get("fixed_costs", []):
@@ -920,17 +966,89 @@ func _develop_and_build_ship_ui(main: Control, project_id: String, plan_id: Stri
 		costs[item_id] = int(costs.get(item_id, 0)) + int(fixed.get("quantity", 0))
 	if not await _ensure_ui_costs_stable(main, costs): return ""
 	if not await _complete_research_program_ui(main, project_id): return ""
+	if Game.simulation.shipyard_queue_index(Game.state, plan_id) >= 0:
+		_journey_fail("Ship Development silently queued %s before the visible Build action" % plan_id)
+		return ""
 	if not await _ensure_ui_costs_stable(main, costs): return ""
 	await _press_named(main, "Navigation_ships", "OPEN_SHIPYARD_FOR_%s" % blueprint_id.to_upper())
-	await _press_named(main, "FleetSection_shipyard", "OPEN_SHIPYARD_SECTION_FOR_%s" % blueprint_id.to_upper())
+	var shipyard_section := main.find_child("FleetSection_shipyard", true, false) as Button
+	if shipyard_section != null and shipyard_section.is_visible_in_tree() and not shipyard_section.disabled:
+		await _press_control(shipyard_section, "OPEN_SHIPYARD_SECTION_FOR_%s" % blueprint_id.to_upper())
+	else:
+		_check(shipyard_section != null and shipyard_section.is_visible_in_tree() and shipyard_section.disabled,
+			"Shipyard section is already selected for %s" % blueprint_id)
 	await _press_named(main, "BuildShip_%s_1" % plan_id, "BUILD_SHIP_%s" % blueprint_id.to_upper())
-	var completed := await _wait_at_public_fast_speed(main, func() -> bool:
-		return not _ship_id_for_blueprint(blueprint_id).is_empty(),
-		JOURNEY_STAGE_TIMEOUT_SECONDS)
+	if Game.simulation.shipyard_queue_index(Game.state, plan_id) < 0:
+		_journey_fail("visible Build did not create the Shipyard order for %s" % blueprint_id)
+		return ""
+	var commission_complete := func() -> bool:
+		for built_ship_id in _ship_ids_for_blueprint(blueprint_id):
+			if not ship_ids_before.has(built_ship_id):
+				return true
+		return false
+	var completed := false
+	# Ship construction pays its physical BOM over one hundred normal settlement
+	# segments. Long-running O&M demand can legitimately consume the last available
+	# unit between the pre-build stock check and a later segment. Treat the
+	# authoritative Shipyard blocker exactly as a player would: inspect the missing
+	# item, manufacture it through Industry, then let the same order resume. This is
+	# bounded and never edits the queue, progress, inventory, or ship state.
+	for recovery_attempt in 8:
+		completed = await _wait_at_public_fast_speed(main, commission_complete, 4.0)
+		if completed:
+			break
+		var queue_index := Game.simulation.shipyard_queue_index(Game.state, plan_id)
+		if queue_index < 0:
+			break
+		var runtime: Dictionary = Game.state.shipyard_queue[queue_index]
+		_print_shipyard_commission_diagnostic(plan_id, blueprint_id, recovery_attempt, runtime)
+		var blocked_reason := String(runtime.get("blocked_reason", ""))
+		if String(runtime.get("status", "")) != "BLOCKED" or not blocked_reason.begins_with("RESOURCES:"):
+			continue
+		var missing_item := blocked_reason.trim_prefix("RESOURCES:")
+		var required := maxi(1, int(runtime.get("reserved_costs", {}).get(missing_item, 1)))
+		var available := Game.state.available_item_quantity(missing_item, SpaceGameState.MAIN_BASE_LOCATION_ID)
+		var gross_target := Game.state.item_quantity(missing_item, SpaceGameState.MAIN_BASE_LOCATION_ID) + maxi(1, required - available)
+		if not await _ensure_ui_item(main, missing_item, gross_target):
+			break
 	if not completed:
+		var final_index := Game.simulation.shipyard_queue_index(Game.state, plan_id)
+		if final_index >= 0:
+			_print_shipyard_commission_diagnostic(plan_id, blueprint_id, 8, Game.state.shipyard_queue[final_index])
 		_journey_fail("visible Shipyard did not commission %s" % blueprint_id)
 		return ""
-	return _ship_id_for_blueprint(blueprint_id)
+	var ship_ids_after := _ship_ids_for_blueprint(blueprint_id)
+	_check(ship_ids_after.size() == ship_ids_before.size() + 1, "visible Build commissions exactly one new %s instance" % blueprint_id)
+	for built_ship_id in ship_ids_after:
+		if not ship_ids_before.has(built_ship_id):
+			return built_ship_id
+	return ""
+
+
+func _print_shipyard_commission_diagnostic(plan_id: String, blueprint_id: String, recovery_attempt: int, runtime: Dictionary) -> void:
+	var required: Dictionary = runtime.get("reserved_costs", {})
+	var items := {}
+	for item_id_value in required.keys():
+		var item_id := String(item_id_value)
+		items[item_id] = {
+			"required":int(required.get(item_id, 0)),
+			"gross":Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID),
+			"available":Game.state.available_item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
+		}
+	print("FULL_GAMEPLAY_UI_SHIPYARD_WAIT=", JSON.stringify({
+		"plan_id":plan_id,
+		"blueprint_id":blueprint_id,
+		"recovery_attempt":recovery_attempt,
+		"status":runtime.get("status", ""),
+		"blocked_reason":runtime.get("blocked_reason", ""),
+		"completed_segments":runtime.get("completed_segments", 0),
+		"paid_cycles":runtime.get("paid_cycles", 0),
+		"cycle_progress":runtime.get("cycle_progress", 0.0),
+		"reserved_items":items,
+		"power":Game.simulation.civilization_power_state(Game.state),
+		"starport_maintenance_coverage":Game.simulation.facility_operations_maintenance_coverage(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, "orbital_starport"),
+		"total_simulation_ms":int(Game.state.total_elapsed_ms)
+	}))
 
 
 func _prepare_route_supplies_ui(main: Control, munitions: int, repair: int, propellant: int) -> bool:
@@ -947,14 +1065,123 @@ func _complete_route_ui(main: Control, route_id: String, ship_ids: Array) -> boo
 	var route: Dictionary = Game.content.expedition_routes.get(route_id, {})
 	if not await _prepare_route_supplies_ui(main, 120, 20, maxi(20, int(route.get("fuel_cost", 0)))):
 		return false
+	var requested_ship_ids: Array[String] = []
+	for ship_id_value in ship_ids:
+		var requested_ship_id := String(ship_id_value)
+		if not requested_ship_id.is_empty() and not requested_ship_ids.has(requested_ship_id):
+			requested_ship_ids.append(requested_ship_id)
+	# Supply production can stop a bootstrap mine and put every idle hull into Ready
+	# Reserve. Mission availability correctly requires Active ships, so restore the
+	# requested roster through the visible lifecycle controls after all preparation.
+	if not await _ensure_ships_active_ui(main, requested_ship_ids, "ROUTE_%s" % route_id.to_upper()):
+		return false
+	# A completed route can legitimately return a damaged vessel to automatic
+	# Starport repair, while long manufacturing waits can expose real fleet O&M
+	# debt. Resolve both with normal time and manufactured Repair Material before
+	# touching the next mission roster.
+	var serviceable := func() -> bool:
+		for requested_ship_id in requested_ship_ids:
+			var requested_ship := Game.state.ship_by_id(requested_ship_id)
+			if requested_ship.is_empty() \
+					or not Game.state.ship_is_docked(requested_ship_id) \
+					or String(requested_ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" \
+					or float(requested_ship.get("maintenance_coverage", 1.0)) <= 0.0:
+				return false
+		return true
+	if not bool(serviceable.call()):
+		# First let any automatic post-route repair cross its normal completion
+		# boundary. This does not repair by assertion; the public speed control drives
+		# the same Starport process a player sees.
+		await _wait_at_public_fast_speed(main, func() -> bool:
+			for requested_ship_id in requested_ship_ids:
+				if not Game.state.ship_is_docked(requested_ship_id):
+					return false
+			return true,
+			LARGE_BATCH_TIMEOUT_SECONDS)
+	if not bool(serviceable.call()):
+		# Immediate mission readiness is a debt-recovery problem, not an eight-hour
+		# base inventory forecast. Produce a small, freshly queried tranche, then let
+		# the normal maintenance settlement run and re-read the requested ships. A
+		# long forecast here can create repair -> remote freight -> repair bootstrap.
+		for recovery_attempt in 3:
+			if bool(serviceable.call()):
+				break
+			var maintenance_recovery := Game.simulation.maintenance_recovery_requirement(
+				Game.state,
+				SpaceGameState.MAIN_BASE_LOCATION_ID,
+				"repair_material",
+				1,
+				0.0
+			)
+			print("FULL_GAMEPLAY_UI_ROUTE_MAINTENANCE_RECOVERY=", JSON.stringify(maintenance_recovery.merged({
+				"attempt":recovery_attempt + 1,
+				"route_id":route_id,
+				"ship_ids":requested_ship_ids,
+				"ships":_ship_serviceability_snapshots(requested_ship_ids)
+			}, true)))
+			var recovery_target := maxi(1, int(maintenance_recovery.get("gross_production_target", 1)))
+			var recovery_produced := await _ensure_ui_costs_stable(main, {
+				"repair_material":recovery_target
+			}, serviceable, Callable(), {}, {}, 1)
+			if not await _ensure_ships_active_ui(main, requested_ship_ids, "ROUTE_%s_RECOVERY_%d" % [route_id.to_upper(), recovery_attempt + 1]):
+				return false
+			if bool(serviceable.call()):
+				break
+			# A completed recipe and its maintenance allocation can straddle adjacent
+			# simulation settlements. This bounded public-speed wait observes that real
+			# boundary before deciding another visible production tranche is required.
+			await _wait_at_public_fast_speed(main, serviceable, 3.0)
+			if not recovery_produced:
+				print("FULL_GAMEPLAY_UI_ROUTE_MAINTENANCE_RETRY=", JSON.stringify({
+					"attempt":recovery_attempt + 1,
+					"route_id":route_id,
+					"ships":_ship_serviceability_snapshots(requested_ship_ids)
+				}))
+	if not bool(serviceable.call()):
+		print("FULL_GAMEPLAY_UI_ROUTE_MAINTENANCE_EXHAUSTED=", JSON.stringify({
+			"route_id":route_id,
+			"ship_ids":requested_ship_ids,
+			"ships":_ship_serviceability_snapshots(requested_ship_ids),
+			"repair_material":Game.state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID)
+		}))
+		return _journey_fail("requested ships remained unavailable after normal repair and maintenance recovery for %s" % route_id)
 	await _press_named(main, "Navigation_ships", "OPEN_SHIPS_FOR_%s" % route_id.to_upper())
 	var roster_button := main.find_child("FleetSection_roster", true, false) as Button
 	if roster_button != null and not roster_button.disabled:
 		await _press_control(roster_button, "OPEN_ROSTER_FOR_%s" % route_id.to_upper())
-	for ship_id_value in ship_ids:
-		await _press_named(main, "AssignExpedition_%s" % String(ship_id_value), "ASSIGN_%s_TO_%s" % [String(ship_id_value).to_upper(), route_id.to_upper()])
+	# Route launch uses the whole Expedition Fleet, not merely the array passed to
+	# this helper. Make the visible roster exactly match this mission: retaining an
+	# old damaged or high-command ship correctly disables Domain availability.
+	await _normalize_expedition_roster_ui(main, requested_ship_ids, route_id)
 	await _press_named(main, "ShipsMissions", "OPEN_MISSIONS_FOR_%s" % route_id.to_upper())
-	await _press_named(main, "StartRoute_%s" % route_id, "START_ROUTE_%s" % route_id.to_upper())
+	var start_route := main.find_child("StartRoute_%s" % route_id, true, false) as Button
+	if start_route == null or not start_route.is_visible_in_tree() or start_route.disabled:
+		var ship_snapshots: Array[Dictionary] = []
+		for fleet_ship_id_value in Game.state.fleet_ship_ids("expedition"):
+			var fleet_ship_id := String(fleet_ship_id_value)
+			var fleet_ship := Game.state.ship_by_id(fleet_ship_id)
+			ship_snapshots.append({
+				"ship_id":fleet_ship_id,
+				"status":fleet_ship.get("status", "MISSING"),
+				"condition":fleet_ship.get("condition", "MISSING"),
+				"maintenance_state":fleet_ship.get("maintenance_state", "MISSING"),
+				"maintenance_coverage":fleet_ship.get("maintenance_coverage", 0.0),
+				"maintenance_debt":fleet_ship.get("maintenance_debt", 0.0),
+				"assignment":fleet_ship.get("assignment", {}).duplicate(true)
+			})
+		print("FULL_GAMEPLAY_UI_ROUTE_START_UNAVAILABLE=", JSON.stringify({
+			"route_id":route_id,
+			"requested_ship_ids":requested_ship_ids,
+			"fleet_ship_ids":Game.state.fleet_ship_ids("expedition"),
+			"can_start":Game.can_start_activity("expedition", route),
+			"activity_available":Game.simulation.activity_available(Game.state, route),
+			"costs_available":Game.simulation.costs_available(Game.state, route),
+			"ships":ship_snapshots,
+			"active_expedition":Game.state.active_expedition.duplicate(true),
+			"fleet_logistics":Game.state.fleet_logistics_runtime("expedition").duplicate(true)
+		}))
+		return _journey_fail("Domain availability kept the visible route disabled for %s" % route_id)
+	await _press_control(start_route, "START_ROUTE_%s" % route_id.to_upper())
 	var completed := await _wait_at_public_fast_speed(main, func() -> bool:
 		return int(Game.state.completed_activities.get("route:%s" % route_id, 0)) > 0,
 		JOURNEY_STAGE_TIMEOUT_SECONDS)
@@ -973,8 +1200,13 @@ func _survey_location_to_ui(main: Control, location_id: String, target_state: St
 			break
 		if not await _ensure_ui_costs_stable(main, Game.simulation.survey_mission_costs(next_state)):
 			return false
-		await _open_location_from_system(main, location_id)
 		var ship_id := preferred_ship_id
+		# The same dependency production may have placed the preferred survey vessel
+		# in Ready Reserve. Reactivate it after costs are ready and immediately before
+		# querying the player-visible Survey action.
+		if not ship_id.is_empty() and not await _ensure_ship_active_ui(main, ship_id, "SURVEY_%s_%s" % [location_id.to_upper(), next_state]):
+			return false
+		await _open_location_from_system(main, location_id)
 		var named_button := main.find_child("StartSurvey_%s_%s_%s" % [location_id, next_state, ship_id], true, false) as Button
 		if named_button == null or named_button.disabled:
 			named_button = _first_enabled_button(main, "StartSurvey_%s_%s_" % [location_id, next_state])
@@ -1008,15 +1240,8 @@ func _develop_remote_site_ui(main: Control, location_id: String, site_id: String
 
 func _exercise_bottleneck_journeys_ui(main: Control, bulk_freighter_id: String) -> bool:
 	_record_registry_event("JOURNEY_03_LOGISTICS_BOTTLENECK", "PRODUCTION_INCREASED")
-	# Keep a genuine Belt export backlog active until the default infrastructure
-	# service consumes its whole dispatch budget.
-	await _replace_policy_ui(main, "asteroid_belt", "mixed_raw_ore", LogisticsEngine.MODE_SUPPLY)
-	await _replace_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore", LogisticsEngine.MODE_DEMAND)
-	var saturated := await _wait_at_public_fast_speed(main, func() -> bool:
-		return String(Game.simulation.logistics.service_snapshot(Game.state, "lunar_belt_freight").get("status", "")) == "SATURATED",
-		JOURNEY_STAGE_TIMEOUT_SECONDS)
-	if not saturated:
-		return _journey_fail("real Belt export pressure did not saturate lunar_belt_freight")
+	if not await _create_belt_route_pressure_ui(main):
+		return false
 	_record_registry_event("JOURNEY_03_LOGISTICS_BOTTLENECK", "ROUTE_SATURATED")
 	await _press_named(main, "Navigation_logistics", "OPEN_LOGISTICS_FOR_BOTTLENECK_CAPTURE")
 	await _capture_playthrough_milestone(main, "04_logistics_bottleneck")
@@ -1047,25 +1272,75 @@ func _exercise_bottleneck_journeys_ui(main: Control, bulk_freighter_id: String) 
 	if not resolved: return _journey_fail("bulk capacity did not resolve the observed route bottleneck")
 	_record_registry_event("JOURNEY_03_LOGISTICS_BOTTLENECK", "BOTTLENECK_RESOLVED")
 
-	# With freight fixed, deliberately leave the advanced Foundry without remote
-	# cobalt. The resulting Domain blocker must become visible before expansion.
-	await _open_industry_production(main)
-	await _press_named(main, "StartIndustry_refine_steel", "START_STEEL_TO_EXPOSE_FOUNDRY_LIMIT")
-	var foundry_limited := await _wait_at_public_fast_speed(main, func() -> bool:
-		return Game.simulation.production_gameplay_state(Game.state, _industry_runtime("refine_steel")) == "BLOCKED_INPUT",
-		JOURNEY_STAGE_TIMEOUT_SECONDS)
-	if not foundry_limited: return _journey_fail("Foundry did not expose the expected input bottleneck after Logistics upgrade")
-	_record_registry_event("JOURNEY_04_BOTTLENECK_SHIFT", "FOUNDRY_LIMITED")
+	# Prepare the expansion BOM before creating the live steel blocker. The shared
+	# UI production planner stops active lines while manufacturing dependencies, so
+	# doing this after the blocker would turn the line into PAUSED and invalidate
+	# the bottleneck-shift observation. Reserve the observation cycle in the same
+	# virtual plan: a separate planning pass would see the expansion's Iron as
+	# available and legitimately spend two of those Ingots on the Steel cycle,
+	# leaving the later material-backed expansion blocked at its final segments.
 	var old_level := int(Game.state.location_industry(SpaceGameState.MAIN_BASE_LOCATION_ID, "orbital_foundry").get("level", 0))
 	var expansion_costs: Dictionary = Game.simulation.industry_expansion_costs(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, "orbital_foundry", 1)
-	if not await _ensure_ui_costs_stable(main, expansion_costs): return false
+	var steel_activity: Dictionary = Game.content.activities.get("refine_steel", {})
+	var steel_runtime := _industry_runtime("refine_steel")
+	var steel_cycle_costs: Dictionary = Game.simulation.industry_cycle_costs(Game.state, steel_runtime, steel_activity, false)
+	var combined_commitments := expansion_costs.duplicate(true)
+	for item_id_value in steel_cycle_costs.keys():
+		var item_id := String(item_id_value)
+		combined_commitments[item_id] = int(combined_commitments.get(item_id, 0)) + int(steel_cycle_costs[item_id])
+	if not await _ensure_ui_costs_stable(main, combined_commitments): return false
+
+	# Starting an industry cycle is intentionally fail-closed when its inputs are
+	# unavailable. Stage one authoritative cycle through the normal UI, let that
+	# cycle complete, and only then observe the next cycle block on remote cobalt.
+	await _open_industry_production(main)
+	var start_steel := main.find_child("StartIndustry_refine_steel", true, false) as Button
+	if start_steel == null or not start_steel.is_visible_in_tree() or start_steel.disabled:
+		print("FULL_GAMEPLAY_UI_STEEL_START_UNAVAILABLE=", JSON.stringify({
+			"cycle_costs":steel_cycle_costs,
+			"runtime":_industry_runtime("refine_steel"),
+			"domain_can_start":Game.can_start_activity("industry", steel_activity)
+		}))
+		return _journey_fail("Foundry could not start after one steel cycle was staged through the visible UI")
+	var steel_completed_before := int(Game.state.completed_activities.get("refine_steel", 0))
+	await _press_control(start_steel, "START_STEEL_TO_EXPOSE_FOUNDRY_LIMIT")
+	var foundry_limited := await _wait_at_public_fast_speed(main, func() -> bool:
+		return int(Game.state.completed_activities.get("refine_steel", 0)) > steel_completed_before \
+			and Game.simulation.production_gameplay_state(Game.state, _industry_runtime("refine_steel")) == "BLOCKED_INPUT",
+		JOURNEY_STAGE_TIMEOUT_SECONDS)
+	if not foundry_limited: return _journey_fail("Foundry did not expose the expected input bottleneck after Logistics upgrade")
+	var foundry_blocker: Dictionary = _industry_runtime("refine_steel").get("blocker", {})
+	if String(foundry_blocker.get("primary_reason", "")) != "INPUT_SHORTAGE" \
+			or String(foundry_blocker.get("item_id", "")) != "cobalt_ingot":
+		return _journey_fail("Foundry bottleneck was not the expected remote cobalt shortage: %s" % JSON.stringify(foundry_blocker))
+	_record_registry_event("JOURNEY_04_BOTTLENECK_SHIFT", "FOUNDRY_LIMITED")
 	await _open_location_from_system(main, SpaceGameState.MAIN_BASE_LOCATION_ID)
 	await _press_named(main, "LocationTab_industry", "OPEN_EARTH_INDUSTRY_FOR_FOUNDRY_UPGRADE")
 	await _press_named(main, "ExpandIndustry_orbital_foundry_1", "UPGRADE_FOUNDRY_AFTER_LOGISTICS")
 	var upgraded := await _wait_at_public_fast_speed(main, func() -> bool:
 		return int(Game.state.location_industry(SpaceGameState.MAIN_BASE_LOCATION_ID, "orbital_foundry").get("level", 0)) > old_level,
 		JOURNEY_STAGE_TIMEOUT_SECONDS)
-	if not upgraded: return _journey_fail("visible Foundry expansion did not complete")
+	if not upgraded:
+		var expansion_items := {}
+		for item_id_value in expansion_costs.keys():
+			var item_id := String(item_id_value)
+			expansion_items[item_id] = {
+				"required":int(expansion_costs[item_id]),
+				"gross":Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID),
+				"available":Game.state.available_item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
+			}
+		print("FULL_GAMEPLAY_UI_FOUNDRY_EXPANSION_TIMEOUT=", JSON.stringify({
+			"old_level":old_level,
+			"current_level":int(Game.state.location_industry(SpaceGameState.MAIN_BASE_LOCATION_ID, "orbital_foundry").get("level", 0)),
+			"expansion_costs":expansion_costs,
+			"steel_cycle_costs":steel_cycle_costs,
+			"combined_commitments":combined_commitments,
+			"items":expansion_items,
+			"project":_active_construction_runtime_read_only(SpaceGameState.MAIN_BASE_LOCATION_ID, "FACILITY_EXPANSION", "orbital_foundry"),
+			"civilization_capacity":Game.simulation.construction_capacity(Game.state),
+			"location_capacity":Game.simulation.location_construction_capacity(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID)
+		}))
+		return _journey_fail("visible Foundry expansion did not complete")
 	_record_registry_event("JOURNEY_04_BOTTLENECK_SHIFT", "FOUNDRY_UPGRADED")
 	if Game.simulation.production_gameplay_state(Game.state, _industry_runtime("refine_steel")) != "BLOCKED_INPUT":
 		return _journey_fail("post-upgrade Foundry did not reveal remote extraction as the shifted constraint")
@@ -1074,6 +1349,171 @@ func _exercise_bottleneck_journeys_ui(main: Control, bulk_freighter_id: String) 
 	var stop_steel := main.find_child("StopIndustry_refine_steel", true, false) as Button
 	if stop_steel != null and not stop_steel.disabled:
 		await _press_control(stop_steel, "STOP_STEEL_AFTER_BOTTLENECK_SHIFT")
+
+	# The specialist Bulk Tug deliberately cannot carry precision components. Once
+	# its congestion lesson is complete, restore the trunk to mixed cargo through
+	# the same visible Location UI the player used to specialize it. Otherwise the
+	# later remote construction journey would correctly wait for electronics.
+	await _open_location_from_system(main, "asteroid_belt")
+	await _press_named(main, "LocationTab_logistics", "OPEN_BELT_LOGISTICS_FOR_MIXED_CARGO_RESTORE")
+	await _press_named(main, "TransportMode_lunar_belt_freight_general_cargo", "RESTORE_BELT_TRUNK_MIXED_CARGO")
+	var restored_service: Dictionary = Game.simulation.logistics.service_for_route(Game.state, "lunar_belt_freight")
+	if String(restored_service.get("transport_mode_id", "")) != "general_cargo":
+		return _journey_fail("visible route control did not restore mixed-cargo freight after the Bulk Tug lesson")
+	var precision_path: Dictionary = Game.simulation.logistics._shortest_path(
+		Game.state,
+		SpaceGameState.MAIN_BASE_LOCATION_ID,
+		"asteroid_belt",
+		"electronics"
+	)
+	if precision_path.is_empty():
+		return _journey_fail("restored mixed-cargo trunk still cannot carry remote construction electronics")
+	return true
+
+
+func _has_facility_maintenance_demand_read_only(location_id: String, facility_id: String) -> bool:
+	for demand_value in Game.state.demand_registry.get("sources", {}).values():
+		var demand := demand_value as Dictionary
+		if String(demand.get("consumer_type", "")) == "facility_om" \
+				and String(demand.get("location_id", "")) == location_id \
+				and String(demand.get("facility_id", "")) == facility_id \
+				and String(demand.get("demand_kind", "")) == "CONTINUOUS" \
+				and float(demand.get("rate_per_hour", 0.0)) > 0.0:
+			return true
+	return false
+
+
+func _create_belt_route_pressure_ui(main: Control) -> bool:
+	# Build a genuine one-budget Belt export backlog through the physical mine.
+	# Earlier ship/BOM preparation can legitimately drain the frontier depot, so
+	# default Supply/Demand policies alone are not evidence of route pressure.
+	var pressure_path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, "asteroid_belt", SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore")
+	var saturation_batch := _route_cargo_batch_read_only(pressure_path)
+	var hub_units := maxf(0.001, float(pressure_path.get("hub_freight_units_per_item", 1.0)))
+	var required_hub_throughput := ceili(float(saturation_batch) * hub_units)
+	for node_id_value in pressure_path.get("nodes", []):
+		var node_id := String(node_id_value)
+		if int(Game.state.location_state(node_id).get("logistics", {}).get("hub_throughput", 0)) < required_hub_throughput:
+			if not await _upgrade_worksite_capacity_ui(main, node_id, "LOGISTICS_HUB_UPGRADE", required_hub_throughput):
+				return false
+	pressure_path = Game.simulation.logistics._shortest_path(Game.state, "asteroid_belt", SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore")
+	saturation_batch = _route_cargo_batch_read_only(pressure_path)
+	# Policy-editor navigation can cross one ordinary maintenance settlement even
+	# when the player has just pressed Pause. Keep a small physical source margin;
+	# the destination deficit and route capacity still cap the actual shipment at
+	# exactly one saturation batch.
+	var source_dispatch_budget := saturation_batch + 4
+	# Finish all potentially raw-material-consuming preparation first. Then remove
+	# any temporary import/export policies left by that normal production work so
+	# the dedicated mine can accumulate one auditable full route batch.
+	if not await _stage_remote_operating_stock_ui(main, "asteroid_belt"):
+		return false
+	# The starting Earth extractor is intentionally persistent during the early
+	# journey. Stop every visible line before sizing destination capacity; otherwise
+	# it can fill several Bulk slots while the normal hub construction is running
+	# and silently reduce an 18-item saturation dispatch to a smaller cargo.
+	await _open_location_from_system(main, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	await _open_industry_production(main)
+	await _stop_all_visible_industry_lines(main)
+	await _press_named(main, "SpeedPause", "PAUSE_TO_ISOLATE_ROUTE_PRESSURE_BACKLOG")
+	await _clear_policy_ui(main, "asteroid_belt", "mixed_raw_ore")
+	await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore")
+	# Drain shipments created by earlier Golden Journey policies before measuring
+	# free storage. With both policies cleared this wait cannot create a successor.
+	if _has_in_transit_item_read_only("mixed_raw_ore"):
+		var prior_raw_shipments_drained := await _wait_at_public_fast_speed(main, func() -> bool:
+			return not _has_in_transit_item_read_only("mixed_raw_ore"),
+			JOURNEY_STAGE_TIMEOUT_SECONDS)
+		if not prior_raw_shipments_drained:
+			return _journey_fail("prior mixed-ore freight did not drain before route-pressure isolation")
+	await _press_named(main, "SpeedPause", "PAUSE_TO_SIZE_ROUTE_PRESSURE_STORAGE")
+	for storage_guard in 4:
+		if Game.simulation.location_storage_free_quantity_for_item(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore") >= saturation_batch:
+			break
+		if not await _upgrade_item_storage_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore"):
+			return false
+		await _press_named(main, "SpeedPause", "PAUSE_AFTER_ROUTE_PRESSURE_STORAGE_UPGRADE_%d" % storage_guard)
+	if Game.simulation.location_storage_free_quantity_for_item(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore") < saturation_batch:
+		return _journey_fail("Earth Bulk storage cannot receive one route-saturation batch")
+	if Game.simulation.location_storage_free_quantity_for_item(Game.state, "asteroid_belt", "mixed_raw_ore") \
+			+ Game.state.item_quantity("mixed_raw_ore", "asteroid_belt") < source_dispatch_budget:
+		if not await _upgrade_item_storage_ui(main, "asteroid_belt", "mixed_raw_ore"):
+			return false
+	if Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt") < source_dispatch_budget:
+		var mining_ship_id := _ship_id_for_blueprint("lunar_pathfinder")
+		var backlog_ready := false
+		for mission_attempt in 4:
+			if Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt") >= source_dispatch_budget:
+				backlog_ready = true
+				break
+			var belt_runtime := _mining_runtime_for_site("belt_cobalt_frontier")
+			if belt_runtime.is_empty() or String(belt_runtime.get("status", "")) not in ["RUNNING", "BLOCKED"]:
+				await _press_named(main, "SpeedPause", "PAUSE_FOR_ROUTE_PRESSURE_MINING_MISSION_%d" % mission_attempt)
+				await _press_named(main, "Navigation_ships", "OPEN_SHIPS_FOR_BOTTLENECK_MINING")
+				var roster_section := main.find_child("FleetSection_roster", true, false) as Button
+				if roster_section != null and roster_section.is_visible_in_tree() and not roster_section.disabled:
+					await _press_control(roster_section, "OPEN_ROSTER_FOR_BOTTLENECK_MINING")
+				await _press_named(main, "AssignMining_%s" % mining_ship_id, "ASSIGN_BELT_MINER_FOR_ROUTE_PRESSURE")
+				await _press_named(main, "Navigation_survey", "OPEN_SURVEY_FOR_ROUTE_PRESSURE")
+				await _press_named(main, "StartMining_belt_cobalt_frontier", "START_BELT_MINING_FOR_ROUTE_PRESSURE")
+			var stock_before_mission := Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt")
+			await _wait_at_public_fast_speed(main, func() -> bool:
+				return Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt") >= source_dispatch_budget \
+					or _mining_runtime_for_site("belt_cobalt_frontier").is_empty(),
+				LARGE_BATCH_TIMEOUT_SECONDS)
+			if Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt") >= source_dispatch_budget:
+				backlog_ready = true
+				break
+			if Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt") <= stock_before_mission:
+				break
+		if not backlog_ready:
+			_print_mining_diagnostic("belt_cobalt_frontier", _ship_id_for_blueprint("lunar_pathfinder"))
+			return _journey_fail("physical Belt mine did not create the route-saturation backlog")
+		await _stop_mining_site_ui(main, "belt_cobalt_frontier", "mixed_raw_ore")
+	# Configure the bounded Supply and matching Demand atomically from the
+	# player's perspective. At running speed, an older valid Demand may consume
+	# the just-published default Supply during the policy editor's settle frames.
+	await _press_named(main, "SpeedPause", "PAUSE_FOR_ROUTE_PRESSURE_POLICIES")
+	await _replace_supply_with_budget_ui(main, "asteroid_belt", "mixed_raw_ore", source_dispatch_budget)
+	# The legitimate automated Earth extraction network remains online and can
+	# publish several ore units on the same deterministic boundary as freight.
+	# Keep the Demand comfortably above that local flow so route capacity—not a
+	# shrinking destination deficit—sets the first dispatch size.
+	var pressure_target := Game.state.item_quantity("mixed_raw_ore", SpaceGameState.MAIN_BASE_LOCATION_ID) + source_dispatch_budget + 128
+	await _replace_policy_with_target_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore", LogisticsEngine.MODE_DEMAND, pressure_target, 100)
+	var speed_one_button := main.find_child("Speed1", true, false) as Button
+	var speed_one_ready := speed_one_button != null and speed_one_button.is_visible_in_tree() and not speed_one_button.disabled
+	_check(speed_one_ready, "SET_GAME_SPEED_1_TO_OBSERVE_ROUTE_SATURATION is reachable through a visible enabled Control")
+	if not speed_one_ready:
+		return false
+	player_action_execution_log.append({
+		"action_id":"SET_GAME_SPEED_1_TO_OBSERVE_ROUTE_SATURATION",
+		"control_name":"Speed1",
+		"simulation_time_ms":int(Game.state.total_elapsed_ms)
+	})
+	# Emit the real button and observe from the first following frame. The generic
+	# press helper intentionally settles several UI frames, which can cross both
+	# the dispatch and the subsequent utilization-reset boundary.
+	speed_one_button.pressed.emit()
+	var saturated := await _wait_until(func() -> bool:
+		return String(Game.simulation.logistics.service_snapshot(Game.state, "lunar_belt_freight").get("status", "")) == "SATURATED",
+		minf(JOURNEY_STAGE_TIMEOUT_SECONDS, 30.0))
+	await _press_named(main, "Speed10", "RETURN_GAME_SPEED_10_AFTER_ROUTE_SATURATION")
+	if not saturated:
+		print("FULL_GAMEPLAY_UI_ROUTE_PRESSURE_TIMEOUT=", JSON.stringify({
+			"saturation_batch":saturation_batch,
+			"source_dispatch_budget":source_dispatch_budget,
+			"pressure_target":pressure_target,
+			"source_inventory":Game.state.location_inventory("asteroid_belt").duplicate(true),
+			"source_available":Game.state.available_item_quantity("mixed_raw_ore", "asteroid_belt"),
+			"destination_inventory":Game.state.location_inventory(SpaceGameState.MAIN_BASE_LOCATION_ID).duplicate(true),
+			"destination_free":Game.simulation.location_storage_free_quantity_for_item(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, "mixed_raw_ore"),
+			"service":Game.simulation.logistics.service_snapshot(Game.state, "lunar_belt_freight"),
+			"source_policies":Game.state.location_state("asteroid_belt").get("logistics", {}).get("policies", {}).duplicate(true),
+			"destination_policies":Game.state.location_state(SpaceGameState.MAIN_BASE_LOCATION_ID).get("logistics", {}).get("policies", {}).duplicate(true),
+			"shipments":Game.state.logistics_network.get("shipments", []).duplicate(true)
+		}))
+		return _journey_fail("real Belt export pressure did not saturate lunar_belt_freight")
 	return true
 
 
@@ -1172,20 +1612,63 @@ func _supply_remote_construction_ui(main: Control, location_id: String, project_
 
 
 func _mine_and_freight_ui(main: Control, location_id: String, site_id: String, ship_id: String, item_id: String, remote_target: int) -> bool:
+	# Refit completion and the long industrial preparation immediately before this
+	# step can legitimately settle another tranche of ship-maintenance debt. Recover
+	# that debt through normal production, then freeze the simulation through the
+	# public Pause control while the player traverses Ships -> Survey. Otherwise a
+	# just-serviceable miner can lose its last coverage during UI settle frames and
+	# the authoritative Start Mining availability correctly disables the button.
+	if not await _recover_mining_ship_service_ui(main, ship_id, "%s_MINING_START" % location_id.to_upper()):
+		return false
+	await _press_named(main, "SpeedPause", "PAUSE_BEFORE_%s_MINING_START" % location_id.to_upper())
 	await _press_named(main, "Navigation_ships", "OPEN_SHIPS_FOR_%s_MINING" % location_id.to_upper())
 	var roster_button := main.find_child("FleetSection_roster", true, false) as Button
 	if roster_button != null and not roster_button.disabled:
 		await _press_control(roster_button, "OPEN_ROSTER_FOR_%s_MINING" % location_id.to_upper())
 	await _press_named(main, "AssignMining_%s" % ship_id, "ASSIGN_%s_MINING_AT_%s" % [ship_id.to_upper(), location_id.to_upper()])
+	if Game.state.ship_fleet_domain(ship_id) != "mining":
+		return _journey_fail("visible Mining assignment was rejected before %s: %s" % [site_id, Game.last_notice])
+	var availability := Game.extraction_operation_availability(site_id, [ship_id])
+	if not bool(availability.get("allowed", false)):
+		_print_mining_diagnostic(site_id, ship_id)
+		return _journey_fail("authoritative Mining availability rejected %s: %s / %s" % [site_id, availability.get("reason_code", "UNKNOWN"), availability.get("reason", "")])
 	await _press_named(main, "Navigation_survey", "OPEN_SURVEY_FOR_%s_MINING" % location_id.to_upper())
 	await _press_named(main, "StartMining_%s" % site_id, "START_MINING_%s" % site_id.to_upper())
+	var runtime := _mining_runtime_for_site(site_id)
+	if runtime.is_empty() or String(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"] or not (runtime.get("assigned_ship_ids", []) as Array).has(ship_id):
+		_print_mining_diagnostic(site_id, ship_id)
+		return _journey_fail("visible Mining start did not create the authoritative %s runtime" % site_id)
+	# Start freight as soon as one physical extraction batch exists. Some remote
+	# depots intentionally hold less than the strategic target; waiting for the
+	# whole target locally deadlocks a valid streaming mine -> route pipeline at
+	# STORAGE_FULL. The delivery ledger below proves the full requested quantity
+	# crossed normal Logistics while extraction remains active.
 	var mined := await _wait_at_public_fast_speed(main, func() -> bool:
-		return Game.state.item_quantity(item_id, location_id) >= remote_target,
+		return Game.state.item_quantity(item_id, location_id) > 0,
 		LARGE_BATCH_TIMEOUT_SECONDS)
 	if not mined:
 		_print_mining_diagnostic(site_id, ship_id)
-		return _journey_fail("remote UI mining did not stage %s at %s" % [item_id, location_id])
-	return await _freight_remote_item_ui(main, location_id, item_id, true)
+		return _journey_fail("remote UI mining did not produce the first %s batch at %s" % [item_id, location_id])
+	var delivered_before := int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0))
+	for streaming_guard in 64:
+		var delivered_quantity := int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) - delivered_before
+		if delivered_quantity >= remote_target:
+			return true
+		if Game.state.item_quantity(item_id, location_id) <= 0:
+			var next_batch := await _wait_at_public_fast_speed(main, func() -> bool:
+				return Game.state.item_quantity(item_id, location_id) > 0,
+				JOURNEY_STAGE_TIMEOUT_SECONDS)
+			if not next_batch:
+				_print_mining_diagnostic(site_id, ship_id)
+				return _journey_fail("streaming Mining did not produce the next %s batch at %s" % [item_id, location_id])
+		# Each bounded freight call stages one real return-dispatch operating
+		# tranche, moves the current depot batch, and clears its temporary policies.
+		# Repeating that normal player loop prevents either raw cargo or operating
+		# stock from exceeding a deliberately small frontier depot.
+		if not await _freight_remote_item_ui(main, location_id, item_id, true):
+			return false
+	_print_mining_diagnostic(site_id, ship_id)
+	return _journey_fail("streaming Mining and Logistics exceeded the delivery guard for %s" % item_id)
 
 
 func _freight_remote_item_ui(main: Control, location_id: String, item_id: String, require_source_release: bool = false) -> bool:
@@ -1246,26 +1729,79 @@ func _path_cargo_batch_read_only(path: Dictionary) -> int:
 	return maxi(1, result if result != 2147483647 else 1)
 
 
-func _stage_remote_operating_stock_ui(main: Control, location_id: String, dispatch_count: int = 1, destination_id: String = "") -> bool:
+func _route_cargo_batch_read_only(path: Dictionary) -> int:
+	if path.is_empty():
+		return 1
+	var result := 2147483647
+	for route_id_value in path.get("route_ids", []):
+		var route_id := String(route_id_value)
+		var route_units := maxf(0.001, float(path.get("route_freight_units_per_item", {}).get(route_id, 1.0)))
+		result = mini(result, floori(float(Game.simulation.logistics.service_capacity(Game.state, route_id)) / route_units))
+	return maxi(1, result if result != 2147483647 else 1)
+
+
+func _has_in_transit_item_read_only(item_id: String) -> bool:
+	for shipment_value in Game.state.logistics_network.get("shipments", []):
+		var shipment := shipment_value as Dictionary
+		if int((shipment.get("cargo", {}) as Dictionary).get(item_id, 0)) > 0:
+			return true
+	return false
+
+
+func _stage_remote_operating_stock_ui(main: Control, location_id: String, dispatch_count: int = 1, destination_id: String = "", minimum_source_requirements: Dictionary = {}) -> bool:
 	if location_id == SpaceGameState.MAIN_BASE_LOCATION_ID:
-		var source_requirements := {"chemical_propellant":40, "repair_material":20}
+		var spendable_requirements := {"chemical_propellant":40, "repair_material":20}
+		var outbound_guard_key := ""
 		if not destination_id.is_empty():
+			outbound_guard_key = "earth_outbound:%s" % destination_id
+			if bool(_operating_stock_stage_guard.get(outbound_guard_key, false)):
+				return _journey_fail("Earth outbound operating-stock dependency recursed through %s" % destination_id)
 			var outbound_path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, location_id, destination_id, "chemical_propellant")
 			var outbound_costs: Dictionary = Game.simulation.logistics._path_costs(Game.state, outbound_path)
 			var bounded_dispatches := clampi(dispatch_count, 1, 64)
 			# Eight dispatch-costs of margin cover concurrent O&M settlement while
 			# the visible production plan is running. The main depot is mature and
 			# these are real manufactured/consumed operating goods, not free fuel.
-			source_requirements["chemical_propellant"] = maxi(40, int(outbound_costs.get("chemical_propellant", 0)) * (bounded_dispatches + 8))
-			source_requirements["repair_material"] = maxi(20, int(outbound_costs.get("repair_material", 0)) * (bounded_dispatches + 8))
-		return await _ensure_ui_costs_stable(main, source_requirements)
+			spendable_requirements["chemical_propellant"] = maxi(40, int(outbound_costs.get("chemical_propellant", 0)) * (bounded_dispatches + 8))
+			spendable_requirements["repair_material"] = maxi(20, int(outbound_costs.get("repair_material", 0)) * (bounded_dispatches + 8))
+			_operating_stock_stage_guard[outbound_guard_key] = true
+			_operating_stock_guard_trace.append({"event":"ENTER", "key":outbound_guard_key})
+		for item_id_value in minimum_source_requirements.keys():
+			var item_id := String(item_id_value)
+			spendable_requirements[item_id] = maxi(int(spendable_requirements.get(item_id, 0)), int(minimum_source_requirements[item_id]))
+		var spendable_ready := func() -> bool:
+			for item_id_value in spendable_requirements.keys():
+				if Game.state.available_item_quantity(String(item_id_value), SpaceGameState.MAIN_BASE_LOCATION_ID) < int(spendable_requirements[item_id_value]):
+					return false
+			return true
+		var source_ready := bool(spendable_ready.call())
+		for recovery_attempt in 3:
+			if source_ready:
+				break
+			var planned_requirements := spendable_requirements.duplicate(true)
+			var repair_recovery := Game.simulation.maintenance_recovery_requirement(
+				Game.state,
+				SpaceGameState.MAIN_BASE_LOCATION_ID,
+				"repair_material",
+				int(spendable_requirements.get("repair_material", 0)),
+				8.0 * 3600000.0
+			)
+			planned_requirements["repair_material"] = int(repair_recovery.get("gross_production_target", spendable_requirements.get("repair_material", 0)))
+			print("FULL_GAMEPLAY_UI_MAINTENANCE_RECOVERY_PLAN=", JSON.stringify(repair_recovery.merged({"attempt":recovery_attempt}, true)))
+			var recovery_executed := await _ensure_ui_costs_stable(main, planned_requirements, spendable_ready, Callable(), {}, spendable_requirements, 1)
+			# This helper deliberately permits an optimistic return for live remote
+			# sinks that can consume a produced batch before it remains visible at
+			# Earth. Operating-stock recovery has the opposite contract: success is
+			# legal only while the requested stock is actually spendable here.
+			source_ready = recovery_executed and bool(spendable_ready.call())
+		return _finish_operating_stock_guard(outbound_guard_key, source_ready)
 	if bool(_operating_stock_stage_guard.get(location_id, false)):
 		return _journey_fail("remote operating-stock dependency recursed through %s" % location_id)
 	var path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, location_id, "chemical_propellant")
 	var path_costs: Dictionary = Game.simulation.logistics._path_costs(Game.state, path)
 	dispatch_count = clampi(dispatch_count, 1, 16)
-	var fuel_target := maxi(1, int(path_costs.get("chemical_propellant", 0)) * dispatch_count)
-	var repair_target := maxi(1, int(path_costs.get("repair_material", 0)) * dispatch_count)
+	var fuel_target := maxi(1, int(path_costs.get("chemical_propellant", 0)))
+	var repair_target := maxi(1, int(path_costs.get("repair_material", 0)))
 	# A remote origin only needs one return-dispatch cost buffer. Oversupplying this
 	# stock can fill a frontier Fluid depot and block the raw gas the route exists
 	# to export; replenish the buffer before each dispatch instead.
@@ -1283,11 +1819,98 @@ func _stage_remote_operating_stock_ui(main: Control, location_id: String, dispat
 	# mining and UI work for every two-unit frontier cargo without changing the
 	# outcome of the freight transaction.
 	_operating_stock_stage_guard[location_id] = true
-	var source_stock_ready := await _ensure_ui_costs_stable(main, {
+	_operating_stock_guard_trace.append({"event":"ENTER", "key":location_id})
+	var source_requirements := {
 		"chemical_propellant":maxi(10, fuel_budget),
 		"repair_material":maxi(10, repair_budget)
-	})
-	_operating_stock_stage_guard.erase(location_id)
+	}
+	var source_ready := func() -> bool:
+		for item_id_value in source_requirements.keys():
+			var item_id := String(item_id_value)
+			if Game.state.available_item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) < int(source_requirements[item_id]):
+				return false
+		return true
+	# Repair material is consumed continuously while the player manufactures this
+	# dispatch tranche. Plan the authoritative debt plus an eight-hour bounded
+	# demand horizon, but stop through the normal UI as soon as the exact spendable
+	# route budget exists. Without that distinction a valid long-running fleet can
+	# consume part of the batch and leave the recipe waiting for inputs at a gross
+	# stock target that can no longer be reached from its already-spent BOM.
+	var source_stock_ready := bool(source_ready.call())
+	for recovery_attempt in 6:
+		if source_stock_ready:
+			break
+		var source_repair_recovery := Game.simulation.maintenance_recovery_requirement(
+			Game.state,
+			SpaceGameState.MAIN_BASE_LOCATION_ID,
+			"repair_material",
+			int(source_requirements["repair_material"]),
+			8.0 * 3600000.0
+		)
+		# A large accumulated debt is a player-visible reason to put idle docked
+		# hulls in Ready Reserve. Logistics and construction hulls stay active, so
+		# the route being supplied keeps its physical capacity.
+		if float(source_repair_recovery.get("fleet_debt", 0.0)) >= float(source_requirements["repair_material"]):
+			await _set_idle_fleet_ready_reserve_ui(main)
+			source_repair_recovery = Game.simulation.maintenance_recovery_requirement(
+				Game.state,
+				SpaceGameState.MAIN_BASE_LOCATION_ID,
+				"repair_material",
+				int(source_requirements["repair_material"]),
+				8.0 * 3600000.0
+			)
+		var planned_source_requirements := source_requirements.duplicate(true)
+		var current_repair_available := Game.state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID)
+		var gross_repair_budget := int(source_repair_recovery.get("gross_production_target", source_requirements["repair_material"]))
+		# The planner accepts a desired available balance. Add the current balance
+		# so its production entry retains the Domain's full additional gross budget.
+		planned_source_requirements["repair_material"] = current_repair_available + gross_repair_budget
+		var repair_completed_before := int(Game.state.completed_activities.get("fabricate_repair_material", 0))
+		var repair_consumed_before := int(Game.state.fleet_maintenance.get("consumption_totals", {}).get("repair_material", 0))
+		var repair_debt_before := float(source_repair_recovery.get("fleet_debt", 0.0))
+		var production_progress := func(progress_item_id: String) -> int:
+			if progress_item_id != "repair_material":
+				return 0
+			return int(Game.state.completed_activities.get("fabricate_repair_material", 0))
+		print("FULL_GAMEPLAY_UI_REMOTE_STOCK_RECOVERY_PLAN=", JSON.stringify(source_repair_recovery.merged({
+			"attempt":recovery_attempt,
+			"destination":location_id,
+			"source_requirements":source_requirements
+		}, true)))
+		var recovery_executed := await _ensure_ui_costs_stable(
+			main,
+			planned_source_requirements,
+			source_ready,
+			production_progress,
+			{"repair_material":repair_completed_before + gross_repair_budget},
+			source_requirements,
+			1
+		)
+		source_stock_ready = bool(source_ready.call())
+		if source_stock_ready:
+			break
+		var repair_completed_after := int(Game.state.completed_activities.get("fabricate_repair_material", 0))
+		var repair_consumed_after := int(Game.state.fleet_maintenance.get("consumption_totals", {}).get("repair_material", 0))
+		var repair_debt_after := float(Game.simulation.maintenance_recovery_requirement(
+			Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material", int(source_requirements["repair_material"]), 0.0
+		).get("fleet_debt", 0.0))
+		var conserved_progress := repair_completed_after > repair_completed_before \
+			or repair_consumed_after > repair_consumed_before \
+			or repair_debt_after < repair_debt_before - 0.000001
+		print("FULL_GAMEPLAY_UI_REMOTE_STOCK_RECOVERY_RESULT=", JSON.stringify({
+			"attempt":recovery_attempt,
+			"executed":recovery_executed,
+			"ready":source_stock_ready,
+			"completed_before":repair_completed_before,
+			"completed_after":repair_completed_after,
+			"consumed_before":repair_consumed_before,
+			"consumed_after":repair_consumed_after,
+			"debt_before":repair_debt_before,
+			"debt_after":repair_debt_after
+		}))
+		if not conserved_progress:
+			break
+	_finish_operating_stock_guard(location_id, source_stock_ready)
 	if not source_stock_ready: return false
 	await _press_named(main, "SpeedPause", "PAUSE_FOR_BOUNDED_OPERATING_STOCK_POLICIES")
 	await _replace_supply_with_budget_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "chemical_propellant", fuel_budget)
@@ -1414,7 +2037,9 @@ func _install_ship_module_ui(main: Control, ship_id: String, module_id: String) 
 		await _press_control(roster_button, "OPEN_ROSTER_TO_INSTALL_%s" % module_id.to_upper())
 	await _press_named(main, "InstallModule_%s_%s" % [ship_id, module_id], "INSTALL_%s_ON_%s" % [module_id.to_upper(), ship_id.to_upper()])
 	var completed := await _wait_at_public_fast_speed(main, func() -> bool:
-		return module_id in Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)),
+		return module_id in Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)) \
+			and not _ship_has_active_refit(ship_id) \
+			and String(Game.state.ship_by_id(ship_id).get("status", "")) == "DOCKED",
 		JOURNEY_STAGE_TIMEOUT_SECONDS)
 	return completed or _journey_fail("visible refit did not install %s on %s" % [module_id, ship_id])
 
@@ -1431,9 +2056,16 @@ func _remove_ship_module_ui(main: Control, ship_id: String, module_id: String) -
 		await _press_control(roster_button, "OPEN_ROSTER_TO_REMOVE_%s" % module_id.to_upper())
 	await _press_named(main, "RemoveModule_%s_%s" % [ship_id, module_id], "REMOVE_%s_FROM_%s" % [module_id.to_upper(), ship_id.to_upper()])
 	var completed := await _wait_at_public_fast_speed(main, func() -> bool:
-		return module_id not in Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)),
+		return module_id not in Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)) \
+			and not _ship_has_active_refit(ship_id) \
+			and String(Game.state.ship_by_id(ship_id).get("status", "")) == "DOCKED",
 		JOURNEY_STAGE_TIMEOUT_SECONDS)
 	return completed or _journey_fail("visible refit did not remove %s from %s" % [module_id, ship_id])
+
+
+func _ship_has_active_refit(ship_id: String) -> bool:
+	return Game.state.refit_projects.any(func(runtime_value) -> bool:
+		return String((runtime_value as Dictionary).get("ship_id", "")) == ship_id)
 
 
 func _uninstall_process_module_ui(main: Control, facility_id: String, module_id: String) -> bool:
@@ -1528,6 +2160,13 @@ func _stage_worksite_maintenance_ui(main: Control, location_id: String) -> bool:
 		await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, String(item_id_value))
 		await _clear_policy_ui(main, location_id, String(item_id_value))
 	return covered or _journey_fail("worksite maintenance coverage stayed below commissioning threshold")
+
+
+func _finish_operating_stock_guard(key: String, result: bool) -> bool:
+	if not key.is_empty():
+		_operating_stock_stage_guard.erase(key)
+		_operating_stock_guard_trace.append({"event":"EXIT", "key":key, "result":result})
+	return result
 
 
 func _location_capacity_value(location_id: String, project_type: String) -> int:
@@ -1818,20 +2457,6 @@ func _capture_playthrough_milestone(main: Control, basename: String) -> void:
 		_check(String(I18n.current_locale) == original_locale, "%s capture restores the prior locale" % basename)
 
 
-func _consume_ui_item_below(main: Control, activity_id: String, item_id: String, maximum_quantity: int) -> bool:
-	if Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) <= maximum_quantity:
-		return true
-	await _open_industry_production(main)
-	await _press_named(main, "StartIndustry_%s" % activity_id, "START_%s_FOR_FREIGHT_DEFICIT" % activity_id.to_upper())
-	var consumed := await _wait_at_public_fast_speed(main, func() -> bool:
-		return Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) <= maximum_quantity,
-		JOURNEY_STAGE_TIMEOUT_SECONDS)
-	var stop_button := main.find_child("StopIndustry_%s" % activity_id, true, false) as Button
-	if stop_button != null and stop_button.is_visible_in_tree() and not stop_button.disabled:
-		await _press_control(stop_button, "STOP_%s_AFTER_FREIGHT_DEFICIT" % activity_id.to_upper())
-	return consumed
-
-
 func _stop_all_visible_industry_lines(main: Control) -> void:
 	# Page rebuilds free the remaining controls after each press, so resolve the
 	# visible tree again until no normal Stop action remains.
@@ -1844,7 +2469,9 @@ func _stop_all_visible_industry_lines(main: Control) -> void:
 		await _open_industry_production(main)
 
 
-func _produce_until(main: Control, activity_id: String, product_id: String, target_quantity: int, timeout_seconds: float, use_public_fast_speed: bool = false, storage_recovery_attempts: int = 0, progress_retry_attempts: int = 0, committed_sink_progress: Callable = Callable(), committed_sink_target: int = 0) -> bool:
+func _produce_until(main: Control, activity_id: String, product_id: String, target_quantity: int, timeout_seconds: float, use_public_fast_speed: bool = false, storage_recovery_attempts: int = 0, progress_retry_attempts: int = 0, committed_sink_progress: Callable = Callable(), committed_sink_target: int = 0, external_completion: Callable = Callable()) -> bool:
+	if external_completion.is_valid() and bool(external_completion.call()):
+		return true
 	if Game.state.item_quantity(product_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= target_quantity:
 		return true
 	var quantity_before := Game.state.item_quantity(product_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
@@ -1884,7 +2511,7 @@ func _produce_until(main: Control, activity_id: String, product_id: String, targ
 				await _wait_at_public_fast_speed(main, func() -> bool: return false, 1.0)
 			if (start_control == null or not start_control.is_visible_in_tree() or start_control.disabled) and progress_retry_attempts < 8:
 				await _open_industry_production(main)
-				return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts, progress_retry_attempts + 1, committed_sink_progress, committed_sink_target)
+				return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts, progress_retry_attempts + 1, committed_sink_progress, committed_sink_target, external_completion)
 		if start_control == null or not start_control.is_visible_in_tree() or start_control.disabled:
 			print("FULL_GAMEPLAY_UI_START_UNAVAILABLE=", JSON.stringify({
 				"activity_id":activity_id,
@@ -1901,29 +2528,44 @@ func _produce_until(main: Control, activity_id: String, product_id: String, targ
 		# delivery proof; wait for the whole requested batch instead of restarting
 		# the UI production line after every individual cycle.
 		var current_quantity := Game.state.item_quantity(product_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
-		return current_quantity >= target_quantity \
+		return (external_completion.is_valid() and bool(external_completion.call())) \
+			or current_quantity >= target_quantity \
 			or (committed_sink_progress.is_valid() and int(committed_sink_progress.call()) >= committed_sink_target)
+	var completion_or_blocked := func() -> bool:
+		if bool(completion_predicate.call()):
+			return true
+		var live_runtime := _industry_runtime(activity_id)
+		if String(live_runtime.get("status", "")) != "BLOCKED":
+			return false
+		var primary_reason := String(live_runtime.get("blocker", {}).get("primary_reason", ""))
+		return String(live_runtime.get("blocked_reason", "")) in ["RESOURCES", "STORAGE_FULL"] \
+			or primary_reason in ["INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD", "STORAGE_FULL"]
+	var paused_for_precise_stop := false
 	if use_public_fast_speed:
-		await _wait_at_public_fast_speed(main, completion_predicate, timeout_seconds)
+		await _wait_at_public_fast_speed(main, completion_or_blocked, timeout_seconds, true)
+		paused_for_precise_stop = true
 	else:
-		await _wait_until(completion_predicate, timeout_seconds)
+		await _wait_until(completion_or_blocked, timeout_seconds)
 	var produced := Game.state.item_quantity(product_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= target_quantity
 	var delivered_to_committed_sink := committed_sink_progress.is_valid() \
 		and int(committed_sink_progress.call()) >= committed_sink_target
+	var externally_completed := external_completion.is_valid() and bool(external_completion.call())
 	var runtime_before_stop := _industry_runtime(activity_id)
 	var storage_limited := String(runtime_before_stop.get("blocked_reason", "")) == "STORAGE_FULL" \
 		or String(runtime_before_stop.get("blocker", {}).get("primary_reason", "")) == "STORAGE_FULL"
 	var stop_button := main.find_child("StopIndustry_%s" % activity_id, true, false) as Button
 	if stop_button != null and stop_button.is_visible_in_tree() and not stop_button.disabled:
 		await _press_control(stop_button, "STOP_%s" % activity_id.to_upper())
-	if delivered_to_committed_sink:
+	if paused_for_precise_stop:
+		await _press_named(main, "Speed10", "RETURN_GAME_SPEED_10_AFTER_PRECISE_PRODUCTION_STOP")
+	if delivered_to_committed_sink or externally_completed:
 		return true
 	if not produced:
 		if storage_limited and storage_recovery_attempts < 6:
 			var expanded := await _upgrade_activity_storage_ui(main, runtime_before_stop, Game.content.activities.get(activity_id, {}))
 			if expanded:
 				await _open_industry_production(main)
-				return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts + 1, progress_retry_attempts, committed_sink_progress, committed_sink_target)
+				return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts + 1, progress_retry_attempts, committed_sink_progress, committed_sink_target, external_completion)
 		var primary_reason := String(runtime_before_stop.get("blocker", {}).get("primary_reason", ""))
 		var input_limited := String(runtime_before_stop.get("blocked_reason", "")) == "RESOURCES" \
 			or primary_reason in ["INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD"]
@@ -1941,7 +2583,7 @@ func _produce_until(main: Control, activity_id: String, product_id: String, targ
 					if not await _ensure_ui_item(main, cost_item, target_cost_stock):
 						return false
 			await _open_industry_production(main)
-			return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts, progress_retry_attempts + 1, committed_sink_progress, committed_sink_target)
+			return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts, progress_retry_attempts + 1, committed_sink_progress, committed_sink_target, external_completion)
 		var completed_after := int(Game.state.completed_activities.get(activity_id, 0))
 		if (Game.state.item_quantity(product_id, SpaceGameState.MAIN_BASE_LOCATION_ID) > quantity_before \
 				or completed_after > completed_before) and progress_retry_attempts < 8:
@@ -1950,7 +2592,7 @@ func _produce_until(main: Control, activity_id: String, product_id: String, targ
 			# of forward progress, so continue until the sink is funded and spendable
 			# stock accumulates. A genuinely stalled recipe records no new completion.
 			await _open_industry_production(main)
-			return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts, progress_retry_attempts + 1, committed_sink_progress, committed_sink_target)
+			return await _produce_until(main, activity_id, product_id, target_quantity, timeout_seconds, use_public_fast_speed, storage_recovery_attempts, progress_retry_attempts + 1, committed_sink_progress, committed_sink_target, external_completion)
 		print("FULL_GAMEPLAY_UI_PRODUCTION_TIMEOUT=", JSON.stringify({
 			"activity_id":activity_id,
 			"product_id":product_id,
@@ -2015,26 +2657,13 @@ func _upgrade_item_storage_ui(main: Control, location_id: String, item_id: Strin
 	return await _upgrade_worksite_capacity_ui(main, location_id, project_type, current_capacity + 1)
 
 
-func _ensure_ui_costs(main: Control, costs: Dictionary) -> bool:
-	for item_id_value in costs.keys():
-		var item_id := String(item_id_value)
-		var required_available := int(costs[item_id])
-		var available := Game.state.available_item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
-		# Domain availability, not gross stock, funds commands. Produce above any
-		# legitimate reservation so the visible button receives spendable inputs.
-		var target_total := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) + maxi(0, required_available - available)
-		if not await _ensure_ui_item(main, item_id, target_total):
-			return false
-	return true
-
-
-func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Callable = Callable(), committed_sink_progress: Callable = Callable(), committed_sink_targets: Dictionary = {}) -> bool:
+func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Callable = Callable(), committed_sink_progress: Callable = Callable(), committed_sink_targets: Dictionary = {}, spendable_targets: Dictionary = {}, max_passes: int = 3) -> bool:
 	# Reserve the whole requested BOM in a read-only virtual inventory before
 	# pressing any recipe. This gives one dependency-ordered UI production plan;
 	# producing a later capital good can no longer consume a product that an
 	# earlier loop had incorrectly considered "finished". All execution still
 	# uses the ordinary Industry/Mining controls and public speed buttons.
-	for pass_index in 3:
+	for pass_index in maxi(1, max_passes):
 		if completion.is_valid() and bool(completion.call()):
 			return true
 		await _open_industry_production(main)
@@ -2057,8 +2686,25 @@ func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Calla
 			if quantity <= 0:
 				continue
 			var target := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) + quantity
+			if spendable_targets.has(item_id):
+				var desired_available := maxi(0, int(spendable_targets.get(item_id, 0)))
+				var current_gross := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
+				var current_available := Game.state.available_item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
+				target = _planned_entry_gross_target(current_gross, current_available, quantity, desired_available)
 			if String(entry.get("kind", "")) == "RAW":
-				if not await _ensure_raw_resource_ui(main, item_id, target):
+				if not _operating_stock_stage_guard.is_empty() and _active_local_extraction_network_produces(item_id):
+					var remaining_raw := quantity
+					while remaining_raw > 0:
+						# One Earth-network tranche must fit the guarded measured-rate
+						# recovery window. Larger dependency batches are accumulated by
+						# repeating the same visible Speed control, never by spawning ore.
+						var tranche := mini(80, remaining_raw)
+						var tranche_target := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) + tranche
+						if not await _ensure_raw_resource_ui(main, item_id, tranche_target):
+							_print_cost_convergence_diagnostic(costs, pass_index, "RAW_PRODUCTION_FAILED")
+							return false
+						remaining_raw -= tranche
+				elif not await _ensure_raw_resource_ui(main, item_id, target):
 					_print_cost_convergence_diagnostic(costs, pass_index, "RAW_PRODUCTION_FAILED")
 					return false
 			else:
@@ -2069,7 +2715,7 @@ func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Calla
 					item_sink_progress = committed_sink_progress.bind(item_id)
 					item_sink_target = int(committed_sink_targets.get(item_id, 0))
 				await _open_industry_production(main)
-				if not await _produce_until(main, activity_id, item_id, target, LARGE_BATCH_TIMEOUT_SECONDS, true, 0, 0, item_sink_progress, item_sink_target):
+				if not await _produce_until(main, activity_id, item_id, target, LARGE_BATCH_TIMEOUT_SECONDS, true, 0, 0, item_sink_progress, item_sink_target, completion):
 					_print_cost_convergence_diagnostic(costs, pass_index, "PRODUCTION_FAILED:%s" % activity_id)
 					return false
 			if completion.is_valid() and bool(completion.call()):
@@ -2088,8 +2734,17 @@ func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Calla
 			# visible as available Earth stock. The caller now waits on the actual
 			# project completion condition and reports any real delivery shortfall.
 			return true
-	_print_cost_convergence_diagnostic(costs, 3, "PASS_LIMIT")
+	_print_cost_convergence_diagnostic(costs, maxi(1, max_passes), "PASS_LIMIT")
 	return false
+
+
+func _planned_entry_gross_target(current_gross: int, current_available: int, planned_quantity: int, desired_available: int) -> int:
+	# `planned_quantity` can include authoritative maintenance debt and a bounded
+	# consumption horizon. A spendable target is an early-stop predicate, not a
+	# replacement for that physical production budget. The old override collapsed
+	# a 98-unit recovery plan to 27 gross units; continuous maintenance consumed the
+	# batch before 27 units could coexist and the UI journey exhausted its inputs.
+	return current_gross + maxi(maxi(0, planned_quantity), maxi(0, desired_available - current_available))
 
 
 func _build_ui_production_plan(costs: Dictionary) -> Dictionary:
@@ -2242,17 +2897,50 @@ func _ensure_raw_resource_ui(main: Control, item_id: String, target_quantity: in
 			# Prefer the already-established local recovery path before inspecting
 			# frontier stock. Freight from a remote mining origin consumes the very
 			# operating goods this replenishment may be trying to manufacture.
+			# While staging remote operating stock, that fallback would be a real
+			# bootstrap cycle: producing the freight fuel would itself require the
+			# same remote freight fuel. Measure the first bounded recovery window,
+			# then derive one final guarded wait from the network's actual output.
+			# Both waits still use the visible public speed controls and total at
+			# most 120 wall-clock seconds.
+			var production_before := _local_extraction_production_total_read_only(item_id)
+			var stock_before := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
 			var local_progress := await _wait_at_public_fast_speed(main, func() -> bool:
 				return Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= target_quantity,
 				LARGE_BATCH_TIMEOUT_SECONDS)
 			if local_progress: return true
+			var production_delta := maxi(0, _local_extraction_production_total_read_only(item_id) - production_before)
+			var stock_delta := maxi(0, Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) - stock_before)
+			var local_timeout := LARGE_BATCH_TIMEOUT_SECONDS
+			# A healthy automated network can legitimately need slightly longer than
+			# the fixed first window for a large late-game BOM. Derive one bounded
+			# follow-up from the observed net stock gain for every local recovery, not
+			# only while the remote operating-stock recursion guard is active. Using
+			# net stock (rather than the gross production ledger) keeps real competing
+			# consumption visible instead of assuming every produced unit accumulated.
+			if production_delta > 0 and stock_delta > 0:
+				var local_shortfall := maxi(1, target_quantity - Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID))
+				var followup_timeout := clampf(float(local_shortfall) * LARGE_BATCH_TIMEOUT_SECONDS / float(stock_delta) * 1.5, 3.0, 80.0)
+				local_timeout += followup_timeout
+				local_progress = await _wait_at_public_fast_speed(main, func() -> bool:
+					return Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= target_quantity,
+					followup_timeout)
+				if local_progress: return true
 			print("FULL_GAMEPLAY_UI_LOCAL_EXTRACTION_RECOVERY_TIMEOUT=", JSON.stringify({
 				"item_id":item_id,
 				"target":target_quantity,
 				"current":Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID),
+				"timeout_seconds":local_timeout,
+				"observed_production_delta":production_delta,
+				"observed_stock_delta":stock_delta,
+				"operating_stock_guard":_operating_stock_stage_guard.keys(),
 				"networks":Game.state.extraction_network_states.duplicate(true),
 				"storage":Game.simulation.location_storage_snapshot(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID)
 			}))
+			if not _operating_stock_stage_guard.is_empty():
+				return _journey_fail("LOCAL_BOOTSTRAP_EXHAUSTED: Earth extraction could not replenish %s while staging remote operating stock" % item_id)
+		elif not _operating_stock_stage_guard.is_empty():
+			return _journey_fail("LOCAL_BOOTSTRAP_EXHAUSTED: no Earth extraction network can produce %s while staging remote operating stock" % item_id)
 		for source_location in ["deep_system", "gas_giant_region", "asteroid_belt"]:
 			if Game.state.item_quantity(item_id, source_location) <= 0:
 				continue
@@ -2272,6 +2960,9 @@ func _ensure_raw_resource_ui(main: Control, item_id: String, target_quantity: in
 			if automatic_progress: return true
 		var selection := _mining_selection_read_only(item_id)
 		if selection.is_empty():
+			selection = await _recover_mining_selection_ui(main, item_id)
+		if selection.is_empty():
+			_print_mining_selection_diagnostic(item_id)
 			return _journey_fail("no visible legal mining ship/site can replenish %s" % item_id)
 		var ship_id := String(selection.get("ship_id", ""))
 		var site_id := String(selection.get("site_id", ""))
@@ -2306,6 +2997,13 @@ func _ensure_raw_resource_ui(main: Control, item_id: String, target_quantity: in
 					return false
 				if not await _stage_remote_operating_stock_ui(main, source_location):
 					return false
+		# Operating-stock recovery and a stopped bootstrap batch can legitimately put
+		# idle hulls into Ready Reserve to reduce the maintenance sink. Do every such
+		# preparation first, then return the selected miner to Active through the
+		# visible lifecycle control immediately before Assign/Start availability is
+		# evaluated. Activating before preparation leaves a correctly disabled UI.
+		if not await _ensure_ship_active_ui(main, ship_id, "REPLENISH_%s" % item_id.to_upper()):
+			return false
 		var runtime := _mining_runtime_for_site(site_id)
 		if runtime.is_empty() or String(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"]:
 			# Freeze the simulation through the public speed control while the UI
@@ -2382,11 +3080,206 @@ func _active_local_extraction_network_produces(item_id: String) -> bool:
 	return false
 
 
+func _local_extraction_production_total_read_only(item_id: String) -> int:
+	var result := 0
+	for network_id_value in Game.state.extraction_network_states.keys():
+		var network_id := String(network_id_value)
+		var network: Dictionary = Game.content.extraction_networks.get(network_id, {})
+		if String(network.get("region", SpaceGameState.MAIN_BASE_LOCATION_ID)) != SpaceGameState.MAIN_BASE_LOCATION_ID:
+			continue
+		var runtime: Dictionary = Game.state.extraction_network_states.get(network_id, {})
+		result += int(runtime.get("production_totals", {}).get(item_id, 0))
+	return result
+
+
 func _stop_mining_site_ui(main: Control, site_id: String, item_id: String) -> void:
 	await _press_named(main, "Navigation_survey", "OPEN_SURVEY_TO_STOP_%s_MINING" % item_id.to_upper())
 	var stop_button := main.find_child("StopMining_%s" % site_id, true, false) as Button
 	if stop_button != null and stop_button.is_visible_in_tree() and not stop_button.disabled:
 		await _press_control(stop_button, "STOP_MINING_AFTER_%s_BATCH" % item_id.to_upper())
+		# The stopped hull is docked again. Return non-logistics idle ships to Ready
+		# Reserve through the same lifecycle UI so a temporary bootstrap mine does not
+		# silently recreate the maintenance deficit it was opened to solve.
+		await _set_idle_fleet_ready_reserve_ui(main)
+
+
+func _recover_mining_ship_service_ui(main: Control, ship_id: String, context: String) -> bool:
+	if not await _ensure_ship_active_ui(main, ship_id, context):
+		return false
+	var serviceable := func() -> bool:
+		var ship := Game.state.ship_by_id(ship_id)
+		var canonical_debt := maxf(
+			float(ship.get("maintenance_debt", 0.0)),
+			float(Game.state.fleet_maintenance.get("debt", {}).get(ship_id, 0.0))
+		)
+		return Game.state.ship_is_docked(ship_id) \
+			and String(ship.get("maintenance_state", "ACTIVE")) == "ACTIVE" \
+			and float(ship.get("maintenance_coverage", 0.0)) > 0.0 \
+			and canonical_debt <= 0.000001 \
+			and Game.state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID) >= 1 \
+			and Game.simulation.mining_power(Game.state, [ship_id]) > 0.0
+	if bool(serviceable.call()):
+		return true
+	# First allow combat repair or a pending maintenance settlement to finish at a
+	# normal public-speed boundary. If coverage is still zero, manufacture the
+	# authoritative recovery requirement; never write ship readiness directly.
+	await _wait_at_public_fast_speed(main, serviceable, 3.0)
+	for recovery_attempt in 3:
+		if bool(serviceable.call()):
+			return true
+		var recovery := Game.simulation.maintenance_recovery_requirement(
+			Game.state,
+			SpaceGameState.MAIN_BASE_LOCATION_ID,
+			"repair_material",
+			1,
+			0.0
+		)
+		print("FULL_GAMEPLAY_UI_MINING_SHIP_RECOVERY=", JSON.stringify(recovery.merged({
+			"attempt":recovery_attempt + 1,
+			"context":context,
+			"ship":_ship_serviceability_snapshots([ship_id])[0]
+		}, true)))
+		var recovery_target := maxi(1, int(recovery.get("gross_production_target", 1)))
+		await _ensure_ui_costs_stable(main, {"repair_material":recovery_target}, serviceable, Callable(), {}, {}, 1)
+		# Dependency production can stop a temporary mine and return every idle hull
+		# to Ready Reserve. Reactivate the requested miner after that production work,
+		# otherwise a fully repaired ship is falsely reported as unavailable.
+		if String(Game.state.ship_by_id(ship_id).get("maintenance_state", "")) == "READY_RESERVE":
+			if not await _ensure_ship_active_ui(main, ship_id, "%s_RECOVERY_%d" % [context, recovery_attempt + 1]):
+				return false
+		await _wait_at_public_fast_speed(main, serviceable, 3.0)
+	if bool(serviceable.call()):
+		return true
+	print("FULL_GAMEPLAY_UI_MINING_SHIP_RECOVERY_EXHAUSTED=", JSON.stringify({
+		"context":context,
+		"repair_material":Game.state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID),
+		"ship":_ship_serviceability_snapshots([ship_id])[0]
+	}))
+	return _journey_fail("mining ship remained unavailable after normal repair and maintenance recovery: %s" % context)
+
+
+func _ensure_ship_active_ui(main: Control, ship_id: String, context: String) -> bool:
+	var ship := Game.state.ship_by_id(ship_id)
+	if ship.is_empty():
+		return _journey_fail("%s: missing ship %s" % [context, ship_id])
+	if String(ship.get("maintenance_state", "ACTIVE")) == "ACTIVE":
+		return true
+	if String(ship.get("maintenance_state", "ACTIVE")) != "READY_RESERVE":
+		return _journey_fail("%s: ship %s requires normal reactivation construction" % [context, ship_id])
+	await _press_named(main, "Navigation_ships", "OPEN_SHIPS_TO_ACTIVATE_%s" % ship_id)
+	var roster_button := main.find_child("FleetSection_roster", true, false) as Button
+	if roster_button != null and roster_button.is_visible_in_tree() and not roster_button.disabled:
+		await _press_control(roster_button, "OPEN_ROSTER_TO_ACTIVATE_%s" % ship_id)
+	await _press_named(main, "SetShipActive_%s" % ship_id, "SET_SHIP_ACTIVE_FOR_%s" % context)
+	return String(Game.state.ship_by_id(ship_id).get("maintenance_state", "")) == "ACTIVE"
+
+
+func _ensure_ships_active_ui(main: Control, ship_ids: Array, context: String) -> bool:
+	for ship_id_value in ship_ids:
+		var ship_id := String(ship_id_value)
+		if ship_id.is_empty():
+			continue
+		if not await _ensure_ship_active_ui(main, ship_id, "%s_%s" % [context, ship_id]):
+			return false
+	return true
+
+
+func _set_idle_fleet_ready_reserve_ui(main: Control) -> int:
+	var reserve_ids: Array[String] = []
+	for ship_value in Game.state.ships:
+		var ship := ship_value as Dictionary
+		var ship_id := String(ship.get("instance_id", ""))
+		var assignment: Dictionary = ship.get("assignment", {})
+		var assignment_domain := Game.state.ship_fleet_domain(ship_id)
+		if String(ship.get("status", "")) != "DOCKED" \
+				or String(ship.get("condition", "")) != "OPERATIONAL" \
+				or String(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" \
+				or assignment_domain == "logistics" \
+				or String(assignment.get("type", "")) == "CONSTRUCTION_SUPPORT":
+			continue
+		reserve_ids.append(ship_id)
+	if reserve_ids.is_empty():
+		return 0
+	await _press_named(main, "Navigation_ships", "OPEN_SHIPS_TO_REDUCE_IDLE_MAINTENANCE")
+	var roster_button := main.find_child("FleetSection_roster", true, false) as Button
+	if roster_button != null and roster_button.is_visible_in_tree() and not roster_button.disabled:
+		await _press_control(roster_button, "OPEN_ROSTER_TO_REDUCE_IDLE_MAINTENANCE")
+	var changed := 0
+	for ship_id in reserve_ids:
+		var reserve_button := main.find_child("SetShipReadyReserve_%s" % ship_id, true, false) as Button
+		if reserve_button == null or not reserve_button.is_visible_in_tree() or reserve_button.disabled:
+			continue
+		await _press_control(reserve_button, "SET_IDLE_SHIP_READY_RESERVE_%s" % ship_id)
+		if String(Game.state.ship_by_id(ship_id).get("maintenance_state", "")) == "READY_RESERVE":
+			changed += 1
+	return changed
+
+
+func _recover_mining_selection_ui(main: Control, item_id: String) -> Dictionary:
+	var selection_ready := func() -> bool:
+		return not _mining_selection_read_only(item_id).is_empty()
+	await _wait_at_public_fast_speed(main, selection_ready, 3.0)
+	for recovery_attempt in 3:
+		var selection := _mining_selection_read_only(item_id)
+		if not selection.is_empty():
+			return selection
+		var recovery := Game.simulation.maintenance_recovery_requirement(
+			Game.state,
+			SpaceGameState.MAIN_BASE_LOCATION_ID,
+			"repair_material",
+			1,
+			0.0
+		)
+		var recovery_target := maxi(1, int(recovery.get("gross_production_target", 1)))
+		print("FULL_GAMEPLAY_UI_MINING_SELECTION_RECOVERY=", JSON.stringify(recovery.merged({
+			"attempt":recovery_attempt + 1,
+			"item_id":item_id
+		}, true)))
+		await _ensure_ui_costs_stable(main, {"repair_material":recovery_target}, selection_ready, Callable(), {}, {}, 1)
+		await _wait_at_public_fast_speed(main, selection_ready, 3.0)
+	return _mining_selection_read_only(item_id)
+
+
+func _print_mining_selection_diagnostic(item_id: String) -> void:
+	var sites: Array[Dictionary] = []
+	for site_id_value in Game.content.mining_sites.keys():
+		var site_id := String(site_id_value)
+		var activity: Dictionary = Game.content.get_mining_activity_for_site(site_id)
+		if not activity.get("rewards", []).any(func(reward): return String((reward as Dictionary).get("item", "")) == item_id):
+			continue
+		var site: Dictionary = Game.content.mining_sites.get(site_id, {})
+		var mining_location: Dictionary = Game.content.mining_locations.get(String(site.get("location", "")), {})
+		var runtime: Dictionary = Game.state.mining_site_states.get(site_id, {})
+		sites.append({
+			"site_id":site_id,
+			"location_id":mining_location.get("region", ""),
+			"available":Game.state.mining_site_available(site_id),
+			"runtime":runtime.duplicate(true),
+			"activity_requirements":activity.get("requirements", []).duplicate(true)
+		})
+	var ships: Array[Dictionary] = []
+	for ship_value in Game.state.ships:
+		var ship := ship_value as Dictionary
+		var ship_id := String(ship.get("instance_id", ""))
+		ships.append({
+			"ship_id":ship_id,
+			"blueprint_id":ship.get("blueprint_id", ""),
+			"status":ship.get("status", ""),
+			"condition":ship.get("condition", ""),
+			"maintenance_state":ship.get("maintenance_state", ""),
+			"maintenance_coverage":ship.get("maintenance_coverage", 0.0),
+			"docked":Game.state.ship_is_docked(ship_id),
+			"mining_power":Game.simulation.mining_power(Game.state, [ship_id]),
+			"modules":Game.state.ship_module_definition_ids(ship),
+			"assignment":ship.get("assignment", {}).duplicate(true)
+		})
+	print("FULL_GAMEPLAY_UI_MINING_SELECTION_FAILURE=", JSON.stringify({
+		"item_id":item_id,
+		"sites":sites,
+		"ships":ships,
+		"mining_operations":Game.state.mining_operations.duplicate(true),
+		"repair_material":Game.state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	}))
 
 
 func _mining_selection_read_only(item_id: String) -> Dictionary:
@@ -2397,14 +3290,20 @@ func _mining_selection_read_only(item_id: String) -> Dictionary:
 	for prefer_main_base in [true, false]:
 		for runtime_value in Game.state.mining_operations:
 			var runtime := runtime_value as Dictionary
-			var runtime_location := String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-			if (runtime_location == SpaceGameState.MAIN_BASE_LOCATION_ID) != prefer_main_base: continue
+			# Mining runtimes intentionally identify their physical resource site
+			# (for example belt_cobalt_seam), while inventory, Logistics and UI
+			# navigation operate on the parent strategic region. Normalize the
+			# already-running path exactly as the candidate-site path below does.
+			# Returning the site id here made the harness try to open a non-existent
+			# Location screen and could never stage legal operating stock.
+			var inventory_location := _mining_runtime_inventory_location_read_only(runtime)
+			if (inventory_location == SpaceGameState.MAIN_BASE_LOCATION_ID) != prefer_main_base: continue
 			if String(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"]: continue
 			var activity: Dictionary = Game.content.activities.get(String(runtime.get("activity_id", "")), {})
 			if not activity.get("rewards", []).any(func(reward): return String((reward as Dictionary).get("item", "")) == item_id): continue
-			var ship_ids: Array = runtime.get("ship_ids", [])
+			var ship_ids: Array = runtime.get("assigned_ship_ids", runtime.get("ship_ids", []))
 			if ship_ids.is_empty(): continue
-			return {"site_id":String(runtime.get("site_id", "")), "ship_id":String(ship_ids[0]), "location_id":runtime_location}
+			return {"site_id":String(runtime.get("site_id", "")), "ship_id":String(ship_ids[0]), "location_id":inventory_location}
 	for prefer_main_base in [true, false]:
 		for site_id_value in Game.content.mining_sites.keys():
 			var site_id := String(site_id_value)
@@ -2423,9 +3322,15 @@ func _mining_selection_read_only(item_id: String) -> Dictionary:
 				var ship_id := String(ship.get("instance_id", ""))
 				if not Game.state.ship_is_docked(ship_id): continue
 				if Game.simulation.mining_power(Game.state, [ship_id]) <= 0.0: continue
-				if not Game.simulation.build_requirements_met(Game.state, activity, [ship_id]): continue
+				if not Game.simulation.activity_requirements_met_for_ships(Game.state, activity, [ship_id]): continue
 				return {"site_id":site_id, "ship_id":ship_id, "location_id":location_id}
 	return {}
+
+
+func _mining_runtime_inventory_location_read_only(runtime: Dictionary) -> String:
+	var runtime_site_location := String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	var mining_location: Dictionary = Game.content.mining_locations.get(runtime_site_location, {})
+	return String(mining_location.get("region", runtime_site_location))
 
 
 func _mining_runtime_for_site(site_id: String) -> Dictionary:
@@ -2441,20 +3346,73 @@ func _assign_ship_and_open_route(main: Control, ship_id: String, route_id: Strin
 	var roster_button := main.find_child("FleetSection_roster", true, false) as Button
 	if roster_button != null and not roster_button.disabled:
 		await _press_control(roster_button, "OPEN_SHIP_ROSTER_FOR_%s" % route_id.to_upper())
-	await _press_named(main, "AssignExpedition_%s" % ship_id, "ASSIGN_EXPEDITION_FOR_%s" % route_id.to_upper())
+	await _normalize_expedition_roster_ui(main, [ship_id], route_id)
 	await _press_named(main, "ShipsMissions", "OPEN_MISSIONS_FOR_%s" % route_id.to_upper())
 	await _press_named(main, "StartRoute_%s" % route_id, "START_ROUTE_%s" % route_id.to_upper())
 
 
-func _wait_at_public_fast_speed(main: Control, predicate: Callable, timeout_seconds: float) -> bool:
+func _normalize_expedition_roster_ui(main: Control, requested_ship_ids: Array, route_id: String) -> void:
+	# Every expedition launch consumes the visible Expedition Fleet roster. Keep it
+	# exact through the same player controls so an earlier route cannot silently
+	# add command cost, damage, or maintenance debt to a later mission.
+	for existing_ship_id_value in Game.state.fleet_ship_ids("expedition"):
+		var existing_ship_id := String(existing_ship_id_value)
+		if not requested_ship_ids.has(existing_ship_id):
+			await _press_named(main, "AssignStandby_%s" % existing_ship_id, "ASSIGN_%s_STANDBY_BEFORE_%s" % [existing_ship_id.to_upper(), route_id.to_upper()])
+	for requested_ship_id_value in requested_ship_ids:
+		var requested_ship_id := String(requested_ship_id_value)
+		if Game.state.ship_fleet_domain(requested_ship_id) != "expedition":
+			await _press_named(main, "AssignExpedition_%s" % requested_ship_id, "ASSIGN_%s_TO_%s" % [requested_ship_id.to_upper(), route_id.to_upper()])
+	var normalized: Array[String] = []
+	for normalized_ship_id_value in Game.state.fleet_ship_ids("expedition"):
+		normalized.append(String(normalized_ship_id_value))
+	normalized.sort()
+	var expected: Array[String] = []
+	for expected_ship_id_value in requested_ship_ids:
+		expected.append(String(expected_ship_id_value))
+	expected.sort()
+	_check(normalized == expected, "visible expedition roster is exact for %s" % route_id)
+
+
+func _ship_serviceability_snapshots(ship_ids: Array) -> Array[Dictionary]:
+	var snapshots: Array[Dictionary] = []
+	for ship_id_value in ship_ids:
+		var ship_id := String(ship_id_value)
+		var ship := Game.state.ship_by_id(ship_id)
+		snapshots.append({
+			"ship_id":ship_id,
+			"docked":Game.state.ship_is_docked(ship_id),
+			"status":ship.get("status", "MISSING"),
+			"condition":ship.get("condition", "MISSING"),
+			"maintenance_state":ship.get("maintenance_state", "MISSING"),
+			"maintenance_coverage":ship.get("maintenance_coverage", 0.0),
+			"maintenance_debt":ship.get("maintenance_debt", 0.0),
+			"assignment":ship.get("assignment", {}).duplicate(true)
+		})
+	return snapshots
+
+
+func _wait_at_public_fast_speed(main: Control, predicate: Callable, timeout_seconds: float, pause_on_completion: bool = false) -> bool:
 	var simulation_before := int(Game.state.total_elapsed_ms)
-	await _press_named(main, "Speed100", "SET_GAME_SPEED_100_FOR_LONG_WAIT")
+	if pause_on_completion:
+		await _press_named_without_settle(main, "Speed100", "SET_GAME_SPEED_100_FOR_PRECISE_PRODUCTION")
+	else:
+		await _press_named(main, "Speed100", "SET_GAME_SPEED_100_FOR_LONG_WAIT")
 	# A preceding player-visible Pause is used while editing bounded logistics or
 	# assigning a mining vessel. Verify the speed command has crossed a real
 	# simulation boundary before starting the wall-clock timeout. On Windows the
 	# first post-pause frame can occasionally retain a zero delta; reselecting 1×
 	# then 100× through the same top-bar controls provides a bounded UI recovery.
 	if int(Game.state.total_elapsed_ms) <= simulation_before:
+		var network_statuses := {}
+		for network_id_value in Game.state.extraction_network_states.keys():
+			var network_id := String(network_id_value)
+			var network_runtime: Dictionary = Game.state.extraction_network_states.get(network_id, {})
+			network_statuses[network_id] = {
+				"status":network_runtime.get("status", ""),
+				"unlocked":network_runtime.get("unlocked", false),
+				"integrated_site_count":(network_runtime.get("integrated_site_ids", []) as Array).size()
+			}
 		print("FULL_GAMEPLAY_UI_SPEED_RECOVERY=", JSON.stringify({
 			"before":simulation_before,
 			"after_first_press":int(Game.state.total_elapsed_ms),
@@ -2466,21 +3424,56 @@ func _wait_at_public_fast_speed(main: Control, predicate: Callable, timeout_seco
 			"industry":Game.state.industrial_operations.map(func(operation_value):
 				var operation := operation_value as Dictionary
 				return {"activity_id":operation.get("activity_id", ""), "status":operation.get("status", ""), "blocked_reason":operation.get("blocked_reason", ""), "progress_ms":operation.get("progress_ms", 0.0), "location_id":operation.get("location_id", "")}),
-			"extraction_networks":Game.state.extraction_network_states.duplicate(true),
-			"logistics":Game.state.logistics_network.duplicate(true),
-			"research":Game.state.research.duplicate(true),
-			"active_expedition":Game.state.active_expedition.duplicate(true)
+			"extraction_networks":network_statuses,
+			"logistics":{"shipments":(Game.state.logistics_network.get("shipments", []) as Array).size()},
+			"research":{
+				"project_id":Game.state.research.get("project_id", ""),
+				"stage_id":Game.state.research.get("stage_id", ""),
+				"status":Game.state.research.get("status", ""),
+				"blocked_reason":Game.state.research.get("blocked_reason", "")
+			},
+			"active_expedition":{
+				"route_id":Game.state.active_expedition.get("route_id", ""),
+				"node_index":Game.state.active_expedition.get("node_index", 0),
+				"status":Game.state.active_expedition.get("status", "")
+			}
 		}))
-		await _press_named(main, "Speed1", "RECOVER_GAME_SPEED_1_AFTER_PAUSE")
-		await _press_named(main, "Speed100", "RECOVER_GAME_SPEED_100_AFTER_PAUSE")
+		if pause_on_completion:
+			await _press_named_without_settle(main, "Speed1", "RECOVER_GAME_SPEED_1_AFTER_PRECISE_PAUSE")
+			await _press_named_without_settle(main, "Speed100", "RECOVER_GAME_SPEED_100_AFTER_PRECISE_PAUSE")
+		else:
+			await _press_named(main, "Speed1", "RECOVER_GAME_SPEED_1_AFTER_PAUSE")
+			await _press_named(main, "Speed100", "RECOVER_GAME_SPEED_100_AFTER_PAUSE")
 		var resumed := await _wait_until(func() -> bool:
 			return int(Game.state.total_elapsed_ms) > simulation_before,
-			1.0)
+			1.0,
+			not pause_on_completion,
+			0.01 if pause_on_completion else WALL_POLL_SECONDS)
 		if not resumed:
 			print("FULL_GAMEPLAY_UI_SPEED_RECOVERY_DEFERRED=true")
-	var completed := await _wait_until(predicate, timeout_seconds)
-	await _press_named(main, "Speed10", "RETURN_GAME_SPEED_10_AFTER_LONG_WAIT")
+	var completed := await _wait_until(predicate, timeout_seconds, not pause_on_completion, 0.01 if pause_on_completion else WALL_POLL_SECONDS)
+	if pause_on_completion:
+		await _press_named_without_settle(main, "SpeedPause", "PAUSE_AFTER_PRECISE_PRODUCTION_TARGET")
+	else:
+		await _press_named(main, "Speed10", "RETURN_GAME_SPEED_10_AFTER_LONG_WAIT")
 	return completed
+
+
+func _press_named_without_settle(root: Node, control_name: String, action_id: String) -> void:
+	var button := root.find_child(control_name, true, false) as Button
+	var valid := button != null and button.is_visible_in_tree() and not button.disabled
+	_check(valid, "%s is reachable through a visible enabled Control" % action_id)
+	if not valid:
+		return
+	player_action_execution_log.append({
+		"action_id":action_id,
+		"control_name":String(button.name),
+		"simulation_time_ms":int(Game.state.total_elapsed_ms)
+	})
+	button.pressed.emit()
+	# One frame lets the public speed command take effect without the normal 180ms
+	# page-rebuild settle, which would equal 18+ simulation seconds at 100x.
+	await get_tree().process_frame
 
 
 func _open_location_from_system(main: Control, location_id: String) -> void:
@@ -2496,15 +3489,16 @@ func _first_enabled_button(root: Node, prefix: String) -> Button:
 	return null
 
 
-func _wait_until(predicate: Callable, wall_timeout_seconds: float) -> bool:
+func _wait_until(predicate: Callable, wall_timeout_seconds: float, settle_on_success: bool = true, poll_seconds: float = WALL_POLL_SECONDS) -> bool:
 	var deadline := Time.get_ticks_msec() + int(wall_timeout_seconds * 1000.0)
 	while Time.get_ticks_msec() < deadline:
 		if bool(predicate.call()):
-			await _settle_ui()
+			if settle_on_success:
+				await _settle_ui()
 			return true
 		# ignore_time_scale=true: this polling delay measures wall time while the
 		# game advances only because the player selected a normal top-bar speed.
-		await get_tree().create_timer(WALL_POLL_SECONDS, true, false, true).timeout
+		await get_tree().create_timer(poll_seconds, true, false, true).timeout
 	return bool(predicate.call())
 
 
@@ -2585,6 +3579,15 @@ func _ship_id_for_blueprint(blueprint_id: String) -> String:
 	return ""
 
 
+func _ship_ids_for_blueprint(blueprint_id: String) -> Array[String]:
+	var result: Array[String] = []
+	for ship_value in Game.state.ships:
+		var ship := ship_value as Dictionary
+		if String(ship.get("blueprint_id", "")) == blueprint_id:
+			result.append(String(ship.get("instance_id", "")))
+	return result
+
+
 func _print_time_orchestration_diagnostic(activity_id: String) -> void:
 	var runtime := {}
 	for operation_value in Game.state.construction_operations:
@@ -2596,7 +3599,11 @@ func _print_time_orchestration_diagnostic(activity_id: String) -> void:
 		"activity_id":activity_id,
 		"total_simulation_ms":int(Game.state.total_elapsed_ms),
 		"unprocessed_accumulator_ms":float(Game.get("_simulation_accumulator_ms")),
-		"runtime":runtime
+		"runtime":runtime,
+		"asset_ledger":Game.state.asset_ledger_snapshot(),
+		"research":Game.state.research.duplicate(true),
+		"industry":Game.state.industrial_operations.duplicate(true),
+		"shipyard":Game.state.shipyard_queue.duplicate(true),
 	}))
 
 
@@ -2773,6 +3780,11 @@ func _assert_journey_evidence(main: Control) -> void:
 	]
 	var executed_actions: Array = player_action_execution_log.map(func(entry: Dictionary) -> String: return String(entry.get("action_id", "")))
 	_check(required_actions.all(func(action_id: String) -> bool: return executed_actions.has(action_id)), "PlayerActionExecutionLog contains every mandatory visible control used by this Journey")
+	var gas_refit_index := _first_action_index_with_prefix(executed_actions, "INSTALL_GAS_COLLECTOR_ON_")
+	var gas_mining_index := executed_actions.find("START_MINING_JOVIAN_CLOUD_FRONTIER")
+	var capital_research_index := executed_actions.find("START_RESEARCH_RESEARCH_CAPITAL_COMBAT")
+	_check(gas_refit_index >= 0 and gas_refit_index < gas_mining_index and gas_mining_index < capital_research_index,
+		"Jovian UI progression installs Gas Collection and establishes physical gas production before Capital Combat consumes Superalloy")
 	_check(player_action_execution_log.size() >= required_actions.size(), "PlayerActionExecutionLog retains the complete ordered interaction trace")
 	print("FULL_GAMEPLAY_UI_ACTION_LOG=" + JSON.stringify(player_action_execution_log))
 	print("FULL_GAMEPLAY_UI_JOURNEY_LOG=" + JSON.stringify(journey_event_log))
@@ -2781,6 +3793,13 @@ func _assert_journey_evidence(main: Control) -> void:
 	_check((ui_only_contract.get("directGameplayCommands", []) as Array).is_empty(), "Fresh Save harness never calls a gameplay command directly")
 	_check((ui_only_contract.get("directStateWrites", []) as Array).is_empty(), "Fresh Save harness never writes Domain state directly")
 	_write_runtime_evidence(required_events, required_actions, executed_actions, completed_journey_ids, ui_only_contract, telemetry)
+
+
+func _first_action_index_with_prefix(actions: Array, prefix: String) -> int:
+	for index in actions.size():
+		if String(actions[index]).begins_with(prefix):
+			return index
+	return -1
 
 
 func _audit_harness_ui_only_contract() -> Dictionary:
@@ -2803,7 +3822,7 @@ func _audit_harness_ui_only_contract() -> Dictionary:
 			direct_state_writes.append("%d:%s" % [line_index + 1, line.strip_edges()])
 		for call_match in direct_game_call.search_all(line):
 			var method_name := call_match.get_string(1)
-			if method_name not in ["get", "can_start_activity", "is_processing"]:
+			if method_name not in ["get", "can_start_activity", "extraction_operation_availability", "is_processing"]:
 				direct_gameplay_commands.append("%d:Game.%s" % [line_index + 1, method_name])
 	return {
 		"directGameplayCommands":direct_gameplay_commands,

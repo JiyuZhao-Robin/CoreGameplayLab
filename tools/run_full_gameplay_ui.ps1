@@ -3,7 +3,7 @@ param(
     [string]$Godot = "D:\Godot\godot.exe",
     [string]$Project = "D:\Projects\standalone\core_gameplay_lab",
     [string]$RunId = (Get-Date -Format "yyyyMMdd-HHmmss"),
-    [ValidateRange(60, 3600)]
+    [ValidateRange(60, 28800)]
     [int]$TimeoutSeconds = 3600,
     [switch]$CleanEvidence
 )

@@ -995,6 +995,7 @@
     "notice.extraction_command_capacity": "Extraction command capacity would be exceeded",
     "notice.extraction_ship_required": "Choose at least one operational ship fitted with extraction equipment",
     "notice.extraction_ship_unavailable": "Every selected ship must be operational, available and fitted with extraction equipment",
+    "notice.extraction_ship_requirements": "Each selected ship must satisfy this site's extraction equipment requirements",
     "notice.extraction_started": "Permanent extraction started at %s",
     "notice.extraction_stopped": "Extraction vessel recalled",
     "notice.facility_missing": "Unknown infrastructure facility",

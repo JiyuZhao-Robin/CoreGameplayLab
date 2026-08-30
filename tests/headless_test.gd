@@ -687,6 +687,8 @@ func _test_phase_four_freight_services(database: ContentDatabase) -> void:
 	_check(simulation.construction_gameplay_state({"status":"QUEUED"}) == "WAITING_CAPACITY" and simulation.construction_gameplay_state({"status":"BLOCKED", "blocker":{"primary_reason":"INPUT_SHORTAGE"}}) == "WAITING_MATERIAL", "Construction UI states come from the shared Domain vocabulary")
 	_check(simulation.logistics._demand_priority_score(state, {"priority":50, "item_id":"mixed_raw_ore"}) > simulation.logistics._demand_priority_score(state, {"priority":50, "item_id":"electronics"}), "route Priority Strategy changes automatic batch scheduling order")
 	_check(simulation.logistics.service_capacity(state, "earth_lunar_freight") > 0.0 and not simulation.logistics._shortest_path(state, "earth_orbit", "lunar_space", "mixed_raw_ore").is_empty() and simulation.logistics._shortest_path(state, "earth_orbit", "lunar_space", "electronics").is_empty(), "Bulk Tug capacity and Freight Class compatibility affect actual path selection")
+	_check(simulation.logistics.configure_service(state, "earth_lunar_freight", "general_cargo", [], "DEMAND_PRIORITY") and not simulation.logistics._shortest_path(state, "earth_orbit", "lunar_space", "electronics").is_empty(), "switching a specialist Bulk Tug route back to General Cargo restores precision-component delivery")
+	_check(state.ship_is_unassigned_docked(tug_id), "restoring public General Cargo releases the specialist Bulk Tug ship")
 
 	state.technologies["mass_driver_logistics"] = true
 	_check(simulation.logistics.configure_service(state, "earth_lunar_freight", "mass_driver", []), "Mass Driver provides an infrastructure Logistics Service without ships")
@@ -985,6 +987,13 @@ func _test_combat_depth_zones(database: ContentDatabase) -> void:
 
 func _test_parallel_shipbuilding(database: ContentDatabase) -> void:
 	var simulation := SimulationEngine.new(database)
+	var development := _new_state(database, simulation)
+	var development_project: Dictionary = database.research_projects["develop_lunar_pathfinder"]
+	_check(simulation._complete_research_program(development, development_project), "Ship Development completes through the shared Research completion contract")
+	_check(bool(development.unlocked_ship_plans.get("construct_lunar_pathfinder", false)), "Ship Development unlocks its canonical Shipyard plan")
+	_check(development.shipyard_queue.is_empty() and not development.owns_ship_model("lunar_pathfinder"), "Ship Development cannot silently enqueue or construct a player-facing hull")
+	_check(development.enqueue_ship_plan("construct_lunar_pathfinder") and development.shipyard_queue.size() == 1, "an explicit normal Build command is the sole transition from unlocked plan to Shipyard queue")
+
 	var state := _new_state(database, simulation)
 	state.unlock_ship_plan("construct_lunar_pathfinder")
 	state.add_item("reactor_part", 10)
@@ -1115,6 +1124,12 @@ func _test_phase_five_loadout_fabrication(database: ContentDatabase) -> void:
 	bulk["modules"] = ["bulk_freight_array"]
 	cryogenic["modules"] = ["cryogenic_hold_system"]
 	_check(is_equal_approx(simulation.construction_capacity(state), empty_role_capacity), "an idle Construction Support hull is not a global passive Construction buff")
+	constructor["maintenance_state"] = "READY_RESERVE"
+	_check(not simulation.assign_construction_support(state, str(constructor.get("instance_id", "")), SpaceGameState.MAIN_BASE_LOCATION_ID), "Ready Reserve hulls cannot provide full-time Construction Support")
+	constructor["maintenance_state"] = "ACTIVE"
+	constructor["maintenance_coverage"] = 0.0
+	_check(not simulation.assign_construction_support(state, str(constructor.get("instance_id", "")), SpaceGameState.MAIN_BASE_LOCATION_ID), "zero-coverage hulls cannot enter Construction Support")
+	constructor["maintenance_coverage"] = 1.0
 	_check(simulation.assign_construction_support(state, str(constructor.get("instance_id", "")), SpaceGameState.MAIN_BASE_LOCATION_ID) and simulation.construction_capacity(state) > empty_role_capacity and simulation.repair_support_rate(state) > 1.0 and simulation.expedition_support_rate(state) > 1.0, "construction, repair and deep-survey effects activate only after their role plugins are fitted and Construction Support is assigned")
 	constructor["maintenance_coverage"] = 0.0
 	_check(is_equal_approx(simulation.construction_capacity(state), empty_role_capacity), "unsupported Construction vessels provide no free capacity at zero Maintenance coverage")
@@ -1264,6 +1279,62 @@ func _test_ship_lifecycle(database: ContentDatabase) -> void:
 	_check(state.stored_equipment_ids("corsair_overcharged_laser").has(special_id), "Scrap returns physical special equipment to storage")
 	var restored := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
 	_check(restored.naval_archive.size() == state.naval_archive.size() and restored.fleet_maintenance.has("fractional"), "maintenance state, service history and Naval Archive survive save/load")
+	var recovery_state := _new_state(database, simulation)
+	var starting_repair := recovery_state.item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	if starting_repair > 0:
+		recovery_state.remove_item("repair_material", starting_repair, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	simulation.advance(recovery_state, 12.0 * 60.0 * 60.0 * 1000.0)
+	var recovery_snapshot := simulation.maintenance_recovery_requirement(recovery_state, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material", 20, 8.0 * 60.0 * 60.0 * 1000.0)
+	_check(float(recovery_snapshot.get("fleet_debt", 0.0)) > 0.0, "unfunded fleet operation creates a real recoverable maintenance backlog")
+	_check(int(recovery_snapshot.get("gross_production_target", 0)) == 20 + ceili(float(recovery_snapshot.get("fleet_debt", 0.0)) + float(recovery_snapshot.get("horizon_quantity", 0.0)) - 0.000001), "maintenance recovery query includes spendable stock, fleet debt and bounded continuous demand")
+	var recovery_restored := SpaceGameState.from_dictionary(recovery_state.to_dictionary(), database.domains.keys(), database.regions)
+	var restored_requirement := simulation.maintenance_recovery_requirement(recovery_restored, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material", 20, 8.0 * 60.0 * 60.0 * 1000.0)
+	_check(int(restored_requirement.get("gross_production_target", 0)) == int(recovery_snapshot.get("gross_production_target", -1)), "maintenance recovery requirement is stable across Save/Load")
+	var recovery_activity: Dictionary = database.activities["fabricate_repair_material"]
+	var recovery_runtime := simulation.industry_runtime_for_facility(recovery_state, "makeshift_workshop", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	var gross_target := int(recovery_snapshot.get("gross_production_target", 0))
+	recovery_state.add_item("iron_ingot", gross_target * 2, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	recovery_state.add_item("copper_ingot", gross_target, SpaceGameState.MAIN_BASE_LOCATION_ID)
+	recovery_runtime.merge({
+		"activity_id":"fabricate_repair_material", "method_id":"fabricate_repair_material",
+		"status":"RUNNING", "control_mode":"ON", "manual_lock":false,
+		"progress_ms":0.0, "productivity_progress":0.0
+	}, true)
+	var cycles_before := int(recovery_state.completed_activities.get("fabricate_repair_material", 0))
+	var fleet_consumed_before := int(recovery_state.fleet_maintenance.get("consumption_totals", {}).get("repair_material", 0))
+	var operations_consumed_before := int(recovery_state.operations_maintenance.get("consumption_totals", {}).get("repair_material", 0))
+	var iron_before := recovery_state.item_quantity("iron_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	var copper_before := recovery_state.item_quantity("copper_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	for _step in range(gross_target + 16):
+		simulation.advance(recovery_state, simulation.effective_duration_ms(recovery_state, "industry", recovery_activity, recovery_runtime) + 1.0)
+		var current_requirement := simulation.maintenance_recovery_requirement(recovery_state, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material", 20, 0.0)
+		if float(current_requirement.get("fleet_debt", 1.0)) <= 0.000001 and recovery_state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID) >= 20:
+			break
+	var cycles_after := int(recovery_state.completed_activities.get("fabricate_repair_material", 0))
+	var completed_cycles := cycles_after - cycles_before
+	var fleet_consumed := int(recovery_state.fleet_maintenance.get("consumption_totals", {}).get("repair_material", 0)) - fleet_consumed_before
+	var operations_consumed := int(recovery_state.operations_maintenance.get("consumption_totals", {}).get("repair_material", 0)) - operations_consumed_before
+	var repair_remaining := recovery_state.item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID)
+	var final_recovery := simulation.maintenance_recovery_requirement(recovery_state, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material", 20, 0.0)
+	_check(completed_cycles > 0 and float(final_recovery.get("fleet_debt", 1.0)) <= 0.000001 and recovery_state.available_item_quantity("repair_material", SpaceGameState.MAIN_BASE_LOCATION_ID) >= 20, "real Repair Material production clears fleet debt and leaves the requested spendable operating stock")
+	_check(iron_before - recovery_state.item_quantity("iron_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID) == completed_cycles * 2 and copper_before - recovery_state.item_quantity("copper_ingot", SpaceGameState.MAIN_BASE_LOCATION_ID) == completed_cycles, "maintenance recovery consumes the canonical Repair Material recipe inputs for every completed cycle")
+	_check(completed_cycles == repair_remaining + fleet_consumed + operations_consumed, "Repair Material is conserved across production, fleet debt settlement, facility O&M and remaining Inventory")
+	var inconsistent_save := recovery_state.to_dictionary()
+	var inconsistent_ship_id := str(recovery_state.ships[0].get("instance_id", ""))
+	inconsistent_save["fleet_maintenance"]["debt"][inconsistent_ship_id] = 7.0
+	for ship_value in inconsistent_save["ships"]:
+		var saved_ship := ship_value as Dictionary
+		if str(saved_ship.get("instance_id", "")) == inconsistent_ship_id:
+			saved_ship["maintenance_debt"] = 11.0
+	var reconciled_high_ship := SpaceGameState.from_dictionary(inconsistent_save, database.domains.keys(), database.regions)
+	_check(is_equal_approx(float(reconciled_high_ship.fleet_maintenance.get("debt", {}).get(inconsistent_ship_id, 0.0)), 11.0) and is_equal_approx(float(reconciled_high_ship.ship_by_id(inconsistent_ship_id).get("maintenance_debt", 0.0)), 11.0), "Save migration preserves the larger ship-side maintenance liability")
+	inconsistent_save["fleet_maintenance"]["debt"][inconsistent_ship_id] = 13.0
+	for ship_value in inconsistent_save["ships"]:
+		var saved_ship := ship_value as Dictionary
+		if str(saved_ship.get("instance_id", "")) == inconsistent_ship_id:
+			saved_ship["maintenance_debt"] = 5.0
+	var reconciled_high_registry := SpaceGameState.from_dictionary(inconsistent_save, database.domains.keys(), database.regions)
+	_check(is_equal_approx(float(reconciled_high_registry.fleet_maintenance.get("debt", {}).get(inconsistent_ship_id, 0.0)), 13.0) and is_equal_approx(float(reconciled_high_registry.ship_by_id(inconsistent_ship_id).get("maintenance_debt", 0.0)), 13.0), "Save migration preserves the larger registry-side maintenance liability")
 
 
 func _test_industry_and_capital_cycles(database: ContentDatabase) -> void:
