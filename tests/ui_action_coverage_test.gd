@@ -167,6 +167,14 @@ func _verify_production_start_stop_actions() -> void:
 	if production_tab != null and not production_tab.disabled:
 		production_tab.pressed.emit()
 		await _settle_ui()
+	# The industrial network is now the default read-only overview. Preserve the
+	# existing command coverage by entering its explicit list/detailed control
+	# surface before looking up the stable StartIndustry_/StopIndustry_ buttons.
+	var detailed_view := main.find_child("IndustryProductionListView", true, false) as Button
+	_check(_button_usable(detailed_view), "Production start/stop keeps the list/detailed command surface reachable")
+	if _button_usable(detailed_view):
+		detailed_view.pressed.emit()
+		await _settle_ui()
 	var start_button := _first_enabled_named_prefix("StartIndustry_")
 	var activity_id := String(start_button.name).trim_prefix("StartIndustry_") if start_button != null else ""
 	var start_result := await _double_submit_with_structured_rejection(start_button, func() -> bool:
@@ -1825,7 +1833,7 @@ func _import_isolated_save_evidence() -> void:
 		and int((parsed as Dictionary).get("schemaVersion", 0)) == 1 \
 		and String((parsed as Dictionary).get("source", "")) == "tests/ui_persistence_audit_test.gd" \
 		and bool((parsed as Dictionary).get("passed", false)) \
-		and String((parsed as Dictionary).get("isolation", "")).contains("APPDATA and LOCALAPPDATA redirected")
+		and String((parsed as Dictionary).get("isolation", "")).contains("unique platform-runner temporary root")
 	var observations: Array = []
 	if parsed is Dictionary:
 		observations = (parsed as Dictionary).get("observations", [])

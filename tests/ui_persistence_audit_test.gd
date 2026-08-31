@@ -1,11 +1,12 @@
 extends Node
 
 const MainScene := preload("res://src/ui/main.tscn")
-const MARKER_PATH := "user://ui_persistence_audit_marker.json"
 const RESULT_PATH := "res://artifacts/test-results/ui-persistence-audit.json"
 
 var failures: Array[String] = []
 var observations: Array[Dictionary] = []
+var audit_root := ""
+var marker_path := ""
 
 
 func _ready() -> void:
@@ -21,7 +22,10 @@ func _run() -> void:
 			phase = argument.trim_prefix("--ui-persistence-phase=")
 		elif argument.begins_with("--ui-persistence-isolation-token="):
 			isolation_token = argument.trim_prefix("--ui-persistence-isolation-token=")
-	_check(not isolation_token.is_empty() and OS.get_user_data_dir().contains(isolation_token), "user:// resolves inside the runner's unique isolated directory")
+		elif argument.begins_with("--ui-persistence-root="):
+			audit_root = argument.trim_prefix("--ui-persistence-root=").simplify_path()
+	marker_path = audit_root.path_join("ui_persistence_audit_marker.json")
+	_check(not isolation_token.is_empty() and audit_root.is_absolute_path() and audit_root.contains(isolation_token) and audit_root.get_file().begins_with("helios-ui-persistence-audit-"), "save, UI preferences and marker resolve inside the runner's unique isolated directory")
 	if not Game.persistence_enabled:
 		_fail("persistence audit must run without --no-persistence")
 		_finish(phase)
@@ -58,9 +62,9 @@ func _write_phase() -> void:
 	var revision_before := Game.state.revision
 	_press(main.find_child("SaveButton", true, false) as Button)
 	await _settle_ui()
-	_check(FileAccess.file_exists("user://space_idle_save.json") and Game.state.revision > revision_before, "visible SaveButton writes the isolated LocalSaveRepository")
+	_check(FileAccess.file_exists(audit_root.path_join("space_idle_save.json")) and Game.state.revision > revision_before, "visible SaveButton writes the isolated LocalSaveRepository")
 
-	var marker := FileAccess.open(MARKER_PATH, FileAccess.WRITE)
+	var marker := FileAccess.open(marker_path, FileAccess.WRITE)
 	if marker == null:
 		_fail("writer creates the isolated persistence marker")
 	else:
@@ -78,7 +82,7 @@ func _write_phase() -> void:
 
 func _read_phase() -> void:
 	Engine.time_scale = 0.0
-	var marker_data: Variant = JSON.parse_string(FileAccess.get_file_as_string(MARKER_PATH)) if FileAccess.file_exists(MARKER_PATH) else null
+	var marker_data: Variant = JSON.parse_string(FileAccess.get_file_as_string(marker_path)) if FileAccess.file_exists(marker_path) else null
 	_check(marker_data is Dictionary, "reader finds the writer marker in the same isolated user data directory")
 	if not marker_data is Dictionary:
 		return
@@ -126,7 +130,7 @@ func _finish(phase: String) -> void:
 				"passed":failures.is_empty(),
 				"observations":observations,
 				"failures":failures,
-				"isolation":"APPDATA and LOCALAPPDATA redirected by tools/run_ui_persistence_audit.ps1"
+				"isolation":"save, UI preferences and marker redirected to a unique platform-runner temporary root"
 			}, "  "))
 	if failures.is_empty():
 		print("UI_PERSISTENCE_%s_PASS" % phase.to_upper())

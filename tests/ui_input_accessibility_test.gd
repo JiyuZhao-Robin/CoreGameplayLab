@@ -21,6 +21,8 @@ func _run() -> void:
 	add_child(main)
 	await _settle_ui()
 
+	await _test_shell_structure_and_collapsing(main)
+	await _test_industrial_network_input(main)
 	await _test_mouse_keyboard_navigation(main)
 	await _test_focus_survives_domain_refresh(main)
 	await _test_disabled_reasons(main)
@@ -38,6 +40,90 @@ func _run() -> void:
 	else:
 		push_error("UI_INPUT_ACCESSIBILITY_FAIL\n%s" % "\n".join(failures))
 		get_tree().quit(1)
+
+
+func _test_shell_structure_and_collapsing(main: Control) -> void:
+	var required_surfaces := [
+		"TopStatusBar", "ResourceRailSurface", "CentralWorkspace",
+		"ContextInspectorSurface", "CommandDockSurface", "WorkspaceNavigationBar"
+	]
+	var missing: Array[String] = []
+	for surface_name in required_surfaces:
+		if main.find_child(surface_name, true, false) == null:
+			missing.append(surface_name)
+	_check(missing.is_empty(), "the desktop shell exposes the DSP-style five-region workspace", "EXECUTED", {
+		"missing":missing
+	})
+	var left_surface := main.find_child("ResourceRailSurface", true, false) as Control
+	var left_toggle := main.find_child("CollapseResourceRail", true, false) as Button
+	var expanded_width := left_surface.custom_minimum_size.x if left_surface != null else 0.0
+	_press(left_toggle)
+	await get_tree().process_frame
+	var collapsed_width := left_surface.custom_minimum_size.x if left_surface != null else expanded_width
+	_check(left_toggle != null and collapsed_width < expanded_width and not left_toggle.tooltip_text.is_empty(), "the resource rail collapses without removing its accessible restore control", "EXECUTED", {
+		"expandedWidth":expanded_width,
+		"collapsedWidth":collapsed_width
+	})
+	_press(left_toggle)
+	await get_tree().process_frame
+	var right_surface := main.find_child("ContextInspectorSurface", true, false) as Control
+	var right_toggle := main.find_child("CollapseContextInspector", true, false) as Button
+	expanded_width = right_surface.custom_minimum_size.x if right_surface != null else 0.0
+	_press(right_toggle)
+	await get_tree().process_frame
+	collapsed_width = right_surface.custom_minimum_size.x if right_surface != null else expanded_width
+	_check(right_toggle != null and collapsed_width < expanded_width and not right_toggle.tooltip_text.is_empty(), "the context inspector collapses without clearing the active workspace", "EXECUTED", {
+		"expandedWidth":expanded_width,
+		"collapsedWidth":collapsed_width,
+		"visiblePage":_visible_page_name(main)
+	})
+	_press(right_toggle)
+	await get_tree().process_frame
+
+
+func _test_industrial_network_input(main: Control) -> void:
+	_press(main.find_child("Navigation_industry", true, false) as Button)
+	await _settle_ui()
+	var view := main.find_child("IndustrialNetworkView", true, false) as IndustrialNetworkView
+	_check(view != null and view.is_visible_in_tree(), "Industry opens the native industrial network as its default production view", "EXECUTED", {})
+	if view == null:
+		return
+	var production_node: IndustrialNetworkNode = null
+	for value in view._nodes.values():
+		var candidate := value as IndustrialNetworkNode
+		if str(candidate.projection.get("kind", "")) == "PRODUCTION":
+			production_node = candidate
+			break
+	_check(production_node != null, "the network exposes a keyboard-focusable aggregate Production node", "EXECUTED", {})
+	if production_node == null:
+		return
+	var production_node_id := production_node.node_id
+	production_node.grab_focus()
+	await _send_root_key(KEY_ENTER)
+	await _settle_ui()
+	_check(_page_visible(main, "industry") and main.find_child("IndustryProductionNetworkView", true, false) != null and main.find_child("IndustrialNetworkView", true, false) == null, "Enter opens the selected network entity's existing detailed control path", "EXECUTED", {
+		"selectedNode":production_node_id
+	})
+	var network_button := main.find_child("IndustryProductionNetworkView", true, false) as Button
+	_press(network_button)
+	await _settle_ui()
+	view = main.find_child("IndustrialNetworkView", true, false) as IndustrialNetworkView
+	if view == null or view._nodes.is_empty():
+		_check(false, "network view can be restored from the preserved list/detail entry", "EXECUTED", {})
+		return
+	var selected_id := str(view._nodes.keys()[0])
+	view._select_node(selected_id, true)
+	await get_tree().process_frame
+	_check(main.find_child("IndustrialNetworkInspectorOpen", true, false) != null, "node selection populates the Context Inspector", "EXECUTED", {"nodeId":selected_id})
+	await _send_action("ui_cancel")
+	await _settle_ui()
+	_check(_page_visible(main, "industry") and view.selected_entity().is_empty(), "Escape closes network focus/Inspector before leaving the Industry workspace", "EXECUTED", {})
+	var reduced := main.find_child("IndustrialNetworkReducedMotion", true, false) as CheckButton
+	if reduced != null:
+		reduced.grab_focus()
+		await _send_action("ui_accept")
+		await get_tree().process_frame
+	_check(reduced != null and reduced.button_pressed, "Reduced Motion is keyboard-operable and remains a UI-only preference", "EXECUTED", {})
 
 
 func _test_mouse_keyboard_navigation(main: Control) -> void:

@@ -13,7 +13,7 @@ $previousAppData = $env:APPDATA
 $previousLocalAppData = $env:LOCALAPPDATA
 
 function Invoke-PersistencePhase([string]$Phase, [string]$LogPath) {
-    $arguments = "--headless --path `"$Project`" --log-file `"$LogPath`" --scene res://tests/ui_persistence_audit_test.tscn -- --ui-persistence-phase=$Phase --ui-persistence-isolation-token=$isolationToken"
+    $arguments = "--headless --path `"$Project`" --log-file `"$LogPath`" --scene res://tests/ui_persistence_audit_test.tscn -- --ui-persistence-phase=$Phase --ui-persistence-isolation-token=$isolationToken --ui-persistence-root=`"$isolatedRoot`""
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $process.StartInfo.FileName = $Godot

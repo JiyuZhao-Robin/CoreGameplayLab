@@ -130,7 +130,7 @@ func _run() -> void:
 	if extracted:
 		journey_event_log.append("FIRST_EXTRACTION")
 
-	await _press_named(main, "Navigation_industry", "OPEN_INDUSTRY")
+	await _open_industry_production(main)
 	var start_separation := main.find_child("StartIndustry_separate_iron_ore", true, false) as Button
 	await _press_control(start_separation, "START_SEPARATE_IRON_ORE")
 	var separation_running := _industry_activity_is_running("separate_iron_ore")
@@ -2359,6 +2359,10 @@ func _open_industry_production(main: Control) -> void:
 		var production_tab := main.find_child("IndustrySection_production", true, false) as Button
 		if production_tab != null and not production_tab.disabled:
 			await _press_control(production_tab, "SELECT_INDUSTRY_PRODUCTION")
+	if String(main.get("_industry_view_mode")) != "list":
+		var detailed_view := main.find_child("IndustryProductionListView", true, false) as Button
+		if detailed_view != null and not detailed_view.disabled:
+			await _press_control(detailed_view, "OPEN_INDUSTRY_LIST_CONTROLS")
 
 
 func _open_industry_construction(main: Control) -> void:

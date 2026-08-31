@@ -32,7 +32,7 @@ artifacts/ui/matrix/<RunId>/<locale>/<resolution>/<page>.png
 
 脚本固定使用 `D:\Godot\godot.exe` 和绝对 `--path D:\Projects\standalone\core_gameplay_lab`，以普通 windowed 模式启动；不使用 `--headless`。它在 Windows DPI 下强制精确 client area，保存 Godot 的真实最终 viewport，不缩放内容，再按引擎保持比例的位置补齐完整 client 边缘。每张图均等待 Godot 到达最终渲染探针并自行退出，检查退出码、`SCRIPT ERROR` / autoload 错误、黑帧颜色采样、文件存在性与 PNG 像素尺寸。`--no-persistence` 防止截图批次写入游戏存档。
 
-项目基准 viewport 为 1440×900（16:10）。旧工作树保持比例时，Godot 的 `get_viewport().get_texture()` 在 1920×1080 窗口内只产生 1728×1080 内容图；这正是旧截图名为 1920×1080、实际却为 1728×1080 的原因。当前 `window/stretch/aspect="expand"` 已使 post-fix 批次的 viewport 与 1920×1080、1366×768 client 精确一致；矩阵仍保留 client 尺寸和 inset 检查，避免回归。
+项目基准 viewport 为 1440×900（16:10）。旧工作树保持比例时，Godot 的 `get_viewport().get_texture()` 在 1920×1080 窗口内只产生 1728×1080 内容图；这正是旧截图名为 1920×1080、实际却为 1728×1080 的原因。第一批 DSPONLINE 风格重构移除了整体 `canvas_items` stretch，改用原生窗口像素与 Container/anchor 响应布局；后续矩阵仍须保留 client 尺寸和 inset 检查，避免裁切或等比缩小回归。
 
 ### 覆盖集合
 

@@ -6,6 +6,11 @@ const FULL_GAMEPLAY_HARNESS_PATH := "res://tests/full_gameplay_ui_test.gd"
 const UI_PATHS := [
 	"res://src/ui/main.gd",
 	"res://src/ui/ui_theme_tokens.gd",
+	"res://src/ui/view_models/industrial_network_projection.gd",
+	"res://src/ui/components/industrial_network_view.gd",
+	"res://src/ui/components/industrial_network_node.gd",
+	"res://src/ui/components/industrial_network_edge_layer.gd",
+	"res://src/ui/components/industrial_network_glyph.gd",
 	"res://src/ui/components/system_map_view.gd",
 	"res://src/ui/components/megastructure_progress_view.gd"
 ]

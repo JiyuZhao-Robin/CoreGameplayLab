@@ -73,6 +73,10 @@ func _run() -> void:
 	var industry_nav := main.find_child("Navigation_industry", true, false) as Button
 	_press(industry_nav)
 	await _redraw()
+	var detailed_view := main.find_child("IndustryProductionListView", true, false) as Button
+	_check(detailed_view != null and not detailed_view.disabled, "industrial network preserves the existing list/detail control path")
+	_press(detailed_view)
+	await _redraw()
 	var start_separation := main.find_child("StartIndustry_separate_iron_ore", true, false) as Button
 	_check(start_separation != null and not start_separation.disabled, "first industrial recipe is startable through the UI")
 	_press(start_separation)

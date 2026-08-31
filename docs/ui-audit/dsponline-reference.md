@@ -39,14 +39,14 @@ Domain command gateway
 
 参考布局是高密度生产工作台：顶部全局状态、左侧资源/导航、中央画布、右侧 Context Inspector、底部命令或事件区域。左右侧栏可独立折叠，中央工作区实际扩展，并保留选择和滚动位置。
 
-本项目采用：
+第一批 Godot 重构已经采用：
 
 - 顶栏只放时间、速度、地点、能源、物流告警、建设、研发和巨构状态。
-- 左栏固定 11 个核心入口；锁定功能仍显示条件。
-- 中央为当前工作区。
+- 左栏显示当前地点资源、仓储、主要库存与当前 Guidance，并可独立折叠。
+- 中央上方承载 11 个稳定的核心入口；锁定功能仍显示条件，下方为当前工作区。
 - 右栏由当前 location/entity/blocker 驱动，不再作为静态库存摘要。
-- 底栏统一承载告警、时间线、任务和 Suggested Next Step。
-- 1920×1080 为基准；1366×768 收缩侧栏，优先隐藏次要字段而非缩小正文。
+- 底栏统一承载当前工作区、Back、告警、时间线、任务和 Suggested Next Step。
+- 1920×1080 为基准；1366×768 可折叠侧栏，并使用原生像素布局，优先释放中央空间而非缩小正文。
 
 ## Context Inspector 与下钻
 
@@ -97,6 +97,19 @@ radius 4 / 6 / 10
 
 不可采用：React Flow/DOM/CSS 实现，以及参考项目的品牌、物品 glyph、图标和截图资产。
 
+## 工业网络动态实现审计（2026-08-31 补充）
+
+本轮在可访问的只读副本 `/Volumes/T9/Developer/projects/DSPONLINE` 中进一步检查了工业网络动态实现。只记录可泛化行为，没有复制源码或资源：
+
+- 线路只有在权威流量大于零时进入 active；流量/容量决定 packet 密度和节奏，而不是固定装饰跑马灯。
+- 拓扑 revision 与 runtime flow update 分离；节点位置和端口变化才重建几何，普通数值更新只改变视觉签名。
+- 大线路层使用批量 Canvas、viewport overscan、空间过滤、DPR 上限和 animation-frame 合并；拖动画布优先做整体位移，避免重复生成对象。
+- 节点尺寸观察只更新 handle/port；生产进度用共享 visual clock，产出/到达是一次性 pulse，不把整卡永久点亮。
+- 暂停时不继续重建领域流动画；编辑器 Hover、选择和输入仍工作。
+- 参考节奏约为：控件 110–150 ms、workspace 约 170 ms、节点呼吸约 1.9 s、流动 dash 约 1.05 s。性能模式与 Reduced Motion 关闭连续动画。
+
+Helios 将这些原则转化为一个 Godot `IndustrialNetworkEdgeLayer` 共享时钟、缓存 Bézier、非线性吞吐速度、拥堵降速、暂停/Reduced Motion 静止和 GraphNode 增量更新。具体时长、颜色、glyph、布局与数据模型均按 Helios 原创实现。
+
 ## 输入、焦点与返回
 
 参考项目有统一 Workspace/Dialog 焦点契约：背景 inert、Tab 循环、Escape 策略、关闭后归还焦点；破坏性操作默认聚焦取消。当前项目应建立唯一 Modal/Back 层级，将 `ui_cancel`、Escape 和手柄返回统一处理。
@@ -142,7 +155,7 @@ radius 4 / 6 / 10
 
 ## 对 Core UI 实现的直接约束
 
-1. 统一 `UIState` 表达 active workspace、selected context、overlay/modal，不再增加互斥页面布尔值。
+1. `UiNavigationState` 已统一 active workspace、selected context、navigation history 与侧栏折叠；overlay/modal 仍是下一批迁移目标，不再增加互斥页面布尔值。
 2. 统一语义 Theme 和共享组件，页面不得各自发明颜色、间距、按钮风格。
 3. 所有玩法动作必须到 Domain Command；所有规则数字来自 Query/Simulation。
 4. Context Inspector 和 Diagnostics 共用结构化 BlockerInfo。

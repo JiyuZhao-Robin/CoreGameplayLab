@@ -1204,6 +1204,251 @@ func current_economy_analysis(state: SpaceGameState, location_id: String = Space
 	return economy_planner.current_economy_analysis(state, location_id)
 
 
+## Authoritative, read-only runtime snapshot for the industrial network UI.
+## Rates are calculated here with the same methods used by Simulation and the
+## Planner; presentation code only maps these records into nodes and edges.
+func industrial_network_snapshot(state: SpaceGameState, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
+	var economy: Dictionary = current_economy_analysis(state, location_id)
+	var economy_rows := {}
+	var product_ids := {}
+	for row_value in economy.get("products", []):
+		var row := row_value as Dictionary
+		var product_id := str(row.get("product_id", ""))
+		if product_id.is_empty():
+			continue
+		economy_rows[product_id] = row.duplicate(true)
+		product_ids[product_id] = true
+
+	var lines: Array = []
+	for operation_value in state.industrial_operations:
+		var operation := operation_value as Dictionary
+		if str(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != location_id:
+			continue
+		var activity_id := str(operation.get("activity_id", ""))
+		if activity_id.is_empty():
+			continue
+		var activity: Dictionary = content.activities.get(activity_id, {})
+		if activity.is_empty() or str(activity.get("domain", "")) != "industry" or is_construction_activity(activity):
+			continue
+		var rate_runtime := operation.duplicate(true)
+		effective_duration_ms(state, "industry", activity, rate_runtime)
+		var theoretical_cycles_per_hour := maxf(0.0, float(rate_runtime.get("theoretical_rate", operation.get("theoretical_rate", 0.0)))) * 3600.0
+		var actual_cycles_per_hour := maxf(0.0, float(rate_runtime.get("actual_rate", operation.get("actual_rate", 0.0)))) * 3600.0
+		if str(operation.get("status", "IDLE")) != "RUNNING":
+			actual_cycles_per_hour = 0.0
+		var inputs: Array = []
+		var cycle_costs: Dictionary = industry_cycle_costs(state, operation, activity, false)
+		var input_ids: Array = cycle_costs.keys()
+		input_ids.sort()
+		for input_id_value in input_ids:
+			var input_id := str(input_id_value)
+			var quantity := maxf(0.0, float(cycle_costs.get(input_id, 0.0)))
+			inputs.append({"item_id":input_id, "quantity_per_cycle":quantity, "actual_rate":quantity * actual_cycles_per_hour, "requested_rate":quantity * theoretical_cycles_per_hour})
+			product_ids[input_id] = true
+		var outputs: Array = []
+		var productivity := 1.0 + activity_productivity_bonus(state, "industry", activity, operation)
+		for reward_value in activity.get("rewards", []):
+			var reward := reward_value as Dictionary
+			var output_id := str(reward.get("item", ""))
+			var quantity := maxf(0.0, float(reward.get("quantity", 0.0))) * productivity
+			outputs.append({"item_id":output_id, "quantity_per_cycle":quantity, "actual_rate":quantity * actual_cycles_per_hour, "requested_rate":quantity * theoretical_cycles_per_hour})
+			product_ids[output_id] = true
+		var operating_state := str(operation.get("operating_state", "PAUSED"))
+		var blocker := {}
+		if operating_state != "RUNNING" or str(operation.get("status", "IDLE")) != "RUNNING":
+			blocker = blocker_diagnostic(state, "industry", operation)
+		lines.append({
+			"line_id":str(operation.get("line_id", "LINE-%06d" % (int(operation.get("slot", 0)) + 1))),
+			"slot":int(operation.get("slot", 0)),
+			"facility_id":str(operation.get("facility_id", activity.get("facility", ""))),
+			"production_device_id":str(operation.get("production_device_id", "")),
+			"activity_id":activity_id,
+			"method_id":str(operation.get("method_id", activity_id)),
+			"status":operating_state,
+			"runtime_status":str(operation.get("status", "IDLE")),
+			"actual_rate":actual_cycles_per_hour,
+			"theoretical_rate":theoretical_cycles_per_hour,
+			"utilization":0.0 if theoretical_cycles_per_hour <= 0.000001 else clampf(actual_cycles_per_hour / theoretical_cycles_per_hour, 0.0, 1.0),
+			"inputs":inputs,
+			"outputs":outputs,
+			"blocker":blocker,
+			"control_mode":str(operation.get("control_mode", "PINNED")),
+			"manual_lock":bool(operation.get("manual_lock", true))
+		})
+	lines.sort_custom(func(a, b): return str(a.get("line_id", "")) < str(b.get("line_id", "")))
+
+	var facilities: Array = []
+	var local_facilities: Dictionary = state.location_industries(location_id)
+	var facility_ids: Array = local_facilities.keys()
+	facility_ids.sort()
+	for facility_id_value in facility_ids:
+		var facility_id := str(facility_id_value)
+		var local_state: Dictionary = local_facilities.get(facility_id, {})
+		if int(local_state.get("level", 0)) <= 0:
+			continue
+		facilities.append({"facility_id":facility_id, "level":int(local_state.get("level", 1)), "status":str(local_state.get("status", "ACTIVE")), "throughput":facility_manufacturing_throughput(state, facility_id, location_id)})
+
+	var sources: Array = []
+	var network_ids: Array = state.extraction_network_states.keys()
+	network_ids.sort()
+	for network_id_value in network_ids:
+		var network_id := str(network_id_value)
+		var network_runtime: Dictionary = state.extraction_network_states.get(network_id, {})
+		var network: Dictionary = content.extraction_networks.get(network_id, {})
+		if network.is_empty():
+			continue
+		var source_outputs := {}
+		for site_id_value in network_runtime.get("integrated_site_ids", []):
+			var site_id := str(site_id_value)
+			var site: Dictionary = content.mining_sites.get(site_id, {})
+			var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
+			if str(mining_location.get("region", "")) != location_id:
+				continue
+			var product_id := str(mining_location.get("raw_material", ""))
+			var cycles_per_hour := 3600000.0 / maxf(1.0, float(extraction_network_cycle_duration_ms(network)))
+			var nominal_rate := float(network.get("quantity_per_site", 1.0)) * float(network_runtime.get("level", 1)) * cycles_per_hour
+			var sustainable_rate := extraction_site_sustainable_potential(state, site_id) * simulation_speed_multiplier("mining")
+			var actual_rate := minf(nominal_rate, sustainable_rate) if str(network_runtime.get("status", "IDLE")) == "RUNNING" else 0.0
+			var output: Dictionary = source_outputs.get(product_id, {"item_id":product_id, "actual_rate":0.0, "requested_rate":0.0, "capacity":0.0, "site_ids":[]})
+			output["actual_rate"] = float(output.get("actual_rate", 0.0)) + actual_rate
+			output["requested_rate"] = float(output.get("requested_rate", 0.0)) + nominal_rate
+			output["capacity"] = float(output.get("capacity", 0.0)) + sustainable_rate
+			output["site_ids"].append(site_id)
+			source_outputs[product_id] = output
+			product_ids[product_id] = true
+		if not source_outputs.is_empty():
+			var output_rows: Array = source_outputs.values()
+			output_rows.sort_custom(func(a, b): return str(a.get("item_id", "")) < str(b.get("item_id", "")))
+			sources.append({"source_id":network_id, "source_type":"EXTRACTION_NETWORK", "status":str(network_runtime.get("status", "IDLE")), "outputs":output_rows, "blocker":network_runtime.get("blocker", {}).duplicate(true)})
+
+	var route_rows: Array = []
+	var route_ids: Array = content.logistics_routes.keys()
+	route_ids.sort()
+	for route_id_value in route_ids:
+		var route_id := str(route_id_value)
+		var route: Dictionary = content.logistics_routes.get(route_id, {})
+		var origin := str(route.get("from", ""))
+		var destination := str(route.get("to", ""))
+		if location_id not in [origin, destination]:
+			continue
+		var service: Dictionary = logistics.service_snapshot(state, route_id)
+		var cargo := {}
+		var cargo_rate := {}
+		var in_transit := 0.0
+		var actual_rate := 0.0
+		for shipment_value in state.logistics_network.get("shipments", []):
+			var shipment := shipment_value as Dictionary
+			if not shipment.get("route_path", []).has(route_id):
+				continue
+			var duration_hours := maxf(0.001, float(shipment.get("total_ms", 1.0)) / 3600000.0)
+			for item_id_value in shipment.get("cargo", {}).keys():
+				var item_id := str(item_id_value)
+				var amount := maxf(0.0, float(shipment.get("cargo", {}).get(item_id, 0.0)))
+				cargo[item_id] = float(cargo.get(item_id, 0.0)) + amount
+				cargo_rate[item_id] = float(cargo_rate.get(item_id, 0.0)) + amount / duration_hours
+				in_transit += amount
+				actual_rate += amount / duration_hours
+				product_ids[item_id] = true
+		route_rows.append({
+			"route_id":route_id, "origin":origin, "destination":destination,
+			"direction":"INBOUND" if destination == location_id else "OUTBOUND",
+			"status":str(service.get("status", "NO_TRANSPORT")),
+			"transport_mode_id":str(service.get("transport_mode_id", "")),
+			"actual_rate":actual_rate,
+			"requested_rate":float(service.get("capacity_per_minute", 0.0)) * 60.0 * float(service.get("utilization", 0.0)),
+			"capacity":float(service.get("capacity_per_minute", 0.0)) * 60.0,
+			"utilization":float(service.get("utilization", 0.0)),
+			"in_transit":in_transit,
+			"cargo":cargo,
+			"cargo_rate":cargo_rate,
+			"blocker":service.get("last_blocker", {}).duplicate(true)
+		})
+
+	var demands: Array = []
+	var demand_ids: Array = state.demand_registry.get("sources", {}).keys()
+	demand_ids.sort()
+	for demand_id_value in demand_ids:
+		var demand_id := str(demand_id_value)
+		var demand: Dictionary = state.demand_registry.get("sources", {}).get(demand_id, {})
+		if str(demand.get("location_id", "")) != location_id:
+			continue
+		var product_id := str(demand.get("product_id", ""))
+		product_ids[product_id] = true
+		demands.append({
+			"demand_id":demand_id, "product_id":product_id,
+			"demand_kind":str(demand.get("demand_kind", "COMMITTED")),
+			"source_type":str(demand.get("source_type", "manual_order")),
+			"source_id":str(demand.get("source_id", demand_id)),
+			"priority":int(demand.get("priority", 50)),
+			"rate":maxf(0.0, float(demand.get("rate_per_hour", 0.0))),
+			"quantity":maxf(0.0, float(demand.get("quantity", demand.get("backlog_quantity", 0.0)))),
+			"backlog":maxf(0.0, float(demand.get("backlog_quantity", demand.get("quantity", 0.0))))
+		})
+
+	var inbound_by_item := {}
+	var outbound_by_item := {}
+	for shipment_value in state.logistics_network.get("shipments", []):
+		var shipment := shipment_value as Dictionary
+		for item_id_value in shipment.get("cargo", {}).keys():
+			var item_id := str(item_id_value)
+			var amount := maxf(0.0, float(shipment.get("cargo", {}).get(item_id, 0.0)))
+			if str(shipment.get("destination", "")) == location_id:
+				inbound_by_item[item_id] = float(inbound_by_item.get(item_id, 0.0)) + amount
+			if str(shipment.get("origin", "")) == location_id:
+				outbound_by_item[item_id] = float(outbound_by_item.get(item_id, 0.0)) + amount
+
+	var buffers: Array = []
+	var sorted_products: Array = product_ids.keys()
+	sorted_products.sort()
+	for product_id_value in sorted_products:
+		var product_id := str(product_id_value)
+		if product_id.is_empty():
+			continue
+		var row: Dictionary = economy_rows.get(product_id, {})
+		var storage_class := storage_class_for_item(product_id)
+		var storage_class_row: Dictionary = economy.get("storage", {}).get("classes", {}).get(storage_class, {})
+		buffers.append({
+			"product_id":product_id,
+			"on_hand":int(row.get("on_hand", state.item_quantity(product_id, location_id))),
+			"reserved":int(row.get("reserved", maxi(0, state.item_quantity(product_id, location_id) - state.available_item_quantity(product_id, location_id)))),
+			"available":int(row.get("available", state.available_item_quantity(product_id, location_id))),
+			"inbound":float(inbound_by_item.get(product_id, 0.0)),
+			"outbound":float(outbound_by_item.get(product_id, 0.0)),
+			"capacity":float(row.get("storage_capacity", storage_class_row.get("capacity", 0.0))),
+			"free":float(row.get("free_storage", storage_class_row.get("free", 0.0))),
+			"utilization":float(row.get("storage_utilization", storage_class_row.get("utilization", 0.0))),
+			"production_rate":float(row.get("production_rate", 0.0)),
+			"consumption_rate":float(row.get("consumption_rate", 0.0)),
+			"net_rate":float(row.get("net_rate", 0.0)),
+			"committed_demand":float(row.get("committed_demand", 0.0)),
+			"status":str(row.get("status", "STABLE")),
+			"storage_class":storage_class
+		})
+
+	var bottlenecks: Array = []
+	for product_id_value in sorted_products:
+		var row: Dictionary = economy_rows.get(str(product_id_value), {})
+		if str(row.get("status", "STABLE")) in ["CRITICAL", "TIGHT", "STORAGE_FULL"]:
+			bottlenecks.append(shortest_bottleneck_chain(state, str(product_id_value), location_id, maxf(0.0, float(row.get("consumption_rate", 0.0)))))
+
+	return {
+		"location_id":location_id,
+		"generated_at_ms":int(state.total_elapsed_ms),
+		"lines":lines,
+		"facilities":facilities,
+		"sources":sources,
+		"buffers":buffers,
+		"logistics":route_rows,
+		"demands":demands,
+		"infrastructure":{
+			"industry":location_industry_constraint_profile(state, location_id),
+			"local_logistics":local_logistics_profile(state, location_id),
+			"storage":economy.get("storage", {}).duplicate(true)
+		},
+		"bottlenecks":bottlenecks
+	}
+
+
 func target_throughput_plan(state: SpaceGameState, targets: Dictionary, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
 	return economy_planner.plan_targets(state, targets, location_id)
 

@@ -2,6 +2,10 @@ extends Control
 
 const SystemMapViewScript = preload("res://src/ui/components/system_map_view.gd")
 const MegastructureProgressViewScript = preload("res://src/ui/components/megastructure_progress_view.gd")
+const GameShellScript = preload("res://src/ui/components/game_shell.gd")
+const UiNavigationStateScript = preload("res://src/ui/ui_navigation_state.gd")
+const IndustrialNetworkProjectionScript = preload("res://src/ui/view_models/industrial_network_projection.gd")
+const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_network_view.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
 const COLOR_BG := UiTokens.COLOR_CANVAS
@@ -9,6 +13,7 @@ const COLOR_PANEL := UiTokens.COLOR_PANEL
 const COLOR_PANEL_ALT := UiTokens.COLOR_RAISED
 const COLOR_BORDER := UiTokens.COLOR_BORDER
 const COLOR_TEXT := UiTokens.COLOR_TEXT
+const COLOR_TEXT_SECONDARY := UiTokens.COLOR_TEXT_SECONDARY
 const COLOR_MUTED := UiTokens.COLOR_TEXT_MUTED
 const COLOR_ACCENT := UiTokens.COLOR_FOCUS
 const COLOR_GOOD := UiTokens.COLOR_RUNNING
@@ -25,10 +30,14 @@ const NAV_TRANSLATION_KEYS := {
 }
 
 var _tabs: TabContainer
+var _shell
+var _ui_state = UiNavigationStateScript.new()
 var _pages: Dictionary = {}
 var _page_controls: Dictionary = {}
 var _header_status: Label
 var _notice_label: Label
+var _dock_workspace_label: Label
+var _dock_next_button: Button
 var _event_log: Array[String] = []
 var _dirty := true
 var _immediate_refresh_requested := false
@@ -40,6 +49,7 @@ var _nav_buttons: Dictionary = {}
 var _selected_location_id := SpaceGameState.MAIN_BASE_LOCATION_ID
 var _location_section := "overview"
 var _industry_section := "production"
+var _industry_view_mode := "network"
 var _fleet_section := "roster"
 var _logistics_item_selection := {}
 var _logistics_advanced := false
@@ -56,7 +66,12 @@ var _alert_records := {}
 var _active_blocker_cache: Array[Dictionary] = []
 var _telemetry_events: Array[Dictionary] = []
 var _seen_blocker_ids := {}
-var _navigation_history: Array[String] = []
+var _industrial_network_view: IndustrialNetworkView
+var _industrial_network_projection: IndustrialNetworkProjection
+var _industrial_network_preferences: Dictionary = {}
+var _selected_industrial_network_node: Dictionary = {}
+var _reduced_motion := false
+var _network_preferences_save_due_ms := 0
 
 
 func _ready() -> void:
@@ -66,6 +81,12 @@ func _ready() -> void:
 			_fleet_section = String(argument).trim_prefix("--fleet-section=")
 		elif String(argument).begins_with("--industry-section="):
 			_industry_section = String(argument).trim_prefix("--industry-section=")
+		elif String(argument).begins_with("--industry-view="):
+			_industry_view_mode = String(argument).trim_prefix("--industry-view=")
+		elif String(argument).begins_with("--network-location="):
+			_selected_location_id = String(argument).trim_prefix("--network-location=")
+		elif String(argument) == "--reduced-motion":
+			_reduced_motion = true
 	_build_theme()
 	_build_shell()
 	_connect_game_signals()
@@ -82,6 +103,9 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
+	if _network_preferences_save_due_ms > 0 and now >= _network_preferences_save_due_ms:
+		_network_preferences_save_due_ms = 0
+		_save_ui_preferences()
 	if now - _last_header_ms >= 200:
 		_update_header()
 		_last_header_ms = now
@@ -110,13 +134,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.is_action_pressed("ui_cancel"):
 		return
-	var destination := ""
-	while not _navigation_history.is_empty() and destination.is_empty():
-		var candidate: String = String(_navigation_history.pop_back())
-		if candidate != _active_page_key and _page_controls.has(candidate):
-			destination = candidate
-	if destination.is_empty() and _active_page_key != "system_map":
-		destination = "system_map"
+	if is_instance_valid(_industrial_network_view) and _active_page_key == "industry" and _industry_section == "production" and _industry_view_mode == "network" and _industrial_network_view.clear_selection():
+		_selected_industrial_network_node.clear()
+		_ui_state.select_context("location", _selected_location_id)
+		_rebuild_sidebar()
+		get_viewport().set_input_as_handled()
+		return
+	var destination: String = String(_ui_state.back_target(_page_controls))
 	if not destination.is_empty():
 		_switch_page(destination, false)
 		get_viewport().set_input_as_handled()
@@ -135,36 +159,34 @@ func _build_theme() -> void:
 
 
 func _build_shell() -> void:
-	var background := ColorRect.new()
-	background.color = COLOR_BG
-	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(background)
+	_shell = GameShellScript.new()
+	add_child(_shell)
+	_shell.build()
+	_shell.left_rail_toggled.connect(_on_left_rail_toggled)
+	_shell.right_inspector_toggled.connect(_on_right_inspector_toggled)
+	_shell.set_left_collapsed(_ui_state.left_rail_collapsed)
+	_shell.set_right_collapsed(_ui_state.right_inspector_collapsed)
+	_shell.header_slot.add_child(_build_header())
 
-	var root_margin := MarginContainer.new()
-	root_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root_margin.add_theme_constant_override("margin_left", 18)
-	root_margin.add_theme_constant_override("margin_top", 14)
-	root_margin.add_theme_constant_override("margin_right", 18)
-	root_margin.add_theme_constant_override("margin_bottom", 14)
-	add_child(root_margin)
+	var resource_scroll := ScrollContainer.new()
+	resource_scroll.name = "ResourceRail"
+	resource_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	resource_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	resource_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_shell.left_slot.add_child(resource_scroll)
+	var resource_box := VBoxContainer.new()
+	resource_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	resource_box.add_theme_constant_override("separation", UiTokens.SPACING_SM)
+	resource_scroll.add_child(resource_box)
+	_pages["resource_rail"] = resource_box
 
-	var root_box := VBoxContainer.new()
-	root_box.add_theme_constant_override("separation", 10)
-	root_margin.add_child(root_box)
-
-	root_box.add_child(_build_header())
-
-	var workspace := HBoxContainer.new()
-	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	workspace.add_theme_constant_override("separation", 10)
-	root_box.add_child(workspace)
-	workspace.add_child(_build_navigation_rail())
+	_shell.center_slot.add_child(_build_navigation_rail())
 
 	_tabs = TabContainer.new()
 	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tabs.tabs_visible = false
-	workspace.add_child(_tabs)
+	_shell.center_slot.add_child(_tabs)
 
 	_add_page(I18n.core("page.system_map"), "system_map")
 	_add_page(I18n.core("page.location"), "location")
@@ -181,44 +203,35 @@ func _build_shell() -> void:
 	var restored_page: Control = _page_controls.get(_active_page_key)
 	_tabs.current_tab = restored_page.get_index() if is_instance_valid(restored_page) else 0
 
-	var sidebar := _panel()
-	sidebar.custom_minimum_size = Vector2(UiTokens.INSPECTOR_WIDTH, 0)
-	workspace.add_child(sidebar)
-	var sidebar_margin := _margin(14, 14, 14, 14)
-	sidebar.add_child(sidebar_margin)
 	var sidebar_scroll := ScrollContainer.new()
+	sidebar_scroll.name = "ContextInspector"
+	sidebar_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sidebar_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	sidebar_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	sidebar_margin.add_child(sidebar_scroll)
+	_shell.right_slot.add_child(sidebar_scroll)
 	var sidebar_box := VBoxContainer.new()
 	sidebar_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sidebar_box.add_theme_constant_override("separation", 10)
+	sidebar_box.add_theme_constant_override("separation", UiTokens.SPACING_SM)
 	sidebar_scroll.add_child(sidebar_box)
 	_pages["sidebar"] = sidebar_box
-
-	var timeline_panel := _panel(Color("0d151a"))
-	timeline_panel.custom_minimum_size.y = UiTokens.BOTTOM_BAR_HEIGHT
-	root_box.add_child(timeline_panel)
-	var timeline_margin := _margin(14, 8, 14, 8)
-	timeline_panel.add_child(timeline_margin)
-	_notice_label = Label.new()
-	_notice_label.name = "AlertsTimelineTasks"
-	_notice_label.custom_minimum_size.y = 42
-	_notice_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_notice_label.add_theme_color_override("font_color", COLOR_MUTED)
-	_notice_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	timeline_margin.add_child(_notice_label)
+	_shell.bottom_slot.add_child(_build_command_dock())
 
 
 func _build_navigation_rail() -> Control:
-	var panel := _panel(Color("101820"))
-	panel.custom_minimum_size.x = UiTokens.NAV_WIDTH
-	var margin := _margin(10, 12, 10, 12)
+	var panel := _panel(UiTokens.COLOR_RAISED)
+	panel.name = "WorkspaceNavigationBar"
+	panel.custom_minimum_size.y = UiTokens.WORKSPACE_NAV_HEIGHT
+	var margin := _margin(8, 6, 8, 6)
 	panel.add_child(margin)
-	var rail := VBoxContainer.new()
-	rail.add_theme_constant_override("separation", 5)
+	var rail := HBoxContainer.new()
+	rail.add_theme_constant_override("separation", 4)
 	margin.add_child(rail)
-	var operations_title := _label(I18n.core("shell.operations"), 12, COLOR_MUTED)
+	var operations_title := _label(I18n.core("shell.workspaces", "WORKSPACES"), 10, COLOR_MUTED)
 	operations_title.name = "OperationsTitle"
+	operations_title.custom_minimum_size.x = 78
+	operations_title.autowrap_mode = TextServer.AUTOWRAP_OFF
+	operations_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	operations_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	rail.add_child(operations_title)
 	var entries := [
 		["system_map", "nav.system_map"],
@@ -235,20 +248,15 @@ func _build_navigation_rail() -> Control:
 	]
 	for entry in entries:
 		var key := String(entry[0])
-		var button := _button(I18n.core(String(entry[1])), _switch_page.bind(key))
+		var button := _button(I18n.core("nav.short.%s" % key, I18n.core(String(entry[1]))), _switch_page.bind(key))
 		var public_key := "ships" if key == "fleet" else ("survey" if key == "frontier" else key)
 		button.name = "Navigation_%s" % public_key
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.custom_minimum_size = Vector2(UiTokens.NAV_WIDTH - 20, UiTokens.ROW_HEIGHT)
+		button.tooltip_text = I18n.core(String(entry[1]))
+		button.custom_minimum_size = Vector2(58, 34)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.add_theme_font_size_override("font_size", 12)
 		_nav_buttons[key] = button
 		rail.add_child(button)
-	var spacer := Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	rail.add_child(spacer)
-	var scope := _label(I18n.core("shell.scope"), 10, COLOR_MUTED)
-	scope.name = "ScopeLabel"
-	scope.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rail.add_child(scope)
 	return panel
 
 
@@ -256,12 +264,10 @@ func _switch_page(key: String, record_history: bool = true) -> void:
 	var page: Control = _page_controls.get(key)
 	if not is_instance_valid(page):
 		return
-	if record_history and key != _active_page_key and _page_controls.has(_active_page_key):
-		_navigation_history.append(_active_page_key)
-		if _navigation_history.size() > 32:
-			_navigation_history.pop_front()
+	if not _ui_state.navigate(key, _page_controls, record_history):
+		return
 	_tabs.current_tab = page.get_index()
-	_active_page_key = key
+	_active_page_key = _ui_state.active_workspace
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
 	_update_navigation_state()
@@ -277,47 +283,47 @@ func _update_navigation_state() -> void:
 		var page: Control = _page_controls.get(key)
 		var active := is_instance_valid(page) and page.get_index() == _tabs.current_tab
 		var availability: Dictionary = Game.ui_navigation_availability(key)
-		var caption := I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize())
+		var caption := I18n.core("nav.short.%s" % key, I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize()))
 		if not bool(availability.get("unlocked", true)):
-			caption += "  ·  " + I18n.core("nav.locked", "Locked")
+			caption += " *"
 		button.text = caption
-		button.tooltip_text = "" if bool(availability.get("unlocked", true)) else I18n.core(String(availability.get("condition_key", "")), "Progression requirement not met")
+		button.tooltip_text = I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize()) if bool(availability.get("unlocked", true)) else I18n.core(String(availability.get("condition_key", "")), "Progression requirement not met")
 		button.add_theme_color_override("font_color", COLOR_ACCENT if active else COLOR_TEXT)
-		button.add_theme_stylebox_override("normal", _button_style(Color("18303a") if active else Color("141c24"), COLOR_ACCENT if active else COLOR_BORDER))
+		button.add_theme_stylebox_override("normal", _button_style(UiTokens.COLOR_CONTROL_ACTIVE if active else UiTokens.COLOR_CONTROL, COLOR_ACCENT if active else COLOR_BORDER))
 
 
 func _build_header() -> Control:
-	var panel := _panel(COLOR_PANEL_ALT)
-	panel.custom_minimum_size.y = 76
-	var margin := _margin(16, 10, 12, 10)
-	panel.add_child(margin)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	margin.add_child(row)
+	row.add_theme_constant_override("separation", 6)
 
 	var title_box := VBoxContainer.new()
-	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_box.custom_minimum_size.x = 214
 	row.add_child(title_box)
-	var title := _label(I18n.core("shell.title"), 22, COLOR_TEXT)
+	var title := _label(I18n.core("shell.brand_short", "HELIOS"), 18, COLOR_TEXT)
 	title.name = "ShellTitle"
+	title.autowrap_mode = TextServer.AUTOWRAP_OFF
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_box.add_child(title)
-	var subtitle := _label(I18n.core("shell.subtitle"), 13, COLOR_MUTED)
+	var subtitle := _label(I18n.core("shell.brand_subtitle", "INDUSTRIAL NETWORK"), 10, COLOR_MUTED)
 	subtitle.name = "ShellSubtitle"
+	subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_box.add_child(subtitle)
 
-	_header_status = _label("", 14, COLOR_MUTED)
+	_header_status = _label("", 12, COLOR_MUTED)
 	_header_status.name = "HeaderStatus"
-	_header_status.custom_minimum_size.x = 360
+	_header_status.custom_minimum_size.x = 300
 	_header_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_header_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_header_status.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_header_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_header_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_header_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_header_status)
 
 	for speed in [0.0, 1.0, 2.0, 5.0, 10.0, 100.0]:
 		var text_value := I18n.core("shell.pause") if speed == 0.0 else "%d×" % int(speed)
 		var speed_button := _button(text_value, _set_speed.bind(speed))
 		speed_button.name = "SpeedPause" if speed == 0.0 else "Speed%d" % int(speed)
-		speed_button.custom_minimum_size.x = 60 if speed >= 100.0 else 56
+		speed_button.custom_minimum_size.x = 48 if speed >= 100.0 else 42
 		if speed >= 100.0:
 			speed_button.tooltip_text = I18n.core("shell.speed_100_tooltip", "Fast-forward 100× through the normal deterministic simulation; all costs and blockers still apply.")
 		_speed_buttons[speed] = speed_button
@@ -332,7 +338,51 @@ func _build_header() -> Control:
 	var restart_button := _button(I18n.core("shell.restart"), _request_reset_game, false, COLOR_BAD)
 	restart_button.name = "RestartButton"
 	row.add_child(restart_button)
-	return panel
+	return row
+
+
+func _build_command_dock() -> Control:
+	var row := HBoxContainer.new()
+	row.name = "CommandDock"
+	row.add_theme_constant_override("separation", UiTokens.SPACING_MD)
+	var identity := VBoxContainer.new()
+	identity.custom_minimum_size.x = 148
+	var dock_title := _label(I18n.core("shell.command_dock", "COMMAND DOCK"), 10, COLOR_MUTED)
+	dock_title.name = "CommandDockTitle"
+	identity.add_child(dock_title)
+	_dock_workspace_label = _label("", 15, COLOR_TEXT)
+	_dock_workspace_label.name = "DockWorkspaceLabel"
+	identity.add_child(_dock_workspace_label)
+	row.add_child(identity)
+	var separator := VSeparator.new()
+	row.add_child(separator)
+	_notice_label = Label.new()
+	_notice_label.name = "AlertsTimelineTasks"
+	_notice_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_notice_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_notice_label.add_theme_font_size_override("font_size", 12)
+	_notice_label.add_theme_color_override("font_color", COLOR_MUTED)
+	_notice_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_notice_label.max_lines_visible = 3
+	_notice_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	row.add_child(_notice_label)
+	var actions := VBoxContainer.new()
+	actions.custom_minimum_size.x = 142
+	actions.add_theme_constant_override("separation", UiTokens.SPACING_XS)
+	var back_button := _button(I18n.core("shell.back", "Back"), _navigate_back)
+	back_button.name = "ShellBack"
+	actions.add_child(back_button)
+	_dock_next_button = _button(I18n.core("shell.next_action", "Next action"), _open_next_flow_target, false, COLOR_GOOD)
+	_dock_next_button.name = "DockNextStep"
+	actions.add_child(_dock_next_button)
+	row.add_child(actions)
+	return row
+
+
+func _navigate_back() -> void:
+	var destination: String = String(_ui_state.back_target(_page_controls))
+	if not destination.is_empty():
+		_switch_page(destination, false)
 
 
 func _add_page(title: String, key: String) -> void:
@@ -364,6 +414,7 @@ func _rebuild_all() -> void:
 	if not is_instance_valid(Game.state) or not is_instance_valid(Game.content):
 		return
 	_refresh_alerts()
+	_rebuild_resource_rail()
 	_rebuild_sidebar()
 	_rebuild_system_map()
 	_rebuild_location()
@@ -398,6 +449,7 @@ func _rebuild_active_page() -> void:
 	if page_before is ScrollContainer:
 		scroll_before = (page_before as ScrollContainer).scroll_vertical
 	_refresh_alerts()
+	_rebuild_resource_rail()
 	_rebuild_sidebar()
 	var active_page: Control = _tabs.get_current_tab_control()
 	var key: String = str(active_page.name) if is_instance_valid(active_page) else "system_map"
@@ -405,7 +457,11 @@ func _rebuild_active_page() -> void:
 		"system_map": _rebuild_system_map()
 		"location": _rebuild_location()
 		"frontier": _rebuild_frontier()
-		"industry": _rebuild_industry()
+		"industry":
+			if _industry_section == "production" and _industry_view_mode == "network" and is_instance_valid(_industrial_network_view):
+				_refresh_industrial_network_view()
+			else:
+				_rebuild_industry()
 		"inventory": _rebuild_inventory()
 		"logistics": _rebuild_logistics()
 		"construction": _rebuild_construction()
@@ -439,6 +495,79 @@ func _restore_rebuilt_page_context(focused_name: String, page_key: String, scrol
 	replacement.grab_focus()
 
 
+func _rebuild_resource_rail() -> void:
+	var box := _pages.get("resource_rail") as VBoxContainer
+	if not is_instance_valid(box):
+		return
+	_clear(box)
+	var location := Game.state.location_state(_selected_location_id)
+	box.add_child(_label(I18n.core("resource_rail.title", "LOCATION RESOURCES"), 10, COLOR_MUTED))
+	box.add_child(_label(_location_name(_selected_location_id), 18, COLOR_TEXT))
+	var location_status := _status_text(String(location.get("survey_state", "UNKNOWN"))) if not location.is_empty() else I18n.core("status.UNKNOWN", "Unknown")
+	box.add_child(_label(location_status, 11, COLOR_ACCENT))
+	box.add_child(_separator())
+
+	var storage := Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
+	var storage_tone := COLOR_BAD if float(storage.get("utilization", 0.0)) >= 0.98 else (COLOR_WARN if float(storage.get("utilization", 0.0)) >= 0.85 else COLOR_TEXT)
+	box.add_child(_label(I18n.core("resource_rail.storage", "STORAGE"), 10, COLOR_MUTED))
+	box.add_child(_label(I18n.core("resource_rail.storage_value", "%d / %d units · %d%%") % [int(storage.get("used", 0.0)), int(storage.get("capacity", 0.0)), int(float(storage.get("utilization", 0.0)) * 100.0)], 13, storage_tone))
+	var storage_bar := ProgressBar.new()
+	storage_bar.max_value = 1.0
+	storage_bar.value = float(storage.get("utilization", 0.0))
+	storage_bar.show_percentage = false
+	storage_bar.custom_minimum_size.y = 6
+	box.add_child(storage_bar)
+	box.add_child(_label(I18n.core("resource_rail.inventory", "LOCAL INVENTORY"), 10, COLOR_MUTED))
+
+	var inventory_rows: Array[Dictionary] = []
+	for item_id_value in Game.state.location_inventory(_selected_location_id).keys():
+		var item_id := String(item_id_value)
+		var quantity := Game.state.item_quantity(item_id, _selected_location_id)
+		if quantity <= 0:
+			continue
+		inventory_rows.append({"item_id":item_id, "quantity":quantity, "available":Game.state.available_item_quantity(item_id, _selected_location_id)})
+	inventory_rows.sort_custom(func(a: Dictionary, b: Dictionary): return int(a.get("quantity", 0)) > int(b.get("quantity", 0)))
+	if inventory_rows.is_empty():
+		box.add_child(_label(I18n.core("sidebar.empty", "Inventory is empty"), 12, COLOR_MUTED))
+	else:
+		for index in mini(6, inventory_rows.size()):
+			var row_data: Dictionary = inventory_rows[index]
+			var row := HBoxContainer.new()
+			var item_id := String(row_data.get("item_id", ""))
+			var item_label := _label(_content_name(Game.content.items.get(item_id, {}), item_id), 12, COLOR_TEXT)
+			item_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			item_label.custom_minimum_size.x = 116
+			item_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+			item_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			item_label.tooltip_text = item_label.text
+			row.add_child(item_label)
+			var quantity_label := _label("%d" % int(row_data.get("quantity", 0)), 12, COLOR_TEXT)
+			quantity_label.custom_minimum_size.x = 42
+			quantity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			quantity_label.tooltip_text = I18n.core("resource_rail.available", "Available: %d") % int(row_data.get("available", 0))
+			row.add_child(quantity_label)
+			box.add_child(row)
+	var open_inventory := _button(I18n.core("resource_rail.open_inventory", "Open inventory"), _switch_page.bind("inventory"), false, COLOR_ACCENT)
+	open_inventory.name = "ResourceRailOpenInventory"
+	box.add_child(open_inventory)
+	box.add_child(_separator())
+
+	box.add_child(_label(I18n.core("resource_rail.current_task", "CURRENT TASK"), 10, COLOR_MUTED))
+	var guidance := Game.guidance_snapshot()
+	var task_caption := String(guidance.get("message", guidance.get("reason", ""))).get_slice("\n", 0)
+	box.add_child(_label(task_caption, 12, COLOR_TEXT_SECONDARY))
+	var task_action := _button(I18n.core("resource_rail.locate_task", "Locate task"), _open_next_flow_target, false, COLOR_GOOD)
+	task_action.name = "ResourceRailNextStep"
+	task_action.tooltip_text = String(guidance.get("reason", ""))
+	box.add_child(task_action)
+
+	var scope := _label(I18n.core("shell.scope"), 10, COLOR_MUTED)
+	scope.name = "ScopeLabel"
+	scope.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scope.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	box.add_child(scope)
+
+
 func _rebuild_sidebar() -> void:
 	var box: VBoxContainer = _pages["sidebar"]
 	_clear(box)
@@ -460,6 +589,11 @@ func _rebuild_sidebar() -> void:
 	selector.item_selected.connect(_on_context_location_selected.bind(location_ids))
 	box.add_child(selector)
 	var selected := Game.state.location_state(_selected_location_id)
+	if _ui_state.selected_kind == "industrial_network" and not _selected_industrial_network_node.is_empty():
+		_build_industrial_network_inspector(box, _selected_industrial_network_node)
+		_build_sidebar_footer(box)
+		return
+	_ui_state.select_context("location", _selected_location_id)
 	if not selected.is_empty():
 		var power: Dictionary = selected.get("power", {})
 		var storage: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
@@ -485,7 +619,82 @@ func _rebuild_sidebar() -> void:
 			var inspect := _button(_blocker_text(blocker), _navigate_blocker.bind(blocker), false, COLOR_WARN)
 			inspect.tooltip_text = I18n.core("diagnostics.open_resolution", "Open resolution")
 			box.add_child(inspect)
+	_build_sidebar_footer(box)
 
+
+func _build_industrial_network_inspector(box: VBoxContainer, node: Dictionary) -> void:
+	var kind := String(node.get("kind", "PRODUCTION"))
+	var status := String(node.get("status", "PAUSED"))
+	box.add_child(_label(I18n.core("industrial_network.inspector.entity", "%s ENTITY") % I18n.core("industrial_network.kind.%s" % kind.to_lower(), kind.capitalize()), 10, COLOR_MUTED))
+	box.add_child(_label(String(node.get("title", node.get("id", ""))), 18, COLOR_TEXT))
+	box.add_child(_label(String(node.get("subtitle", "")), 12, COLOR_TEXT_SECONDARY))
+	var status_tone := COLOR_BAD if status in ["BLOCKED", "BLOCKED_INPUT", "BLOCKED_OUTPUT", "CRITICAL"] else (COLOR_WARN if status in ["POWER_LIMITED", "COOLING_LIMITED", "LOGISTICS_LIMITED", "CONGESTED", "SATURATED", "TIGHT", "STORAGE_FULL", "CONSTRAINED"] else COLOR_GOOD)
+	box.add_child(_label(I18n.core("industrial_network.inspector.status", "Status: %s") % _status_text(status), 13, status_tone))
+	var blocker: Dictionary = node.get("blocker", {}) if node.get("blocker", null) is Dictionary else {}
+	if not blocker.is_empty():
+		box.add_child(_label(I18n.core("blocker.primary") % _blocker_text(blocker), 13, COLOR_WARN))
+	box.add_child(_separator())
+	box.add_child(_label(I18n.core("industrial_network.inspector.behavior", "ACTUAL BEHAVIOR"), 10, COLOR_MUTED))
+	box.add_child(_label(I18n.core("industrial_network.inspector.rate", "Actual %.2f/h · Theoretical %.2f/h · Utilization %d%%") % [float(node.get("actual_rate", 0.0)), float(node.get("theoretical_rate", 0.0)), int(float(node.get("utilization", 0.0)) * 100.0)], 12, COLOR_TEXT))
+	var buffer: Dictionary = node.get("buffer", {}) if node.get("buffer", null) is Dictionary else {}
+	if kind == "BUFFER":
+		box.add_child(_label(I18n.core("industrial_network.inspector.buffer", "Available %d · Reserved %d · Inbound %.1f · Capacity %.0f") % [int(buffer.get("available", 0)), int(buffer.get("reserved", 0)), float(buffer.get("inbound", 0.0)), float(buffer.get("capacity", 0.0))], 12, COLOR_TEXT_SECONDARY))
+		box.add_child(_label(I18n.core("industrial_network.inspector.net", "Net %.2f/h · Committed %.1f") % [float(buffer.get("net_rate", 0.0)), float(buffer.get("committed_demand", 0.0))], 12, COLOR_TEXT_SECONDARY))
+	elif kind == "LOGISTICS":
+		box.add_child(_label(I18n.core("industrial_network.inspector.logistics", "In transit %.1f · Capacity %.1f/h") % [float(buffer.get("in_transit", 0.0)), float(buffer.get("capacity", 0.0))], 12, COLOR_TEXT_SECONDARY))
+	elif kind == "DEMAND":
+		box.add_child(_label(I18n.core("industrial_network.inspector.demand", "Committed %.1f · Priority %d") % [float(buffer.get("backlog", buffer.get("quantity", 0.0))), int(buffer.get("priority", 50))], 12, COLOR_TEXT_SECONDARY))
+	_add_network_port_inspector(box, I18n.core("industrial_network.inputs", "INPUTS"), node.get("inputs", []))
+	_add_network_port_inspector(box, I18n.core("industrial_network.outputs", "OUTPUTS"), node.get("outputs", []))
+	box.add_child(_separator())
+	var open_button := _button(I18n.core("industrial_network.inspector.open", "Open detailed control"), _open_industrial_network_target.bind(node), false, COLOR_ACCENT)
+	open_button.name = "IndustrialNetworkInspectorOpen"
+	box.add_child(open_button)
+	if kind == "PRODUCTION" and node.get("allowed_actions", []).has("STOP"):
+		var slot := int(buffer.get("slot", -1))
+		var stop_button := _button(I18n.core("common.stop"), _command.bind(I18n.core("command.stop_production"), Game.stop_industry_operation.bind(slot)), slot < 0, COLOR_WARN)
+		stop_button.name = "IndustrialNetworkInspectorStop"
+		stop_button.tooltip_text = I18n.core("industrial_network.inspector.stop_reason", "Stops this real production line through the command gateway")
+		box.add_child(stop_button)
+	var close_button := _button(I18n.core("industrial_network.inspector.close", "Close inspector"), _close_industrial_network_inspector, false, COLOR_MUTED)
+	close_button.name = "IndustrialNetworkInspectorClose"
+	box.add_child(close_button)
+
+
+func _add_network_port_inspector(box: VBoxContainer, heading: String, ports_value) -> void:
+	var ports: Array = ports_value if ports_value is Array else []
+	if ports.is_empty():
+		return
+	box.add_child(_label(heading, 10, COLOR_MUTED))
+	for port_value in ports:
+		var port := port_value as Dictionary
+		var item_id := String(port.get("item_id", ""))
+		var title := String(port.get("title", _content_name(Game.content.items.get(item_id, {}), item_id)))
+		box.add_child(_label(I18n.core("industrial_network.inspector.port_rate", "%s · %.2f/h") % [title, float(port.get("actual_rate", port.get("requested_rate", 0.0)))], 11, COLOR_TEXT_SECONDARY))
+
+
+func _close_industrial_network_inspector() -> void:
+	_selected_industrial_network_node.clear()
+	_ui_state.select_context("location", _selected_location_id)
+	if is_instance_valid(_industrial_network_view):
+		_industrial_network_view.clear_selection()
+	_rebuild_sidebar()
+
+
+func _open_industrial_network_target(node: Dictionary) -> void:
+	var target: Dictionary = node.get("navigation_target", {}) if node.get("navigation_target", null) is Dictionary else {}
+	var page := String(target.get("page", "industry"))
+	if target.has("location_id") and Game.state.has_location(String(target.get("location_id", ""))):
+		_selected_location_id = String(target.get("location_id", _selected_location_id))
+	if page == "industry":
+		_industry_section = String(target.get("section", "production"))
+		_industry_view_mode = String(target.get("view", "list"))
+	elif page == "logistics" and target.has("route_id"):
+		_logistics_route_focus_id = String(target.get("route_id", ""))
+	_switch_page(page)
+
+
+func _build_sidebar_footer(box: VBoxContainer) -> void:
 	box.add_child(_separator())
 	box.add_child(_section_title(I18n.core("sidebar.guide")))
 	var guidance := Game.guidance_snapshot()
@@ -560,6 +769,7 @@ func _rebuild_system_map() -> void:
 	map_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_view.location_selected.connect(_open_location)
 	box.add_child(map_view)
+	map_view.custom_minimum_size.y = 430.0 if get_window().size.y <= 800 else 560.0
 	map_view.configure(map_locations, map_routes, _selected_location_id)
 
 	box.add_child(_section_title(I18n.core("system.production_logistics")))
@@ -1351,6 +1561,13 @@ func _capture_requested_view() -> void:
 			_tabs.current_tab = page.get_index()
 	await get_tree().process_frame
 	await get_tree().process_frame
+	for argument in args:
+		if String(argument).begins_with("--network-visual-phase=") and is_instance_valid(_industrial_network_view):
+			_industrial_network_view.set_visual_phase_for_capture(float(String(argument).trim_prefix("--network-visual-phase=")))
+		elif String(argument).begins_with("--network-focus-activity=") and is_instance_valid(_industrial_network_view):
+			_industrial_network_view.focus_production_method(String(argument).trim_prefix("--network-focus-activity="), false)
+	if args.has("--network-focus-bottleneck") and is_instance_valid(_industrial_network_view):
+		_industrial_network_view.focus_bottleneck(false)
 	RenderingServer.force_draw(false)
 	await get_tree().process_frame
 	var directory := ProjectSettings.globalize_path("res://artifacts/ui")
@@ -1603,8 +1820,29 @@ func _refresh_alerts() -> void:
 
 func _rebuild_industry() -> void:
 	var box: VBoxContainer = _pages["industry"]
+	var network_workspace := _industry_section == "production" and _industry_view_mode == "network"
+	_configure_industry_workspace(network_workspace)
 	_clear(box)
-	box.add_child(_page_title(I18n.core("industry.title"), I18n.core("industry.subtitle")))
+	if network_workspace:
+		var compact_header := HBoxContainer.new()
+		compact_header.name = "IndustryNetworkHeader"
+		compact_header.add_theme_constant_override("separation", 10)
+		var compact_title := Label.new()
+		compact_title.text = I18n.core("industry.title")
+		compact_title.add_theme_font_size_override("font_size", 20)
+		compact_title.add_theme_color_override("font_color", COLOR_TEXT)
+		compact_header.add_child(compact_title)
+		var compact_context := Label.new()
+		compact_context.text = I18n.core("industrial_network.workspace_context", "Orbital industrial operations console")
+		compact_context.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		compact_context.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		compact_context.add_theme_font_size_override("font_size", 12)
+		compact_context.add_theme_color_override("font_color", COLOR_MUTED)
+		compact_context.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		compact_header.add_child(compact_context)
+		box.add_child(compact_header)
+	else:
+		box.add_child(_page_title(I18n.core("industry.title"), I18n.core("industry.subtitle")))
 	var section_tabs := HFlowContainer.new()
 	section_tabs.add_theme_constant_override("h_separation", 6)
 	section_tabs.add_theme_constant_override("v_separation", 6)
@@ -1625,6 +1863,19 @@ func _rebuild_industry() -> void:
 			_build_industry_production(box)
 
 
+func _configure_industry_workspace(network_workspace: bool) -> void:
+	var scroll = _page_controls.get("industry") as ScrollContainer
+	if not is_instance_valid(scroll):
+		return
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if network_workspace else ScrollContainer.SCROLL_MODE_AUTO
+	var margin := scroll.get_child(0) as MarginContainer if scroll.get_child_count() > 0 else null
+	if is_instance_valid(margin):
+		margin.size_flags_vertical = Control.SIZE_EXPAND_FILL if network_workspace else Control.SIZE_SHRINK_BEGIN
+	var box = _pages.get("industry") as VBoxContainer
+	if is_instance_valid(box):
+		box.size_flags_vertical = Control.SIZE_EXPAND_FILL if network_workspace else Control.SIZE_SHRINK_BEGIN
+
+
 func _select_industry_section(section: String) -> void:
 	_industry_section = section
 	_save_ui_preferences()
@@ -1643,6 +1894,104 @@ func _open_production_capability(location_id: String) -> void:
 
 
 func _build_industry_production(box: VBoxContainer) -> void:
+	var view_tabs := HBoxContainer.new()
+	view_tabs.add_theme_constant_override("separation", 6)
+	var network_button := _industrial_network_mode_button(I18n.core("industrial_network.view.network", "Network view"), "network")
+	network_button.name = "IndustryProductionNetworkView"
+	view_tabs.add_child(network_button)
+	var list_button := _industrial_network_mode_button(I18n.core("industrial_network.view.list", "List / detailed view"), "list")
+	list_button.name = "IndustryProductionListView"
+	view_tabs.add_child(list_button)
+	box.add_child(view_tabs)
+	if _industry_view_mode == "network":
+		_build_industry_network(box)
+		return
+	_build_industry_production_list(box)
+
+
+func _industrial_network_mode_button(caption: String, mode: String) -> Button:
+	var button := _button(caption, _select_industry_view_mode.bind(mode), false, COLOR_ACCENT)
+	if mode == _industry_view_mode:
+		button.add_theme_stylebox_override("normal", UiTokens.control_style(UiTokens.COLOR_CONTROL_ACTIVE, UiTokens.COLOR_FOCUS))
+		button.add_theme_stylebox_override("hover", UiTokens.control_style(UiTokens.COLOR_CONTROL_ACTIVE.lightened(0.03), UiTokens.COLOR_FOCUS))
+		button.add_theme_color_override("font_color", COLOR_TEXT)
+		button.tooltip_text = I18n.core("industrial_network.view.active", "Current production view")
+	return button
+
+
+func _select_industry_view_mode(mode: String) -> void:
+	if mode not in ["network", "list"]:
+		return
+	_industry_view_mode = mode
+	if mode != "network":
+		_industrial_network_view = null
+	_save_ui_preferences()
+	_request_active_page_refresh(true)
+
+
+func _build_industry_network(box: VBoxContainer) -> void:
+	if not is_instance_valid(_industrial_network_projection):
+		_industrial_network_projection = IndustrialNetworkProjectionScript.new(Game.content)
+	_industrial_network_view = IndustrialNetworkViewScript.new()
+	_industrial_network_view.name = "IndustrialNetworkView"
+	_industrial_network_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_industrial_network_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_industrial_network_view.build(_industrial_network_preferences, _reduced_motion)
+	_industrial_network_view.entity_selected.connect(_on_industrial_network_entity_selected)
+	_industrial_network_view.entity_activated.connect(_on_industrial_network_entity_activated)
+	_industrial_network_view.preferences_changed.connect(_on_industrial_network_preferences_changed)
+	_industrial_network_view.reduced_motion_changed.connect(_on_reduced_motion_changed)
+	box.add_child(_industrial_network_view)
+	_refresh_industrial_network_view()
+
+
+func _refresh_industrial_network_view() -> void:
+	if not is_instance_valid(_industrial_network_view):
+		return
+	if not is_instance_valid(_industrial_network_projection):
+		_industrial_network_projection = IndustrialNetworkProjectionScript.new(Game.content)
+	var snapshot := Game.simulation.industrial_network_snapshot(Game.state, _selected_location_id)
+	var projection := _industrial_network_projection.build(snapshot)
+	_industrial_network_view.apply_projection(projection)
+	_industrial_network_view.set_reduced_motion(_reduced_motion)
+	_industrial_network_view.set_simulation_paused(Engine.time_scale <= 0.0)
+	if not _selected_industrial_network_node.is_empty():
+		_industrial_network_view.select_entity(String(_selected_industrial_network_node.get("id", "")), false)
+		var current := _industrial_network_view.selected_entity()
+		if not current.is_empty():
+			_selected_industrial_network_node = current
+			_rebuild_sidebar()
+
+
+func _on_industrial_network_entity_selected(node: Dictionary) -> void:
+	if node.is_empty():
+		return
+	_selected_industrial_network_node = node.duplicate(true)
+	_ui_state.select_context("industrial_network", String(node.get("id", "")))
+	if _ui_state.right_inspector_collapsed:
+		_ui_state.right_inspector_collapsed = false
+		if is_instance_valid(_shell):
+			_shell.set_right_collapsed(false)
+	_rebuild_sidebar()
+	_network_preferences_save_due_ms = Time.get_ticks_msec() + 500
+
+
+func _on_industrial_network_entity_activated(node: Dictionary) -> void:
+	_on_industrial_network_entity_selected(node)
+	_open_industrial_network_target(node)
+
+
+func _on_industrial_network_preferences_changed(preferences: Dictionary) -> void:
+	_industrial_network_preferences = preferences.duplicate(true)
+	_network_preferences_save_due_ms = Time.get_ticks_msec() + 500
+
+
+func _on_reduced_motion_changed(enabled: bool) -> void:
+	_reduced_motion = enabled
+	_save_ui_preferences()
+
+
+func _build_industry_production_list(box: VBoxContainer) -> void:
 	box.add_child(_section_title(I18n.core("industry.production_methods")))
 	for activity_value in Game.content.activities.values():
 		var activity := activity_value as Dictionary
@@ -3509,6 +3858,11 @@ func _update_bottom_bar() -> void:
 	var latest := String(_event_log.back()) if not _event_log.is_empty() else I18n.core("sidebar.none", "None")
 	var guidance := Game.guidance_snapshot()
 	var task_caption := String(guidance.get("message", guidance.get("reason", ""))).get_slice("\n", 0)
+	if is_instance_valid(_dock_workspace_label):
+		_dock_workspace_label.text = I18n.core(String(NAV_TRANSLATION_KEYS.get(_active_page_key, "nav.%s" % _active_page_key)), _active_page_key.capitalize())
+	if is_instance_valid(_dock_next_button):
+		_dock_next_button.disabled = String(guidance.get("page", "")).is_empty()
+		_dock_next_button.tooltip_text = String(guidance.get("reason", ""))
 	_notice_label.text = I18n.core("bottom.summary") % [
 		I18n.core("bottom.alerts", "Alerts"), alert_count,
 		I18n.core("bottom.task", "Task"), task_caption,
@@ -3532,44 +3886,80 @@ func _on_command_rejected(reason: String) -> void:
 
 
 func _load_ui_preferences() -> void:
-	if not Game.persistence_enabled:
-		return
-	if _ui_config.load(UI_CONFIG_PATH) != OK:
-		return
-	_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
+	if Game.persistence_enabled and _ui_config.load(_ui_config_path()) == OK:
+		_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
+		_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
+		_location_section = String(_ui_config.get_value("navigation", "location_section", "overview"))
+		_industry_section = String(_ui_config.get_value("navigation", "industry_section", "production"))
+		_industry_view_mode = String(_ui_config.get_value("navigation", "industry_view_mode", "network"))
+		_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
+		_developer_details = bool(_ui_config.get_value("display", "developer_details", false))
+		_reduced_motion = bool(_ui_config.get_value("display", "reduced_motion", false))
+		_ui_state.left_rail_collapsed = bool(_ui_config.get_value("display", "resource_rail_collapsed", false))
+		_ui_state.right_inspector_collapsed = bool(_ui_config.get_value("display", "context_inspector_collapsed", false))
+		var network_preferences = _ui_config.get_value("industrial_network", "workspace", {})
+		_industrial_network_preferences = network_preferences.duplicate(true) if network_preferences is Dictionary else {}
 	if _active_page_key == "overview":
 		_active_page_key = "system_map"
 	elif _active_page_key == "ships":
 		_active_page_key = "fleet"
 	elif _active_page_key == "survey":
 		_active_page_key = "frontier"
-	_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	if _industry_view_mode not in ["network", "list"]:
+		_industry_view_mode = "network"
 	if not Game.state.has_location(_selected_location_id):
 		_selected_location_id = SpaceGameState.MAIN_BASE_LOCATION_ID
-	_location_section = String(_ui_config.get_value("navigation", "location_section", "overview"))
-	_industry_section = String(_ui_config.get_value("navigation", "industry_section", "production"))
-	_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
-	_developer_details = bool(_ui_config.get_value("display", "developer_details", false))
+	_ui_state.restore_workspace(_active_page_key)
+	_ui_state.select_context("location", _selected_location_id)
 
 
 func _save_ui_preferences() -> void:
 	if not Game.persistence_enabled:
 		return
+	if is_instance_valid(_industrial_network_view):
+		_industrial_network_preferences = _industrial_network_view.export_preferences()
 	_ui_config.set_value("navigation", "active_page", _active_page_key)
 	_ui_config.set_value("navigation", "selected_location", _selected_location_id)
 	_ui_config.set_value("navigation", "location_section", _location_section)
 	_ui_config.set_value("navigation", "industry_section", _industry_section)
+	_ui_config.set_value("navigation", "industry_view_mode", _industry_view_mode)
 	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
 	_ui_config.set_value("display", "developer_details", _developer_details)
-	_ui_config.save(UI_CONFIG_PATH)
+	_ui_config.set_value("display", "reduced_motion", _reduced_motion)
+	_ui_config.set_value("display", "resource_rail_collapsed", _ui_state.left_rail_collapsed)
+	_ui_config.set_value("display", "context_inspector_collapsed", _ui_state.right_inspector_collapsed)
+	_ui_config.set_value("industrial_network", "workspace", _industrial_network_preferences)
+	_ui_config.save(_ui_config_path())
+
+
+func _ui_config_path() -> String:
+	for argument_value in OS.get_cmdline_user_args():
+		var argument := String(argument_value)
+		if argument.begins_with("--ui-persistence-root="):
+			var candidate := argument.trim_prefix("--ui-persistence-root=").simplify_path()
+			if candidate.is_absolute_path() and candidate.get_file().begins_with("helios-ui-persistence-audit-"):
+				return candidate.path_join("core_gameplay_ui.cfg")
+	return UI_CONFIG_PATH
 
 
 func _on_context_location_selected(index: int, location_ids: Array[String]) -> void:
 	if index < 0 or index >= location_ids.size():
 		return
 	_selected_location_id = location_ids[index]
+	_selected_industrial_network_node.clear()
+	_ui_state.select_context("location", _selected_location_id)
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
+
+
+func _on_left_rail_toggled(collapsed: bool) -> void:
+	_ui_state.left_rail_collapsed = collapsed
+	_save_ui_preferences()
+
+
+func _on_right_inspector_toggled(collapsed: bool) -> void:
+	_ui_state.right_inspector_collapsed = collapsed
+	_save_ui_preferences()
 
 
 func _toggle_developer_details() -> void:
@@ -3580,22 +3970,26 @@ func _toggle_developer_details() -> void:
 
 func _on_locale_changed(_locale: String) -> void:
 	_refresh_shell_locale()
+	_industrial_network_view = null
+	_industrial_network_projection = null
 	_request_active_page_refresh(true)
 
 
 func _refresh_shell_locale() -> void:
+	if is_instance_valid(_shell):
+		_shell.refresh_locale()
 	var operations_title := find_child("OperationsTitle", true, false) as Label
 	if is_instance_valid(operations_title):
-		operations_title.text = I18n.core("shell.operations")
+		operations_title.text = I18n.core("shell.workspaces", "WORKSPACES")
 	var scope := find_child("ScopeLabel", true, false) as Label
 	if is_instance_valid(scope):
 		scope.text = I18n.core("shell.scope")
 	var title := find_child("ShellTitle", true, false) as Label
 	if is_instance_valid(title):
-		title.text = I18n.core("shell.title")
+		title.text = I18n.core("shell.brand_short", "HELIOS")
 	var subtitle := find_child("ShellSubtitle", true, false) as Label
 	if is_instance_valid(subtitle):
-		subtitle.text = I18n.core("shell.subtitle")
+		subtitle.text = I18n.core("shell.brand_subtitle", "INDUSTRIAL NETWORK")
 	var pause_button := find_child("SpeedPause", true, false) as Button
 	if is_instance_valid(pause_button):
 		pause_button.text = I18n.core("shell.pause")
@@ -3611,9 +4005,20 @@ func _refresh_shell_locale() -> void:
 	var locale_button := find_child("ToggleLocale", true, false) as Button
 	if is_instance_valid(locale_button):
 		locale_button.text = I18n.core("shell.locale_toggle")
+	var dock_title := find_child("CommandDockTitle", true, false) as Label
+	if is_instance_valid(dock_title):
+		dock_title.text = I18n.core("shell.command_dock", "COMMAND DOCK")
+	var back_button := find_child("ShellBack", true, false) as Button
+	if is_instance_valid(back_button):
+		back_button.text = I18n.core("shell.back", "Back")
+	if is_instance_valid(_dock_next_button):
+		_dock_next_button.text = I18n.core("shell.next_action", "Next action")
 	for key_value in _nav_buttons.keys():
 		var key := String(key_value)
-		(_nav_buttons[key] as Button).text = I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize())
+		var button := _nav_buttons[key] as Button
+		var full_caption := I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize())
+		button.text = I18n.core("nav.short.%s" % key, full_caption)
+		button.tooltip_text = full_caption
 	_update_navigation_state()
 	var page_order := ["system_map", "location", "frontier", "industry", "research", "fleet", "expedition", "megastructure"]
 	for key_value in page_order:

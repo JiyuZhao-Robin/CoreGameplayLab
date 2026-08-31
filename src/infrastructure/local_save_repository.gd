@@ -5,12 +5,26 @@ const SAVE_PATH := "user://space_idle_save.json"
 const TEMP_PATH := "user://space_idle_save.tmp"
 const BACKUP_PATH := "user://space_idle_save.backup.json"
 
+var _save_path := SAVE_PATH
+var _temp_path := TEMP_PATH
+var _backup_path := BACKUP_PATH
+
+
+func configure_audit_root(root_path: String) -> bool:
+	var normalized := root_path.simplify_path()
+	if not normalized.is_absolute_path() or not normalized.get_file().begins_with("helios-ui-persistence-audit-"):
+		return false
+	_save_path = normalized.path_join("space_idle_save.json")
+	_temp_path = normalized.path_join("space_idle_save.tmp")
+	_backup_path = normalized.path_join("space_idle_save.backup.json")
+	return true
+
 func exists() -> bool:
-	return FileAccess.file_exists(SAVE_PATH)
+	return FileAccess.file_exists(_save_path)
 
 
 func load_data() -> Dictionary:
-	for path in [SAVE_PATH, BACKUP_PATH]:
+	for path in [_save_path, _backup_path]:
 		var parsed := _read_wrapper(path)
 		if parsed.is_empty():
 			continue
@@ -52,7 +66,7 @@ func save_state(state: SpaceGameState, content_version: String, enabled_content_
 		"checksum":_checksum(payload),
 		"checksum_version":4
 	}
-	var process_temp_path := "user://space_idle_save.%d.tmp" % OS.get_process_id()
+	var process_temp_path := _save_path.get_base_dir().path_join("space_idle_save.%d.tmp" % OS.get_process_id())
 	var file := FileAccess.open(process_temp_path, FileAccess.WRITE)
 	if file == null:
 		return false
@@ -69,7 +83,7 @@ func save_state(state: SpaceGameState, content_version: String, enabled_content_
 
 func delete_save() -> bool:
 	var success := true
-	for path in [SAVE_PATH, TEMP_PATH, BACKUP_PATH]:
+	for path in [_save_path, _temp_path, _backup_path]:
 		if FileAccess.file_exists(path):
 			success = DirAccess.remove_absolute(ProjectSettings.globalize_path(path)) == OK and success
 	return success
@@ -82,17 +96,19 @@ func _read_wrapper(path: String) -> Dictionary:
 	return parsed if typeof(parsed) == TYPE_DICTIONARY else {}
 
 
-func _replace_atomically(temp_path: String = TEMP_PATH) -> bool:
-	var save_absolute := ProjectSettings.globalize_path(SAVE_PATH)
+func _replace_atomically(temp_path: String = "") -> bool:
+	if temp_path.is_empty():
+		temp_path = _temp_path
+	var save_absolute := ProjectSettings.globalize_path(_save_path)
 	var temp_absolute := ProjectSettings.globalize_path(temp_path)
-	var backup_absolute := ProjectSettings.globalize_path(BACKUP_PATH)
-	if FileAccess.file_exists(BACKUP_PATH):
+	var backup_absolute := ProjectSettings.globalize_path(_backup_path)
+	if FileAccess.file_exists(_backup_path):
 		DirAccess.remove_absolute(backup_absolute)
-	if FileAccess.file_exists(SAVE_PATH):
+	if FileAccess.file_exists(_save_path):
 		if DirAccess.rename_absolute(save_absolute, backup_absolute) != OK:
 			return false
 	if DirAccess.rename_absolute(temp_absolute, save_absolute) != OK:
-		if FileAccess.file_exists(BACKUP_PATH):
+		if FileAccess.file_exists(_backup_path):
 			DirAccess.rename_absolute(backup_absolute, save_absolute)
 		return false
 	return true

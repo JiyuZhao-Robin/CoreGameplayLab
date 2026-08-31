@@ -24,6 +24,10 @@ var _autosave_accumulator_ms := 0.0
 
 
 func _ready() -> void:
+	var persistence_audit_root := _persistence_audit_root()
+	if not persistence_audit_root.is_empty() and not saves.configure_audit_root(persistence_audit_root):
+		push_error("Rejected unsafe persistence audit root")
+		persistence_enabled = false
 	if not content.load_from_file(CONTENT_PATH):
 		push_error("Content validation failed:\n%s" % "\n".join(content.errors))
 	simulation = SimulationEngine.new(content)
@@ -35,6 +39,16 @@ func _ready() -> void:
 	if last_notice.is_empty():
 		last_notice = I18n.t("notice.frontier_ready", "Ships are persistent capital assets. Commit each available vessel to extraction or the active Expedition.")
 	set_process(true)
+
+
+func _persistence_audit_root() -> String:
+	for argument_value in OS.get_cmdline_user_args():
+		var argument := String(argument_value)
+		if argument.begins_with("--ui-persistence-root="):
+			var candidate := argument.trim_prefix("--ui-persistence-root=").simplify_path()
+			if candidate.is_absolute_path() and candidate.get_file().begins_with("helios-ui-persistence-audit-"):
+				return candidate
+	return ""
 
 
 func _process(delta: float) -> void:
