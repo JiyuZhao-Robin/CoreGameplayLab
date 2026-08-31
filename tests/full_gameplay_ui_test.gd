@@ -407,9 +407,8 @@ func _run() -> void:
 		var fixed_item := String(fixed_cost.get("item", ""))
 		pathfinder_costs[fixed_item] = int(pathfinder_costs.get(fixed_item, 0)) + int(fixed_cost.get("quantity", 0))
 	_check(await _ensure_ui_costs_stable(main, pathfinder_costs), "UI industry satisfies the canonical Pathfinder Shipyard BOM")
-	await _press_named(main, "Navigation_ships", "OPEN_SHIPS_FOR_PATHFINDER_BUILD")
-	await _press_named(main, "FleetSection_shipyard", "OPEN_PATHFINDER_SHIPYARD")
-	await _press_named(main, "BuildShip_construct_lunar_pathfinder_1", "BUILD_PATHFINDER")
+	var pathfinder_design_id := await _assemble_and_save_ship_design_ui(main, "construct_lunar_pathfinder", "PATHFINDER")
+	await _press_named(main, "BuildShipDesign_%s_1" % pathfinder_design_id, "BUILD_PATHFINDER")
 	if Game.simulation.shipyard_queue_index(Game.state, "construct_lunar_pathfinder") >= 0:
 		_record_registry_event("JOURNEY_06_SHIP_INDUSTRY", "SHIP_BOM_COMMITTED")
 	var pathfinder_ready := await _wait_at_public_fast_speed(main, func() -> bool:
@@ -970,14 +969,8 @@ func _develop_and_build_ship_ui(main: Control, project_id: String, plan_id: Stri
 		_journey_fail("Ship Development silently queued %s before the visible Build action" % plan_id)
 		return ""
 	if not await _ensure_ui_costs_stable(main, costs): return ""
-	await _press_named(main, "Navigation_ships", "OPEN_SHIPYARD_FOR_%s" % blueprint_id.to_upper())
-	var shipyard_section := main.find_child("FleetSection_shipyard", true, false) as Button
-	if shipyard_section != null and shipyard_section.is_visible_in_tree() and not shipyard_section.disabled:
-		await _press_control(shipyard_section, "OPEN_SHIPYARD_SECTION_FOR_%s" % blueprint_id.to_upper())
-	else:
-		_check(shipyard_section != null and shipyard_section.is_visible_in_tree() and shipyard_section.disabled,
-			"Shipyard section is already selected for %s" % blueprint_id)
-	await _press_named(main, "BuildShip_%s_1" % plan_id, "BUILD_SHIP_%s" % blueprint_id.to_upper())
+	var design_id := await _assemble_and_save_ship_design_ui(main, plan_id, blueprint_id.to_upper())
+	await _press_named(main, "BuildShipDesign_%s_1" % design_id, "BUILD_SHIP_%s" % blueprint_id.to_upper())
 	if Game.simulation.shipyard_queue_index(Game.state, plan_id) < 0:
 		_journey_fail("visible Build did not create the Shipyard order for %s" % blueprint_id)
 		return ""
@@ -1023,6 +1016,40 @@ func _develop_and_build_ship_ui(main: Control, project_id: String, plan_id: Stri
 		if not ship_ids_before.has(built_ship_id):
 			return built_ship_id
 	return ""
+
+
+func _assemble_and_save_ship_design_ui(main: Control, plan_id: String, action_suffix: String) -> String:
+	await _press_named(main, "Navigation_ships", "OPEN_SHIPYARD_FOR_%s" % action_suffix)
+	var shipyard_section := main.find_child("FleetSection_shipyard", true, false) as Button
+	if shipyard_section != null and shipyard_section.is_visible_in_tree() and not shipyard_section.disabled:
+		await _press_control(shipyard_section, "OPEN_SHIPYARD_SECTION_FOR_%s" % action_suffix)
+	var clear_button := main.find_child("ClearShipDesign", true, false) as Button
+	if clear_button != null and clear_button.is_visible_in_tree() and not clear_button.disabled:
+		await _press_control(clear_button, "CLEAR_SHIP_DESIGN_FOR_%s" % action_suffix)
+	var map := main.find_child("ShipAssemblyMap", true, false) as GraphEdit
+	var plan := Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	var hull_id := String(plan.get("ship_id", ""))
+	_check(map != null, "Ship Assembly Map is visible for %s" % action_suffix)
+	if map == null:
+		return ""
+	map.call("_drop_data", Vector2(620.0, 250.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id})
+	var hull := Game.content.ships.get(hull_id, {}) as Dictionary
+	var slot_counts := {}
+	for module_index in plan.get("starting_modules", []).size():
+		var module_id := String(plan.get("starting_modules", [])[module_index])
+		var module := Game.content.modules.get(module_id, {}) as Dictionary
+		var slot := String(module.get("slot", "utility"))
+		var slot_index := int(slot_counts.get(slot, 0))
+		slot_counts[slot] = slot_index + 1
+		map.call("_drop_data", Vector2(80.0 + float(module_index % 2) * 270.0, 80.0 + float(module_index / 2) * 120.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":module_id})
+		map.request_module_connection("ship_design_module_%04d" % (module_index + 1), "socket_%s_%d" % [slot, slot_index])
+	var name_input := main.find_child("ShipDesignName", true, false) as LineEdit
+	if name_input != null:
+		name_input.text = "%s Journey Design" % action_suffix.capitalize()
+	await _press_named(main, "SaveShipDesign", "SAVE_SHIP_DESIGN_%s" % action_suffix)
+	var design_id := Game.last_saved_ship_design_id
+	_check(not design_id.is_empty() and Game.state.ship_designs.has(design_id), "visible Save Design persists the manually connected %s design" % action_suffix)
+	return design_id
 
 
 func _print_shipyard_commission_diagnostic(plan_id: String, blueprint_id: String, recovery_attempt: int, runtime: Dictionary) -> void:

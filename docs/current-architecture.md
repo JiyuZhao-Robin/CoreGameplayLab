@@ -25,9 +25,11 @@ data/content.json + localization
 - 内容层：产品、生产方式、设施、生产装置、舰船、科研、地点、勘测、路线、目标和终局工程均由内容数据定义。
 - 应用层：`src/application/game.gd` 对外提供带校验的事务命令，并负责存档加载、离线推进和事件转发。
 - 领域层：`src/core/simulation_engine.gd` 统一计算配方吞吐、能源、散热、仓储、维护、建设、研发和任务边界。
-- 状态层：`src/core/game_state.gd` 保存地点库存、已安装设备、运输中资产、项目暂存、舰船、研究、勘测和终局状态。
+- 状态层：`src/core/game_state.gd` 保存地点库存、已安装设备、运输中资产、项目暂存、舰船、命名舰船设计（画布节点与玩家连线）、研究、勘测和终局状态。
 - 查询层：`src/core/economy_planner.gd` 缓存 DAG 依赖图并调用模拟的有效 BOM、工时与能耗公式，提供商品吞吐、舰船/月、研发阶段和巨构阶段规划以及瓶颈链。
 - 展示层：`src/ui/main.gd` 和组件只调用应用命令；所有核心流程必须能在 UI 中完成。`Game.guidance_snapshot()` 提供页面、子区域、地点、聚焦实体、阻塞原因和获取链。
+
+舰船装配遵循独立的编辑提交边界：`ShipAssemblyMapView` 只维护当前未保存草稿，Palette 拖拽只创建舰体/零件节点，GraphEdit 连接只表达玩家意图；船体节点根据内容定义的 `slot_layout` 形成不同规模的装配背板，并把能源核心作为中央必需插槽。装配线直接采用 DSPONLINE 画布的短引线/共享横轨/短接入正交路径与节点避让逻辑，未连接插槽为空心灰色，连接后才按类型填色。画布使用页面剩余高度并支持按全部节点边界动态适配全图，舰船 Palette 仅投影 `unlocked_ship_plans` 中当前可用的舰体方案。`Game.ship_design_validation/save_ship_design/enqueue_saved_ship_design` 负责领域校验、事务持久化和进入船厂。`SimulationEngine.shipyard_runtime_plan` 将已保存设计的真实模块清单用于 BOM 与完工舰船，不从 UI 草稿或模板默认连线推断结果。
 
 ## 资产状态
 

@@ -1,8 +1,8 @@
 class_name UiThemeTokens
 extends RefCounted
 
-# Semantic UI tokens. Gameplay screens consume these names instead of
-# inventing per-screen colors and dimensions.
+# Semantic UI tokens. The base dark palette below directly maps the local
+# D:\Projects\DSPONLINE\src\styles.css :root values into Godot names.
 const COLOR_CANVAS := Color("090d0c")
 const COLOR_PANEL := Color("111614")
 const COLOR_RAISED := Color("171d1b")
@@ -32,8 +32,10 @@ const COLOR_INACTIVE := Color("60716a")
 const COLOR_GHOST := Color("70827b")
 const COLOR_GRID_MINOR := Color("17211f")
 const COLOR_GRID_MAJOR := Color("22302c")
-const COLOR_NODE_SURFACE := Color("101715")
-const COLOR_NODE_HEADER := Color("151d1a")
+const COLOR_FACTORY_CANVAS := Color("0b100e")
+const COLOR_FACTORY_GRID_DOT := Color("3c4743")
+const COLOR_NODE_SURFACE := Color("131917")
+const COLOR_NODE_HEADER := Color("171e1b")
 
 const SPACING_XS := 4
 const SPACING_SM := 8

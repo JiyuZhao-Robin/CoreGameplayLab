@@ -33,7 +33,7 @@
 
 连接固定为左输入、右输出。每条边携带 stable edge ID、source/target node/port、item/service type、actual flow、requested flow、capacity、in-transit、status、congestion 和 bottleneck 标记。正常、拥堵、断供、暂停和瓶颈分别使用稳定线、琥珀降速、低亮/断续、停止流动和最短链聚焦；标签只在足够缩放、Hover、选择或瓶颈模式显示。
 
-当前 UI 不允许拖拽端口创建关系。未来若开放连线编辑，也只能提交供应策略、优先级或自动化授权，不能直接移动库存或创建 Shipment。
+工业网络 UI 不允许拖拽端口篡改运行中的物流关系。舰船装配画布是独立的设计编辑器例外：它允许玩家手工连接舰体与零件，但只生成可校验、可保存的 `ship_designs` 草稿/领域聚合，不直接移动库存或创建 Shipment；真正的材料消耗和舰船生成仍由船厂队列与 Simulation 完成。
 
 ## Helios 视觉语言
 
@@ -126,7 +126,7 @@ Reduced Motion 是跨存档 UI preference。开启后关闭粒子和呼吸、相
 
 ## 参考转化与原创边界
 
-`UI-reference/` 的 Upload Labs 截图仅用于抽取深蓝灰网格、暗色悬浮卡片、左右数据方向、空间化大网络和端口多重语义。实现没有复制其字体、图片、图标、品牌、节点内容或代码；Helios 使用自己的工业对象、token、原创 glyph、Context Inspector 和轨道工业尺度。
+`UI-reference/` 的 Upload Labs 截图现为非规范历史材料，不再指导正式 UI 布局。工业网络与全局 Shell 的信息结构、工作区密度、上下文检查器和操作反馈改以 `D:\Projects\DSPONLINE` 的原则为主要参考；实现不复制其 React/CSS、字体、图片、图标、品牌、节点内容或代码，Helios 继续使用自己的工业对象、语义 token、原创 glyph、Context Inspector 和轨道工业尺度。
 
 DSPONLINE 仅用于动态节奏与性能思路：真实流量驱动、拥堵降速、共享画布时钟、暂停域动画、低频警告、一次性恢复反馈、viewport culling、topology/runtime 分离和 Reduced Motion。没有复制 React、CSS、组件、资产、数据或品牌。
 

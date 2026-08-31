@@ -6,6 +6,9 @@ const GameShellScript = preload("res://src/ui/components/game_shell.gd")
 const UiNavigationStateScript = preload("res://src/ui/ui_navigation_state.gd")
 const IndustrialNetworkProjectionScript = preload("res://src/ui/view_models/industrial_network_projection.gd")
 const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_network_view.gd")
+const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
+const ShipAssemblyMapViewScript = preload("res://src/ui/components/ship_assembly_map_view.gd")
+const ShipAssemblyPaletteItemScript = preload("res://src/ui/components/ship_assembly_palette_item.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
 const COLOR_BG := UiTokens.COLOR_CANVAS
@@ -70,6 +73,13 @@ var _industrial_network_view: IndustrialNetworkView
 var _industrial_network_projection: IndustrialNetworkProjection
 var _industrial_network_preferences: Dictionary = {}
 var _selected_industrial_network_node: Dictionary = {}
+var _selected_research_project_id := ""
+var _selected_shipyard_plan_id := ""
+var _selected_shipyard_entity := {"kind":"hull", "id":""}
+var _selected_ship_design_id := ""
+var _ship_assembly_draft: Dictionary = {}
+var _ship_assembly_view: ShipAssemblyMapView
+var _ship_design_name_input: LineEdit
 var _reduced_motion := false
 var _network_preferences_save_due_ms := 0
 
@@ -394,9 +404,14 @@ func _add_page(title: String, key: String) -> void:
 	_tabs.set_tab_title(_tabs.get_tab_count() - 1, title)
 	var margin := _margin(14, 14, 14, 20)
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# A short page should still occupy the complete workspace.  This lets
+	# full-canvas tools such as Ship Assembly consume the remaining height
+	# instead of stopping at their minimum size and leaving a dead band below.
+	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.add_child(margin)
 	var content := VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_theme_constant_override("separation", 10)
 	margin.add_child(content)
 	_pages[key] = content
@@ -593,6 +608,14 @@ func _rebuild_sidebar() -> void:
 		_build_industrial_network_inspector(box, _selected_industrial_network_node)
 		_build_sidebar_footer(box)
 		return
+	if _active_page_key == "research" and not _selected_research_project_id.is_empty():
+		_build_research_project_inspector(box, _selected_research_project_id)
+		_build_sidebar_footer(box)
+		return
+	if _active_page_key == "fleet" and _fleet_section == "shipyard":
+		_build_shipyard_inspector(box, _ship_assembly_draft, _selected_shipyard_entity)
+		_build_sidebar_footer(box)
+		return
 	_ui_state.select_context("location", _selected_location_id)
 	if not selected.is_empty():
 		var power: Dictionary = selected.get("power", {})
@@ -620,6 +643,77 @@ func _rebuild_sidebar() -> void:
 			inspect.tooltip_text = I18n.core("diagnostics.open_resolution", "Open resolution")
 			box.add_child(inspect)
 	_build_sidebar_footer(box)
+
+
+func _build_research_project_inspector(box: VBoxContainer, project_id: String) -> void:
+	var project: Dictionary = Game.content.research_projects.get(project_id, {})
+	if project.is_empty():
+		_selected_research_project_id = ""
+		return
+	var completed := bool(Game.state.completed_projects.get(project_id, false))
+	var current := String(Game.state.research.get("project_id", "")) == project_id
+	var status_id := "COMPLETED" if completed else (String(Game.state.research.get("status", "RUNNING")) if current else ("AVAILABLE" if Game.simulation.research_project_available(Game.state, project) else "LOCKED"))
+	var tone := COLOR_GOOD if status_id == "COMPLETED" else (COLOR_BAD if status_id == "BLOCKED" else (COLOR_WARN if status_id in ["LOCKED", "PAUSED"] else COLOR_ACCENT))
+	box.add_child(_label(I18n.core("research.inspector.project", "RESEARCH PROJECT"), 10, COLOR_MUTED))
+	box.add_child(_label(_content_name(project, project_id), 18, COLOR_TEXT))
+	box.add_child(_label(_status_text(status_id), 13, tone))
+	box.add_child(_label(_project_summary(project), 12, COLOR_TEXT_SECONDARY))
+	box.add_child(_separator())
+	box.add_child(_label(I18n.core("research.prerequisites", "PREREQUISITES"), 10, COLOR_MUTED))
+	if project.get("requirements", []).is_empty():
+		box.add_child(_label(I18n.core("research.no_prerequisites", "No additional prerequisites"), 12, COLOR_GOOD))
+	else:
+		box.add_child(_requirements_label(project.get("requirements", [])))
+	box.add_child(_separator())
+	box.add_child(_label(I18n.core("research.roadmap.title"), 10, COLOR_MUTED))
+	box.add_child(_label(_research_roadmap_text(project, int(Game.state.research.get("stage_index", 0)) if current else -1), 11, COLOR_TEXT_SECONDARY))
+	var close := _button(I18n.core("research.inspector.close", "Close project inspector"), _clear_research_project_selection, false, COLOR_MUTED)
+	close.name = "ResearchInspectorClose"
+	box.add_child(close)
+
+
+func _build_shipyard_inspector(box: VBoxContainer, draft: Dictionary, entity: Dictionary) -> void:
+	box.add_child(_label(I18n.core("ships.shipyard.inspector_title", "SHIP DESIGN INSPECTOR"), 10, COLOR_MUTED))
+	var plan_id := String(draft.get("plan_id", ""))
+	var plan := Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	if plan.is_empty():
+		box.add_child(_label(I18n.core("ships.shipyard.blank_title", "Blank assembly canvas"), 18, COLOR_TEXT))
+		box.add_child(_label(I18n.core("ships.shipyard.blank_help", "Drag an unlocked hull from the Ship tab onto the canvas. Then drag parts and connect each shaped plug yourself."), 12, COLOR_TEXT_SECONDARY))
+		box.add_child(_separator())
+		box.add_child(_label(I18n.core("ships.shipyard.port_legend", "▲ Weapon  ⬟ Special  ◆ Drive  ■ Hull Structure  ● Energy Core"), 12, COLOR_ACCENT))
+		return
+	var hull_id := String(plan.get("ship_id", ""))
+	var hull := Game.content.ships.get(hull_id, {}) as Dictionary
+	box.add_child(_label(_content_name(plan, plan_id), 18, COLOR_TEXT))
+	box.add_child(_label(I18n.core("ships.shipyard.canvas_hull") % [_content_name(hull, hull_id), String(hull.get("class", "Ship"))], 12, COLOR_TEXT_SECONDARY))
+	box.add_child(_label(I18n.core("ships.shipyard.canvas_hull_metrics") % [int(hull.get("module_slots", 0)), int(hull.get("cargo_capacity", 0)), int(hull.get("command_cost", 0))], 12, COLOR_TEXT_SECONDARY))
+	var validation := Game.ship_design_validation(plan_id, draft.get("nodes", []), draft.get("connections", []))
+	box.add_child(_label(String(validation.get("reason", "")), 12, COLOR_GOOD if bool(validation.get("allowed", false)) else COLOR_WARN))
+	box.add_child(_separator())
+	var kind := String(entity.get("kind", "hull"))
+	var entity_id := String(entity.get("id", hull_id))
+	if kind == "module":
+		var module := Game.content.modules.get(entity_id, {}) as Dictionary
+		box.add_child(_label(I18n.core("ships.shipyard.inspector_part"), 10, COLOR_MUTED))
+		box.add_child(_label(_content_name(module, entity_id), 16, COLOR_TEXT))
+		box.add_child(_label(I18n.core("ships.shipyard.canvas_slot") % [I18n.core("ships.shipyard.slot.%s" % String(module.get("slot", "utility"))), String(module.get("size", "S"))], 12, COLOR_ACCENT))
+		box.add_child(_label(I18n.core("ships.shipyard.canvas_module_metrics") % [float(module.get("mass", 0.0)), float(module.get("power", module.get("power_grid", 0.0))), float(module.get("thermal", module.get("cooling", 0.0)))], 12, COLOR_TEXT_SECONDARY))
+		box.add_child(_label(_project_summary(module), 12, COLOR_MUTED))
+	else:
+		box.add_child(_label(I18n.core("ships.shipyard.inspector_hull"), 10, COLOR_MUTED))
+		box.add_child(_label(_project_summary(plan), 12, COLOR_TEXT_SECONDARY))
+	box.add_child(_separator())
+	box.add_child(_label(I18n.core("ships.shipyard.inspector_bom"), 10, COLOR_MUTED))
+	var effective_plan := plan.duplicate(true)
+	if bool(validation.get("allowed", false)):
+		effective_plan["starting_modules"] = validation.get("modules", []).duplicate()
+	box.add_child(_label(_resource_dictionary(Game.simulation.ship_construction_material_totals(effective_plan)), 11, COLOR_TEXT_SECONDARY))
+
+
+func _clear_research_project_selection() -> void:
+	_selected_research_project_id = ""
+	_ui_state.select_context("location", _selected_location_id)
+	_rebuild_sidebar()
 
 
 func _build_industrial_network_inspector(box: VBoxContainer, node: Dictionary) -> void:
@@ -1562,6 +1656,17 @@ func _capture_requested_view() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	for argument in args:
+		if String(argument).begins_with("--capture-ship-design-plan="):
+			_build_capture_ship_design(String(argument).trim_prefix("--capture-ship-design-plan="))
+			await get_tree().process_frame
+			await get_tree().process_frame
+	if args.has("--capture-scroll-bottom"):
+		var captured_page := _page_controls.get(requested_page) as ScrollContainer
+		if is_instance_valid(captured_page):
+			captured_page.scroll_vertical = int(captured_page.get_v_scroll_bar().max_value)
+			await get_tree().process_frame
+			await get_tree().process_frame
+	for argument in args:
 		if String(argument).begins_with("--network-visual-phase=") and is_instance_valid(_industrial_network_view):
 			_industrial_network_view.set_visual_phase_for_capture(float(String(argument).trim_prefix("--network-visual-phase=")))
 		elif String(argument).begins_with("--network-focus-activity=") and is_instance_valid(_industrial_network_view):
@@ -1580,6 +1685,27 @@ func _capture_requested_view() -> void:
 	var error := get_viewport().get_texture().get_image().save_png(ProjectSettings.globalize_path(output_path))
 	print("CAPTURE_SAVED: %s" % output_path if error == OK else "CAPTURE_FAILED: %s" % error_string(error))
 	get_tree().quit(0 if error == OK else 1)
+
+
+func _build_capture_ship_design(plan_id: String) -> void:
+	if not is_instance_valid(_ship_assembly_view):
+		return
+	var plan := Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	var hull_id := String(plan.get("ship_id", ""))
+	var hull := Game.content.ships.get(hull_id, {}) as Dictionary
+	if plan.is_empty() or hull.is_empty():
+		return
+	_ship_assembly_view.clear_draft(false)
+	_ship_assembly_view.call("_drop_data", Vector2(690.0, 300.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id})
+	var slot_counts := {}
+	for module_index in plan.get("starting_modules", []).size():
+		var module_id := String(plan.get("starting_modules", [])[module_index])
+		var slot := String(Game.content.modules.get(module_id, {}).get("slot", "utility"))
+		var slot_index := int(slot_counts.get(slot, 0))
+		slot_counts[slot] = slot_index + 1
+		_ship_assembly_view.call("_drop_data", Vector2(90.0 + float(module_index % 2) * 290.0, 80.0 + float(module_index / 2) * 135.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":module_id})
+		_ship_assembly_view.request_module_connection("ship_design_module_%04d" % (module_index + 1), "socket_%s_%d" % [slot, slot_index])
+	_ship_assembly_view.fit_design()
 
 
 func _rebuild_frontier() -> void:
@@ -2584,29 +2710,19 @@ func _rebuild_research() -> void:
 	_clear(box)
 	box.add_child(_page_title(I18n.core("research.title"), I18n.core("research.subtitle")))
 	_add_unlock_banner(box, "research")
-	var research_summary := HBoxContainer.new()
-	research_summary.add_theme_constant_override("separation", 8)
-	research_summary.add_child(_stat_card(I18n.core("research.stat.completed_programs"), str(Game.state.completed_projects.size()), COLOR_GOOD))
-	research_summary.add_child(_stat_card(I18n.core("research.stat.technologies_spillovers"), I18n.core("common.ratio") % [Game.state.technologies.size(), Game.state.technology_spillovers.size()], COLOR_ACCENT))
-	research_summary.add_child(_stat_card(I18n.core("research.stat.capacity"), "%.1f" % Game.simulation.research_capacity(Game.state), COLOR_GOOD if Game.simulation.research_capacity(Game.state) >= 1.0 else COLOR_WARN))
-	box.add_child(research_summary)
-	box.add_child(_section_title(I18n.core("research.domains")))
-	var domains_row := HFlowContainer.new()
-	domains_row.add_theme_constant_override("h_separation", 8)
-	domains_row.add_theme_constant_override("v_separation", 8)
-	for domain_id_value in SpaceGameState.TECHNOLOGY_DOMAIN_IDS:
-		var domain_id := String(domain_id_value)
-		var domain: Dictionary = Game.state.technology_domains.get(domain_id, {"level":1, "xp":0.0})
-		var domain_card := _stat_card(_technology_domain_name(domain_id), I18n.core("research.domain.progress") % [int(domain.get("level", 1)), float(domain.get("xp", 0.0))], COLOR_TEXT)
-		domain_card.custom_minimum_size.x = 132
-		domains_row.add_child(domain_card)
-	box.add_child(domains_row)
+	var research_summary := _label("%s  %d   ·   %s  %s   ·   %s  %.1f" % [I18n.core("research.stat.completed_programs"), Game.state.completed_projects.size(), I18n.core("research.stat.technologies_spillovers"), I18n.core("common.ratio") % [Game.state.technologies.size(), Game.state.technology_spillovers.size()], I18n.core("research.stat.capacity"), Game.simulation.research_capacity(Game.state)], 12, COLOR_ACCENT)
+	research_summary.autowrap_mode = TextServer.AUTOWRAP_OFF
+	research_summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	box.add_child(_wrap_card(research_summary))
 	var current_id := String(Game.state.research.get("project_id", ""))
 	if not current_id.is_empty():
 		var current := Game.content.research_projects.get(current_id, {}) as Dictionary
 		var current_stage := Game.simulation.research_stage_definition(Game.state, current, int(Game.state.research.get("stage_index", 0)), String(Game.state.research.get("route_id", "")))
-		var card := _card()
-		card.add_child(_label(I18n.core("research.current_project") % _content_name(current, current_id), 17, COLOR_ACCENT))
+		var card := HBoxContainer.new()
+		card.add_theme_constant_override("separation", UiTokens.SPACING_MD)
+		var identity := VBoxContainer.new()
+		identity.custom_minimum_size.x = 310.0
+		identity.add_child(_label(I18n.core("research.current_project") % _content_name(current, current_id), 16, COLOR_ACCENT))
 		var current_route_id := String(Game.state.research.get("route_id", ""))
 		var current_route_name := current_route_id
 		for route_value in current.get("routes", []):
@@ -2619,121 +2735,198 @@ func _rebuild_research() -> void:
 		if not current_route_id.is_empty():
 			current_stage_values.append(current_route_name)
 			current_stage_caption = I18n.core("research.current_stage_route") % current_stage_values
-		card.add_child(_label(current_stage_caption, 14, COLOR_TEXT))
-		card.add_child(_operation_progress(Game.state.research, I18n.core("research.gameplay_state") % _status_text(Game.simulation.research_gameplay_state(Game.state))))
-		_add_blocker_label(card, Game.state.research)
+		identity.add_child(_label(current_stage_caption, 12, COLOR_TEXT_SECONDARY))
+		card.add_child(identity)
+		var progress := _operation_progress(Game.state.research, I18n.core("research.gameplay_state") % _status_text(Game.simulation.research_gameplay_state(Game.state)))
+		progress.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card.add_child(progress)
 		var blocker_guidance := _research_blocker_guidance(Game.state.research.get("blocker", {}))
 		if not blocker_guidance.is_empty():
-			card.add_child(_label(I18n.core("research.guidance") % blocker_guidance, 13, COLOR_GOOD))
-		if not current_stage.get("costs", []).is_empty():
-			card.add_child(_label(I18n.core("research.stage_supply") % _research_stage_cost_progress(current_stage, Game.state.research), 13, COLOR_MUTED))
-		var stage_requirements: Array = current_stage.get("requirements", []) + current_stage.get("operating_conditions", [])
-		if not stage_requirements.is_empty():
-			card.add_child(_requirements_label(stage_requirements))
-		card.add_child(_label(_research_roadmap_text(current, int(Game.state.research.get("stage_index", 0))), 12, COLOR_MUTED))
-		var research_paused := String(Game.state.research.get("status", "")) == "PAUSED"
-		var research_action := _button(I18n.core("research.action.resume") if research_paused else I18n.core("research.action.stop"), _command.bind(I18n.core("command.research.resume") if research_paused else I18n.core("command.research.stop"), Game.start_research_project.bind(current_id, current_route_id) if research_paused else Game.stop_research), false, COLOR_ACCENT if research_paused else COLOR_WARN)
-		research_action.name = "%sResearch_%s" % ["Resume" if research_paused else "Pause", current_id]
-		card.add_child(research_action)
+			var guidance := _label(I18n.core("research.guidance") % blocker_guidance, 11, COLOR_WARN)
+			guidance.custom_minimum_size.x = 260.0
+			card.add_child(guidance)
 		box.add_child(_wrap_card(card))
 
-	box.add_child(_section_title(I18n.core("research.available_programs")))
-	for project_value in Game.content.research_projects.values():
-		var project := project_value as Dictionary
-		var project_id := String(project.get("id", ""))
-		if bool(Game.state.completed_projects.get(project_id, false)):
-			continue
-		if not Game.simulation.definition_revealed(Game.state, project):
-			continue
-		var card := _card()
-		card.add_child(_label(_content_name(project, project_id), 16, COLOR_TEXT))
-		card.add_child(_label(_project_summary(project), 13, COLOR_MUTED))
-		if not project.get("effect_tags", []).is_empty():
-			card.add_child(_label(I18n.core("research.outcome_tags") % I18n.core("format.plus_separator").join(project.get("effect_tags", [])), 12, COLOR_ACCENT))
-		card.add_child(_label(_research_roadmap_text(project, -1), 12, COLOR_MUTED))
-		var available := Game.simulation.research_project_available(Game.state, project)
-		var busy := not current_id.is_empty() and current_id != project_id
-		var research_unavailable_reason := _unmet_requirements(project.get("requirements", []))
-		if busy:
-			research_unavailable_reason = I18n.core("research.current_project") % _content_name(Game.content.research_projects.get(current_id, {}), current_id)
-		elif not available and research_unavailable_reason.is_empty():
-			research_unavailable_reason = I18n.core("block_reason.default")
-		var routes: Array = project.get("routes", [])
-		if routes.is_empty():
-			var start_button := _button(I18n.core("research.action.start_program"), _command.bind(I18n.t("button.start_research"), Game.start_research_project.bind(project_id)), not available or busy)
-			start_button.name = "StartResearch_%s" % project_id
-			if not available or busy:
-				start_button.tooltip_text = research_unavailable_reason
-			card.add_child(start_button)
-		else:
-			var route_actions := HFlowContainer.new()
+	var graph_model := _research_graph_model()
+	box.add_child(_build_research_project_index(graph_model))
+	var tree := ResearchTreeViewScript.new()
+	tree.project_selected.connect(_select_research_project)
+	tree.project_action.connect(_start_research_from_graph)
+	tree.pause_requested.connect(_pause_research_from_graph)
+	tree.unlock_guidance_requested.connect(_open_research_unlock_guidance)
+	box.add_child(tree)
+	tree.configure(graph_model)
+
+
+func _build_research_project_index(model: Dictionary) -> Control:
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UiTokens.panel_style(COLOR_PANEL_ALT, COLOR_BORDER, 3))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 5)
+	column.add_child(_label(I18n.core("research.graph.project_index"), 11, COLOR_MUTED))
+	var scroll := ScrollContainer.new()
+	scroll.name = "ResearchProjectIndex"
+	scroll.custom_minimum_size.y = 40.0
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 6)
+	for node_value in model.get("nodes", []):
+		var data := node_value as Dictionary
+		var project_id := String(data.get("id", ""))
+		var title := String(data.get("title", project_id))
+		var status_id := String(data.get("status_id", "LOCKED"))
+		var mode := String(data.get("action_mode", "LOCKED"))
+		var enabled := bool(data.get("action_enabled", false))
+		var reason := String(data.get("reason", ""))
+		var routes: Array = data.get("routes", [])
+		if mode == "GUIDANCE":
+			var guidance := _button("%s · %s · %s" % [_status_text(status_id), title, I18n.core("research.prerequisites")], _open_research_unlock_guidance.bind(project_id), false, COLOR_MUTED)
+			guidance.name = "ResearchUnlockGuidance_%s" % project_id
+			guidance.tooltip_text = reason
+			actions.add_child(guidance)
+		elif mode == "PAUSE":
+			var pause := _button(I18n.core("research.graph.title_action") % [title, String(data.get("action_label", ""))], _pause_research_from_graph, false, COLOR_WARN)
+			pause.name = "PauseResearch_%s" % project_id
+			actions.add_child(pause)
+		elif mode == "RESUME":
+			var resume := _button(I18n.core("research.graph.title_action") % [title, String(data.get("action_label", ""))], _start_research_from_graph.bind(project_id, String(data.get("active_route_id", ""))), not enabled, COLOR_ACCENT)
+			resume.name = "ResumeResearch_%s" % project_id
+			resume.tooltip_text = reason
+			actions.add_child(resume)
+		elif not routes.is_empty():
 			for route_value in routes:
 				var route := route_value as Dictionary
 				var route_id := String(route.get("id", ""))
-				var route_button := _button(I18n.core("research.action.select_route") % _research_route_name(route), _command.bind(I18n.core("command.research.start_route"), Game.start_research_project.bind(project_id, route_id)), not available or busy, COLOR_ACCENT)
+				var route_button := _button(I18n.core("research.graph.status_title_route") % [_status_text(status_id), title, String(route.get("label", route_id))], _start_research_from_graph.bind(project_id, route_id), not bool(route.get("enabled", enabled)), COLOR_GOOD if status_id == "COMPLETED" else COLOR_ACCENT)
 				route_button.name = "StartResearch_%s_%s" % [project_id, route_id]
-				route_button.tooltip_text = research_unavailable_reason if not available or busy else _research_route_description(route)
-				route_actions.add_child(route_button)
-			card.add_child(route_actions)
-		if not available:
-			card.add_child(_requirements_label(project.get("requirements", [])))
-		box.add_child(_wrap_card(card))
+				route_button.tooltip_text = reason if not bool(route.get("enabled", enabled)) else String(route.get("description", ""))
+				actions.add_child(route_button)
+		elif mode == "START":
+			var start := _button(I18n.core("research.graph.status_title") % [_status_text(status_id), title], _start_research_from_graph.bind(project_id, ""), not enabled, COLOR_ACCENT)
+			start.name = "StartResearch_%s" % project_id
+			start.tooltip_text = reason
+			actions.add_child(start)
+		else:
+			var ledger := _button(I18n.core("research.graph.status_title") % [_status_text(status_id), title], Callable(), true, COLOR_GOOD if status_id == "COMPLETED" else COLOR_MUTED)
+			ledger.name = "ResearchLedger_%s" % project_id
+			actions.add_child(ledger)
+	scroll.add_child(actions)
+	column.add_child(scroll)
+	panel.add_child(column)
+	return panel
 
-	box.add_child(_section_title(I18n.core("research.locked_programs")))
+
+func _research_graph_model() -> Dictionary:
+	var grant_projects := {}
+	for project_value in Game.content.research_projects.values():
+		var project := project_value as Dictionary
+		var granted_technology := String(project.get("grants_technology", ""))
+		if not granted_technology.is_empty():
+			grant_projects[granted_technology] = String(project.get("id", ""))
+	var current_id := String(Game.state.research.get("project_id", ""))
+	var runtime_status := String(Game.state.research.get("status", "IDLE"))
+	var nodes: Array[Dictionary] = []
 	for project_value in Game.content.research_projects.values():
 		var project := project_value as Dictionary
 		var project_id := String(project.get("id", ""))
-		if bool(Game.state.completed_projects.get(project_id, false)) or Game.simulation.definition_revealed(Game.state, project):
-			continue
-		var locked_card := _card()
-		locked_card.add_child(_label(_content_name(project, project_id), 16, COLOR_MUTED))
-		locked_card.add_child(_label(_status_text("LOCKED"), 13, COLOR_WARN))
-		locked_card.add_child(_label(_project_summary(project), 13, COLOR_MUTED))
-		if not project.get("requirements", []).is_empty():
-			locked_card.add_child(_requirements_label(project.get("requirements", [])))
-		var guidance_button := _button(I18n.core("research.open_progression_objectives"), _switch_page.bind("system_map"), false, COLOR_ACCENT)
-		guidance_button.name = "ResearchUnlockGuidance_%s" % project_id
-		locked_card.add_child(guidance_button)
-		box.add_child(_wrap_card(locked_card))
-
-	box.add_child(_section_title(I18n.core("research.maturity")))
-	var maturity_lines: Array[String] = []
-	for item_id_value in Game.state.experimental_maturity.keys():
-		var item_id := String(item_id_value)
-		maturity_lines.append(I18n.core("research.maturity.entry") % [_content_name(Game.content.items.get(item_id, {}), item_id), _research_stage_kind_name(String(Game.state.experimental_maturity.get(item_id, "THEORY")))])
-	maturity_lines.sort()
-	box.add_child(_card_text("\n".join(maturity_lines) if not maturity_lines.is_empty() else I18n.core("research.maturity.empty"), COLOR_TEXT if not maturity_lines.is_empty() else COLOR_MUTED))
-
-	box.add_child(_section_title(I18n.core("research.achievements")))
-	var technology_lines: Array[String] = []
-	for technology_id_value in Game.state.technologies.keys():
-		if not bool(Game.state.technologies.get(technology_id_value, false)):
-			continue
-		var technology_id := String(technology_id_value)
-		var technology := Game.content.technologies.get(technology_id, {}) as Dictionary
-		technology_lines.append((I18n.core("research.technology.completed_spillover") if bool(Game.state.technology_spillovers.get(technology_id, false)) else I18n.core("research.technology.completed")) % _content_name(technology, technology_id))
-	technology_lines.sort()
-	box.add_child(_card_text("\n".join(technology_lines) if not technology_lines.is_empty() else I18n.core("research.technology.empty"), COLOR_GOOD if not technology_lines.is_empty() else COLOR_MUTED))
-
-	box.add_child(_section_title(I18n.core("research.completed_programs")))
-	var completed_lines: Array[String] = []
-	for completed_id_value in Game.state.completed_projects.keys():
-		if not bool(Game.state.completed_projects.get(completed_id_value, false)):
-			continue
-		var completed_id := String(completed_id_value)
-		var completed_project := Game.content.research_projects.get(completed_id, {}) as Dictionary
-		var route_names: Array[String] = []
-		for route_value in completed_project.get("routes", []):
+		var completed := bool(Game.state.completed_projects.get(project_id, false))
+		var current := current_id == project_id
+		var revealed := Game.simulation.definition_revealed(Game.state, project)
+		var available := Game.simulation.research_project_available(Game.state, project)
+		var busy := not current_id.is_empty() and not current
+		var status_id := "COMPLETED" if completed else (runtime_status if current and runtime_status in ["RUNNING", "PAUSED", "BLOCKED"] else ("AVAILABLE" if revealed and available else "LOCKED"))
+		var action_mode := "COMPLETED" if completed else ("PAUSE" if current and runtime_status in ["RUNNING", "BLOCKED"] else ("RESUME" if current and runtime_status == "PAUSED" else ("GUIDANCE" if not revealed else "START")))
+		var action_enabled := (current and runtime_status == "PAUSED" and available) or (not current and not completed and revealed and available and not busy)
+		var action_label := I18n.core("research.action.start_program")
+		if action_mode == "PAUSE":
+			action_label = I18n.core("research.action.stop")
+		elif action_mode == "RESUME":
+			action_label = I18n.core("research.action.resume")
+		elif action_mode == "GUIDANCE":
+			action_label = I18n.core("research.open_progression_objectives")
+		var reason := _unmet_requirements(project.get("requirements", []))
+		if busy:
+			reason = I18n.core("research.current_project") % _content_name(Game.content.research_projects.get(current_id, {}), current_id)
+		elif not available and reason.is_empty() and not completed:
+			reason = I18n.core("block_reason.default")
+		var technology_requirements: Array[String] = []
+		_collect_research_technology_requirements(project.get("requirements", []), technology_requirements)
+		var dependencies: Array[String] = []
+		for technology_id in technology_requirements:
+			var dependency_id := String(grant_projects.get(technology_id, ""))
+			if not dependency_id.is_empty() and dependency_id != project_id and not dependencies.has(dependency_id):
+				dependencies.append(dependency_id)
+		var routes: Array[Dictionary] = []
+		for route_value in project.get("routes", []):
 			var route := route_value as Dictionary
 			var route_id := String(route.get("id", ""))
-			if bool(Game.state.completed_research_routes.get(completed_id, {}).get(route_id, false)):
-				route_names.append(_research_route_name(route))
-			elif current_id.is_empty():
-				var supplemental := _button(I18n.core("research.action.supplemental_route") % _research_route_name(route), _command.bind(I18n.core("command.research.supplemental_route"), Game.start_research_project.bind(completed_id, route_id)), not Game.simulation.research_project_available(Game.state, completed_project, route_id), COLOR_ACCENT)
-				box.add_child(supplemental)
-		completed_lines.append(I18n.core("research.completed.entry_routes") % [_content_name(completed_project, completed_id), I18n.core("format.slash_separator").join(route_names)] if not route_names.is_empty() else I18n.core("research.completed.entry") % _content_name(completed_project, completed_id))
-	completed_lines.sort()
-	box.add_child(_card_text("\n".join(completed_lines) if not completed_lines.is_empty() else I18n.core("research.completed.empty"), COLOR_GOOD if not completed_lines.is_empty() else COLOR_MUTED))
+			if completed and bool(Game.state.completed_research_routes.get(project_id, {}).get(route_id, false)):
+				continue
+			var route_available := action_enabled if not completed else (current_id.is_empty() and Game.simulation.research_project_available(Game.state, project, route_id))
+			routes.append({"id":route_id, "label":I18n.core("research.action.supplemental_route") % _research_route_name(route) if completed else I18n.core("research.action.select_route") % _research_route_name(route), "description":_research_route_description(route), "enabled":route_available})
+		if completed and not routes.is_empty() and current_id.is_empty():
+			action_mode = "START"
+			action_enabled = true
+		nodes.append({
+			"id":project_id,
+			"title":_content_name(project, project_id),
+			"summary":_project_summary(project),
+			"lane":"SHIP_DEVELOPMENT" if String(project.get("project_type", "TECHNOLOGY")) == "SHIP_DEVELOPMENT" else "TECHNOLOGY",
+			"dependencies":dependencies,
+			"status_id":status_id,
+			"status":_status_text(status_id),
+			"action_mode":action_mode,
+			"action_enabled":action_enabled,
+			"action_label":action_label,
+			"active_route_id":String(Game.state.research.get("route_id", "")) if current else "",
+			"reason":reason,
+			"routes":routes
+		})
+	return {
+		"core_title":I18n.core("research.graph.core_title", "RESEARCH CORE"),
+		"core_subtitle":I18n.core("research.graph.core_subtitle", "PROGRAM CONTROL"),
+		"core_summary":I18n.core("research.graph.core_summary", "%d real programs") % nodes.size(),
+		"status_format":I18n.core("research.graph.node_status"),
+		"nodes":nodes
+	}
+
+
+func _collect_research_technology_requirements(value, result: Array[String]) -> void:
+	if value is Array:
+		for child in value:
+			_collect_research_technology_requirements(child, result)
+		return
+	if not value is Dictionary:
+		return
+	var requirement := value as Dictionary
+	if String(requirement.get("type", "")) == "technology":
+		var technology_id := String(requirement.get("id", ""))
+		if not technology_id.is_empty() and not result.has(technology_id):
+			result.append(technology_id)
+	for child in requirement.get("children", []):
+		_collect_research_technology_requirements(child, result)
+
+
+func _select_research_project(project_id: String) -> void:
+	_selected_research_project_id = project_id
+	_ui_state.select_context("research_project", project_id)
+	_rebuild_sidebar()
+
+
+func _start_research_from_graph(project_id: String, route_id: String) -> void:
+	var supplemental := bool(Game.state.completed_projects.get(project_id, false)) and not route_id.is_empty()
+	var command_label := I18n.core("command.research.supplemental_route") if supplemental else (I18n.core("command.research.start_route") if not route_id.is_empty() else I18n.t("button.start_research"))
+	_command(command_label, Game.start_research_project.bind(project_id, route_id))
+
+
+func _pause_research_from_graph() -> void:
+	_command(I18n.core("command.research.stop"), Game.stop_research)
+
+
+func _open_research_unlock_guidance(project_id: String) -> void:
+	_selected_research_project_id = project_id
+	_switch_page("system_map")
 
 
 func _technology_domain_name(domain_id: String) -> String:
@@ -3149,7 +3342,9 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 		var order_card := _card()
 		var order_plan_id := String(order.get("plan_id", ""))
 		var order_plan := Game.content.ship_construction_projects.get(order_plan_id, {}) as Dictionary
-		order_card.add_child(_label(I18n.core("ships.shipyard.order_header") % [_content_name(order_plan, I18n.core("ships.shipyard.order")), _status_text(String(order.get("status", "QUEUED")))], 16, COLOR_TEXT))
+		var design := Game.state.ship_designs.get(String(order.get("design_id", "")), {}) as Dictionary
+		var order_name := String(design.get("name", _content_name(order_plan, I18n.core("ships.shipyard.order"))))
+		order_card.add_child(_label(I18n.core("ships.shipyard.order_header") % [order_name, _status_text(String(order.get("status", "QUEUED")))], 16, COLOR_TEXT))
 		order_card.add_child(_label(I18n.core("ships.shipyard.order_progress") % [float(order.get("completed_segments", 0)), int(order.get("quantity_completed", 0)), int(order.get("quantity_total", 1)), int(order.get("quantity_remaining", 0))], 13, COLOR_MUTED))
 		_add_blocker_label(order_card, order)
 		var queue_actions := HFlowContainer.new()
@@ -3168,34 +3363,242 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 		box.add_child(_wrap_card(order_card))
 	if Game.state.shipyard_queue.is_empty():
 		box.add_child(_card_text(I18n.core("ships.shipyard.empty"), COLOR_MUTED))
-	box.add_child(_section_title(I18n.core("ships.shipyard.unlocked_plans")))
-	for plan_value in Game.content.ship_construction_projects.values():
-		var plan := plan_value as Dictionary
-		var plan_id := String(plan.get("id", ""))
-		var plan_unlocked := bool(Game.state.unlocked_ship_plans.get(plan_id, false))
-		var card := _card()
-		card.add_child(_label(_content_name(plan, plan_id), 16, COLOR_TEXT))
-		if not plan_unlocked:
-			card.add_child(_label(_status_text("LOCKED"), 13, COLOR_WARN))
-			if not plan.get("requirements", []).is_empty():
-				card.add_child(_requirements_label(plan.get("requirements", [])))
-		card.add_child(_label(_project_summary(plan), 13, COLOR_MUTED))
-		var starting_loadout: Array[String] = []
-		for module_id_value in plan.get("starting_modules", []):
-			var module_id := String(module_id_value)
-			starting_loadout.append(_content_name(Game.content.modules.get(module_id, {}), module_id))
-		card.add_child(_label(I18n.core("ships.shipyard.starting_loadout") % I18n.core("format.slash_separator").join(starting_loadout), 13, COLOR_MUTED))
-		var batch_row := HFlowContainer.new()
-		batch_row.add_theme_constant_override("h_separation", 6)
-		batch_row.add_theme_constant_override("v_separation", 6)
+	box.add_child(_section_title(I18n.core("ships.shipyard.saved_designs", "SAVED SHIP DESIGNS")))
+	box.add_child(_build_ship_design_library())
+	box.add_child(_section_title(I18n.core("ships.shipyard.canvas_title")))
+	box.add_child(_card_text(I18n.core("ships.shipyard.canvas_help", "Start with an empty canvas. Drag a hull from the Ship tab, add parts from the Parts tab, then connect matching shapes yourself."), COLOR_MUTED))
+	box.add_child(_build_ship_assembly_palette())
+	var controls := HFlowContainer.new()
+	controls.add_theme_constant_override("h_separation", 6)
+	_ship_design_name_input = LineEdit.new()
+	_ship_design_name_input.name = "ShipDesignName"
+	_ship_design_name_input.placeholder_text = I18n.core("ships.shipyard.design_name_placeholder", "Design name")
+	_ship_design_name_input.custom_minimum_size.x = 260.0
+	if not _selected_ship_design_id.is_empty():
+		_ship_design_name_input.text = String(Game.state.ship_designs.get(_selected_ship_design_id, {}).get("name", ""))
+	controls.add_child(_ship_design_name_input)
+	var validate := _button(I18n.core("ships.shipyard.validate_design", "VALIDATE"), _validate_ship_assembly_draft, false, COLOR_ACCENT)
+	validate.name = "ValidateShipDesign"
+	controls.add_child(validate)
+	var save := _button(I18n.core("ships.shipyard.save_design", "SAVE DESIGN"), _save_ship_assembly_draft, false, COLOR_GOOD)
+	save.name = "SaveShipDesign"
+	controls.add_child(save)
+	var clear := _button(I18n.core("ships.shipyard.clear_design", "CLEAR CANVAS"), _clear_ship_assembly_draft, false, COLOR_WARN)
+	clear.name = "ClearShipDesign"
+	controls.add_child(clear)
+	box.add_child(controls)
+	_ship_assembly_view = ShipAssemblyMapViewScript.new()
+	_ship_assembly_view.draft_changed.connect(_on_ship_assembly_draft_changed)
+	_ship_assembly_view.entity_selected.connect(_select_shipyard_entity)
+	_ship_assembly_view.notice_requested.connect(_on_ship_assembly_notice)
+	box.add_child(_ship_assembly_view)
+	_ship_assembly_view.configure(_ship_assembly_catalog(), _ship_assembly_draft)
+
+
+func _build_ship_design_library() -> Control:
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UiTokens.panel_style(COLOR_PANEL_ALT, COLOR_BORDER, 3))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 5)
+	var design_ids: Array = Game.state.ship_designs.keys()
+	design_ids.sort()
+	if design_ids.is_empty():
+		column.add_child(_label(I18n.core("ships.shipyard.no_saved_designs", "No saved design. Assemble and validate one on the canvas below."), 12, COLOR_MUTED))
+	for design_id_value in design_ids:
+		var design_id := String(design_id_value)
+		var design := Game.state.ship_designs[design_id] as Dictionary
+		var row := HFlowContainer.new()
+		row.add_theme_constant_override("h_separation", 6)
+		var load := _button(String(design.get("name", design_id)), _load_ship_design.bind(design_id), design_id == _selected_ship_design_id, COLOR_ACCENT)
+		load.name = "LoadShipDesign_%s" % design_id
+		load.custom_minimum_size.x = 260.0
+		row.add_child(load)
 		for quantity in [1, 5, 20]:
-			var build_button := _button(I18n.core("ships.shipyard.build_batch") % quantity, _command.bind(I18n.core("command.ships.enqueue"), Game.enqueue_unlocked_ship_plan.bind(plan_id, quantity)), not plan_unlocked)
-			build_button.name = "BuildShip_%s_%d" % [plan_id, quantity]
-			if not plan_unlocked:
-				build_button.tooltip_text = I18n.core("ships.shipyard.locked_reason")
-			batch_row.add_child(build_button)
-		card.add_child(batch_row)
-		box.add_child(_wrap_card(card))
+			var build := _button(I18n.core("ships.shipyard.build_batch") % quantity, _enqueue_saved_ship_design.bind(design_id, quantity), false, COLOR_GOOD)
+			build.name = "BuildShipDesign_%s_%d" % [design_id, quantity]
+			row.add_child(build)
+		var remove := _button(I18n.core("ships.shipyard.delete_design"), _delete_ship_design.bind(design_id), false, COLOR_WARN)
+		remove.name = "DeleteShipDesign_%s" % design_id
+		row.add_child(remove)
+		column.add_child(row)
+	panel.add_child(column)
+	return panel
+
+
+func _build_ship_assembly_palette() -> Control:
+	var tabs := TabContainer.new()
+	tabs.name = "ShipAssemblyPalette"
+	# One compact shelf is enough; overflowing unlocked hulls/parts already have
+	# their own scroll containers.  The saved height belongs to the canvas.
+	tabs.custom_minimum_size.y = 104.0
+	var hull_scroll := ScrollContainer.new()
+	hull_scroll.name = "Ships"
+	hull_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	hull_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var hull_row := HBoxContainer.new()
+	hull_row.add_theme_constant_override("separation", 6)
+	var plans: Array[Dictionary] = []
+	for plan_value in Game.content.ship_construction_projects.values():
+		plans.append(plan_value as Dictionary)
+	plans.sort_custom(func(a: Dictionary, b: Dictionary): return _content_name(a, String(a.get("id", ""))) < _content_name(b, String(b.get("id", ""))))
+	for plan in plans:
+		var plan_id := String(plan.get("id", ""))
+		var hull_id := String(plan.get("ship_id", ""))
+		var hull := Game.content.ships.get(hull_id, {}) as Dictionary
+		var unlocked := bool(Game.state.unlocked_ship_plans.get(plan_id, false))
+		# The palette is an inventory of hull models the player can actually
+		# construct, not a catalogue of every hull definition in the database.
+		if not unlocked:
+			continue
+		var item := ShipAssemblyPaletteItemScript.new()
+		item.name = "ShipPaletteHull_%s" % plan_id
+		item.configure({"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id}, "%s\n%s · %d slots" % [_content_name(hull, hull_id), String(hull.get("class", "Ship")), int(hull.get("module_slots", 0))], true, I18n.core("ships.shipyard.drag_hull", "Drag this hull onto the empty canvas"))
+		hull_row.add_child(item)
+	hull_scroll.add_child(hull_row)
+	tabs.add_child(hull_scroll)
+	var parts_scroll := ScrollContainer.new()
+	parts_scroll.name = "Parts"
+	parts_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	parts_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	var parts_flow := HFlowContainer.new()
+	parts_flow.add_theme_constant_override("h_separation", 6)
+	parts_flow.add_theme_constant_override("v_separation", 6)
+	var module_ids: Array = Game.content.modules.keys()
+	module_ids.sort()
+	for module_id_value in module_ids:
+		var module_id := String(module_id_value)
+		var module := Game.content.modules[module_id] as Dictionary
+		if not Game.simulation.definition_revealed(Game.state, module):
+			continue
+		var slot := String(module.get("slot", "utility"))
+		var item := ShipAssemblyPaletteItemScript.new()
+		item.name = "ShipPalettePart_%s" % module_id
+		item.configure({"ship_assembly_palette":true, "kind":"module", "definition_id":module_id}, "%s\n%s · %s · %s" % [_content_name(module, module_id), String(module.get("size", "S")), I18n.core("ships.shipyard.slot.%s" % slot), _ship_port_shape_label(slot, Game.ship_module_mount_role(module_id))], true, I18n.core("ships.shipyard.drag_part", "Drag this part onto the canvas, then connect its shaped plug"))
+		parts_flow.add_child(item)
+	parts_scroll.add_child(parts_flow)
+	tabs.add_child(parts_scroll)
+	tabs.set_tab_title(0, I18n.core("ships.shipyard.palette_ships", "舰船"))
+	tabs.set_tab_title(1, I18n.core("ships.shipyard.palette_parts", "零件"))
+	return tabs
+
+
+func _ship_assembly_catalog() -> Dictionary:
+	var plans := {}
+	for plan_id_value in Game.content.ship_construction_projects.keys():
+		var plan_id := String(plan_id_value)
+		var plan := (Game.content.ship_construction_projects[plan_id] as Dictionary).duplicate(true)
+		plan["title"] = _content_name(plan, plan_id)
+		plan["assembly_sockets"] = Game.ship_design_socket_schema(plan_id)
+		plans[plan_id] = plan
+	var hulls := {}
+	for hull_id_value in Game.content.ships.keys():
+		var hull_id := String(hull_id_value)
+		var hull := (Game.content.ships[hull_id] as Dictionary).duplicate(true)
+		hull["title"] = _content_name(hull, hull_id)
+		hulls[hull_id] = hull
+	var modules := {}
+	for module_id_value in Game.content.modules.keys():
+		var module_id := String(module_id_value)
+		var module := (Game.content.modules[module_id] as Dictionary).duplicate(true)
+		module["title"] = _content_name(module, module_id)
+		module["assembly_mount"] = Game.ship_module_mount_role(module_id)
+		modules[module_id] = module
+	return {"plans":plans, "hulls":hulls, "modules":modules, "socket_label_format":I18n.core("ships.shipyard.socket_label"), "module_label_format":I18n.core("ships.shipyard.part_label"), "hull_summary_format":I18n.core("ships.shipyard.hull_backplane"), "core_socket_format":I18n.core("ships.shipyard.energy_core_socket"), "slot_labels":{
+		"weapon":I18n.core("ships.shipyard.slot.weapon"), "shield":I18n.core("ships.shipyard.slot.shield"), "drive":I18n.core("ships.shipyard.slot.drive"), "utility":I18n.core("ships.shipyard.slot.utility"), "core":I18n.core("ships.shipyard.slot.core")
+	}}
+
+
+func _ship_port_shape_label(slot: String, mount_role := "") -> String:
+	if mount_role == "STRUCTURAL":
+		return "■"
+	if mount_role == "SPECIAL" and slot == "utility":
+		return "⬟"
+	return {"weapon":"▲", "shield":"■", "drive":"◆", "utility":"⬟", "core":"●"}.get(slot, "■")
+
+
+func _on_ship_assembly_draft_changed(snapshot: Dictionary) -> void:
+	_ship_assembly_draft = snapshot.duplicate(true)
+	_selected_shipyard_plan_id = String(snapshot.get("plan_id", ""))
+	if not _selected_shipyard_plan_id.is_empty():
+		_ui_state.select_context("ship_assembly", _selected_shipyard_plan_id)
+	_rebuild_sidebar()
+
+
+func _on_ship_assembly_notice(code: String) -> void:
+	var messages := {
+		"HULL_ALREADY_PLACED":I18n.core("ships.shipyard.notice.hull_already_placed", "Only one hull can be placed. Clear or delete it before choosing another."),
+		"PORT_DIRECTION_INVALID":I18n.core("ships.shipyard.notice.port_direction", "Connect a part plug to a hull socket."),
+		"PORT_SHAPE_MISMATCH":I18n.core("ships.shipyard.notice.port_mismatch", "That part does not match the socket's connector and mount family."),
+		"PORT_ALREADY_OCCUPIED":I18n.core("ships.shipyard.notice.port_occupied", "That part or socket is already connected.")
+	}
+	_append_log(String(messages.get(code, code)))
+
+
+func _validate_ship_assembly_draft() -> void:
+	var snapshot := _ship_assembly_view.draft_snapshot() if is_instance_valid(_ship_assembly_view) else _ship_assembly_draft
+	var validation := Game.ship_design_validation(String(snapshot.get("plan_id", "")), snapshot.get("nodes", []), snapshot.get("connections", []))
+	_append_log(String(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
+	_rebuild_sidebar()
+
+
+func _save_ship_assembly_draft() -> void:
+	var snapshot := _ship_assembly_view.draft_snapshot() if is_instance_valid(_ship_assembly_view) else _ship_assembly_draft
+	var requested_name := _ship_design_name_input.text if is_instance_valid(_ship_design_name_input) else ""
+	_command(I18n.core("command.ships.save_design", "Save ship design"), _commit_ship_design.bind(snapshot, requested_name))
+
+
+func _commit_ship_design(snapshot: Dictionary, requested_name: String) -> bool:
+	var success := Game.save_ship_design(_selected_ship_design_id, requested_name, String(snapshot.get("plan_id", "")), snapshot.get("nodes", []), snapshot.get("connections", []))
+	if success:
+		_selected_ship_design_id = Game.last_saved_ship_design_id
+		_ship_assembly_draft = (Game.state.ship_designs.get(_selected_ship_design_id, {}) as Dictionary).duplicate(true)
+	return success
+
+
+func _clear_ship_assembly_draft() -> void:
+	_selected_ship_design_id = ""
+	_selected_shipyard_plan_id = ""
+	_selected_shipyard_entity = {"kind":"hull", "id":""}
+	_ship_assembly_draft = {}
+	if is_instance_valid(_ship_design_name_input):
+		_ship_design_name_input.text = ""
+	if is_instance_valid(_ship_assembly_view):
+		_ship_assembly_view.clear_draft(false)
+	_rebuild_sidebar()
+
+
+func _load_ship_design(design_id: String) -> void:
+	var design := Game.state.ship_designs.get(design_id, {}) as Dictionary
+	if design.is_empty():
+		return
+	_selected_ship_design_id = design_id
+	_ship_assembly_draft = design.duplicate(true)
+	_selected_shipyard_plan_id = String(design.get("plan_id", ""))
+	_selected_shipyard_entity = {"kind":"hull", "id":String(design.get("hull_id", ""))}
+	_request_active_page_refresh(true)
+
+
+func _delete_ship_design(design_id: String) -> void:
+	_command(I18n.core("command.ships.delete_design", "Delete ship design"), _commit_delete_ship_design.bind(design_id))
+
+
+func _commit_delete_ship_design(design_id: String) -> bool:
+	var success := Game.delete_ship_design(design_id)
+	if success and _selected_ship_design_id == design_id:
+		_selected_ship_design_id = ""
+		_selected_shipyard_plan_id = ""
+		_ship_assembly_draft = {}
+	return success
+
+
+func _enqueue_saved_ship_design(design_id: String, quantity: int) -> void:
+	_command(I18n.core("command.ships.enqueue"), Game.enqueue_saved_ship_design.bind(design_id, quantity))
+
+
+func _select_shipyard_entity(kind: String, entity_id: String) -> void:
+	_selected_shipyard_entity = {"kind":kind, "id":entity_id}
+	_ui_state.select_context("ship_assembly", entity_id)
+	_rebuild_sidebar()
 
 
 func _rebuild_expedition() -> void:

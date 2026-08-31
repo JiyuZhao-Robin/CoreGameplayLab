@@ -106,6 +106,8 @@ var manufacturing_modules_built := {}
 var pinned_items: Array = []
 var saved_loadouts := {}
 var next_loadout_serial := 1
+var ship_designs := {}
+var next_ship_design_serial := 1
 var region_states := {}
 var mining_site_states := {}
 var combat_area_states := {}
@@ -420,6 +422,8 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.pinned_items = data.get("pinned_items", []).duplicate()
 	state.saved_loadouts = _normalized_saved_loadouts(data.get("saved_loadouts", {}))
 	state.next_loadout_serial = _serial_after_identifiers(int(data.get("next_loadout_serial", 1)), state.saved_loadouts.keys(), "LOADOUT-")
+	state.ship_designs = _normalized_ship_designs(data.get("ship_designs", {}))
+	state.next_ship_design_serial = _serial_after_identifiers(int(data.get("next_ship_design_serial", 1)), state.ship_designs.keys(), "DESIGN-")
 	state.region_states = data.get("region_states", {}).duplicate(true)
 	state.mining_site_states = data.get("mining_site_states", {}).duplicate(true)
 	if int(data.get("save_version", 0)) <= 33:
@@ -532,6 +536,8 @@ func to_dictionary() -> Dictionary:
 		"pinned_items":pinned_items,
 		"saved_loadouts":saved_loadouts,
 		"next_loadout_serial":next_loadout_serial,
+		"ship_designs":ship_designs,
+		"next_ship_design_serial":next_ship_design_serial,
 		"region_states":region_states,
 		"mining_site_states":mining_site_states,
 		"combat_area_states":combat_area_states,
@@ -965,13 +971,15 @@ func ship_plan_queued(plan_id: String) -> bool:
 	return false
 
 
-func enqueue_ship_plan(plan_id: String, quantity: int = 1) -> bool:
+func enqueue_ship_plan(plan_id: String, quantity: int = 1, design_id: String = "", custom_modules: Array = []) -> bool:
 	if not bool(unlocked_ship_plans.get(plan_id, false)) or quantity <= 0:
 		return false
 	var project_id := "SHIPBUILD-%06d" % (shipyard_queue.size() + int(statistics.get("ships_built", 0)) + 1)
 	shipyard_queue.append({
 		"project_id":project_id,
 		"plan_id":plan_id,
+		"design_id":design_id,
+		"custom_modules":custom_modules.duplicate(),
 		"quantity_total":clampi(quantity, 1, 100),
 		"quantity_remaining":clampi(quantity, 1, 100),
 		"quantity_completed":0,
@@ -1542,6 +1550,8 @@ static func _normalized_shipyard_queue(source: Array) -> Array:
 		runtime["blocked_reason"] = str(runtime.get("blocked_reason", ""))
 		runtime["blocker"] = runtime.get("blocker", {}).duplicate(true) if runtime.get("blocker", null) is Dictionary else {}
 		runtime["location_id"] = str(runtime.get("location_id", MAIN_BASE_LOCATION_ID))
+		runtime["design_id"] = str(runtime.get("design_id", ""))
+		runtime["custom_modules"] = runtime.get("custom_modules", []).duplicate() if runtime.get("custom_modules", null) is Array else []
 		if str(runtime["location_id"]).is_empty():
 			runtime["location_id"] = MAIN_BASE_LOCATION_ID
 		result.append(runtime)
@@ -1761,6 +1771,27 @@ static func _normalized_logistics_network(source: Dictionary) -> Dictionary:
 		if shipment_value is Dictionary:
 			shipment_ids.append(str((shipment_value as Dictionary).get("id", "")))
 	result["next_shipment_serial"] = _serial_after_identifiers(int(result.get("next_shipment_serial", 1)), shipment_ids, "SHIPMENT-")
+	return result
+
+
+static func _normalized_ship_designs(source: Dictionary) -> Dictionary:
+	var result := {}
+	for design_id_value in source.keys():
+		var design_id := str(design_id_value)
+		var value = source.get(design_id_value)
+		if design_id.is_empty() or value is not Dictionary:
+			continue
+		var design: Dictionary = value.duplicate(true)
+		design["id"] = design_id
+		design["name"] = str(design.get("name", design_id))
+		design["plan_id"] = str(design.get("plan_id", ""))
+		design["hull_id"] = str(design.get("hull_id", ""))
+		design["modules"] = design.get("modules", []).duplicate() if design.get("modules", null) is Array else []
+		design["nodes"] = design.get("nodes", []).duplicate(true) if design.get("nodes", null) is Array else []
+		design["connections"] = design.get("connections", []).duplicate(true) if design.get("connections", null) is Array else []
+		design["saved_at_ms"] = maxi(0, int(design.get("saved_at_ms", 0)))
+		if not design["plan_id"].is_empty() and not design["hull_id"].is_empty():
+			result[design_id] = design
 	return result
 
 

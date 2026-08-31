@@ -537,7 +537,7 @@
     },
     {
       "actionId": "BUILD_SHIP",
-      "domainCommand": "Game.enqueue_unlocked_ship_plan",
+      "domainCommand": "Game.enqueue_saved_ship_design",
       "requiredContext": ["unlocked Ship Plan", "Shipyard queue"],
       "uiEntryPoints": ["Ships > Shipyard > Build x1/x5/x20 (src/ui/main.gd:2205-2225)"],
       "unlockedBy": ["Ship Plan unlocked"],

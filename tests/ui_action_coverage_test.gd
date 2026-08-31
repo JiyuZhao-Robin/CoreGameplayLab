@@ -822,13 +822,16 @@ func _verify_advanced_power_priority_action() -> void:
 func _verify_build_ship_action() -> void:
 	var success_scenario := "prepare_stellar_energy"
 	_check(_activate_scenario(success_scenario), "%s activates for BUILD_SHIP success" % success_scenario)
+	var prepared_designs := _create_saved_ship_designs(1)
+	_check(prepared_designs.size() == 1, "a valid player ship design is prepared through the public design command")
+	var design_id := prepared_designs[0] if not prepared_designs.is_empty() else ""
+	var plan_id := String(Game.state.ship_designs.get(design_id, {}).get("plan_id", ""))
 	await _spawn_main()
 	_check(await _press_named("Navigation_ships"), "Ships is reachable for BUILD_SHIP")
 	_check(await _press_named("FleetSection_shipyard"), "Shipyard is reachable through its visible tab")
-	var build_button := _first_enabled_named_prefix("BuildShip_")
-	_check(_button_usable(build_button), "an unlocked visible ship plan has an enabled Build control")
+	var build_button := main.find_child("BuildShipDesign_%s_1" % design_id, true, false) as Button
+	_check(_button_usable(build_button), "a saved valid ship design has an enabled Build control")
 	var control_name := String(build_button.name) if build_button != null else ""
-	var plan_id := control_name.trim_prefix("BuildShip_").trim_suffix("_1")
 	var queue_before := Game.state.shipyard_queue.size()
 	if _button_usable(build_button):
 		build_button.pressed.emit()
@@ -837,7 +840,7 @@ func _verify_build_ship_action() -> void:
 	var built := not project_id.is_empty() and Game.state.shipyard_queue.size() == queue_before + 1
 	_record_quadrant("BUILD_SHIP", "success", built, {
 		"scenario":success_scenario, "controlName":control_name,
-		"evidence":"An unlocked plan's visible one-ship batch control is accepted."
+		"evidence":"A saved player-authored design's visible one-ship batch control is accepted."
 	})
 	_record_quadrant("BUILD_SHIP", "consequence", built and int(order.get("quantity_total", 0)) == 1 and String(order.get("plan_id", "")) == plan_id, {
 		"projectId":project_id, "planId":plan_id, "quantity":order.get("quantity_total", 0),
@@ -853,49 +856,34 @@ func _verify_build_ship_action() -> void:
 	await _spawn_main()
 	await _press_named("Navigation_ships")
 	await _press_named("FleetSection_shipyard")
-	var locked_build := _first_disabled_visible_named_prefix("BuildShip_")
+	var locked_build := main.find_child("ShipPaletteHull_construct_ultimate_combat", true, false) as Button
 	var locked_corpus := _visible_text(main)
-	var locked_failure := locked_build != null and not locked_build.tooltip_text.is_empty() \
-		and _contains_any(locked_corpus + "\n" + locked_build.tooltip_text, ["locked", "development", "research", "锁定", "研发", "开发"])
+	var locked_failure := locked_build == null \
+		and _contains_any(locked_corpus, ["no saved design", "blank assembly canvas", "尚无已保存设计", "空白装配画布"])
 	_record_quadrant("BUILD_SHIP", "failure", locked_failure, {
-		"scenario":failure_scenario, "controlName":String(locked_build.name) if locked_build != null else "",
-		"mode":"VISIBLE_DISABLED_CONTROL", "tooltip":locked_build.tooltip_text if locked_build != null else "",
-		"evidence":"Locked plans remain visible with disabled Build controls and a player-facing prerequisite reason; repeated unlocked production remains legal by design."
+		"scenario":failure_scenario, "controlName":"ShipPaletteHull_construct_ultimate_combat",
+		"mode":"UNAVAILABLE_CONTENT_OMITTED",
+		"evidence":"The Ship palette contains only unlocked, constructible hull models; unavailable hulls and build controls are absent until their real unlock and a valid saved design exist."
 	})
 
 
 func _verify_shipyard_queue_actions() -> void:
 	var scenario_id := "open_deep"
 	_check(_activate_scenario(scenario_id), "%s activates for Shipyard queue controls" % scenario_id)
+	var design_ids := _create_saved_ship_designs(2)
 	await _spawn_main()
 	_check(await _press_named("Navigation_ships"), "Ships is reachable for Shipyard queue controls")
 	_check(await _press_named("FleetSection_shipyard"), "Shipyard queue is reachable")
 	var setup_plans: Array[String] = []
-	for node_value in main.find_children("BuildShip_*_1", "Button", true, false):
-		var button := node_value as Button
+	for design_id in design_ids:
+		var button := main.find_child("BuildShipDesign_%s_1" % design_id, true, false) as Button
 		if not _button_usable(button):
 			continue
-		var plan_id := String(button.name).trim_prefix("BuildShip_").trim_suffix("_1")
-		if setup_plans.has(plan_id):
-			continue
 		button.pressed.emit()
-		setup_plans.append(plan_id)
+		setup_plans.append(String(Game.state.ship_designs.get(design_id, {}).get("plan_id", "")))
 		await _settle_ui()
-		if setup_plans.size() >= 2:
-			break
-		# Rebuild invalidates the iteration's remaining controls; locate the next
-		# distinct plan from the live tree on the following pass below.
-		for next_value in main.find_children("BuildShip_*_1", "Button", true, false):
-			var next_button := next_value as Button
-			var next_plan := String(next_button.name).trim_prefix("BuildShip_").trim_suffix("_1")
-			if _button_usable(next_button) and not setup_plans.has(next_plan):
-				next_button.pressed.emit()
-				setup_plans.append(next_plan)
-				await _settle_ui()
-				break
-		break
 	_check(setup_plans.size() == 2 and Game.state.shipyard_queue.size() >= 2,
-		"two distinct visible Build controls form a legal reorderable Shipyard queue")
+		"two distinct saved-design Build controls form a legal reorderable Shipyard queue")
 	var reorder_order := Game.state.shipyard_queue[1] as Dictionary if Game.state.shipyard_queue.size() >= 2 else {}
 	var reorder_project_id := String(reorder_order.get("project_id", ""))
 	var reorder_plan_id := String(reorder_order.get("plan_id", ""))
@@ -1971,6 +1959,35 @@ func _four_case_verified(action_id: String) -> bool:
 func _activate_scenario(scenario_id: String) -> bool:
 	var builder = GameplayScenarioBuilderScript.new(Game.content)
 	return builder.activate(scenario_id)
+
+
+func _create_saved_ship_designs(limit: int) -> Array[String]:
+	var result: Array[String] = []
+	var plan_ids: Array = Game.content.ship_construction_projects.keys()
+	plan_ids.sort()
+	for plan_id_value in plan_ids:
+		var plan_id := String(plan_id_value)
+		if not bool(Game.state.unlocked_ship_plans.get(plan_id, false)):
+			continue
+		var plan := Game.content.ship_construction_projects[plan_id] as Dictionary
+		var hull_id := String(plan.get("ship_id", ""))
+		var nodes: Array = [{"node_id":"ship_design_hull", "kind":"hull", "definition_id":hull_id, "position":{"x":520.0, "y":220.0}}]
+		var connections: Array = []
+		var slot_counts := {}
+		for module_index in plan.get("starting_modules", []).size():
+			var module_id := String(plan.get("starting_modules", [])[module_index])
+			var module := Game.content.modules.get(module_id, {}) as Dictionary
+			var slot := String(module.get("slot", "utility"))
+			var socket_index := int(slot_counts.get(slot, 0))
+			slot_counts[slot] = socket_index + 1
+			var node_id := "ship_design_module_%04d" % (module_index + 1)
+			nodes.append({"node_id":node_id, "kind":"module", "definition_id":module_id, "position":{"x":80.0, "y":80.0 + module_index * 100.0}})
+			connections.append({"module_node_id":node_id, "socket_id":"socket_%s_%d" % [slot, socket_index]})
+		if Game.save_ship_design("", "Coverage Design %d" % (result.size() + 1), plan_id, nodes, connections):
+			result.append(Game.last_saved_ship_design_id)
+			if result.size() >= limit:
+				break
+	return result
 
 
 func _spawn_main() -> void:

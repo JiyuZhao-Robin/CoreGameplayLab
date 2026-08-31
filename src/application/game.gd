@@ -17,6 +17,7 @@ var simulation: SimulationEngine
 var saves := LocalSaveRepository.new()
 var offline_report := {}
 var last_notice := ""
+var last_saved_ship_design_id := ""
 var persistence_enabled := not OS.get_cmdline_user_args().has("--no-persistence")
 
 var _simulation_accumulator_ms := 0.0
@@ -1411,6 +1412,208 @@ func enqueue_unlocked_ship_plan(plan_id: String, quantity: int = 1) -> bool:
 	transaction.record({"type":"ShipyardPlanQueued", "plan_id":plan_id, "quantity":quantity})
 	_commit_transaction(transaction)
 	return true
+
+
+func ship_design_validation(plan_id: String, nodes: Array, connections: Array) -> Dictionary:
+	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	if plan.is_empty():
+		return {"allowed":false, "reason_code":"PLAN_UNKNOWN", "reason":I18n.t("notice.ship_design_plan_unknown", "Unknown hull plan")}
+	if not bool(state.unlocked_ship_plans.get(plan_id, false)):
+		return {"allowed":false, "reason_code":"PLAN_LOCKED", "reason":I18n.t("notice.ship_design_plan_locked", "The hull plan is still locked")}
+	var hull_id := str(plan.get("ship_id", ""))
+	var hull_nodes: Array = []
+	var module_nodes := {}
+	var sanitized_nodes: Array = []
+	for node_value in nodes:
+		if node_value is not Dictionary:
+			continue
+		var node := node_value as Dictionary
+		var node_id := str(node.get("node_id", ""))
+		var kind := str(node.get("kind", ""))
+		var definition_id := str(node.get("definition_id", ""))
+		if node_id.is_empty() or kind not in ["hull", "module"]:
+			return {"allowed":false, "reason_code":"NODE_INVALID", "reason":I18n.t("notice.ship_design_node_invalid", "The design contains an invalid node")}
+		var position := node.get("position", {}) as Dictionary
+		var sanitized := {"node_id":node_id, "kind":kind, "definition_id":definition_id, "position":{"x":float(position.get("x", 0.0)), "y":float(position.get("y", 0.0))}}
+		sanitized_nodes.append(sanitized)
+		if kind == "hull":
+			hull_nodes.append(sanitized)
+		else:
+			if not content.modules.has(definition_id) or module_nodes.has(node_id):
+				return {"allowed":false, "reason_code":"MODULE_INVALID", "reason":I18n.t("notice.ship_design_module_invalid", "The design contains an unknown module")}
+			if not simulation.definition_revealed(state, content.modules.get(definition_id, {})):
+				return {"allowed":false, "reason_code":"MODULE_LOCKED", "reason":I18n.t("notice.ship_design_module_locked", "A module design is not unlocked")}
+			module_nodes[node_id] = sanitized
+	if hull_nodes.size() != 1 or str((hull_nodes[0] as Dictionary).get("definition_id", "")) != hull_id:
+		return {"allowed":false, "reason_code":"HULL_INVALID", "reason":I18n.t("notice.ship_design_hull_invalid", "Place exactly one hull from the selected plan")}
+	var hull := content.ships.get(hull_id, {}) as Dictionary
+	var socket_slots := {}
+	for socket_value in ship_design_socket_schema(plan_id):
+		var socket := socket_value as Dictionary
+		socket_slots[str(socket.get("id", ""))] = socket
+	var used_modules := {}
+	var used_sockets := {}
+	var sanitized_connections: Array = []
+	for connection_value in connections:
+		if connection_value is not Dictionary:
+			continue
+		var connection := connection_value as Dictionary
+		var module_node_id := str(connection.get("module_node_id", ""))
+		var socket_id := str(connection.get("socket_id", ""))
+		if not module_nodes.has(module_node_id) or not socket_slots.has(socket_id) or used_modules.has(module_node_id) or used_sockets.has(socket_id):
+			return {"allowed":false, "reason_code":"CONNECTION_INVALID", "reason":I18n.t("notice.ship_design_connection_invalid", "A module connection is missing, duplicated or targets an unknown socket")}
+		var module_id := str((module_nodes[module_node_id] as Dictionary).get("definition_id", ""))
+		var module_slot := str(content.modules.get(module_id, {}).get("slot", "utility"))
+		var module_mount := ship_module_mount_role(module_id)
+		var socket := socket_slots[socket_id] as Dictionary
+		if module_slot != str(socket.get("slot", "")) or module_mount != str(socket.get("mount_role", "")):
+			return {"allowed":false, "reason_code":"SOCKET_MISMATCH", "reason":I18n.t("notice.ship_design_socket_mismatch", "The connector shape does not match the hull socket")}
+		used_modules[module_node_id] = true
+		used_sockets[socket_id] = true
+		sanitized_connections.append({"module_node_id":module_node_id, "socket_id":socket_id, "slot":module_slot, "mount_role":module_mount, "shape":_ship_design_port_shape(module_slot, module_mount)})
+	if used_modules.size() != module_nodes.size():
+		return {"allowed":false, "reason_code":"MODULE_UNCONNECTED", "reason":I18n.t("notice.ship_design_module_unconnected", "Every placed module must be connected to one matching hull socket")}
+	var modules: Array = []
+	var installed_core_count := 0
+	for node_value in sanitized_nodes:
+		var node := node_value as Dictionary
+		if str(node.get("kind", "")) == "module":
+			var module_id := str(node.get("definition_id", ""))
+			modules.append(module_id)
+			if str(content.modules.get(module_id, {}).get("slot", "utility")) == "core":
+				installed_core_count += 1
+	if int(hull.get("slot_layout", {}).get("core", 0)) > 0 and installed_core_count <= 0:
+		return {"allowed":false, "reason_code":"CORE_REQUIRED", "reason":I18n.t("notice.ship_design_core_required", "Install and connect an energy core in the central hull socket")}
+	var loadout_error := content.ship_loadout_error(hull_id, modules)
+	if not loadout_error.is_empty():
+		return {"allowed":false, "reason_code":"FITTING_INVALID", "reason":I18n.t("notice.ship_design_fitting_invalid", "The assembled loadout is invalid: %s") % loadout_error}
+	return {"allowed":true, "reason_code":"READY", "reason":I18n.t("notice.ship_design_ready", "All connectors and fitting limits are valid"), "plan_id":plan_id, "hull_id":hull_id, "modules":modules, "nodes":sanitized_nodes, "connections":sanitized_connections}
+
+
+func save_ship_design(design_id: String, requested_name: String, plan_id: String, nodes: Array, connections: Array) -> bool:
+	var validation := ship_design_validation(plan_id, nodes, connections)
+	if not bool(validation.get("allowed", false)):
+		return _reject(str(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var target_id := design_id
+	if target_id.is_empty():
+		target_id = "DESIGN-%04d" % transaction.working_state.next_ship_design_serial
+		transaction.working_state.next_ship_design_serial += 1
+	elif not transaction.working_state.ship_designs.has(target_id):
+		return _reject(I18n.t("notice.ship_design_missing", "Saved ship design was not found"))
+	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	var name := requested_name.strip_edges()
+	if name.is_empty():
+		name = I18n.t("format.ship_design_name", "%s Design %d") % [I18n.content(plan), transaction.working_state.ship_designs.size() + 1]
+	transaction.working_state.ship_designs[target_id] = {
+		"id":target_id,
+		"name":name,
+		"plan_id":plan_id,
+		"hull_id":str(validation.get("hull_id", "")),
+		"modules":validation.get("modules", []).duplicate(),
+		"nodes":validation.get("nodes", []).duplicate(true),
+		"connections":validation.get("connections", []).duplicate(true),
+		"saved_at_ms":int(transaction.working_state.total_elapsed_ms)
+	}
+	last_saved_ship_design_id = target_id
+	last_notice = I18n.t("notice.ship_design_saved", "Ship design saved: %s") % name
+	transaction.record({"type":"ShipDesignSaved", "design_id":target_id, "plan_id":plan_id})
+	_commit_transaction(transaction)
+	return true
+
+
+func delete_ship_design(design_id: String) -> bool:
+	if not state.ship_designs.has(design_id):
+		return _reject(I18n.t("notice.ship_design_missing", "Saved ship design was not found"))
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var name := str(transaction.working_state.ship_designs.get(design_id, {}).get("name", design_id))
+	transaction.working_state.ship_designs.erase(design_id)
+	last_notice = I18n.t("notice.ship_design_deleted", "Ship design deleted: %s") % name
+	transaction.record({"type":"ShipDesignDeleted", "design_id":design_id})
+	_commit_transaction(transaction)
+	return true
+
+
+func enqueue_saved_ship_design(design_id: String, quantity: int = 1) -> bool:
+	if quantity <= 0 or quantity > 100:
+		return _reject(I18n.t("notice.shipyard_quantity_invalid", "Ship construction quantity must be between 1 and 100"))
+	var design := state.ship_designs.get(design_id, {}) as Dictionary
+	if design.is_empty():
+		return _reject(I18n.t("notice.ship_design_missing", "Saved ship design was not found"))
+	var validation := ship_design_validation(str(design.get("plan_id", "")), design.get("nodes", []), design.get("connections", []))
+	if not bool(validation.get("allowed", false)):
+		return _reject(str(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	if not transaction.working_state.enqueue_ship_plan(str(design.get("plan_id", "")), quantity, design_id, validation.get("modules", [])):
+		return _reject(I18n.t("notice.shipyard_plan_unavailable", "Ship plan is locked, already queued, or already built"))
+	simulation.normalize_shipyard_queue(transaction.working_state)
+	last_notice = I18n.t("notice.ship_design_queued", "%s × %d added to the Shipyard") % [str(design.get("name", design_id)), quantity]
+	transaction.record({"type":"ShipDesignQueued", "design_id":design_id, "plan_id":design.get("plan_id", ""), "quantity":quantity})
+	_commit_transaction(transaction)
+	return true
+
+
+func ship_module_mount_role(module_id: String) -> String:
+	var module := content.modules.get(module_id, {}) as Dictionary
+	var explicit_role := str(module.get("assembly_mount", ""))
+	if explicit_role in ["STRUCTURAL", "SPECIAL", "DRIVE", "CORE"]:
+		return explicit_role
+	var slot := str(module.get("slot", "utility"))
+	if slot == "core":
+		return "CORE"
+	if slot == "drive":
+		return "DRIVE"
+	if slot == "shield":
+		return "STRUCTURAL"
+	if slot == "weapon":
+		return "SPECIAL"
+	var structural_ids := ["cargo_expansion", "bulk_freight_array", "cryogenic_hold_system"]
+	return "STRUCTURAL" if structural_ids.has(module_id) else "SPECIAL"
+
+
+func ship_design_socket_schema(plan_id: String) -> Array[Dictionary]:
+	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	var hull := content.ships.get(str(plan.get("ship_id", "")), {}) as Dictionary
+	var slots := hull.get("slot_layout", {}) as Dictionary
+	var structural_utility_required := 0
+	var special_utility_required := 0
+	for module_id_value in plan.get("starting_modules", []):
+		var module_id := str(module_id_value)
+		if str(content.modules.get(module_id, {}).get("slot", "")) != "utility":
+			continue
+		if ship_module_mount_role(module_id) == "STRUCTURAL":
+			structural_utility_required += 1
+		else:
+			special_utility_required += 1
+	var utility_count := int(slots.get("utility", 0))
+	var structural_utility_count := clampi(maxi(structural_utility_required, utility_count - special_utility_required), 0, utility_count)
+	var special_utility_count := utility_count - structural_utility_count
+	var result: Array[Dictionary] = []
+	for weapon_index in int(slots.get("weapon", 0)):
+		result.append({"id":"socket_weapon_%d" % weapon_index, "slot":"weapon", "mount_role":"SPECIAL", "shape":"TRIANGLE"})
+	for shield_index in int(slots.get("shield", 0)):
+		result.append({"id":"socket_shield_%d" % shield_index, "slot":"shield", "mount_role":"STRUCTURAL", "shape":"SQUARE"})
+	for drive_index in int(slots.get("drive", 0)):
+		result.append({"id":"socket_drive_%d" % drive_index, "slot":"drive", "mount_role":"DRIVE", "shape":"DIAMOND"})
+	for utility_index in utility_count:
+		var mount_role := "SPECIAL" if utility_index < special_utility_count else "STRUCTURAL"
+		result.append({"id":"socket_utility_%d" % utility_index, "slot":"utility", "mount_role":mount_role, "shape":"SQUARE" if mount_role == "STRUCTURAL" else "PENTAGON"})
+	for core_index in int(slots.get("core", 0)):
+		result.append({"id":"socket_core_%d" % core_index, "slot":"core", "mount_role":"CORE", "shape":"CIRCLE"})
+	return result
+
+
+func _ship_design_port_shape(slot: String, mount_role := "") -> String:
+	if mount_role == "STRUCTURAL":
+		return "SQUARE"
+	if mount_role == "SPECIAL" and slot == "utility":
+		return "PENTAGON"
+	match slot:
+		"weapon": return "TRIANGLE"
+		"shield": return "SQUARE"
+		"drive": return "DIAMOND"
+		"core": return "CIRCLE"
+		_: return "SQUARE"
 
 
 func cancel_shipyard_project(project_id: String) -> bool:

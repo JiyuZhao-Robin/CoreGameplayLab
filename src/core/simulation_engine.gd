@@ -2517,7 +2517,7 @@ func normalize_shipyard_queue(state: SpaceGameState) -> void:
 	for runtime in state.shipyard_queue:
 		runtime["reserved_costs"] = {}
 	for runtime in state.shipyard_queue:
-		var plan: Dictionary = content.ship_construction_projects.get(str(runtime.get("plan_id", "")), {})
+		var plan := shipyard_runtime_plan(runtime)
 		if shipyard_engineering_level(state) < int(plan.get("engineering_required", 1)):
 			runtime["status"] = "BLOCKED"
 			runtime["blocked_reason"] = "ENGINEERING"
@@ -2535,6 +2535,17 @@ func normalize_shipyard_queue(state: SpaceGameState) -> void:
 		else:
 			runtime["status"] = "RUNNING"
 			runtime["blocked_reason"] = ""
+
+
+func shipyard_runtime_plan(runtime: Dictionary) -> Dictionary:
+	var base_plan: Dictionary = content.ship_construction_projects.get(str(runtime.get("plan_id", "")), {})
+	if base_plan.is_empty():
+		return {}
+	var plan := base_plan.duplicate(true)
+	var custom_modules = runtime.get("custom_modules", [])
+	if custom_modules is Array and not custom_modules.is_empty():
+		plan["starting_modules"] = custom_modules.duplicate(true)
+	return plan
 
 
 func _shipyard_next_cycle_costs(runtime: Dictionary, plan: Dictionary) -> Dictionary:
@@ -3799,7 +3810,7 @@ func refresh_demand_registry(state: SpaceGameState) -> void:
 		var runtime := runtime_value as Dictionary
 		if str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"]:
 			continue
-		var plan: Dictionary = content.ship_construction_projects.get(str(runtime.get("plan_id", "")), {})
+		var plan := shipyard_runtime_plan(runtime)
 		if plan.is_empty():
 			continue
 		var remaining_ships := maxi(0, int(runtime.get("quantity_remaining", 0)))
@@ -4057,7 +4068,7 @@ func _progress_runtime(state: SpaceGameState, elapsed_ms: float) -> void:
 func _settle_shipyard_cycle(state: SpaceGameState, runtime: Dictionary) -> bool:
 	if runtime.get("status", "") != "RUNNING" or float(runtime.get("cycle_progress", 0.0)) + 0.000001 < 1.0:
 		return false
-	var plan: Dictionary = content.ship_construction_projects.get(str(runtime.get("plan_id", "")), {})
+	var plan := shipyard_runtime_plan(runtime)
 	if plan.is_empty():
 		return false
 	var due := _shipyard_next_cycle_costs(runtime, plan)
@@ -5753,7 +5764,7 @@ func blocker_diagnostic(state: SpaceGameState, domain_id: String, runtime: Dicti
 				remaining_costs.append({"item":str(cost.get("item", "")), "quantity":remaining})
 		return _first_missing_input_blocker(state, domain_id, runtime, remaining_costs, location_id, {"project_id":project.get("id", ""), "stage_id":stage.get("id", "")})
 	if domain_id == "shipyard":
-		var plan: Dictionary = content.ship_construction_projects.get(str(runtime.get("plan_id", "")), {})
+		var plan := shipyard_runtime_plan(runtime)
 		if str(runtime.get("blocked_reason", "")) == "ENGINEERING":
 			return _make_blocker("MISSING_SCALE_STAGE", domain_id, location_id, {"project_id":runtime.get("project_id", ""), "required":int(plan.get("engineering_required", 1)), "available":shipyard_engineering_level(state)})
 		return _first_missing_input_blocker(state, domain_id, runtime, _dictionary_to_item_entries(_shipyard_next_cycle_costs(runtime, plan)), location_id, {"project_id":runtime.get("project_id", ""), "plan_id":plan.get("id", "")})
