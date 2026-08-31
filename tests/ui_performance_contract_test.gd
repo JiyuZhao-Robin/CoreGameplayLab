@@ -1,10 +1,12 @@
 extends SceneTree
 
 const MAIN_PATH := "res://src/ui/main.gd"
+const FULL_JOURNEY_PATH := "res://tests/full_gameplay_ui_test.gd"
 
 
 func _init() -> void:
 	var source := FileAccess.get_file_as_string(MAIN_PATH)
+	var journey_source := FileAccess.get_file_as_string(FULL_JOURNEY_PATH)
 	var process_body := _function_body(source, "_process")
 	var command_body := _function_body(source, "_command")
 	var state_changed_body := _function_body(source, "_on_state_changed")
@@ -20,6 +22,14 @@ func _init() -> void:
 	_expect("_immediate_refresh_requested" in process_body, "Player interactions can bypass the simulation refresh interval on the next frame", failures)
 	_expect("_request_active_page_refresh(true)" in command_body, "Domain commands request a prompt deferred UI refresh", failures)
 	_expect("_request_active_page_refresh(false)" in state_changed_body, "Simulation ticks remain dirty/coalesced instead of forcing a tree rebuild", failures)
+	var freight_body := _function_body(journey_source, "_freight_remote_item_ui")
+	var raw_body := _function_body(journey_source, "_ensure_raw_resource_ui")
+	var remaining_journey_body := _function_body(journey_source, "_complete_remaining_ui_journey")
+	_expect("delivered_before + release_target" in freight_body, "bounded remote freight waits for its complete physical delivery tranche", failures)
+	_expect("LOCAL_NETWORK_PROGRESS_CONTINUES" in raw_body, "positive local extraction progress cannot fall through into remote operating-stock churn", failures)
+	var expansion_index := remaining_journey_body.find("expand_earth_extraction_network")
+	var coil_batch_index := remaining_journey_body.find("\"superconducting_coil\", 150")
+	_expect(expansion_index >= 0 and coil_batch_index >= 0 and expansion_index < coil_batch_index, "Fresh UI journey performs a capital-funded feedstock expansion before the endgame batch", failures)
 	if failures.is_empty():
 		print("PASS: UI refresh scheduler is dirty, coalesced and active-workspace-only")
 		quit(0)

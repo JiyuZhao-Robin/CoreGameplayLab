@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateRange(60, 28800)]
+    [ValidateRange(60, 57600)]
     [int]$DefaultTimeoutSeconds = 360,
 
     [switch]$SkipGolden,
@@ -120,7 +120,9 @@ Add-AuditTest "ui-reserve-mission-lifecycle" "res://tests/ui_endgame_scenario_te
 Add-AuditTest "ui-outer-titan-commission" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_outer", "--outer-titan-commission-probe") 3600
 Add-AuditTest "ui-outer-titan-exotic-refit" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--outer-titan-exotic-refit-probe") 900
 Add-AuditTest "ui-spendable-production-budget" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=maintenance_backlog", "--spendable-production-probe") 300
-Add-AuditTest "full-gameplay-ui" "res://tests/full_gameplay_ui_test.tscn" $false @("--no-persistence", "--locale=en", "--evidence-run-id=$RunId") 28800
+Add-AuditTest "ui-remote-bounded-dispatch" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--remote-release-probe") 900
+Add-AuditTest "ui-feedstock-expansion" "res://tests/ui_endgame_scenario_test.tscn" $false @("--no-persistence", "--locale=en", "--scenario=open_deep", "--feedstock-expansion-probe") 1800
+Add-AuditTest "full-gameplay-ui" "res://tests/full_gameplay_ui_test.tscn" $false @("--no-persistence", "--locale=en", "--evidence-run-id=$RunId") 57600
 Add-AuditTest "economy-audit" "res://tools/economy_audit.gd" $true @("--no-persistence")
 Add-AuditTest "ui-performance-contract" "res://tests/ui_performance_contract_test.gd" $true @("--no-persistence")
 

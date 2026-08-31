@@ -29,6 +29,8 @@ func _run() -> void:
 	var reserve_mission_probe := false
 	var outer_titan_commission_probe := false
 	var outer_titan_exotic_refit_probe := false
+	var remote_release_probe := false
+	var feedstock_expansion_probe := false
 	for argument_value in OS.get_cmdline_user_args():
 		var argument := String(argument_value)
 		if argument.begins_with("--scenario="):
@@ -57,10 +59,66 @@ func _run() -> void:
 			outer_titan_commission_probe = true
 		elif argument == "--outer-titan-exotic-refit-probe":
 			outer_titan_exotic_refit_probe = true
+		elif argument == "--remote-release-probe":
+			remote_release_probe = true
+		elif argument == "--feedstock-expansion-probe":
+			feedstock_expansion_probe = true
 	_check(builder.activate(scenario_id), "legal Golden Scenario %s activates for UI endgame diagnostics" % scenario_id)
 	var main := MainScene.instantiate() as Control
 	add_child(main)
 	await _settle_ui()
+	if feedstock_expansion_probe:
+		var runtime_before: Dictionary = Game.state.extraction_network_states.get("earth_extraction_network", {})
+		var level_before := int(runtime_before.get("level", 1))
+		var expanded := await _complete_construction_activity_ui(main, "expand_earth_extraction_network")
+		var level_after := int(Game.state.extraction_network_states.get("earth_extraction_network", {}).get("level", 1))
+		_check(expanded and int(Game.state.completed_activities.get("expand_earth_extraction_network", 0)) == 1,
+			"visible Construction completes the capital-funded Near-Earth feedstock expansion exactly once")
+		_check(level_after == level_before + 31,
+			"completed feedstock expansion raises the authoritative extraction-network capacity by 31 levels")
+		var loaded := SpaceGameState.from_dictionary(Game.state.to_dictionary(), Game.content.domains.keys(), Game.content.regions)
+		_check(int(loaded.extraction_network_states.get("earth_extraction_network", {}).get("level", 1)) == level_after,
+			"expanded extraction-network capacity survives authoritative serialization")
+		main.queue_free()
+		await get_tree().process_frame
+		if failures.is_empty():
+			print("PASS: capital-funded feedstock expansion diagnostic completed")
+			get_tree().quit(0)
+		else:
+			for failure in failures:
+				print(failure)
+			get_tree().quit(1)
+		return
+	if remote_release_probe:
+		var source_location := "asteroid_belt"
+		var item_id := "mixed_raw_ore"
+		var source_before := Game.state.item_quantity(item_id, source_location)
+		var cargo_path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, source_location, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id)
+		var cargo_per_dispatch := _path_cargo_batch_read_only(cargo_path)
+		var planned_dispatches := clampi(floori(float(source_before) / float(maxi(1, cargo_per_dispatch))), 1, 16)
+		var release_target := _bounded_freight_release_target(source_before, cargo_per_dispatch, planned_dispatches)
+		var delivered_before := int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0))
+		_check(source_before >= cargo_per_dispatch, "open_deep exposes at least one complete physical Belt freight tranche")
+		var freight_completed := await _freight_remote_item_ui(main, source_location, item_id, true)
+		var delivered_delta := int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) - delivered_before
+		_check(freight_completed and delivered_delta >= release_target,
+			"one visible bounded freight operation delivers every complete planned dispatch tranche")
+		var earth_policies: Dictionary = Game.state.location_state(SpaceGameState.MAIN_BASE_LOCATION_ID).get("logistics", {}).get("policies", {})
+		var source_policies: Dictionary = Game.state.location_state(source_location).get("logistics", {}).get("policies", {})
+		_check(not earth_policies.has(item_id) and not source_policies.has(item_id) \
+				and not earth_policies.has("chemical_propellant") and not earth_policies.has("repair_material") \
+				and not source_policies.has("chemical_propellant") and not source_policies.has("repair_material"),
+			"bounded freight clears all temporary cargo and operating-stock policies")
+		main.queue_free()
+		await get_tree().process_frame
+		if failures.is_empty():
+			print("PASS: bounded remote freight diagnostic completed")
+			get_tree().quit(0)
+		else:
+			for failure in failures:
+				print(failure)
+			get_tree().quit(1)
+		return
 	if outer_titan_exotic_refit_probe:
 		# open_deep is a Golden, invariant-valid checkpoint captured immediately
 		# after the normal Deep System route. Exercise the same consecutive refits

@@ -787,6 +787,10 @@ func _complete_remaining_ui_journey(main: Control, starter_ship_id: String, path
 	journey_event_log.append("DEEP_SYSTEM_INDUSTRY_COMPLETED")
 
 	# Pre-build the process-limited stellar stock before the Megastructure program.
+	# This is a real capital-funded capacity choice, not a test speed shortcut: the
+	# authoritative extraction-network level raises subsequent physical output and
+	# is serialized with the rest of the economy.
+	if not await _complete_construction_activity_ui(main, "expand_earth_extraction_network"): return false
 	if not await _uninstall_process_module_ui(main, "electronics_facility", "fusion_component_test_rig"): return false
 	if not await _install_process_module(main, "electronics_facility", "cryogenic_process_unit"): return false
 	if not await _ensure_ui_item(main, "superconducting_coil", 150): return false
@@ -1675,17 +1679,35 @@ func _freight_remote_item_ui(main: Control, location_id: String, item_id: String
 	var source_before := Game.state.item_quantity(item_id, location_id)
 	var cargo_path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, location_id, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id)
 	var cargo_per_dispatch := _path_cargo_batch_read_only(cargo_path)
-	var planned_dispatches := clampi(ceili(float(source_before) / float(maxi(1, cargo_per_dispatch))), 1, 16) if require_source_release else 1
+	# Count complete cargo tranches. A smaller residual is intentionally left for a
+	# later production/freight window instead of pretending it is a second full
+	# dispatch and waiting forever on its missing payload.
+	var planned_dispatches := clampi(floori(float(source_before) / float(maxi(1, cargo_per_dispatch))), 1, 16) if require_source_release else 1
 	if not await _stage_remote_operating_stock_ui(main, location_id, planned_dispatches): return false
+	var path_costs: Dictionary = Game.simulation.logistics._path_costs(Game.state, cargo_path)
+	var fuel_target := maxi(1, int(path_costs.get("chemical_propellant", 0)))
+	var repair_target := maxi(1, int(path_costs.get("repair_material", 0)))
+	var fuel_budget := maxi(fuel_target, 2 * (planned_dispatches + 2) * fuel_target)
+	var repair_budget := maxi(repair_target, 2 * (planned_dispatches + 2) * repair_target)
 	if Game.simulation.logistics._destination_free_capacity(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id) <= 0:
 		if not await _upgrade_item_storage_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id): return false
 	var delivered_before := int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0))
+	if require_source_release and planned_dispatches > 1:
+		# Keep the visible operating-stock policies active for the whole bounded
+		# cargo tranche. Each return dispatch consumes its origin stock; the exact
+		# one-dispatch destination target refills that stock without filling the
+		# deliberately small frontier Fluid/Component depots.
+		await _replace_supply_with_budget_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "chemical_propellant", fuel_budget)
+		await _replace_supply_with_budget_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material", repair_budget)
+		await _replace_policy_with_target_ui(main, location_id, "chemical_propellant", LogisticsEngine.MODE_DEMAND, fuel_target, 95)
+		await _replace_policy_with_target_ui(main, location_id, "repair_material", LogisticsEngine.MODE_DEMAND, repair_target, 100)
 	await _replace_policy_ui(main, location_id, item_id, LogisticsEngine.MODE_SUPPLY)
 	var transient_demand_buffer := maxi(4096, source_before * 2) if require_source_release else 0
 	var import_target := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) \
 		+ maxi(1, Game.state.available_item_quantity(item_id, location_id)) \
 		+ transient_demand_buffer
 	await _replace_policy_with_target_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id, LogisticsEngine.MODE_DEMAND, import_target, 90)
+	var release_target := _bounded_freight_release_target(source_before, cargo_per_dispatch, planned_dispatches)
 	var delivered := await _wait_at_public_fast_speed(main, func() -> bool:
 		if require_source_release:
 			# Observe a bounded number of real dispatch-capacity tranches leave before
@@ -1694,14 +1716,17 @@ func _freight_remote_item_ui(main: Control, location_id: String, item_id: String
 			# replenish the source in the same boundary that freight removes cargo.
 			# In that case the conserved delivery ledger is the physical-movement
 			# evidence; requiring a lower net source stock creates a false deadlock.
-			var release_target := mini(source_before, planned_dispatches * cargo_per_dispatch)
-			return Game.state.item_quantity(item_id, location_id) <= source_before - release_target \
-				or int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) > delivered_before
+			return int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) >= delivered_before + release_target
 		return int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) > delivered_before,
-		LARGE_BATCH_TIMEOUT_SECONDS)
+		clampf(LARGE_BATCH_TIMEOUT_SECONDS + float(planned_dispatches) * 4.0, LARGE_BATCH_TIMEOUT_SECONDS, 120.0))
 	var import_satisfied_by_normal_economy := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= import_target
 	await _clear_policy_ui(main, location_id, item_id)
 	await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id)
+	if require_source_release and planned_dispatches > 1:
+		await _clear_policy_ui(main, location_id, "chemical_propellant")
+		await _clear_policy_ui(main, location_id, "repair_material")
+		await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "chemical_propellant")
+		await _clear_policy_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, "repair_material")
 	if require_source_release and not delivered:
 		_print_logistics_diagnostic([item_id, "chemical_propellant", "repair_material"])
 		return _journey_fail("normal freight did not move %s from %s" % [item_id, location_id])
@@ -1711,6 +1736,12 @@ func _freight_remote_item_ui(main: Control, location_id: String, item_id: String
 	if not delivered:
 		_check(import_satisfied_by_normal_economy, "normal automated extraction satisfies %s demand before the optional remote shipment dispatches" % item_id)
 	return true
+
+
+func _bounded_freight_release_target(source_quantity: int, cargo_per_dispatch: int, planned_dispatches: int) -> int:
+	# Wait for every planned full dispatch. If the whole source is smaller than one
+	# cargo tranche, that single partial dispatch remains the exact target.
+	return mini(source_quantity, maxi(1, planned_dispatches) * maxi(1, cargo_per_dispatch))
 
 
 func _path_cargo_batch_read_only(path: Dictionary) -> int:
@@ -1805,15 +1836,21 @@ func _stage_remote_operating_stock_ui(main: Control, location_id: String, dispat
 	# A remote origin only needs one return-dispatch cost buffer. Oversupplying this
 	# stock can fill a frontier Fluid depot and block the raw gas the route exists
 	# to export; replenish the buffer before each dispatch instead.
-	if Game.state.item_quantity("chemical_propellant", location_id) >= fuel_target and Game.state.item_quantity("repair_material", location_id) >= repair_target:
+	if dispatch_count == 1 \
+			and Game.state.item_quantity("chemical_propellant", location_id) >= fuel_target \
+			and Game.state.item_quantity("repair_material", location_id) >= repair_target:
 		return true
 	# Two cargo dispatches stage the fuel and repair buffers. Keep a bounded
 	# multi-tick operating margin above the source reserve: the two cargoes each
 	# pay route costs and ordinary O&M can settle between their dispatch ticks.
 	# Destination targets remain exact, so this margin cannot overfill the remote
 	# Fluid or Component depot.
-	var fuel_budget := fuel_target + 8 * int(path_costs.get("chemical_propellant", 0))
-	var repair_budget := repair_target + 8 * int(path_costs.get("repair_material", 0))
+	# Refill one exact frontier buffer for every planned raw-cargo dispatch. A
+	# refill shipment pays the same path cost at Earth, hence the factor of two;
+	# two additional tranches cover the initial staging pair. Continuous O&M is
+	# still added exactly once by maintenance_recovery_requirement below.
+	var fuel_budget := maxi(fuel_target, 2 * (dispatch_count + 2) * int(path_costs.get("chemical_propellant", 0)))
+	var repair_budget := maxi(repair_target, 2 * (dispatch_count + 2) * int(path_costs.get("repair_material", 0)))
 	# Manufacture the actual bounded dispatch budget plus a small O&M reserve.
 	# The previous fixed 40/20 stock target was legal but multiplied early-game
 	# mining and UI work for every two-unit frontier cargo without changing the
@@ -2926,6 +2963,12 @@ func _ensure_raw_resource_ui(main: Control, item_id: String, target_quantity: in
 					return Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= target_quantity,
 					followup_timeout)
 				if local_progress: return true
+			# LOCAL_NETWORK_PROGRESS_CONTINUES: a healthy automated source is a
+			# convergent physical supply path. Do not turn its partial batch into a
+			# remote raw-freight/O&M loop; the late-game capital expansion makes large
+			# construction feedstock batches converge in a few bounded windows.
+			if production_delta > 0 and stock_delta > 0:
+				continue
 			print("FULL_GAMEPLAY_UI_LOCAL_EXTRACTION_RECOVERY_TIMEOUT=", JSON.stringify({
 				"item_id":item_id,
 				"target":target_quantity,

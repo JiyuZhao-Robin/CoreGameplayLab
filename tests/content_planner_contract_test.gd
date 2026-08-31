@@ -14,6 +14,19 @@ func _init() -> void:
 
 func _test_content_contract(database: ContentDatabase) -> void:
 	_check(str(database.pack_metadata.get("version", "")) == "1.29.0", "content pack metadata is aligned to 1.29.0")
+	var extraction_scale: Dictionary = database.activities.get("expand_earth_extraction_network", {})
+	var extraction_scale_effects: Array = extraction_scale.get("effects", [])
+	_check(bool(extraction_scale.get("construction_project", false)) \
+			and extraction_scale_effects.any(func(effect_value):
+				var effect := effect_value as Dictionary
+				return str(effect.get("type", "")) == "upgrade_extraction_network" \
+					and str(effect.get("id", "")) == "earth_extraction_network" \
+					and int(effect.get("levels", 0)) >= 16),
+		"late-game feedstock scaling is a real Construction project that upgrades the authoritative extraction network")
+	_check(_entry_quantity(extraction_scale.get("costs", []), "heavy_structural_section") > 0 \
+			and _entry_quantity(extraction_scale.get("costs", []), "industrial_machine_tools") > 0 \
+			and _entry_quantity(extraction_scale.get("costs", []), "automated_control_core") > 0,
+		"late-game extraction scaling consumes structural, machine-tool and automation Capital Goods")
 	var capital_goods: Array = database.industry_rules.get("capital_goods", [])
 	_check(capital_goods.size() == 8, "the core contains exactly eight reusable Capital Goods")
 	for item_id_value in capital_goods:
@@ -40,6 +53,10 @@ func _test_content_contract(database: ContentDatabase) -> void:
 		if str(mode.get("id", "")) != "general_cargo" and not bool(mode.get("infrastructure_service", false)):
 			_check(not bool(mode.get("public_base_capacity", false)) and float(mode.get("ship_capacity_multiplier", 0.0)) > 0.0, "specialist service %s derives capacity from physical ships" % mode.get("id", "?"))
 	_check(bool(database.transport_modes.get("general_cargo", {}).get("public_base_capacity", false)), "limited public General Cargo preserves multi-hop new-save bootstrap")
+	var early_belt_corridor: Dictionary = database.logistics_routes.get("lunar_belt_freight", {})
+	var frontier_deployment_hub := int(database.survey_rules.get("deployment_package", {}).get("site_effects", {}).get("hub_throughput", 0))
+	_check(int(early_belt_corridor.get("freight_capacity", 0)) <= frontier_deployment_hub,
+			"the first Belt corridor can expose a route bottleneck before forcing administrative hub upgrades")
 	for project_value in database.research_projects.values():
 		var project := project_value as Dictionary
 		if not project.get("stages", []).is_empty():
