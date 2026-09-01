@@ -144,9 +144,8 @@ func validate() -> void:
 	var produced_items := {}
 	var consumed_items := {}
 	var unique_ship_grants := {}
-	# Grid deposits are deterministic production sources owned by factory worlds,
-	# not activities or ships. The bootstrap contract lists the resource types
-	# that world generation may place as fixed deposits.
+	# Grid resource fields are deterministic tile attributes owned by factory
+	# worlds, not physical entities or ship/expedition extraction targets.
 	for item_id_value in industry_rules.get("bootstrap_contract", {}).get("progression_extractable_item_ids", []):
 		produced_items[str(item_id_value)] = true
 	for forbidden_collection in [technologies, research_projects, expedition_routes, megastructures, goals]:
@@ -712,15 +711,19 @@ func _validate_factory_grid_content() -> void:
 		errors.append("factory_grid_rules must define a positive simulation step")
 	if float(factory_grid_rules.get("base_construction_capacity_per_second", -1.0)) < 0.0:
 		errors.append("factory_grid_rules must define non-negative base construction capacity")
+	var terrain_types: Dictionary = factory_grid_rules.get("terrain_types", {})
+	for terrain_id in ["MOUNTAIN", "WATER", "FOREST", "PLAIN", "DESERT"]:
+		if not terrain_types.has(terrain_id) or str(terrain_types.get(terrain_id, {}).get("color", "")).is_empty():
+			errors.append("factory_grid_rules must define terrain '%s' with a display color" % terrain_id)
 	var starter: Dictionary = factory_grid_rules.get("starter_world", {})
 	var starter_size: Dictionary = starter.get("size_tiles", {})
 	if str(starter.get("world_id", "")).is_empty() or not regions.has(str(starter.get("location_id", ""))) or int(starter_size.get("x", 0)) <= 0 or int(starter_size.get("y", 0)) <= 0:
 		errors.append("factory_grid_rules starter_world must define identity, known location and positive bounds")
-	for deposit_value in starter.get("deposits", []):
-		var deposit := deposit_value as Dictionary
-		var deposit_size: Dictionary = deposit.get("size", {})
-		if str(deposit.get("deposit_id", "")).is_empty() or not items.has(str(deposit.get("resource_id", ""))) or int(deposit_size.get("x", 0)) <= 0 or int(deposit_size.get("y", 0)) <= 0:
-			errors.append("factory starter deposit has invalid identity, resource or size")
+	for field_value in starter.get("resource_fields", []):
+		var resource_field := field_value as Dictionary
+		var field_size: Dictionary = resource_field.get("size", {})
+		if str(resource_field.get("resource_field_id", "")).is_empty() or not items.has(str(resource_field.get("resource_id", ""))) or int(field_size.get("x", 0)) <= 0 or int(field_size.get("y", 0)) <= 0:
+			errors.append("factory starter resource field has invalid identity, resource or size")
 	for entity_value in starter.get("entities", []):
 		var entity := entity_value as Dictionary
 		if str(entity.get("entity_id", "")).is_empty() or not factory_buildings.has(str(entity.get("definition_id", ""))):
@@ -748,6 +751,9 @@ func _validate_factory_grid_content() -> void:
 			"EXTRACTOR":
 				if definition.get("resource_categories", []).is_empty() or float(definition.get("mining_rate_per_second", 0.0)) <= 0.0 or int(definition.get("output_capacity", 0)) <= 0:
 					errors.append("factory extractor '%s' has incomplete extraction rules" % definition_id)
+				var coverage_loss := float(definition.get("resource_coverage_loss_per_missing_tile", -1.0))
+				if coverage_loss < 0.0 or coverage_loss > 1.0:
+					errors.append("factory extractor '%s' must define resource coverage loss in [0, 1]" % definition_id)
 			"MACHINE":
 				if definition.get("recipe_ids", []).is_empty() or float(definition.get("speed", 0.0)) <= 0.0 or int(definition.get("input_capacity", 0)) <= 0 or int(definition.get("output_capacity", 0)) <= 0:
 					errors.append("factory machine '%s' has incomplete production rules" % definition_id)

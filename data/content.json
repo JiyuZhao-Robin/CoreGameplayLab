@@ -12,15 +12,37 @@
     "tile_size_m":1,
     "generator_version":1,
     "chunk_size_tiles":64,
+    "terrain_region_scale_tiles":32,
     "simulation_step_seconds":1.0,
     "base_construction_capacity_per_second":1.0,
+    "terrain_types":{
+      "MOUNTAIN":{"color":"#6F716B","buildable":false},
+      "WATER":{"color":"#286C91","buildable":false},
+      "FOREST":{"color":"#3D7650","buildable":true},
+      "PLAIN":{"color":"#8CA66A","buildable":true},
+      "DESERT":{"color":"#BD9559","buildable":true}
+    },
+    "resource_colors":{
+      "iron_ore":"#B45F45",
+      "copper_ore":"#D98545",
+      "water_ice":"#9BD8E8",
+      "titanium_ore":"#7892A8",
+      "cobalt_ore":"#4169A6",
+      "silicate_ore":"#B9AD91",
+      "rare_earth_concentrate":"#B787D4",
+      "thorium_ore":"#7EAA54",
+      "helium_3":"#DAC46A",
+      "methane":"#6FB1A2",
+      "exotic_crystal":"#C85BCF",
+      "dark_matter":"#7657A8"
+    },
     "starter_world": {
       "world_id":"earth-surface-grid",
       "location_id":"earth_orbit",
       "size_tiles":{"x":20000000,"y":20000000},
       "seed":730201,
-      "deposits":[
-        {"deposit_id":"starter-iron-field","resource_id":"iron_ore","origin":{"x":32,"y":32},"size":{"x":24,"y":24},"grade":1.0,"potential_density":0.25,"resource_category":"solid"}
+      "resource_fields":[
+        {"resource_field_id":"starter-iron-field","resource_id":"iron_ore","origin":{"x":32,"y":32},"size":{"x":24,"y":24},"grade":1.0,"potential_density":0.25,"resource_category":"solid"}
       ],
       "entities":[
         {"entity_id":"starter-depot","definition_id":"grid_bulk_depot","origin":{"x":110,"y":32},"inventory":{"scrap_metal":12,"electronics":16}}
@@ -29,7 +51,7 @@
   },
   "factory_buildings": [
     {"id":"grid_solar_array","name":"Surface Solar Array","kind":"POWER","footprint":{"width":8,"height":8},"power_generation_kw":100,"construction_work":10,"construction_cost":[{"item":"scrap_metal","quantity":2}]},
-    {"id":"grid_surface_mine","name":"Surface Mining Field","kind":"EXTRACTOR","footprint":{"width":12,"height":12},"resource_categories":["solid"],"mining_rate_per_second":4.0,"power_demand_kw":50,"output_capacity":48,"construction_work":20,"construction_cost":[{"item":"scrap_metal","quantity":4},{"item":"electronics","quantity":1}]},
+    {"id":"grid_surface_mine","name":"Surface Mining Field","kind":"EXTRACTOR","footprint":{"width":3,"height":3},"resource_categories":["solid"],"mining_rate_per_second":4.0,"resource_coverage_loss_per_missing_tile":0.1,"power_demand_kw":50,"output_capacity":48,"construction_work":20,"construction_cost":[{"item":"scrap_metal","quantity":4},{"item":"electronics","quantity":1}]},
     {"id":"grid_arc_smelter","name":"Macro Arc Smelter","kind":"MACHINE","footprint":{"width":16,"height":12},"recipe_ids":["grid_refine_iron"],"speed":1.0,"power_demand_kw":80,"input_capacity":48,"output_capacity":32,"construction_work":25,"construction_cost":[{"item":"scrap_metal","quantity":4},{"item":"electronics","quantity":2}]},
     {"id":"grid_bulk_depot","name":"Bulk Storage Depot","kind":"STORAGE","footprint":{"width":20,"height":20},"inventory_capacity":1000,"construction_work":30,"construction_cost":[{"item":"iron_ingot","quantity":10}]},
     {"id":"grid_construction_yard","name":"Surface Construction Yard","kind":"CONSTRUCTION","footprint":{"width":24,"height":20},"construction_capacity_per_second":4.0,"power_demand_kw":40,"inventory_capacity":200,"construction_work":40,"construction_cost":[{"item":"iron_ingot","quantity":12},{"item":"electronics","quantity":4}]}

@@ -93,15 +93,15 @@ func initialize_factory_world(world_id: String, location_id: String, size_tiles:
 	return true
 
 
-func register_factory_deposit(world_id: String, deposit_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> bool:
+func register_factory_resource_field(world_id: String, resource_field_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> bool:
 	if not state.factory_worlds.has(world_id) or not content.items.has(resource_id):
 		return _reject("Unknown factory world or resource")
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	var result: Dictionary = simulation.factory_grid.add_deposit(transaction.working_state.factory_worlds[world_id], deposit_id, resource_id, origin, size, grade, potential_density, resource_category)
+	var result: Dictionary = simulation.factory_grid.add_resource_field(transaction.working_state.factory_worlds[world_id], resource_field_id, resource_id, origin, size, grade, potential_density, resource_category)
 	if not bool(result.get("ok", false)):
-		return _reject(str(result.get("reason", "Deposit generation failed")))
-	transaction.record({"type":"FactoryDepositRegistered", "world_id":world_id, "deposit_id":deposit_id, "resource_id":resource_id})
-	last_notice = "Fixed resource deposit registered: %s" % deposit_id
+		return _reject(str(result.get("reason", "Resource-field generation failed")))
+	transaction.record({"type":"FactoryResourceFieldRegistered", "world_id":world_id, "resource_field_id":resource_field_id, "resource_id":resource_id})
+	last_notice = "Tile resource field registered: %s" % resource_field_id
 	_commit_transaction(transaction)
 	return true
 
