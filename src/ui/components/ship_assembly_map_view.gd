@@ -4,6 +4,7 @@ extends GraphEdit
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const ShipPortGlyphScript = preload("res://src/ui/components/ship_port_glyph.gd")
 const ShipHullBackplaneScript = preload("res://src/ui/components/ship_hull_backplane.gd")
+const ShipHullProfiles = preload("res://src/ui/components/ship_hull_profiles.gd")
 const ShipAssemblyConnectionLayerScript = preload("res://src/ui/components/ship_assembly_connection_layer.gd")
 
 signal draft_changed(snapshot: Dictionary)
@@ -26,6 +27,10 @@ var _connection_drag_module_name := ""
 var _hovered_socket_id := ""
 var _selected_connection_key := ""
 var _visual_layer: Control
+var _hull_backplane: ShipHullBackplane
+var _hull_visual: ShipHullVisual
+var _hull_hovered := false
+var _hull_selected := false
 
 
 func _ready() -> void:
@@ -63,6 +68,8 @@ func _ready() -> void:
 	delete_nodes_request.connect(_on_delete_nodes_request)
 	end_node_move.connect(_on_node_move_finished)
 	node_selected.connect(_on_node_selected)
+	if has_signal("node_deselected"):
+		connect("node_deselected", Callable(self, "_on_node_deselected"))
 	resized.connect(_on_canvas_resized)
 	gui_input.connect(_on_canvas_gui_input)
 	scroll_offset_changed.connect(_on_scroll_offset_changed)
@@ -113,6 +120,10 @@ func clear_draft(emit_change := true) -> void:
 	_connection_drag_module_name = ""
 	_hovered_socket_id = ""
 	_selected_connection_key = ""
+	_hull_backplane = null
+	_hull_visual = null
+	_hull_hovered = false
+	_hull_selected = false
 	for child in get_children():
 		if child is GraphNode:
 			remove_child(child)
@@ -153,17 +164,27 @@ func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
 		return false
 	var kind := String(data.get("kind", ""))
 	if kind == "hull":
-		return not _entities.has(HULL_NODE_NAME)
+		# Accept the gesture so _drop_data can explain why a second hull is
+		# rejected instead of leaving the user with only a forbidden cursor.
+		return true
 	return kind == "module"
 
 
 func _drop_data(at_position: Vector2, data: Variant) -> void:
-	if not _can_drop_data(at_position, data):
+	var kind := String(data.get("kind", "")) if data is Dictionary else ""
+	if kind == "hull" and _entities.has(HULL_NODE_NAME):
 		notice_requested.emit("HULL_ALREADY_PLACED")
 		return
+	if not _can_drop_data(at_position, data):
+		return
 	var graph_position := (at_position + scroll_offset) / zoom
-	if String(data.get("kind", "")) == "hull":
+	if kind == "hull":
 		_add_hull(String(data.get("plan_id", "")), graph_position)
+		var hull_node := get_node_or_null(NodePath(HULL_NODE_NAME)) as GraphNode
+		if hull_node != null:
+			hull_node.position_offset -= hull_node.custom_minimum_size * 0.5
+			_layout_hull_socket_nodes()
+		call_deferred("fit_design")
 	else:
 		_add_module(String(data.get("definition_id", "")), graph_position)
 	_emit_draft_changed()
@@ -181,7 +202,9 @@ func _add_hull(plan_id: String, graph_position: Vector2, requested_name := HULL_
 	node.position_offset = graph_position
 	var socket_schema := plan.get("assembly_sockets", []) as Array
 	var socket_count := socket_schema.size()
-	var board_size := Vector2(350.0 + minf(100.0, maxf(0.0, float(socket_count - 5) * 12.0)), 230.0 + minf(60.0, maxf(0.0, float(socket_count - 5) * 8.0)))
+	var visual_spec := ShipHullProfiles.visual_spec(hull)
+	var board_size := ShipHullProfiles.board_size(visual_spec)
+	var ui_visual := (hull.get("ui_visual", {}) as Dictionary).duplicate(true)
 	node.custom_minimum_size = board_size
 	node.draggable = true
 	node.selectable = true
@@ -191,62 +214,61 @@ func _add_hull(plan_id: String, graph_position: Vector2, requested_name := HULL_
 	node.set_meta("entity_id", hull_id)
 	node.z_index = 3
 	var sockets: Array[Dictionary] = []
-	var summary := Label.new()
-	summary.text = String(_catalog.get("hull_summary_format")) % [String(hull.get("class", "Ship")), socket_count]
-	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	summary.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_SECONDARY)
-	summary.add_theme_font_size_override("font_size", UiTokens.font_size(11))
-	node.add_child(summary)
 	var board_surface := ShipHullBackplaneScript.new()
+	board_surface.name = "ShipHullProjection"
 	board_surface.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	board_surface.custom_minimum_size = Vector2(board_size.x - 30.0, board_size.y - 58.0)
-	board_surface.configure(UiTokens.COLOR_INFORMATION)
+	board_surface.custom_minimum_size = Vector2(board_size.x - 18.0, board_size.y - 18.0)
+	board_surface.configure(UiTokens.COLOR_INFORMATION, visual_spec, ui_visual)
+	var has_art := board_surface.has_visual_asset()
+	if has_art:
+		node.title = ""
+	else:
+		board_surface.custom_minimum_size = Vector2(board_size.x - 30.0, board_size.y - 58.0)
+		var summary := Label.new()
+		summary.text = I18n.core("ships.shipyard.projection_summary", "%s · L %.0fm × W %.0fm · MAX T%d / Ø%.0fm") % [String(_catalog.get("hull_summary_format")) % [String(hull.get("class", "Ship")), socket_count], float(visual_spec.get("length_m", 0.0)), float(visual_spec.get("beam_m", 0.0)), int(visual_spec.get("tier", 1)), ShipHullProfiles.socket_diameter_m(String(visual_spec.get("socket_size", "S")))]
+		summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		summary.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_SECONDARY)
+		summary.add_theme_font_size_override("font_size", UiTokens.font_size(11))
+		node.add_child(summary)
 	node.add_child(board_surface)
-	var special_definitions: Array[Dictionary] = []
-	var structural_definitions: Array[Dictionary] = []
-	var drive_definitions: Array[Dictionary] = []
-	var core_definitions: Array[Dictionary] = []
+	var prepared_schema: Array[Dictionary] = []
 	for socket_value in socket_schema:
 		var definition := (socket_value as Dictionary).duplicate(true)
-		match String(definition.get("mount_role", "SPECIAL")):
-			"STRUCTURAL": structural_definitions.append(definition)
-			"DRIVE": drive_definitions.append(definition)
-			"CORE": core_definitions.append(definition)
-			_: special_definitions.append(definition)
-	for flank_index in special_definitions.size():
-		var definition := special_definitions[flank_index]
-		var side := flank_index % 2
-		var row_index := flank_index / 2
-		definition["relative_position"] = Vector2(30.0 if side == 0 else board_size.x - 66.0, 58.0 + float(row_index) * 42.0)
+		if not definition.has("max_size"):
+			definition["max_size"] = String(visual_spec.get("socket_size", "S"))
+		definition["tier"] = ShipHullProfiles.size_tier(String(definition.get("max_size", "S")))
+		definition["diameter_m"] = ShipHullProfiles.socket_diameter_m(String(definition.get("max_size", "S")))
+		prepared_schema.append(definition)
+	var socket_centers := ShipHullProfiles.layout_sockets(visual_spec, prepared_schema)
+	var hull_rectangle := ShipHullProfiles.hull_rect(board_size, visual_spec)
+	for definition in prepared_schema:
+		var socket_id := String(definition.get("id", ""))
+		var socket_size := ShipHullProfiles.socket_node_size(String(definition.get("max_size", "S")))
+		var center_m := socket_centers.get(socket_id, Vector2(float(visual_spec.get("beam_m", 0.0)) * 0.5, float(visual_spec.get("length_m", 0.0)) * 0.5)) as Vector2
+		definition["relative_position"] = hull_rectangle.position + center_m * ShipHullProfiles.WORLD_SCALE - socket_size * 0.5
+		definition["major"] = String(definition.get("slot", "")) == "core" or int(definition.get("tier", 1)) >= 4
+		definition["center_m"] = center_m
 		sockets.append(_socket_record(definition))
-	for drive_index in drive_definitions.size():
-		var drive_definition := drive_definitions[drive_index]
-		var drive_x := board_size.x * 0.5 + (float(drive_index) - float(drive_definitions.size() - 1) * 0.5) * 54.0 - 18.0
-		drive_definition["relative_position"] = Vector2(drive_x, 36.0)
-		sockets.append(_socket_record(drive_definition))
-	for structural_index in structural_definitions.size():
-		var structural_definition := structural_definitions[structural_index]
-		var structural_x := board_size.x * float(structural_index + 1) / float(structural_definitions.size() + 1) - 18.0
-		structural_definition["relative_position"] = Vector2(structural_x, board_size.y - 54.0)
-		sockets.append(_socket_record(structural_definition))
-	for core_index in core_definitions.size():
-		var core_definition := core_definitions[core_index]
-		core_definition["relative_position"] = Vector2(board_size.x * 0.5 - 34.0, board_size.y * 0.5 - 22.0)
-		core_definition["major"] = true
-		sockets.append(_socket_record(core_definition))
-	_apply_node_style(node, UiTokens.COLOR_INFORMATION)
+	if has_art:
+		_apply_art_node_style(node)
+	else:
+		_apply_node_style(node, UiTokens.COLOR_INFORMATION)
 	_register_node_hover(node)
 	add_child(node)
-	_entities[String(node.name)] = {"kind":"hull", "definition_id":hull_id, "plan_id":plan_id, "sockets":sockets}
+	_hull_backplane = board_surface
+	_hull_visual = board_surface.ship_visual()
+	_entities[String(node.name)] = {"kind":"hull", "definition_id":hull_id, "plan_id":plan_id, "sockets":sockets, "visual_spec":visual_spec, "art_mode":has_art}
 	for socket in sockets:
 		_add_hull_socket_node(node, socket)
 	_refresh_socket_visuals()
+	_sync_hull_presentation()
 
 
 func _socket_record(definition: Dictionary) -> Dictionary:
 	var slot := String(definition.get("slot", "utility"))
 	var mount_role := String(definition.get("mount_role", "SPECIAL"))
-	return {"id":String(definition.get("id", "")), "slot":slot, "mount_role":mount_role, "shape":String(definition.get("shape", _slot_shape(slot, mount_role))), "relative_position":definition.get("relative_position", Vector2.ZERO), "major":bool(definition.get("major", false))}
+	var max_size := String(definition.get("max_size", "S"))
+	return {"id":String(definition.get("id", "")), "slot":slot, "mount_role":mount_role, "shape":String(definition.get("shape", _slot_shape(slot, mount_role))), "relative_position":definition.get("relative_position", Vector2.ZERO), "center_m":definition.get("center_m", Vector2.ZERO), "max_size":max_size, "tier":int(definition.get("tier", ShipHullProfiles.size_tier(max_size))), "diameter_m":float(definition.get("diameter_m", ShipHullProfiles.socket_diameter_m(max_size))), "major":bool(definition.get("major", false))}
 
 
 func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
@@ -254,11 +276,14 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	var slot := String(socket.get("slot", "utility"))
 	var shape := String(socket.get("shape", _slot_shape(slot, String(socket.get("mount_role", "")))))
 	var major := bool(socket.get("major", false))
+	var max_size := String(socket.get("max_size", "S"))
+	var tier := int(socket.get("tier", ShipHullProfiles.size_tier(max_size)))
+	var diameter_m := float(socket.get("diameter_m", ShipHullProfiles.socket_diameter_m(max_size)))
 	var socket_node := GraphNode.new()
 	socket_node.name = "ship_design_%s" % socket_id
 	socket_node.title = ""
 	socket_node.position_offset = hull_node.position_offset + (socket.get("relative_position", Vector2.ZERO) as Vector2)
-	socket_node.custom_minimum_size = Vector2(78.0, 78.0) if major else Vector2(42.0, 42.0)
+	socket_node.custom_minimum_size = ShipHullProfiles.socket_node_size(max_size)
 	socket_node.draggable = false
 	socket_node.selectable = false
 	socket_node.resizable = false
@@ -266,12 +291,13 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	socket_node.z_index = 4
 	socket_node.set_meta("entity_kind", "socket")
 	socket_node.set_meta("socket_id", socket_id)
+	socket_node.visible = true
 	var glyph_center := CenterContainer.new()
 	glyph_center.custom_minimum_size = socket_node.custom_minimum_size - Vector2(12.0, 12.0)
 	var glyph := ShipPortGlyphScript.new()
-	glyph.configure(shape, UiTokens.COLOR_BORDER_STRONG, false, "idle")
+	glyph.configure(shape, UiTokens.COLOR_BORDER_STRONG, false, "idle", tier, diameter_m)
 	glyph_center.add_child(glyph)
-	glyph.custom_minimum_size = Vector2(58.0, 58.0) if major else Vector2(24.0, 24.0)
+	glyph.custom_minimum_size = Vector2.ONE * diameter_m * ShipHullProfiles.WORLD_SCALE
 	socket_node.add_child(glyph_center)
 	socket_node.set_slot(0, true, _slot_port_type(slot, String(socket.get("mount_role", ""))), UiTokens.COLOR_BORDER_STRONG, false, 0, Color.WHITE)
 	_apply_socket_style(socket_node, UiTokens.COLOR_BORDER_STRONG, major, "idle")
@@ -280,7 +306,8 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	add_child(socket_node)
 	_socket_nodes[socket_id] = String(socket_node.name)
 	_socket_glyphs[socket_id] = glyph
-	socket_node.tooltip_text = String(_catalog.get("core_socket_format")) % (int(socket_id.get_slice("_", 2)) + 1) if slot == "core" else String(_catalog.get("socket_label_format")) % [String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), int(socket_id.get_slice("_", 2)) + 1, _slot_shape(slot)]
+	var base_tooltip := String(_catalog.get("core_socket_format")) % (int(socket_id.get_slice("_", 2)) + 1) if slot == "core" else String(_catalog.get("socket_label_format")) % [String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), int(socket_id.get_slice("_", 2)) + 1, _slot_shape(slot)]
+	socket_node.tooltip_text = I18n.core("ships.shipyard.socket_physical_scale", "%s · T%d / Ø%.0fm") % [base_tooltip, tier, diameter_m]
 
 
 func _add_module(module_id: String, graph_position: Vector2, requested_name := "") -> void:
@@ -290,6 +317,9 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 	var slot := String(module.get("slot", "utility"))
 	var mount_role := String(module.get("assembly_mount", "SPECIAL"))
 	var shape := _slot_shape(slot, mount_role)
+	var module_size := String(module.get("size", "S"))
+	var module_tier := ShipHullProfiles.size_tier(module_size)
+	var module_diameter_m := ShipHullProfiles.socket_diameter_m(module_size)
 	var node_name := requested_name
 	if node_name.is_empty():
 		node_name = "%s%04d" % [MODULE_NODE_PREFIX, _next_node_serial]
@@ -298,7 +328,7 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 	node.name = node_name
 	node.title = String(module.get("title", module_id))
 	node.position_offset = graph_position
-	node.custom_minimum_size = Vector2(210.0, 70.0)
+	node.custom_minimum_size = Vector2(210.0, maxf(70.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE + 18.0))
 	node.draggable = true
 	node.selectable = true
 	node.resizable = false
@@ -310,20 +340,20 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 	row.custom_minimum_size.x = 180.0
 	row.add_theme_constant_override("separation", 7)
 	var label := Label.new()
-	label.text = String(_catalog.get("module_label_format")) % [String(module.get("size", "S")), String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), shape]
+	label.text = I18n.core("ships.shipyard.module_physical_scale", "%s · T%d / Ø%.0fm") % [String(_catalog.get("module_label_format")) % [module_size, String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), shape], module_tier, module_diameter_m]
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.add_theme_color_override("font_color", _slot_tone(slot))
 	label.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	row.add_child(label)
 	var glyph_frame := PanelContainer.new()
-	glyph_frame.custom_minimum_size = Vector2(34.0, 34.0)
+	glyph_frame.custom_minimum_size = Vector2.ONE * maxf(34.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE + 6.0)
 	var glyph_frame_style := UiTokens.panel_style(UiTokens.COLOR_INSET, _slot_tone(slot).darkened(0.32), 5)
 	glyph_frame_style.shadow_color = Color(_slot_tone(slot), 0.10)
 	glyph_frame_style.shadow_size = 4
 	glyph_frame.add_theme_stylebox_override("panel", glyph_frame_style)
 	var glyph := ShipPortGlyphScript.new()
-	glyph.custom_minimum_size = Vector2(28.0, 28.0)
-	glyph.configure(shape, _slot_tone(slot), true, "idle")
+	glyph.custom_minimum_size = Vector2.ONE * maxf(28.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE)
+	glyph.configure(shape, _slot_tone(slot), true, "idle", module_tier, module_diameter_m)
 	glyph_frame.add_child(glyph)
 	row.add_child(glyph_frame)
 	node.add_child(row)
@@ -331,7 +361,7 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 	_apply_node_style(node, _slot_tone(slot))
 	_register_node_hover(node)
 	add_child(node)
-	_entities[String(node.name)] = {"kind":"module", "definition_id":module_id, "slot":slot, "mount_role":mount_role, "shape":shape}
+	_entities[String(node.name)] = {"kind":"module", "definition_id":module_id, "slot":slot, "mount_role":mount_role, "shape":shape, "size":module_size, "tier":module_tier, "diameter_m":module_diameter_m}
 	_module_glyphs[String(node.name)] = glyph
 
 
@@ -381,13 +411,19 @@ func _on_connection_request(from_node: StringName, from_port: int, to_node: Stri
 	if String(module_data.get("slot", "")) != String(socket.get("slot", "")) or String(module_data.get("mount_role", "")) != String(socket.get("mount_role", "")) or String(module_data.get("shape", "")) != String(socket.get("shape", "")):
 		notice_requested.emit("PORT_SHAPE_MISMATCH")
 		return
+	if int(module_data.get("tier", 1)) > int(socket.get("tier", 1)):
+		notice_requested.emit("PORT_SIZE_MISMATCH")
+		return
 	for link in _links:
 		if String(link.get("module_node_id", "")) == module_node_id or String(link.get("socket_id", "")) == String(socket.get("id", "")):
 			notice_requested.emit("PORT_ALREADY_OCCUPIED")
 			return
 	connect_node(module_node_id, 0, String(socket_node.name), 0)
-	_links.append({"module_node_id":module_node_id, "socket_id":String(socket.get("id", "")), "slot":String(socket.get("slot", "")), "shape":String(socket.get("shape", ""))})
+	_links.append({"module_node_id":module_node_id, "socket_id":String(socket.get("id", "")), "slot":String(socket.get("slot", "")), "shape":String(socket.get("shape", "")), "max_size":String(socket.get("max_size", "S")), "tier":int(socket.get("tier", 1))})
 	_refresh_socket_visuals()
+	var installed_glyph = _socket_glyphs.get(socket_id)
+	if is_instance_valid(installed_glyph) and installed_glyph.has_method("flash_install"):
+		installed_glyph.call("flash_install")
 	_emit_draft_changed()
 
 
@@ -469,12 +505,14 @@ func _on_connection_drag_started(from_node: StringName, from_port: int, is_outpu
 	_connection_drag_module_name = node_name if is_output and from_port == 0 and String(entity.get("kind", "")) == "module" else ""
 	_hovered_socket_id = ""
 	_refresh_socket_visuals()
+	_sync_hull_presentation()
 
 
 func _on_connection_drag_ended() -> void:
 	_connection_drag_module_name = ""
 	_hovered_socket_id = ""
 	_refresh_socket_visuals()
+	_sync_hull_presentation()
 
 
 func _refresh_socket_visuals() -> void:
@@ -490,7 +528,7 @@ func _refresh_socket_visuals() -> void:
 		var tone := _slot_tone(String(socket.get("slot", "utility"))) if is_connected or is_drag_compatible else UiTokens.COLOR_BORDER_STRONG
 		var glyph = _socket_glyphs.get(socket_id)
 		if is_instance_valid(glyph):
-			glyph.configure(String(socket.get("shape", "SQUARE")), tone, is_connected, state)
+			glyph.configure(String(socket.get("shape", "SQUARE")), tone, is_connected, state, int(socket.get("tier", 1)), float(socket.get("diameter_m", 5.0)))
 		var socket_node := get_node_or_null(NodePath(_socket_node_name(socket_id))) as GraphNode
 		if socket_node != null:
 			socket_node.set_slot(0, true, _slot_port_type(String(socket.get("slot", "utility")), String(socket.get("mount_role", ""))), tone, false, 0, Color.WHITE)
@@ -505,7 +543,7 @@ func _refresh_socket_visuals() -> void:
 		var glyph = _module_glyphs.get(node_name)
 		var state := "origin" if node_name == _connection_drag_module_name else ("connected" if bool(connected_modules.get(node_name, false)) else "idle")
 		if is_instance_valid(glyph):
-			glyph.configure(String(module.get("shape", "SQUARE")), _slot_tone(String(module.get("slot", "utility"))), state == "connected" or state == "origin", state)
+			glyph.configure(String(module.get("shape", "SQUARE")), _slot_tone(String(module.get("slot", "utility"))), state == "connected" or state == "origin", state, int(module.get("tier", 1)), float(module.get("diameter_m", 5.0)))
 		var module_node := get_node_or_null(NodePath(node_name)) as GraphNode
 		if module_node != null:
 			_apply_node_style(module_node, _slot_tone(String(module.get("slot", "utility"))))
@@ -518,7 +556,8 @@ func _socket_matches_dragged_module(socket: Dictionary) -> bool:
 	var module := _entities.get(_connection_drag_module_name, {}) as Dictionary
 	return String(module.get("slot", "")) == String(socket.get("slot", "")) \
 		and String(module.get("mount_role", "")) == String(socket.get("mount_role", "")) \
-		and String(module.get("shape", "")) == String(socket.get("shape", ""))
+		and String(module.get("shape", "")) == String(socket.get("shape", "")) \
+		and int(module.get("tier", 1)) <= int(socket.get("tier", 1))
 
 
 func _get_connection_line(from_position: Vector2, to_position: Vector2) -> PackedVector2Array:
@@ -674,6 +713,18 @@ func _apply_node_style(node: GraphNode, tone: Color) -> void:
 	node.add_theme_font_size_override("title_font_size", UiTokens.font_size(12))
 
 
+func _apply_art_node_style(node: GraphNode) -> void:
+	var empty := StyleBoxEmpty.new()
+	empty.set_content_margin_all(0.0)
+	node.add_theme_stylebox_override("panel", empty)
+	node.add_theme_stylebox_override("panel_selected", empty)
+	node.add_theme_stylebox_override("titlebar", empty)
+	node.add_theme_stylebox_override("titlebar_selected", empty)
+	node.add_theme_color_override("title_color", Color.TRANSPARENT)
+	node.add_theme_color_override("title_selected_color", Color.TRANSPARENT)
+	node.add_theme_font_size_override("title_font_size", 1)
+
+
 func _apply_socket_style(node: GraphNode, tone: Color, major: bool, state: String) -> void:
 	var surface_alpha := 0.96 if major else 0.82
 	var border := tone.darkened(0.28)
@@ -703,6 +754,11 @@ func _on_visual_node_hover_changed(node: GraphNode, hovered: bool) -> void:
 		return
 	node.set_meta("visual_hovered", hovered)
 	var entity := _entities.get(String(node.name), {}) as Dictionary
+	if bool(entity.get("art_mode", false)):
+		_hull_hovered = hovered
+		_apply_art_node_style(node)
+		_sync_hull_presentation()
+		return
 	var tone := UiTokens.COLOR_INFORMATION if String(entity.get("kind", "")) == "hull" else _slot_tone(String(entity.get("slot", "utility")))
 	_apply_node_style(node, tone)
 
@@ -756,6 +812,7 @@ func _distance_to_segment(point: Vector2, start: Vector2, finish: Vector2) -> fl
 
 
 func _on_zoom_changed(_value: float) -> void:
+	_sync_hull_presentation()
 	_refresh_visual_layer()
 
 
@@ -776,6 +833,10 @@ func _remove_hull_socket_nodes() -> void:
 			socket_node.queue_free()
 	_socket_nodes.clear()
 	_socket_glyphs.clear()
+	_hull_backplane = null
+	_hull_visual = null
+	_hull_hovered = false
+	_hull_selected = false
 
 
 func _layout_hull_socket_nodes() -> void:
@@ -816,7 +877,9 @@ func fit_design() -> void:
 	# rather than the closest partial crop allowed by a fixed minimum zoom.
 	zoom_min = minf(DEFAULT_ZOOM_MIN, maxf(0.02, required_zoom))
 	zoom = clampf(required_zoom, zoom_min, minf(1.0, zoom_max))
-	scroll_offset = bounds.get_center() - size / (2.0 * zoom)
+	# GraphEdit's scroll offset is expressed in rendered canvas pixels.  Center
+	# the world-space design after applying zoom, matching drop/hit-test math.
+	scroll_offset = bounds.get_center() * zoom - size * 0.5
 	_refresh_visual_layer()
 
 
@@ -843,4 +906,18 @@ func _on_canvas_resized() -> void:
 
 func _on_node_selected(node: Node) -> void:
 	if node.has_meta("entity_kind"):
+		if String(node.get_meta("entity_kind", "")) == "hull":
+			_hull_selected = true
+			_sync_hull_presentation()
 		entity_selected.emit(String(node.get_meta("entity_kind")), String(node.get_meta("entity_id")))
+
+
+func _on_node_deselected(node: Node) -> void:
+	if node.has_meta("entity_kind") and String(node.get_meta("entity_kind", "")) == "hull":
+		_hull_selected = false
+		_sync_hull_presentation()
+
+
+func _sync_hull_presentation() -> void:
+	if is_instance_valid(_hull_backplane):
+		_hull_backplane.set_presentation_state(_hull_hovered, _hull_selected, zoom, 1.0 if not _connection_drag_module_name.is_empty() else 0.0)

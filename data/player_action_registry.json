@@ -63,54 +63,6 @@
       "verified": true
     },
     {
-      "actionId": "DEVELOP_SITE",
-      "domainCommand": "Game.queue_site_development",
-      "requiredContext": ["Surveyed resource site", "permanent Extraction Method", "construction slot"],
-      "uiEntryPoints": ["Location > Resources > Develop Site (src/ui/main.gd:555-564)"],
-      "unlockedBy": ["site Surveyed", "Extraction Method requirements met"],
-      "expectedSuccessResult": "A material-backed SITE_DEVELOPMENT project enters the shared Construction queue.",
-      "expectedFailureReasons": ["SITE_NOT_SURVEYED", "METHOD_UNAVAILABLE", "PROJECT_SLOT_FULL", "CONSTRUCTION_REQUIREMENTS"],
-      "saveRelevant": true,
-      "coreGameplay": true,
-      "verified": true
-    },
-    {
-      "actionId": "START_EXTRACTION",
-      "domainCommand": "Game.start_extraction_operation",
-      "requiredContext": ["available permanent mining site", "docked Mining Fleet ship"],
-      "uiEntryPoints": ["Frontier > Mining Site > Start Mining (src/ui/main.gd:1099)"],
-      "unlockedBy": ["site discovered or developed", "Mining Fleet assigned"],
-      "expectedSuccessResult": "A mining runtime starts and exclusively assigns the selected physical ship.",
-      "expectedFailureReasons": ["MINING_SITE_UNAVAILABLE", "MINING_SHIP_UNAVAILABLE", "COMMAND_CAPACITY", "ACTIVITY_REQUIREMENTS"],
-      "saveRelevant": true,
-      "coreGameplay": true,
-      "verified": true
-    },
-    {
-      "actionId": "STOP_EXTRACTION",
-      "domainCommand": "Game.stop_mining_operation",
-      "requiredContext": ["running mining slot"],
-      "uiEntryPoints": ["Frontier > Active Mining > Stop Mining (src/ui/main.gd:1095)"],
-      "unlockedBy": [],
-      "expectedSuccessResult": "The mining runtime is reset and its physical ships are released.",
-      "expectedFailureReasons": ["INVALID_SLOT", "NO_ACTIVE_OPERATION"],
-      "saveRelevant": true,
-      "coreGameplay": true,
-      "verified": true
-    },
-    {
-      "actionId": "INTEGRATE_EXTRACTION_SITE",
-      "domainCommand": "Game.integrate_mining_site",
-      "requiredContext": ["developed site", "compatible Extraction Network"],
-      "uiEntryPoints": ["Frontier > Mining Site > Integrate Network (src/ui/main.gd:1111)"],
-      "unlockedBy": ["network constructed", "technology and site mastery met"],
-      "expectedSuccessResult": "The site becomes a persistent member of the selected regional Extraction Network.",
-      "expectedFailureReasons": ["NETWORK_LOCKED", "TECHNOLOGY_SHORTAGE", "MASTERY_SHORTAGE", "GRADE_INCOMPATIBLE"],
-      "saveRelevant": true,
-      "coreGameplay": true,
-      "verified": true
-    },
-    {
       "actionId": "START_PRODUCTION",
       "domainCommand": "Game.start_industry_operation",
       "requiredContext": ["Production Line", "Factory", "Production Device", "Production Method"],
@@ -476,30 +428,6 @@
       "verified": true
     },
     {
-      "actionId": "ASSIGN_CONSTRUCTION_SUPPORT",
-      "domainCommand": "Game.assign_ship_to_construction_support",
-      "requiredContext": ["unassigned docked ship", "construction_support capability"],
-      "uiEntryPoints": ["Ships > Roster > Assign Construction Support (src/ui/main.gd:2096-2100)"],
-      "unlockedBy": ["compatible ship loadout"],
-      "expectedSuccessResult": "The physical ship is exclusively assigned and contributes normal location Construction support.",
-      "expectedFailureReasons": ["SHIP_UNAVAILABLE", "CAPABILITY_MISSING", "LOCATION_INVALID"],
-      "saveRelevant": true,
-      "coreGameplay": true,
-      "verified": true
-    },
-    {
-      "actionId": "RELEASE_CONSTRUCTION_SUPPORT",
-      "domainCommand": "Game.release_ship_from_construction_support",
-      "requiredContext": ["ship currently assigned to Construction support"],
-      "uiEntryPoints": ["Ships > Roster > Release Construction Support (src/ui/main.gd:2092-2095)"],
-      "unlockedBy": [],
-      "expectedSuccessResult": "The ship returns to an unassigned docked state.",
-      "expectedFailureReasons": ["SHIP_NOT_ASSIGNED"],
-      "saveRelevant": true,
-      "coreGameplay": true,
-      "verified": true
-    },
-    {
       "actionId": "START_RESEARCH",
       "domainCommand": "Game.start_research_project",
       "requiredContext": ["available R&D Program", "Research facility and capacity"],
@@ -573,11 +501,11 @@
     },
     {
       "actionId": "ASSIGN_SHIP",
-      "domainCommand": "Game.set_ship_fleet_assignment",
-      "requiredContext": ["operational docked ship", "target Mining or Expedition Fleet"],
-      "uiEntryPoints": ["Ships > Roster > Standby/Mining/Expedition (src/ui/main.gd:2082-2089)"],
+      "domainCommand": "Game.set_ship_formation_assignment",
+      "requiredContext": ["operational docked ship", "target tactical formation or standby"],
+      "uiEntryPoints": ["Ships > Roster > Standby/Join Tactical Formation (src/ui/main.gd:3146-3154)"],
       "unlockedBy": [],
-      "expectedSuccessResult": "The physical ship has one exclusive persisted fleet assignment.",
+      "expectedSuccessResult": "The physical ship has one exclusive persisted tactical formation assignment.",
       "expectedFailureReasons": ["SHIP_MISSING", "SHIP_NOT_DOCKED", "FLEET_ACTIVE", "COMMAND_CAPACITY", "MAINTENANCE_NOT_ACTIVE"],
       "saveRelevant": true,
       "coreGameplay": true,

@@ -2,9 +2,12 @@ class_name ShipAssemblyConnectionLayer
 extends Control
 
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
+const ANIMATION_STEP := 1.0 / 25.0
 
 var _graph: GraphEdit
 var _visual_phase := 0.0
+var _animation_accumulator := 0.0
+var _route_cache := {}
 
 
 func configure(graph: GraphEdit) -> void:
@@ -17,7 +20,11 @@ func configure(graph: GraphEdit) -> void:
 
 
 func _process(delta: float) -> void:
-	_visual_phase = fposmod(_visual_phase + delta, 120.0)
+	_animation_accumulator += delta
+	if _animation_accumulator < ANIMATION_STEP:
+		return
+	_visual_phase = fposmod(_visual_phase + _animation_accumulator, 240.0)
+	_animation_accumulator = 0.0
 	queue_redraw()
 
 
@@ -25,6 +32,7 @@ func refresh() -> void:
 	if not is_instance_valid(_graph):
 		return
 	var links := _graph.get("_links") as Array
+	_route_cache.clear()
 	set_process(not links.is_empty() or not String(_graph.get("_connection_drag_module_name")).is_empty())
 	queue_redraw()
 
@@ -62,7 +70,8 @@ func _draw_established_connections() -> void:
 	var selected_key := String(_graph.get("_selected_connection_key"))
 	for link_value in links:
 		var link := link_value as Dictionary
-		var world_path := _graph.call("_world_path_for_link", link) as PackedVector2Array
+		var route := _cached_route(link)
+		var world_path := route.get("path", PackedVector2Array()) as PackedVector2Array
 		var path := _world_to_screen(world_path)
 		if path.size() < 2:
 			continue
@@ -75,17 +84,23 @@ func _draw_established_connections() -> void:
 		draw_polyline(path, Color(tone, 0.18 if not selected else 0.32), width + 3.0, true)
 		draw_polyline(path, tone.lightened(0.14) if selected else tone, width, true)
 		_draw_connection_arrow(path, tone.lightened(0.18), width)
-		_draw_connection_packets(path, link, tone, selected)
+		_draw_connection_packet(route, link, tone, selected)
 
 
-func _draw_connection_packets(path: PackedVector2Array, link: Dictionary, tone: Color, selected: bool) -> void:
-	var seed := float(abs(String(link.get("module_node_id", "")).hash()) % 997) / 997.0
-	var packet_count := 2 if selected else 1
-	for packet_index in packet_count:
-		var progress := fposmod(seed + _visual_phase * 0.18 + float(packet_index) / float(packet_count), 1.0)
-		var position := _sample_path(path, progress)
-		draw_circle(position, 5.0 if selected else 4.0, Color(tone, 0.10))
-		draw_circle(position, 2.4 if selected else 1.9, tone.lightened(0.28))
+func _draw_connection_packet(route: Dictionary, link: Dictionary, tone: Color, selected: bool) -> void:
+	var stable_id := "%s>%s" % [String(link.get("module_node_id", "")), String(link.get("socket_id", ""))]
+	var seed := float(abs(stable_id.hash()) % 4093) / 4093.0
+	var cycle_seconds := 5.8 if selected else 7.4
+	var active_fraction := 0.68 if selected else 0.48
+	var cycle := fposmod(_visual_phase / cycle_seconds + seed, 1.0)
+	if cycle > active_fraction:
+		return
+	var progress := cycle / active_fraction
+	var envelope := smoothstep(0.0, 0.12, progress) * (1.0 - smoothstep(0.82, 1.0, progress))
+	var world_position := _sample_cached_route(route, progress)
+	var position := world_position * _graph.zoom - _graph.scroll_offset
+	draw_circle(position, 5.0 if selected else 4.0, Color(tone, 0.075 * envelope))
+	draw_circle(position, 2.2 if selected else 1.7, Color(tone.lightened(0.22), 0.72 * envelope))
 
 
 func _draw_connection_arrow(path: PackedVector2Array, tone: Color, width: float) -> void:
@@ -161,6 +176,40 @@ func _sample_path(path: PackedVector2Array, progress: float) -> Vector2:
 		if target <= segment:
 			return path[index].lerp(path[index + 1], target / maxf(segment, 0.001))
 		target -= segment
+	return path[path.size() - 1]
+
+
+func _cached_route(link: Dictionary) -> Dictionary:
+	var key := "%s>%s" % [String(link.get("module_node_id", "")), String(link.get("socket_id", ""))]
+	if _route_cache.has(key):
+		return _route_cache[key] as Dictionary
+	var path := _graph.call("_world_path_for_link", link) as PackedVector2Array
+	var cumulative := PackedFloat32Array()
+	cumulative.resize(path.size())
+	var total := 0.0
+	for index in range(1, path.size()):
+		total += path[index - 1].distance_to(path[index])
+		cumulative[index] = total
+	var route := {"path":path, "cumulative":cumulative, "total":total}
+	_route_cache[key] = route
+	return route
+
+
+func _sample_cached_route(route: Dictionary, progress: float) -> Vector2:
+	var path := route.get("path", PackedVector2Array()) as PackedVector2Array
+	var cumulative := route.get("cumulative", PackedFloat32Array()) as PackedFloat32Array
+	var total := float(route.get("total", 0.0))
+	if path.is_empty():
+		return Vector2.ZERO
+	if total <= 0.001 or cumulative.size() != path.size():
+		return path[0]
+	var target := clampf(progress, 0.0, 1.0) * total
+	for index in range(1, path.size()):
+		if target > cumulative[index]:
+			continue
+		var previous_length := cumulative[index - 1]
+		var segment_length := maxf(0.001, cumulative[index] - previous_length)
+		return path[index - 1].lerp(path[index], (target - previous_length) / segment_length)
 	return path[path.size() - 1]
 
 

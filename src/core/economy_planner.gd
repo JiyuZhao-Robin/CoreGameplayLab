@@ -23,36 +23,30 @@ func production_dependency_graph() -> Dictionary:
 	for item_id_value in content.items.keys():
 		var item_id := str(item_id_value)
 		nodes["product:%s" % item_id] = {"id":"product:%s" % item_id, "kind":"PRODUCT", "definition_id":item_id}
-	for activity_value in content.activities.values():
-		var method := activity_value as Dictionary
-		if str(method.get("domain", "")) != "industry" or not bool(method.get("repeat", true)):
-			continue
-		var method_id := str(method.get("id", ""))
-		var method_node := "method:%s" % method_id
-		nodes[method_node] = {"id":method_node, "kind":"PRODUCTION_METHOD", "definition_id":method_id}
-		var facility_id := str(method.get("facility", ""))
-		var facility_node := "factory:%s" % facility_id
-		nodes[facility_node] = {"id":facility_node, "kind":"FACTORY", "definition_id":facility_id}
-		edges.append({"from":method_node, "to":facility_node, "type":"REQUIRES"})
-		for capability_value in method.get("required_facility_capabilities", []):
-			var capability_id := str(capability_value)
-			var device_node := "device:%s:%s" % [facility_id, capability_id]
-			nodes[device_node] = {"id":device_node, "kind":"PRODUCTION_DEVICE", "definition_id":capability_id, "facility_id":facility_id}
-			edges.append({"from":method_node, "to":device_node, "type":"REQUIRES"})
-		for cost_value in method.get("costs", []):
-			var cost := cost_value as Dictionary
-			edges.append({"from":method_node, "to":"product:%s" % cost.get("item", ""), "type":"CONSUMES", "quantity":cost.get("quantity", 0)})
-		for reward_value in method.get("rewards", []):
-			var reward := reward_value as Dictionary
-			var product_id := str(reward.get("item", ""))
-			edges.append({"from":"product:%s" % product_id, "to":method_node, "type":"PRODUCED_BY", "quantity":reward.get("quantity", 0)})
+	for recipe_value in content.factory_recipes.values():
+		var recipe := recipe_value as Dictionary
+		var recipe_id := str(recipe.get("id", ""))
+		var recipe_node := "recipe:%s" % recipe_id
+		nodes[recipe_node] = {"id":recipe_node, "kind":"FACTORY_RECIPE", "definition_id":recipe_id}
+		for building_id_value in _compatible_building_ids(recipe_id):
+			var building_id := str(building_id_value)
+			var building_node := "building:%s" % building_id
+			nodes[building_node] = {"id":building_node, "kind":"FACTORY_BUILDING", "definition_id":building_id}
+			edges.append({"from":recipe_node, "to":building_node, "type":"REQUIRES"})
+		for input_value in recipe.get("inputs", []):
+			var input := input_value as Dictionary
+			edges.append({"from":recipe_node, "to":"product:%s" % input.get("item", ""), "type":"CONSUMES", "quantity":input.get("quantity", 0)})
+		for output_value in recipe.get("outputs", []):
+			var output := output_value as Dictionary
+			var product_id := str(output.get("item", ""))
+			edges.append({"from":"product:%s" % product_id, "to":recipe_node, "type":"PRODUCED_BY", "quantity":output.get("quantity", 0)})
 			var product_producers: Array = producers.get(product_id, [])
-			product_producers.append(method_id)
+			product_producers.append(recipe_id)
 			producers[product_id] = product_producers
-		for support in ["power", "cooling", "storage", "logistics"]:
+		for support in ["power", "storage", "cargo_links"]:
 			var infrastructure_node := "infrastructure:%s" % support
 			nodes[infrastructure_node] = {"id":infrastructure_node, "kind":"INFRASTRUCTURE_REQUIREMENT", "definition_id":support}
-			edges.append({"from":method_node, "to":infrastructure_node, "type":"REQUIRES"})
+			edges.append({"from":recipe_node, "to":infrastructure_node, "type":"REQUIRES"})
 	_dependency_graph_cache = {"nodes":nodes, "edges":edges, "producers":producers, "cycle_policy":"EXTERNAL_CREDIT"}
 	return _dependency_graph_cache
 
@@ -77,7 +71,7 @@ func _expand_upstream(product_id: String, graph: Dictionary, nodes: Dictionary, 
 	next_stack.append(product_id)
 	for method_id_value in graph.get("producers", {}).get(product_id, []):
 		var method_id := str(method_id_value)
-		var method_node := "method:%s" % method_id
+		var method_node := "recipe:%s" % method_id
 		nodes[method_node] = graph.get("nodes", {}).get(method_node, {})
 		for edge_value in graph.get("edges", []):
 			var edge := edge_value as Dictionary
@@ -97,53 +91,57 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 	for item_id_value in content.items.keys():
 		var item_id := str(item_id_value)
 		rows[item_id] = _empty_economy_row(state, location_id, item_id, storage_snapshot)
-	for runtime_value in state.mining_operations + state.industrial_operations:
-		var runtime := runtime_value as Dictionary
-		var domain_id := str(runtime.get("domain", ""))
-		if domain_id not in ["mining", "industry"] or str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"]:
+	for world_id_value in state.factory_worlds.keys():
+		var world_id := str(world_id_value)
+		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
+		if str(world.get("location_id", "")) != location_id:
 			continue
-		var runtime_location: String = str(simulation._runtime_inventory_location_id(state, domain_id, runtime))
-		if runtime_location != location_id:
-			continue
-		var method: Dictionary = content.activities.get(str(runtime.get("activity_id", "")), {})
-		if method.is_empty():
-			continue
-		var cycles_per_hour := 0.0
-		if str(runtime.get("status", "")) == "RUNNING":
-			var snapshot := runtime.duplicate(true)
-			var duration: float = float(simulation.effective_duration_ms(state, domain_id, method, snapshot))
-			if duration != INF and duration > 0.0:
-				cycles_per_hour = 3600000.0 / duration
-		var productivity: float = 1.0 + float(simulation.activity_productivity_bonus(state, domain_id, method, runtime))
-		for reward_value in method.get("rewards", []):
-			var reward := reward_value as Dictionary
-			var product_id := str(reward.get("item", ""))
-			rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + float(reward.get("quantity", 0)) * cycles_per_hour * productivity
-			if str(runtime.get("status", "")) == "BLOCKED":
-				rows[product_id]["blocked_sources"].append({"source_id":runtime.get("line_id", runtime.get("site_id", "")), "method_id":method.get("id", ""), "blocker":simulation.blocker_diagnostic(state, domain_id, runtime)})
-		var effective_cycle_costs: Dictionary = simulation.industry_cycle_costs(state, runtime, method, false)
-		for input_id_value in effective_cycle_costs.keys():
-			var input_id := str(input_id_value)
-			rows[input_id]["production_consumption_rate"] = float(rows[input_id].get("production_consumption_rate", 0.0)) + float(effective_cycle_costs.get(input_id, 0)) * cycles_per_hour
-	for network_id_value in state.extraction_network_states.keys():
-		var network_id := str(network_id_value)
-		var runtime: Dictionary = state.extraction_network_states.get(network_id, {})
-		var network: Dictionary = content.extraction_networks.get(network_id, {})
-		if str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED_OUTPUT"] or network.is_empty():
-			continue
-		for site_id_value in runtime.get("integrated_site_ids", []):
-			var site: Dictionary = content.mining_sites.get(str(site_id_value), {})
-			var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
-			if str(mining_location.get("region", "")) != location_id:
-				continue
-			var product_id := str(mining_location.get("raw_material", ""))
-			var cycles_per_hour: float = 3600000.0 / float(simulation.extraction_network_cycle_duration_ms(network))
-			if str(runtime.get("status", "")) == "RUNNING":
-				var nominal_rate := float(network.get("quantity_per_site", 1)) * float(runtime.get("level", 1)) * cycles_per_hour
-				var sustainable_rate: float = float(simulation.extraction_site_sustainable_potential(state, str(site_id_value))) * float(simulation.simulation_speed_multiplier("mining"))
-				rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + minf(nominal_rate, sustainable_rate)
-			else:
-				rows[product_id]["blocked_sources"].append({"source_id":network_id, "blocker":{"primary_reason":"STORAGE_FULL", "location_id":location_id}})
+		for entity_id_value in world.get("entities", {}).keys():
+			var entity_id := str(entity_id_value)
+			var entity: Dictionary = world.get("entities", {}).get(entity_id_value, {})
+			for field in ["inventory", "inputs", "outputs"]:
+				for item_id_value in entity.get(field, {}).keys():
+					var item_id := str(item_id_value)
+					if rows.has(item_id):
+						var quantity := maxi(0, int(entity.get(field, {}).get(item_id_value, 0)))
+						rows[item_id]["stock"] = int(rows[item_id].get("stock", 0)) + quantity
+						rows[item_id]["on_hand"] = int(rows[item_id].get("on_hand", 0)) + quantity
+						rows[item_id]["available"] = int(rows[item_id].get("available", 0)) + quantity
+						rows[item_id]["factory_on_hand"] = int(rows[item_id].get("factory_on_hand", 0)) + quantity
+			match str(entity.get("kind", "")):
+				"EXTRACTOR":
+					var deposit := _deposit_for_extractor(world, entity_id)
+					var product_id := str(deposit.get("resource_id", ""))
+					if product_id.is_empty() or not rows.has(product_id):
+						continue
+					rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + maxf(0.0, float(entity.get("actual_rate", 0.0))) * 3600.0
+					_append_factory_blocker(rows[product_id], world_id, entity)
+				"MACHINE":
+					var recipe: Dictionary = content.factory_recipes.get(str(entity.get("recipe_id", "")), {})
+					if recipe.is_empty():
+						continue
+					var cycles_per_hour := maxf(0.0, float(entity.get("actual_rate", 0.0))) * 3600.0
+					for output_value in recipe.get("outputs", []):
+						var output := output_value as Dictionary
+						var product_id := str(output.get("item", ""))
+						if rows.has(product_id):
+							rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + float(output.get("quantity", 0.0)) * cycles_per_hour
+							_append_factory_blocker(rows[product_id], world_id, entity)
+					for input_value in recipe.get("inputs", []):
+						var input := input_value as Dictionary
+						var input_id := str(input.get("item", ""))
+						if rows.has(input_id):
+							rows[input_id]["production_consumption_rate"] = float(rows[input_id].get("production_consumption_rate", 0.0)) + float(input.get("quantity", 0.0)) * cycles_per_hour
+		for order_value in world.get("construction_orders", {}).values():
+			var order := order_value as Dictionary
+			for item_id_value in order.get("delivered_items", {}).keys():
+				var item_id := str(item_id_value)
+				if rows.has(item_id):
+					var quantity := maxi(0, int(order.get("delivered_items", {}).get(item_id_value, 0)))
+					rows[item_id]["stock"] = int(rows[item_id].get("stock", 0)) + quantity
+					rows[item_id]["on_hand"] = int(rows[item_id].get("on_hand", 0)) + quantity
+					rows[item_id]["reserved"] = int(rows[item_id].get("reserved", 0)) + quantity
+					rows[item_id]["construction_staging"] = int(rows[item_id].get("construction_staging", 0)) + quantity
 	for demand_value in state.demand_registry.get("sources", {}).values():
 		var demand := demand_value as Dictionary
 		if str(demand.get("location_id", "")) != location_id:
@@ -177,12 +175,24 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 	return {"location_id":location_id, "products":result, "storage":storage_snapshot, "generated_at_ms":int(state.total_elapsed_ms)}
 
 
+func _append_factory_blocker(row: Dictionary, world_id: String, entity: Dictionary) -> void:
+	var status := str(entity.get("status", "IDLE"))
+	if status in ["RUNNING", "POWER_LIMITED", "IDLE"]:
+		return
+	row["blocked_sources"].append({
+		"source_id":str(entity.get("id", "")),
+		"world_id":world_id,
+		"method_id":str(entity.get("recipe_id", "")),
+		"blocker":{"primary_reason":status, "world_id":world_id, "entity_id":str(entity.get("id", ""))}
+	})
+
+
 func _empty_economy_row(state: SpaceGameState, location_id: String, item_id: String, storage: Dictionary) -> Dictionary:
 	var storage_class: String = str(simulation.storage_class_for_item(item_id))
 	var class_row: Dictionary = storage.get("classes", {}).get(storage_class, {})
 	var on_hand := state.item_quantity(item_id, location_id)
 	var available := state.available_item_quantity(item_id, location_id)
-	return {"product_id":item_id, "stock":on_hand, "on_hand":on_hand, "reserved":maxi(0, on_hand - available), "available":available, "storage_class":storage_class, "storage_capacity":class_row.get("capacity", 0.0), "free_storage":class_row.get("free", 0.0), "storage_utilization":class_row.get("utilization", 0.0), "production_rate":0.0, "production_consumption_rate":0.0, "continuous_demand_rate":0.0, "committed_demand":0.0, "import_rate":0.0, "export_rate":0.0, "net_rate":0.0, "stock_coverage_hours":INF, "demand_sources":[], "blocked_sources":[], "status":"STABLE"}
+	return {"product_id":item_id, "stock":on_hand, "on_hand":on_hand, "location_on_hand":on_hand, "factory_on_hand":0, "construction_staging":0, "reserved":maxi(0, on_hand - available), "available":available, "storage_class":storage_class, "storage_capacity":class_row.get("capacity", 0.0), "free_storage":class_row.get("free", 0.0), "storage_utilization":class_row.get("utilization", 0.0), "production_rate":0.0, "production_consumption_rate":0.0, "continuous_demand_rate":0.0, "committed_demand":0.0, "import_rate":0.0, "export_rate":0.0, "net_rate":0.0, "stock_coverage_hours":INF, "demand_sources":[], "blocked_sources":[], "status":"STABLE"}
 
 
 func _finalize_economy_row(row: Dictionary) -> void:
@@ -215,29 +225,39 @@ func plan_targets(state: SpaceGameState, targets: Dictionary, location_id: Strin
 		_expand_requirement(state, str(item_id_value), maxf(0.0, float(targets[item_id_value])), location_id, required, method_cycles, selections, external_credits, [])
 	var factories: Array = []
 	var power_required := 0.0
-	var cooling_required := 0.0
 	var capital_goods := {}
-	for method_id_value in method_cycles.keys():
-		var method_id := str(method_id_value)
-		var method: Dictionary = content.activities.get(method_id, {})
-		var facility_id := str(method.get("facility", ""))
-		var cycles_required := float(method_cycles.get(method_id, 0.0))
-		var per_device: float = float(simulation.nominal_production_method_cycles_per_hour(state, location_id, method))
-		var current_level := int(state.location_industry(location_id, facility_id).get("level", 0))
-		var recommended := ceili(cycles_required / maxf(0.000001, per_device))
-		var shortage := maxi(0, recommended - current_level)
-		var definition: Dictionary = content.facilities.get(facility_id, {})
-		power_required += float(recommended) * (float(definition.get("baseline_power_demand", 0.0)) + float(definition.get("advanced_power_demand", 0.0))) * float(method.get("production_energy_multiplier", 1.0))
-		cooling_required += float(recommended) * float(content.industry_rules.get("cooling_demand_per_level", 2.0)) * float(method.get("production_cooling_multiplier", 1.0))
-		var expansion_costs: Dictionary = simulation.industry_expansion_costs(state, location_id, facility_id, shortage) if shortage > 0 else {}
-		for item_id_value in expansion_costs.keys():
-			capital_goods[str(item_id_value)] = int(capital_goods.get(str(item_id_value), 0)) + int(expansion_costs[item_id_value])
-		factories.append({"facility_id":facility_id, "method_id":method_id, "production_device_requirements":method.get("required_facility_capabilities", []).duplicate(), "required_cycles_per_hour":cycles_required, "cycles_per_hour_per_device":per_device, "current":current_level, "recommended":recommended, "shortage":shortage, "utilization":cycles_required / maxf(0.000001, per_device * float(maxi(1, recommended)))})
+	for recipe_id_value in method_cycles.keys():
+		var recipe_id := str(recipe_id_value)
+		var recipe: Dictionary = _recipe_with_building(recipe_id)
+		if recipe.is_empty():
+			continue
+		var building_id := str(recipe.get("building_definition_id", ""))
+		var definition: Dictionary = content.factory_buildings.get(building_id, {})
+		var cycles_required := float(method_cycles.get(recipe_id, 0.0))
+		var per_device := maxf(0.000001, float(definition.get("speed", 1.0)) * 3600.0 / maxf(0.000001, float(recipe.get("duration_seconds", 1.0))))
+		var current_count := _factory_entity_count(state, location_id, building_id, recipe_id)
+		var recommended := ceili(cycles_required / per_device)
+		var shortage := maxi(0, recommended - current_count)
+		power_required += float(recommended) * maxf(0.0, float(definition.get("power_demand_kw", 0.0)))
+		for cost_value in definition.get("construction_cost", []):
+			var cost := cost_value as Dictionary
+			var item_id := str(cost.get("item", ""))
+			capital_goods[item_id] = int(capital_goods.get(item_id, 0)) + int(cost.get("quantity", 0)) * shortage
+		factories.append({
+			"building_definition_id":building_id,
+			"recipe_id":recipe_id,
+			"required_cycles_per_hour":cycles_required,
+			"cycles_per_hour_per_entity":per_device,
+			"current":current_count,
+			"recommended":recommended,
+			"shortage":shortage,
+			"utilization":cycles_required / maxf(0.000001, per_device * float(maxi(1, recommended)))
+		})
 	var current_analysis := current_economy_analysis(state, location_id)
 	var bottlenecks: Array = []
 	for item_id_value in targets.keys():
 		bottlenecks.append(trace_bottleneck(state, str(item_id_value), location_id, float(targets[item_id_value])))
-	return {"location_id":location_id, "targets":targets.duplicate(true), "product_requirements":required, "method_selections":selections, "factory_requirements":factories, "infrastructure_requirements":{"power":power_required, "cooling":cooling_required, "storage":_planned_storage(required), "capital_goods":capital_goods}, "logistics":_planned_logistics(state, location_id, required), "industrial_geography":extraction_capacity_analysis(state, required), "bottlenecks":bottlenecks, "external_credits":external_credits, "current_economy":current_analysis, "read_only":true}
+	return {"location_id":location_id, "targets":targets.duplicate(true), "product_requirements":required, "method_selections":selections, "factory_requirements":factories, "infrastructure_requirements":{"power_kw":power_required, "storage":_planned_storage(required), "capital_goods":capital_goods}, "logistics":_planned_logistics(state, location_id, required), "industrial_geography":extraction_capacity_analysis(state, required), "bottlenecks":bottlenecks, "external_credits":external_credits, "current_economy":current_analysis, "read_only":true}
 
 
 func plan_bom_target(state: SpaceGameState, target_id: String, bom: Dictionary, location_id: String, horizon_hours: float = 1.0) -> Dictionary:
@@ -335,10 +355,10 @@ func _expand_requirement(state: SpaceGameState, item_id: String, rate: float, lo
 	if method.is_empty():
 		return
 	var output_quantity := 0.0
-	for reward_value in method.get("rewards", []):
-		var reward := reward_value as Dictionary
-		if str(reward.get("item", "")) == item_id:
-			output_quantity += float(reward.get("quantity", 0))
+	for output_value in method.get("outputs", []):
+		var output := output_value as Dictionary
+		if str(output.get("item", "")) == item_id:
+			output_quantity += float(output.get("quantity", 0))
 	if output_quantity <= 0.0:
 		return
 	var cycles := rate / output_quantity
@@ -347,25 +367,22 @@ func _expand_requirement(state: SpaceGameState, item_id: String, rate: float, lo
 	selections[item_id] = method_id
 	var next_stack := stack.duplicate()
 	next_stack.append(item_id)
-	var planning_runtime := {"facility_id":str(method.get("facility", "")), "location_id":location_id, "material_savings_fractional":{}}
-	var effective_cycle_costs: Dictionary = simulation.industry_cycle_costs(state, planning_runtime, method, false)
-	for item_id_value in effective_cycle_costs.keys():
-		_expand_requirement(state, str(item_id_value), float(effective_cycle_costs.get(item_id_value, 0)) * cycles, location_id, required, method_cycles, selections, external_credits, next_stack)
+	for input_value in method.get("inputs", []):
+		var input := input_value as Dictionary
+		_expand_requirement(state, str(input.get("item", "")), float(input.get("quantity", 0)) * cycles, location_id, required, method_cycles, selections, external_credits, next_stack)
 
 
 func _preferred_method(state: SpaceGameState, item_id: String, location_id: String) -> Dictionary:
 	var candidates: Array = []
-	for activity_value in content.activities.values():
-		var activity := activity_value as Dictionary
-		if str(activity.get("domain", "")) != "industry" or not bool(activity.get("repeat", true)):
-			continue
-		if not activity.get("rewards", []).any(func(reward): return str((reward as Dictionary).get("item", "")) == item_id):
-			continue
-		if simulation.activity_available(state, activity, location_id) and bool(simulation.production_method_environment_eligibility(state, location_id, activity).get("eligible", false)):
-			candidates.append(activity)
+	for recipe_value in content.factory_recipes.values():
+		var recipe := recipe_value as Dictionary
+		if recipe.get("outputs", []).any(func(output): return str((output as Dictionary).get("item", "")) == item_id):
+			var candidate := _recipe_with_building(str(recipe.get("id", "")))
+			if not candidate.is_empty():
+				candidates.append(candidate)
 	if candidates.is_empty():
 		return {}
-	candidates.sort_custom(func(a, b): return float(a.get("work_required", 1.0)) < float(b.get("work_required", 1.0)) if float(a.get("work_required", 1.0)) != float(b.get("work_required", 1.0)) else str(a.get("id", "")) < str(b.get("id", "")))
+	candidates.sort_custom(func(a, b): return float(a.get("duration_seconds", 1.0)) < float(b.get("duration_seconds", 1.0)) if float(a.get("duration_seconds", 1.0)) != float(b.get("duration_seconds", 1.0)) else str(a.get("id", "")) < str(b.get("id", "")))
 	return candidates[0]
 
 
@@ -383,7 +400,7 @@ func trace_bottleneck(state: SpaceGameState, product_id: String, location_id: St
 		var row: Dictionary = rows.get(current_id, {})
 		if not row.get("blocked_sources", []).is_empty():
 			var blocked: Dictionary = row.get("blocked_sources", [])[0]
-			chain.append({"kind":"METHOD", "id":blocked.get("method_id", blocked.get("source_id", ""))})
+			chain.append({"kind":"ENTITY", "id":blocked.get("source_id", ""), "world_id":blocked.get("world_id", "")})
 			var blocker: Dictionary = blocked.get("blocker", {})
 			primary = str(blocker.get("primary_reason", "CAPACITY_SHORTAGE"))
 			if blocker.has("item_id"):
@@ -396,12 +413,13 @@ func trace_bottleneck(state: SpaceGameState, product_id: String, location_id: St
 		if method.is_empty():
 			var source_transport := _known_source_transport(state, current_id, location_id)
 			if source_transport.is_empty():
-				primary = "NO_SURVEYED_SOURCE" if _has_resource_source(current_id) else "NO_PRODUCTION_METHOD"
+				primary = "NO_FIXED_DEPOSIT" if _has_resource_source(state, current_id) else "NO_FACTORY_RECIPE"
 				chain.append({"kind":"CONSTRAINT", "id":primary})
 				break
 			var geography: Dictionary = extraction_capacity_analysis(state, {current_id:target_rate}).get("products", {}).get(current_id, {})
-			primary = "RESOURCE_POTENTIAL_SHORTAGE" if target_rate > float(geography.get("surveyed_capacity", 0.0)) + 0.000001 else "LOGISTICS_CAPACITY_SHORTAGE"
-			chain.append({"kind":"SITE", "id":source_transport.get("site_id", ""), "location_id":source_transport.get("origin", ""), "sustainable_potential":source_transport.get("sustainable_potential", 0.0)})
+			primary = "EXTRACTION_CAPACITY_SHORTAGE" if target_rate > float(geography.get("installed_capacity", 0.0)) + 0.000001 else "LOGISTICS_CAPACITY_SHORTAGE"
+			chain.append({"kind":"DEPOSIT", "id":source_transport.get("deposit_id", ""), "world_id":source_transport.get("world_id", ""), "location_id":source_transport.get("origin", ""), "mapped_potential":source_transport.get("mapped_potential", 0.0)})
+			chain.append({"kind":"WORLD", "id":source_transport.get("world_id", ""), "location_id":source_transport.get("origin", "")})
 			var route_ids: Array = source_transport.get("route_ids", [])
 			var nodes: Array = source_transport.get("nodes", [])
 			for index in route_ids.size():
@@ -416,14 +434,12 @@ func trace_bottleneck(state: SpaceGameState, product_id: String, location_id: St
 			elif float(source_transport.get("bottleneck_capacity_per_hour", 0.0)) + 0.000001 < target_rate * float(content.item_freight_profile(current_id).get("freight_units", 1.0)):
 				primary = "LOGISTICS_CAPACITY_SHORTAGE"
 			break
-		chain.append({"kind":"METHOD", "id":method.get("id", "")})
+		chain.append({"kind":"RECIPE", "id":method.get("id", "")})
 		var critical_input := ""
-		var planning_runtime := {"facility_id":str(method.get("facility", "")), "location_id":location_id, "material_savings_fractional":{}}
-		var effective_cycle_costs: Dictionary = simulation.industry_cycle_costs(state, planning_runtime, method, false)
-		var input_ids: Array = effective_cycle_costs.keys()
-		input_ids.sort()
-		for input_id_value in input_ids:
-			var input_id := str(input_id_value)
+		var inputs: Array = method.get("inputs", []).duplicate(true)
+		inputs.sort_custom(func(a, b): return str((a as Dictionary).get("item", "")) < str((b as Dictionary).get("item", "")))
+		for input_value in inputs:
+			var input_id := str((input_value as Dictionary).get("item", ""))
 			var input_row: Dictionary = rows.get(input_id, {})
 			if float(input_row.get("net_rate", 0.0)) < -0.000001 or int(input_row.get("stock", 0)) <= 0:
 				critical_input = input_id
@@ -433,9 +449,9 @@ func trace_bottleneck(state: SpaceGameState, product_id: String, location_id: St
 			chain.append({"kind":"PRODUCT", "id":current_id})
 			primary = "INPUT_SHORTAGE"
 			continue
-		var facility_id := str(method.get("facility", ""))
-		primary = "MISSING_FACTORY" if int(state.location_industry(location_id, facility_id).get("level", 0)) <= 0 else "FACTORY_SATURATED"
-		chain.append({"kind":"FACTORY", "id":facility_id})
+		var building_id := str(method.get("building_definition_id", ""))
+		primary = "MISSING_FACTORY_ENTITY" if _factory_entity_count(state, location_id, building_id, str(method.get("id", ""))) <= 0 else "FACTORY_SATURATED"
+		chain.append({"kind":"FACTORY_BUILDING", "id":building_id})
 		break
 	return {"product_id":product_id, "target_rate":target_rate, "actual_rate":float(rows.get(product_id, {}).get("production_rate", 0.0)), "primary_bottleneck":primary, "shortest_chain":chain}
 
@@ -455,14 +471,16 @@ func _planned_logistics(state: SpaceGameState, location_id: String, required: Di
 	item_ids.sort()
 	for item_id_value in item_ids:
 		var item_id := str(item_id_value)
-		if not _preferred_method(state, item_id, location_id).is_empty() or not _has_resource_source(item_id):
+		if not _preferred_method(state, item_id, location_id).is_empty() or not _has_resource_source(state, item_id):
 			continue
 		var source_transport := _known_source_transport(state, item_id, location_id)
+		if source_transport.is_empty() or str(source_transport.get("origin", "")) == location_id:
+			continue
 		var freight_profile: Dictionary = content.item_freight_profile(item_id)
 		var fallback_units := float(freight_profile.get("freight_units", 1.0))
 		var cargo_mass_per_item := float(freight_profile.get("cargo_mass", freight_profile.get("mass_per_unit", freight_profile.get("mass", fallback_units))))
 		var cargo_volume_per_item := float(freight_profile.get("cargo_volume", freight_profile.get("volume_per_unit", freight_profile.get("volume", fallback_units))))
-		result.append({"product_id":item_id, "source_site_id":source_transport.get("site_id", ""), "origin":source_transport.get("origin", ""), "destination":location_id, "required_rate":required[item_id], "cargo_mass_per_hour":float(required[item_id]) * cargo_mass_per_item, "cargo_volume_per_hour":float(required[item_id]) * cargo_volume_per_item, "current_route_capacity":source_transport.get("bottleneck_capacity_per_hour", 0.0), "lead_time_ms":source_transport.get("lead_time_ms", INF), "route_ids":source_transport.get("route_ids", []).duplicate(), "nodes":source_transport.get("nodes", []).duplicate(), "potential_congestion":"NO_SURVEYED_ROUTE" if source_transport.is_empty() else ("ROUTE_UNAVAILABLE" if not bool(source_transport.get("service_available", false)) else "ROUTE_CAPACITY")})
+		result.append({"product_id":item_id, "source_deposit_id":source_transport.get("deposit_id", ""), "source_world_id":source_transport.get("world_id", ""), "origin":source_transport.get("origin", ""), "destination":location_id, "required_rate":required[item_id], "cargo_mass_per_hour":float(required[item_id]) * cargo_mass_per_item, "cargo_volume_per_hour":float(required[item_id]) * cargo_volume_per_item, "current_route_capacity":source_transport.get("bottleneck_capacity_per_hour", 0.0), "lead_time_ms":source_transport.get("lead_time_ms", INF), "route_ids":source_transport.get("route_ids", []).duplicate(), "nodes":source_transport.get("nodes", []).duplicate(), "potential_congestion":"ROUTE_UNAVAILABLE" if not bool(source_transport.get("service_available", false)) else "ROUTE_CAPACITY"})
 	return result
 
 
@@ -470,46 +488,39 @@ func extraction_capacity_analysis(state: SpaceGameState, requirements: Dictionar
 	var products := {}
 	for product_id_value in requirements.keys():
 		var product_id := str(product_id_value)
-		var sites: Array = []
-		var total := 0.0
-		var has_unsurveyed := false
-		var has_deep_survey_option := false
-		var has_method_option := false
-		var site_ids: Array = content.mining_sites.keys()
-		site_ids.sort()
-		for site_id_value in site_ids:
-			var site_id := str(site_id_value)
-			var site: Dictionary = content.mining_sites.get(site_id, {})
-			var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
-			if str(mining_location.get("raw_material", "")) != product_id:
-				continue
-			var runtime: Dictionary = state.mining_site_states.get(site_id, {})
-			var survey_state := str(runtime.get("survey_state", LocationState.UNKNOWN))
-			if simulation.survey_state_rank(survey_state) < simulation.survey_state_rank(LocationState.SURVEYED):
-				has_unsurveyed = true
-				continue
-			var method_id := str(runtime.get("extraction_method_id", "mobile_surface_extraction"))
-			if method_id.is_empty():
-				method_id = "mobile_surface_extraction"
-			var potential := float(simulation.extraction_site_sustainable_potential(state, site_id, method_id))
-			total += potential
-			sites.append({"site_id":site_id, "location_id":mining_location.get("region", ""), "survey_state":survey_state, "method_id":method_id, "developed":runtime.get("developed", false), "sustainable_potential":potential})
-			has_deep_survey_option = has_deep_survey_option or survey_state == LocationState.SURVEYED
-			for method_value in mining_location.get("resource_profile", {}).get("allowed_methods", []):
-				if str(method_value) != method_id and float(content.extraction_methods.get(str(method_value), {}).get("potential_multiplier", 1.0)) > float(content.extraction_methods.get(method_id, {}).get("potential_multiplier", 1.0)):
-					has_method_option = true
+		var deposits: Array = []
+		var mapped_potential := 0.0
+		var installed_capacity := 0.0
+		for world_id_value in state.factory_worlds.keys():
+			var world_id := str(world_id_value)
+			var world: Dictionary = state.factory_worlds.get(world_id_value, {})
+			for entity_value in world.get("entities", {}).values():
+				var deposit := entity_value as Dictionary
+				if str(deposit.get("kind", "")) != "DEPOSIT" or str(deposit.get("resource_id", "")) != product_id:
+					continue
+				var potential := _deposit_mapped_potential_per_hour(deposit)
+				var extractor_ids: Array[String] = []
+				var deposit_installed := 0.0
+				for link_value in world.get("links", {}).values():
+					var link := link_value as Dictionary
+					if str(link.get("kind", "")) != "RESOURCE" or str(link.get("source_id", "")) != str(deposit.get("id", "")):
+						continue
+					var extractor: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
+					extractor_ids.append(str(extractor.get("id", "")))
+					deposit_installed += maxf(0.0, float(extractor.get("actual_rate", 0.0))) * 3600.0
+				mapped_potential += potential
+				installed_capacity += deposit_installed
+				deposits.append({"deposit_id":str(deposit.get("id", "")), "world_id":world_id, "location_id":str(world.get("location_id", "")), "resource_id":product_id, "grade":float(deposit.get("grade", 1.0)), "mapped_potential":potential, "installed_capacity":deposit_installed, "extractor_ids":extractor_ids})
 		var required_rate := maxf(0.0, float(requirements.get(product_id, 0.0)))
-		if sites.is_empty() and not has_unsurveyed:
+		if deposits.is_empty():
 			continue
 		var solutions: Array[String] = []
-		if required_rate > total + 0.000001:
-			if has_unsurveyed:
-				solutions.append("SURVEY_ADDITIONAL_SITES")
-			if has_deep_survey_option:
-				solutions.append("DEEP_SURVEY_EXISTING_SITES")
-			if has_method_option:
-				solutions.append("UNLOCK_OR_ADOPT_ADVANCED_EXTRACTION")
-		products[product_id] = {"required_rate":required_rate, "surveyed_capacity":total, "shortfall":maxf(0.0, required_rate - total), "sites":sites, "potential_solutions":solutions}
+		if required_rate > installed_capacity + 0.000001:
+			solutions.append("PLACE_EXTRACTOR" if installed_capacity <= 0.000001 else "EXPAND_EXTRACTOR_COVERAGE")
+			if mapped_potential <= installed_capacity + 0.000001:
+				solutions.append("MAP_ADDITIONAL_DEPOSITS")
+			solutions.append("CONNECT_POWER_AND_CARGO")
+		products[product_id] = {"required_rate":required_rate, "mapped_potential":mapped_potential, "installed_capacity":installed_capacity, "shortfall":maxf(0.0, required_rate - installed_capacity), "deposits":deposits, "potential_solutions":solutions}
 	return {"products":products, "read_only":true}
 
 
@@ -517,48 +528,46 @@ func _best_known_source_lead_time(state: SpaceGameState, item_id: String, destin
 	return float(_known_source_transport(state, item_id, destination).get("lead_time_ms", INF))
 
 
-func _has_resource_source(item_id: String) -> bool:
-	return content.mining_locations.values().any(func(value): return str((value as Dictionary).get("raw_material", "")) == item_id)
+func _has_resource_source(state: SpaceGameState, item_id: String) -> bool:
+	for world_value in state.factory_worlds.values():
+		for entity_value in (world_value as Dictionary).get("entities", {}).values():
+			var entity := entity_value as Dictionary
+			if str(entity.get("kind", "")) == "DEPOSIT" and str(entity.get("resource_id", "")) == item_id:
+				return true
+	return false
 
 
 func _known_source_transport(state: SpaceGameState, item_id: String, destination: String) -> Dictionary:
 	var candidates: Array = []
-	var site_ids: Array = content.mining_sites.keys()
-	site_ids.sort()
-	for site_id_value in site_ids:
-		var site_id := str(site_id_value)
-		var site: Dictionary = content.mining_sites.get(site_id, {})
-		var mining_location: Dictionary = content.mining_locations.get(str(site.get("location", "")), {})
-		if str(mining_location.get("raw_material", "")) != item_id:
-			continue
-		var runtime: Dictionary = state.mining_site_states.get(site_id, {})
-		if simulation.survey_state_rank(str(runtime.get("survey_state", LocationState.UNKNOWN))) < simulation.survey_state_rank(LocationState.SURVEYED):
-			continue
-		var origin := str(mining_location.get("region", ""))
-		if not state.has_location(origin) or not state.has_location(destination):
-			continue
-		var path: Dictionary = simulation.logistics._shortest_path(state, origin, destination, item_id)
-		var service_available := not path.is_empty()
-		if path.is_empty():
-			path = _topology_shortest_path(state, origin, destination)
-		if path.is_empty():
-			continue
-		var route_snapshots := {}
-		var bottleneck_capacity_per_hour := INF
-		for route_id_value in path.get("route_ids", []):
-			var route_id := str(route_id_value)
-			var snapshot: Dictionary = simulation.logistics.service_snapshot(state, route_id)
-			route_snapshots[route_id] = snapshot
-			bottleneck_capacity_per_hour = minf(bottleneck_capacity_per_hour, float(snapshot.get("capacity_per_minute", 0.0)) * 60.0)
-		if path.get("route_ids", []).is_empty():
-			bottleneck_capacity_per_hour = INF
-		var method_id := str(runtime.get("extraction_method_id", "mobile_surface_extraction"))
-		if method_id.is_empty():
-			method_id = "mobile_surface_extraction"
-		candidates.append({"site_id":site_id, "origin":origin, "destination":destination, "nodes":path.get("nodes", [origin, destination]).duplicate(), "route_ids":path.get("route_ids", []).duplicate(), "lead_time_ms":float(path.get("transit_time_ms", simulation.logistics_lead_time_ms(state, origin, destination))), "score":float(path.get("score", path.get("transit_time_ms", INF))), "service_available":service_available, "route_snapshots":route_snapshots, "bottleneck_capacity_per_hour":0.0 if not service_available else bottleneck_capacity_per_hour, "sustainable_potential":simulation.extraction_site_sustainable_potential(state, site_id, method_id)})
+	for world_id_value in state.factory_worlds.keys():
+		var world_id := str(world_id_value)
+		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
+		var origin := str(world.get("location_id", ""))
+		for entity_value in world.get("entities", {}).values():
+			var deposit := entity_value as Dictionary
+			if str(deposit.get("kind", "")) != "DEPOSIT" or str(deposit.get("resource_id", "")) != item_id:
+				continue
+			if not state.has_location(origin) or not state.has_location(destination):
+				continue
+			var path: Dictionary = simulation.logistics._shortest_path(state, origin, destination, item_id)
+			var service_available := origin == destination or not path.is_empty()
+			if path.is_empty():
+				path = _topology_shortest_path(state, origin, destination)
+			if path.is_empty():
+				continue
+			var route_snapshots := {}
+			var bottleneck_capacity_per_hour := INF
+			for route_id_value in path.get("route_ids", []):
+				var route_id := str(route_id_value)
+				var snapshot: Dictionary = simulation.logistics.service_snapshot(state, route_id)
+				route_snapshots[route_id] = snapshot
+				bottleneck_capacity_per_hour = minf(bottleneck_capacity_per_hour, float(snapshot.get("capacity_per_minute", 0.0)) * 60.0)
+			if path.get("route_ids", []).is_empty():
+				bottleneck_capacity_per_hour = INF
+			candidates.append({"deposit_id":str(deposit.get("id", "")), "world_id":world_id, "origin":origin, "destination":destination, "nodes":path.get("nodes", [origin, destination]).duplicate(), "route_ids":path.get("route_ids", []).duplicate(), "lead_time_ms":float(path.get("transit_time_ms", simulation.logistics_lead_time_ms(state, origin, destination))), "score":float(path.get("score", path.get("transit_time_ms", INF))), "service_available":service_available, "route_snapshots":route_snapshots, "bottleneck_capacity_per_hour":0.0 if not service_available else bottleneck_capacity_per_hour, "mapped_potential":_deposit_mapped_potential_per_hour(deposit)})
 	if candidates.is_empty():
 		return {}
-	candidates.sort_custom(func(a, b): return float(a.get("score", INF)) < float(b.get("score", INF)) if not is_equal_approx(float(a.get("score", INF)), float(b.get("score", INF))) else str(a.get("site_id", "")) < str(b.get("site_id", "")))
+	candidates.sort_custom(func(a, b): return float(a.get("score", INF)) < float(b.get("score", INF)) if not is_equal_approx(float(a.get("score", INF)), float(b.get("score", INF))) else str(a.get("deposit_id", "")) < str(b.get("deposit_id", "")))
 	return (candidates[0] as Dictionary).duplicate(true)
 
 
@@ -609,6 +618,57 @@ func _topology_shortest_path(state: SpaceGameState, origin: String, destination:
 	reversed_nodes.reverse()
 	reversed_routes.reverse()
 	return {"nodes":reversed_nodes, "route_ids":reversed_routes, "transit_time_ms":distances[destination], "score":distances[destination]}
+
+
+func _compatible_building_ids(recipe_id: String) -> Array:
+	var result: Array = []
+	for building_id_value in content.factory_buildings.keys():
+		var building_id := str(building_id_value)
+		var definition: Dictionary = content.factory_buildings.get(building_id, {})
+		if str(definition.get("kind", "")) == "MACHINE" and definition.get("recipe_ids", []).has(recipe_id):
+			result.append(building_id)
+	result.sort()
+	return result
+
+
+func _recipe_with_building(recipe_id: String) -> Dictionary:
+	var recipe: Dictionary = content.factory_recipes.get(recipe_id, {})
+	var building_ids := _compatible_building_ids(recipe_id)
+	if recipe.is_empty() or building_ids.is_empty():
+		return {}
+	var result := recipe.duplicate(true)
+	result["building_definition_id"] = str(building_ids[0])
+	return result
+
+
+func _factory_entity_count(state: SpaceGameState, location_id: String, building_id: String, recipe_id: String = "") -> int:
+	var result := 0
+	for world_value in state.factory_worlds.values():
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		for entity_value in world.get("entities", {}).values():
+			var entity := entity_value as Dictionary
+			if str(entity.get("definition_id", "")) != building_id:
+				continue
+			if not recipe_id.is_empty() and str(entity.get("recipe_id", "")) != recipe_id:
+				continue
+			result += 1
+	return result
+
+
+func _deposit_for_extractor(world: Dictionary, extractor_id: String) -> Dictionary:
+	for link_value in world.get("links", {}).values():
+		var link := link_value as Dictionary
+		if str(link.get("kind", "")) == "RESOURCE" and str(link.get("target_id", "")) == extractor_id:
+			return world.get("entities", {}).get(str(link.get("source_id", "")), {})
+	return {}
+
+
+func _deposit_mapped_potential_per_hour(deposit: Dictionary) -> float:
+	var size: Dictionary = deposit.get("footprint", {}).get("size", {})
+	var area := maxi(0, int(size.get("x", 0))) * maxi(0, int(size.get("y", 0)))
+	return maxf(0.0, float(deposit.get("potential_density", 0.0))) * float(area) * 3600.0
 
 
 func _status_rank(status: String) -> int:

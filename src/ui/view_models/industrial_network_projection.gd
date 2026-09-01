@@ -29,8 +29,8 @@ func build(snapshot: Dictionary) -> Dictionary:
 			products[str(output.get("item_id", ""))] = true
 		nodes.append(_node(
 			"source:%s" % source_id, "SOURCE", source_id, location_id,
-			_name(_content.extraction_networks, source_id, source_id),
-			I18n.core("industrial_network.source.subtitle", "Permanent extraction network"),
+			str(source.get("name", source_id)),
+			I18n.core("industrial_network.source.subtitle", "Factory-grid material source"),
 			str(source.get("status", "IDLE")), [], outputs,
 			_sum_field(outputs, "actual_rate"), _sum_field(outputs, "requested_rate"),
 			_ratio(_sum_field(outputs, "actual_rate"), _sum_field(outputs, "capacity")),

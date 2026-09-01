@@ -14,13 +14,9 @@ func _initialize() -> void:
 		return
 	_test_schema_34_to_35_fixture()
 	_test_every_migratable_schema_entry()
-	_test_identity_serial_recovery()
-	_test_one_hour_batch_equivalence()
-	_test_maintenance_shortage_boundary_equivalence()
+	_test_operational_formation_migration()
 	_test_full_storage_blocks_and_recovers_delivery()
-	_test_operations_maintenance_and_construction()
 	_test_offline_debt_survives_cap_and_round_trip()
-	_test_core_asset_conservation()
 	_finish()
 
 
@@ -31,7 +27,8 @@ func _test_schema_34_to_35_fixture() -> void:
 		return
 	var fixture := fixture_value as Dictionary
 	var migrated_payload := SpaceGameState.migrate_save_dictionary(fixture)
-	_check(int(migrated_payload.get("save_version", 0)) == 35, "schema 34 migrates through the explicit 34-to-35 step")
+	_check(int(migrated_payload.get("save_version", 0)) == 38, "schema 34 migrates through the explicit chain to schema 38")
+	_check(migrated_payload.get("factory_worlds", null) is Dictionary and migrated_payload.get("factory_worlds", {}).is_empty(), "schema 35-to-36 creates an explicit empty grid-world collection without inventing placement")
 	_check(migrated_payload.get("statistics", {}).get("item_consumed_totals", null) is Dictionary, "schema 34-to-35 initializes item-specific consumption accounting")
 	var archive: Dictionary = migrated_payload.get("retired_megastructure_archive", {})
 	_check(bool(archive.get("matter_extractor", {}).get("completed", false)), "completed retired Megastructure is archived")
@@ -45,8 +42,11 @@ func _test_schema_34_to_35_fixture() -> void:
 	_check(state.item_quantity("iron_ore", "earth_orbit") == 120 and state.item_quantity("iron_ore", "lunar_space") == 7, "migration preserves per-Location inventory")
 	_check(int(state.location_reserves("earth_orbit").get("iron_ore", 0)) == 11 and int(state.location_reserves("earth_orbit").get("electronics", 0)) == 4, "migration preserves player reserves")
 	_check(state.logistics_network.get("shipments", []).size() == 1 and int(state.logistics_network.get("shipments", [])[0].get("cargo", {}).get("electronics", 0)) == 5, "migration preserves in-transit cargo")
-	var construction: Dictionary = state.construction_operations[0]
-	_check(str(construction.get("project_id", "")) == "CONSTRUCTION-000041" and int(construction.get("consumed", {}).get("iron_ingot", 0)) == 2 and int(construction.get("reserved_costs", {}).get("electronics", 0)) == 1, "migration preserves Construction progress, consumed materials and commitments")
+	var aggregate_archive: Dictionary = state.retired_aggregate_industry_archive
+	var archived_construction: Array = aggregate_archive.get("construction_operations", [])
+	var current_payload := state.to_dictionary()
+	_check(not current_payload.has("mining_operations") and state.industrial_operations.is_empty() and state.construction_operations.is_empty() and not current_payload.has("extraction_network_states"), "schema-36 migration removes aggregate industrial runtime from live state")
+	_check(not archived_construction.is_empty() and str((archived_construction[0] as Dictionary).get("project_id", "")) == "CONSTRUCTION-000041", "removed Construction progress survives only in the aggregate-industry archive")
 	_check(str(state.research.get("project_id", "")) == "research_industrial_coordination" and int(state.research.get("reserved_costs", {}).get("data_core", 0)) == 1 and int(state.research.get("consumed", {}).get("electronics", 0)) == 3, "migration preserves Research stage ownership and material state")
 	_check(not state.ship_by_id("SHIP-034").is_empty() and str(state.ship_by_id("SHIP-034").get("maintenance_state", "")) == "READY_RESERVE", "migration preserves physical Ship identity and lifecycle state")
 	_check(state.retired_megastructure_archive == archive, "normalized state preserves the complete retired Megastructure archive")
@@ -54,12 +54,12 @@ func _test_schema_34_to_35_fixture() -> void:
 	_check_ledger_balance(ledger, "migrated fixture")
 	_check(bool(ledger.get("ProjectStaging", {}).get("ReservationSubset", false)) and int(ledger.get("ProjectStaging", {}).get("Items", {}).get("electronics", 0)) <= int(ledger.get("Inventory", {}).get("Reserved", {}).get("electronics", 0)), "ProjectStaging is exposed as a bounded Reserved subset")
 	var round_trip := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
-	_check(round_trip.aggregate_inventory() == state.aggregate_inventory() and round_trip.location_reserves("earth_orbit") == state.location_reserves("earth_orbit"), "schema-35 round trip conserves migrated inventory and reserves")
-	_check(round_trip.logistics_network.get("shipments", []) == state.logistics_network.get("shipments", []) and round_trip.retired_megastructure_archive == state.retired_megastructure_archive, "schema-35 round trip conserves in-transit cargo and retired projects")
+	_check(round_trip.aggregate_inventory() == state.aggregate_inventory() and round_trip.location_reserves("earth_orbit") == state.location_reserves("earth_orbit"), "schema-36 round trip conserves migrated inventory and reserves")
+	_check(round_trip.logistics_network.get("shipments", []) == state.logistics_network.get("shipments", []) and round_trip.retired_megastructure_archive == state.retired_megastructure_archive and round_trip.retired_aggregate_industry_archive == state.retired_aggregate_industry_archive, "schema-36 round trip conserves in-transit cargo and both retirement archives")
 
 
 func _test_every_migratable_schema_entry() -> void:
-	_check(GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION == 24 and SpaceGameState.SAVE_VERSION == 35, "migration-chain test covers every published schema entry from 24 through 34")
+	_check(GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION == 24 and SpaceGameState.SAVE_VERSION == 38, "migration-chain test covers every published schema entry from 24 through 37")
 	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	seed.revision = 341
 	seed.parent_revision = 340
@@ -77,7 +77,7 @@ func _test_every_migratable_schema_entry() -> void:
 		var entry_payload := seed_payload.duplicate(true)
 		entry_payload["save_version"] = entry_schema
 		var migrated_payload := SpaceGameState.migrate_save_dictionary(entry_payload)
-		_check(int(migrated_payload.get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d migration chain reaches schema 35" % entry_schema)
+		_check(int(migrated_payload.get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d migration chain reaches schema 38" % entry_schema)
 		_check(str(migrated_payload.get("save_id", "")) == sentinel_save_id and int(migrated_payload.get("revision", -1)) == 341, "schema %d migration preserves Save identity and revision sentinels" % entry_schema)
 		var migrated_locations: Dictionary = migrated_payload.get("locations", {})
 		var migrated_earth: Dictionary = migrated_locations.get("earth_orbit", {})
@@ -89,7 +89,42 @@ func _test_every_migratable_schema_entry() -> void:
 		_check(restored.item_quantity("iron_ore", "earth_orbit") == expected_earth_iron and restored.item_quantity("electronics", "lunar_space") == expected_lunar_electronics, "schema %d deserialization preserves per-Location inventory" % entry_schema)
 		_check(int(restored.location_reserves("earth_orbit").get("iron_ore", 0)) == 13 and int(restored.location_reserves("lunar_space").get("electronics", 0)) == 3, "schema %d deserialization preserves Location reserve ownership" % entry_schema)
 		_check(not sentinel_ship_id.is_empty() and not restored.ship_by_id(sentinel_ship_id).is_empty(), "schema %d deserialization preserves stable Ship identity" % entry_schema)
-		_check(int(restored.to_dictionary().get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d deserialization reserializes only as current schema 35" % entry_schema)
+		_check(int(restored.to_dictionary().get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d deserialization reserializes only as current schema 38" % entry_schema)
+
+
+func _test_operational_formation_migration() -> void:
+	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	var ship_id := str(seed.ships[0].get("instance_id", ""))
+	var legacy_constructor := seed._create_ship_instance("mobile_constructor", [], "Legacy Daedalus")
+	var legacy_constructor_id := str(legacy_constructor.get("instance_id", ""))
+	seed.ships[0]["modules"].append("mining_laser")
+	seed.ships[0]["blueprint_id"] = "ultimate_miner"
+	seed.add_item("mining_laser", 3)
+	seed.ships[0]["status"] = "CONSTRUCTION_SUPPORT"
+	seed.ships[0]["assignment"] = {"type":"CONSTRUCTION_SUPPORT", "location_id":SpaceGameState.MAIN_BASE_LOCATION_ID}
+	var payload := seed.to_dictionary()
+	payload["save_version"] = 36
+	payload.erase("fleet_formations")
+	payload.erase("next_formation_serial")
+	payload["expedition_fleet"] = {"ship_ids":[ship_id]}
+	payload["extraction_assets"] = {"ship_ids":[ship_id]}
+	payload["fleet_logistics"] = {"expedition":seed.fleet_logistics_runtime().duplicate(true)}
+	var migrated := SpaceGameState.from_dictionary(payload, database.domains.keys(), database.regions)
+	_check(migrated.formation_ship_ids().has(ship_id) and migrated.ship_formation_id(ship_id) == SpaceGameState.DEFAULT_FORMATION_ID, "formation migration preserves legacy expedition members as a generic tactical formation")
+	_check(str(migrated.ship_by_id(ship_id).get("status", "")) == "DOCKED" and str(migrated.ship_by_id(ship_id).get("assignment", {}).get("formation_id", "")) == SpaceGameState.DEFAULT_FORMATION_ID, "retired construction work assignment becomes docked formation membership")
+	_check(not migrated.ship_module_definition_ids(migrated.ship_by_id(ship_id)).has("mining_laser"), "retired ship extraction plugins are stripped during migration")
+	_check(str(migrated.ship_by_id(ship_id).get("blueprint_id", "")) == "ultimate_transport", "schema-38 reclassifies the legacy ultimate miner hull as transport")
+	_check(str(migrated.ship_by_id(legacy_constructor_id).get("blueprint_id", "")) == "heavy_lift_transport", "schema-38 reclassifies the legacy mobile constructor hull as heavy transport")
+	_check(migrated.item_quantity("mining_laser") == 0 and int(migrated.retired_aggregate_industry_archive.get("ship_work_assets", {}).get("locations", {}).get("earth_orbit", {}).get("inventory:mining_laser", 0)) == 3, "schema-38 removes legacy work-plugin stock from live inventory and preserves migration evidence")
+	var persisted := migrated.to_dictionary()
+	_check(persisted.has("fleet_formations") and persisted.has("wreck_sites") and not persisted.has("expedition_fleet") and not persisted.has("extraction_assets"), "schema-38 persists generic formations and finite wreck sites without work-type fleet fields")
+	for retired_id in ["mining_laser", "deep_core_drill", "heavy_mining_array", "gas_collector", "exotic_containment", "construction_support_system"]:
+		_check(not database.modules.has(retired_id) and not database.items.has(retired_id), "ship work plugin %s is deleted from live content" % retired_id)
+	_check(database.ships.has("heavy_lift_transport") and not database.ships.has("mobile_constructor"), "the former engineering hull is live only as a logistics transport")
+	var interim_payload := seed.to_dictionary()
+	interim_payload["save_version"] = 38
+	var interim_restored := SpaceGameState.from_dictionary(interim_payload, database.domains.keys(), database.regions)
+	_check(str(interim_restored.ship_by_id(legacy_constructor_id).get("blueprint_id", "")) == "heavy_lift_transport" and not interim_restored.ship_module_definition_ids(interim_restored.ship_by_id(ship_id)).has("mining_laser"), "interim schema-38 developer saves also enforce the completed ship-role cutover")
 
 
 func _test_identity_serial_recovery() -> void:

@@ -4,6 +4,7 @@ extends RefCounted
 var version := ""
 var pack_metadata := {}
 var simulation_profiles := {}
+var factory_grid_rules := {}
 var industry_rules := {}
 var fleet_rules := {}
 var freight_rules := {}
@@ -16,13 +17,8 @@ var modules := {}
 var process_modules := {}
 var universal_industry_plugins := {}
 var facilities := {}
-var mining_locations := {}
-var mining_hazards := {}
 var resource_regions := {}
-var mining_sites := {}
 var combat_areas := {}
-var extraction_networks := {}
-var extraction_methods := {}
 var logistics_routes := {}
 var transport_modes := {}
 var industrial_templates := {}
@@ -36,6 +32,8 @@ var enemies := {}
 var expedition_routes := {}
 var megastructures := {}
 var planet_visual_profiles := {}
+var factory_buildings := {}
+var factory_recipes := {}
 var construction_engineering_requirements := {}
 var activities_by_domain := {}
 var progression_edges: Array[Dictionary] = []
@@ -57,6 +55,7 @@ func load_from_file(path: String) -> bool:
 		errors.append("Content version %s does not match product version %s" % [version, GameVersion.PRODUCT_VERSION])
 	pack_metadata = parsed.get("content_pack", {"id":"base", "version":version, "namespace":"base"}).duplicate(true)
 	simulation_profiles = parsed.get("simulation_profiles", {}).duplicate(true)
+	factory_grid_rules = parsed.get("factory_grid_rules", {}).duplicate(true)
 	industry_rules = parsed.get("industry_rules", {}).duplicate(true)
 	fleet_rules = parsed.get("fleet_rules", {}).duplicate(true)
 	freight_rules = parsed.get("freight_rules", {}).duplicate(true)
@@ -71,13 +70,8 @@ func load_from_file(path: String) -> bool:
 	_index_definitions(parsed.get("process_modules", []), process_modules, "process_module")
 	_index_definitions(parsed.get("universal_industry_plugins", []), universal_industry_plugins, "universal_industry_plugin")
 	_index_definitions(parsed.get("facilities", []), facilities, "facility")
-	_index_definitions(parsed.get("mining_locations", []), mining_locations, "mining_location")
-	_index_definitions(parsed.get("mining_hazards", []), mining_hazards, "mining_hazard")
 	_index_definitions(parsed.get("resource_regions", []), resource_regions, "resource_region")
-	_index_definitions(parsed.get("mining_sites", []), mining_sites, "mining_site")
 	_index_definitions(parsed.get("combat_areas", []), combat_areas, "combat_area")
-	_index_definitions(parsed.get("extraction_networks", []), extraction_networks, "extraction_network")
-	_index_definitions(parsed.get("extraction_methods", []), extraction_methods, "extraction_method")
 	_index_definitions(parsed.get("logistics_routes", []), logistics_routes, "logistics_route")
 	_index_definitions(parsed.get("transport_modes", []), transport_modes, "transport_mode")
 	_index_definitions(parsed.get("industrial_templates", []), industrial_templates, "industrial_template")
@@ -91,6 +85,8 @@ func load_from_file(path: String) -> bool:
 	_index_definitions(parsed.get("expedition_routes", []), expedition_routes, "expedition_route")
 	_index_definitions(parsed.get("megastructures", []), megastructures, "megastructure")
 	_index_definitions(parsed.get("planet_visual_profiles", []), planet_visual_profiles, "planet_visual_profile")
+	_index_definitions(parsed.get("factory_buildings", []), factory_buildings, "factory_building")
+	_index_definitions(parsed.get("factory_recipes", []), factory_recipes, "factory_recipe")
 	for domain_id in domains:
 		activities_by_domain[domain_id] = []
 	for activity in activities.values():
@@ -112,13 +108,8 @@ func clear() -> void:
 	process_modules.clear()
 	universal_industry_plugins.clear()
 	facilities.clear()
-	mining_locations.clear()
-	mining_hazards.clear()
 	resource_regions.clear()
-	mining_sites.clear()
 	combat_areas.clear()
-	extraction_networks.clear()
-	extraction_methods.clear()
 	logistics_routes.clear()
 	transport_modes.clear()
 	industrial_templates.clear()
@@ -132,12 +123,15 @@ func clear() -> void:
 	expedition_routes.clear()
 	megastructures.clear()
 	planet_visual_profiles.clear()
+	factory_buildings.clear()
+	factory_recipes.clear()
 	construction_engineering_requirements.clear()
 	activities_by_domain.clear()
 	progression_edges.clear()
 	graph_validation_errors.clear()
 	pack_metadata.clear()
 	simulation_profiles.clear()
+	factory_grid_rules.clear()
 	industry_rules.clear()
 	fleet_rules.clear()
 	freight_rules.clear()
@@ -150,11 +144,18 @@ func validate() -> void:
 	var produced_items := {}
 	var consumed_items := {}
 	var unique_ship_grants := {}
+	# Grid deposits are deterministic production sources owned by factory worlds,
+	# not activities or ships. The bootstrap contract lists the resource types
+	# that world generation may place as fixed deposits.
+	for item_id_value in industry_rules.get("bootstrap_contract", {}).get("progression_extractable_item_ids", []):
+		produced_items[str(item_id_value)] = true
 	for forbidden_collection in [technologies, research_projects, expedition_routes, megastructures, goals]:
 		for definition_id_value in (forbidden_collection as Dictionary).keys():
 			if "interstellar" in str(definition_id_value).to_lower():
 				errors.append("The single-system core cannot expose interstellar content: %s" % definition_id_value)
 	_validate_simulation_profiles()
+	_validate_factory_grid_content()
+	_validate_ship_role_contract()
 	if float(industry_rules.get("economy_of_scale_per_level", 0.0)) < 0.0 or float(industry_rules.get("economy_of_scale_cap", 0.0)) < 0.0:
 		errors.append("industry_rules must define non-negative Economy of Scale values")
 	if float(industry_rules.get("production_speed_multiplier", 0.0)) <= 0.0:
@@ -286,18 +287,6 @@ func validate() -> void:
 			errors.append("%s has an invalid domain" % label)
 		if float(activity.get("duration_ms", 0)) <= 0:
 			errors.append("%s must have a positive duration" % label)
-		if activity.get("domain", "") == "mining":
-			var location_id := str(activity.get("location", ""))
-			if not mining_locations.has(location_id):
-				errors.append("%s references a missing mining location" % label)
-			elif str(activity.get("raw_material", "")) != str(mining_locations[location_id].get("raw_material", "")):
-				errors.append("%s output does not match its mining location's mixed raw material" % label)
-			if not mining_sites.has(str(activity.get("site", ""))):
-				errors.append("%s references a missing permanent mining site" % label)
-			if activity.has("loot"):
-				errors.append("%s must not define random mining loot" % label)
-			if float(activity.get("extraction_cost", 0)) <= 0:
-				errors.append("%s must define positive extraction_cost" % label)
 		if activity.get("domain", "") == "industry":
 			if float(activity.get("work_required", 0)) <= 0:
 				errors.append("%s must define positive work_required" % label)
@@ -618,40 +607,9 @@ func validate() -> void:
 		for generation in plugin.get("compatible_generations", []):
 			if int(generation) < 1 or int(generation) > 6:
 				errors.append("universal industry plugin '%s' has invalid compatible generation" % plugin.get("id", "?"))
-	for location in mining_locations.values():
-		if not regions.has(str(location.get("region", ""))):
-			errors.append("mining location '%s' references a missing region" % location.get("id", "?"))
-		if float(location.get("density", 0)) <= 0:
-			errors.append("mining location '%s' has invalid density" % location.get("id", "?"))
-		if float(location.get("extraction_potential", 0)) <= 0:
-			errors.append("mining location '%s' has invalid extraction potential" % location.get("id", "?"))
-		for hazard_id in location.get("hazards", []):
-			if not mining_hazards.has(str(hazard_id)):
-				errors.append("mining location '%s' references missing hazard '%s'" % [location.get("id", "?"), hazard_id])
-		var raw_material_id := str(location.get("raw_material", ""))
-		if raw_material_id not in ["mixed_raw_ore", "mixed_raw_gas"] or not items.has(raw_material_id):
-			errors.append("mining location '%s' must produce mixed raw ore or mixed raw gas" % location.get("id", "?"))
-		if int(location.get("material_grade", 0)) <= 0:
-			errors.append("mining location '%s' has invalid material grade" % location.get("id", "?"))
-	for hazard in mining_hazards.values():
-		if str(hazard.get("required_capability", "")).is_empty():
-			errors.append("mining hazard '%s' requires a capability" % hazard.get("id", "?"))
-		if float(hazard.get("unprotected_uptime", 0.0)) <= 0.0 or float(hazard.get("protected_uptime", 0.0)) <= 0.0:
-			errors.append("mining hazard '%s' has invalid uptime" % hazard.get("id", "?"))
-		if hazard.has("failure_chance") or hazard.has("repair_ms"):
-			errors.append("mining hazard '%s' must be deterministic" % hazard.get("id", "?"))
 	for resource_region in resource_regions.values():
 		if not regions.has(str(resource_region.get("region", ""))):
 			errors.append("resource region '%s' references a missing space region" % resource_region.get("id", "?"))
-	for site in mining_sites.values():
-		var site_id := str(site.get("id", ""))
-		var location_id := str(site.get("location", ""))
-		if not resource_regions.has(str(site.get("resource_region", ""))):
-			errors.append("mining site '%s' references a missing resource region" % site_id)
-		if not mining_locations.has(location_id):
-			errors.append("mining site '%s' references a missing mining location" % site_id)
-		if int(site.get("mastery_cycles_per_level", 0)) <= 0 or int(site.get("max_mastery_level", 0)) <= 0:
-			errors.append("mining site '%s' has invalid deterministic mastery rules" % site_id)
 	for area in combat_areas.values():
 		if not regions.has(str(area.get("region", ""))):
 			errors.append("combat area '%s' references a missing region" % area.get("id", "?"))
@@ -661,14 +619,6 @@ func validate() -> void:
 		var route_id := str(area.get("route", ""))
 		if not route_id.is_empty() and not expedition_routes.has(route_id):
 			errors.append("combat area '%s' references a missing first-clear route" % area.get("id", "?"))
-	for network in extraction_networks.values():
-		if not regions.has(str(network.get("region", ""))):
-			errors.append("extraction network '%s' references a missing region" % network.get("id", "?"))
-		if float(network.get("cycle_time_ms", 0.0)) <= 0.0 or int(network.get("quantity_per_site", 0)) <= 0 or float(network.get("efficiency_ratio", 0.0)) <= 0.0 or float(network.get("efficiency_ratio", 0.0)) >= 1.0:
-			errors.append("extraction network '%s' must define stable below-ship efficiency" % network.get("id", "?"))
-		for site_id in network.get("site_ids", []):
-			if not mining_sites.has(str(site_id)):
-				errors.append("extraction network '%s' references missing site '%s'" % [network.get("id", "?"), site_id])
 	for ship in ships.values():
 		if int(ship.get("module_slots", -1)) < 0:
 			errors.append("ship '%s' has invalid module slots" % ship.get("id", "?"))
@@ -696,6 +646,46 @@ func validate() -> void:
 	_validate_core_content_contract()
 
 
+func _validate_ship_role_contract() -> void:
+	for retired_domain_id in ["mining", "salvaging"]:
+		if domains.has(retired_domain_id):
+			errors.append("ship-role contract forbids the retired '%s' activity domain" % retired_domain_id)
+	var forbidden_fields := ["mining_power", "extraction_power", "extraction_method_efficiency", "salvage_power"]
+	var forbidden_capabilities := [
+		"mining", "laser_ablation", "deep_core_mining", "heavy_mining",
+		"ice_harvesting", "bulk_extraction", "gas_collection",
+		"exotic_containment", "construction_support"
+	]
+	for module_value in modules.values():
+		var module := module_value as Dictionary
+		var module_id := str(module.get("id", "?"))
+		if str(module.get("domain", "")) in ["mining", "salvaging"]:
+			errors.append("ship module '%s' uses a retired work domain" % module_id)
+		for field in forbidden_fields:
+			if module.has(field):
+				errors.append("ship module '%s' exposes forbidden work field '%s'" % [module_id, field])
+		for capability_id in forbidden_capabilities:
+			if module.get("capabilities", {}).has(capability_id):
+				errors.append("ship module '%s' exposes forbidden work capability '%s'" % [module_id, capability_id])
+	for ship_value in ships.values():
+		var ship := ship_value as Dictionary
+		for field in forbidden_fields:
+			if ship.has(field):
+				errors.append("ship '%s' exposes forbidden work field '%s'" % [ship.get("id", "?"), field])
+	for activity_value in activities.values():
+		var activity := activity_value as Dictionary
+		if str(activity.get("domain", "")) in ["mining", "salvaging"]:
+			errors.append("activity '%s' uses a retired ship-work domain" % activity.get("id", "?"))
+	for route_value in expedition_routes.values():
+		var route := route_value as Dictionary
+		for node_value in route.get("nodes", []):
+			var node := node_value as Dictionary
+			for effect_value in node.get("effects", []):
+				var effect := effect_value as Dictionary
+				if str(effect.get("type", "")) == "discover_mining_site":
+					errors.append("expedition route '%s' still exposes a retired permanent mining site" % route.get("id", "?"))
+
+
 func _validate_simulation_profiles() -> void:
 	var profiles: Dictionary = simulation_profiles.get("profiles", {})
 	var default_profile := str(simulation_profiles.get("default_profile", ""))
@@ -707,9 +697,81 @@ func _validate_simulation_profiles() -> void:
 	for profile_id_value in profiles.keys():
 		var profile_id := str(profile_id_value)
 		var profile: Dictionary = profiles.get(profile_id, {})
-		for system_id in ["mining", "manufacturing", "construction", "shipyard", "automation"]:
-			if float(profile.get(system_id, 0.0)) <= 0.0:
-				errors.append("simulation profile '%s' must define a positive %s multiplier" % [profile_id, system_id])
+		if float(profile.get("shipyard", 0.0)) <= 0.0:
+			errors.append("simulation profile '%s' must define a positive shipyard multiplier" % profile_id)
+
+
+func _validate_factory_grid_content() -> void:
+	if int(factory_grid_rules.get("tile_size_m", 0)) != 1:
+		errors.append("factory_grid_rules must define one square metre tiles")
+	if int(factory_grid_rules.get("generator_version", 0)) <= 0:
+		errors.append("factory_grid_rules must define a positive generator version")
+	if int(factory_grid_rules.get("chunk_size_tiles", 0)) <= 0:
+		errors.append("factory_grid_rules must define a positive chunk size")
+	if float(factory_grid_rules.get("simulation_step_seconds", 0.0)) <= 0.0:
+		errors.append("factory_grid_rules must define a positive simulation step")
+	if float(factory_grid_rules.get("base_construction_capacity_per_second", -1.0)) < 0.0:
+		errors.append("factory_grid_rules must define non-negative base construction capacity")
+	var starter: Dictionary = factory_grid_rules.get("starter_world", {})
+	var starter_size: Dictionary = starter.get("size_tiles", {})
+	if str(starter.get("world_id", "")).is_empty() or not regions.has(str(starter.get("location_id", ""))) or int(starter_size.get("x", 0)) <= 0 or int(starter_size.get("y", 0)) <= 0:
+		errors.append("factory_grid_rules starter_world must define identity, known location and positive bounds")
+	for deposit_value in starter.get("deposits", []):
+		var deposit := deposit_value as Dictionary
+		var deposit_size: Dictionary = deposit.get("size", {})
+		if str(deposit.get("deposit_id", "")).is_empty() or not items.has(str(deposit.get("resource_id", ""))) or int(deposit_size.get("x", 0)) <= 0 or int(deposit_size.get("y", 0)) <= 0:
+			errors.append("factory starter deposit has invalid identity, resource or size")
+	for entity_value in starter.get("entities", []):
+		var entity := entity_value as Dictionary
+		if str(entity.get("entity_id", "")).is_empty() or not factory_buildings.has(str(entity.get("definition_id", ""))):
+			errors.append("factory starter entity has invalid identity or building definition")
+		for item_id_value in entity.get("inventory", {}).keys():
+			if not items.has(str(item_id_value)) or int(entity.get("inventory", {}).get(item_id_value, 0)) < 0:
+				errors.append("factory starter entity has invalid inventory item '%s'" % item_id_value)
+	var allowed_kinds := ["EXTRACTOR", "MACHINE", "STORAGE", "POWER", "CONSTRUCTION"]
+	for definition_value in factory_buildings.values():
+		var definition := definition_value as Dictionary
+		var definition_id := str(definition.get("id", "?"))
+		var kind := str(definition.get("kind", ""))
+		if kind not in allowed_kinds:
+			errors.append("factory building '%s' has invalid kind '%s'" % [definition_id, kind])
+		var footprint: Dictionary = definition.get("footprint", {})
+		if int(footprint.get("width", 0)) <= 0 or int(footprint.get("height", 0)) <= 0:
+			errors.append("factory building '%s' must define a positive footprint" % definition_id)
+		if float(definition.get("construction_work", 0.0)) <= 0.0:
+			errors.append("factory building '%s' must define positive construction work" % definition_id)
+		_validate_item_entries(definition.get("construction_cost", []), "factory building '%s'" % definition_id)
+		for power_field in ["power_generation_kw", "power_demand_kw"]:
+			if float(definition.get(power_field, 0.0)) < 0.0:
+				errors.append("factory building '%s' has invalid %s" % [definition_id, power_field])
+		match kind:
+			"EXTRACTOR":
+				if definition.get("resource_categories", []).is_empty() or float(definition.get("mining_rate_per_second", 0.0)) <= 0.0 or int(definition.get("output_capacity", 0)) <= 0:
+					errors.append("factory extractor '%s' has incomplete extraction rules" % definition_id)
+			"MACHINE":
+				if definition.get("recipe_ids", []).is_empty() or float(definition.get("speed", 0.0)) <= 0.0 or int(definition.get("input_capacity", 0)) <= 0 or int(definition.get("output_capacity", 0)) <= 0:
+					errors.append("factory machine '%s' has incomplete production rules" % definition_id)
+				for recipe_id_value in definition.get("recipe_ids", []):
+					if not factory_recipes.has(str(recipe_id_value)):
+						errors.append("factory machine '%s' references missing recipe '%s'" % [definition_id, recipe_id_value])
+			"STORAGE":
+				if int(definition.get("inventory_capacity", 0)) <= 0:
+					errors.append("factory storage '%s' must define positive capacity" % definition_id)
+			"POWER":
+				if float(definition.get("power_generation_kw", 0.0)) <= 0.0:
+					errors.append("factory power building '%s' must generate power" % definition_id)
+			"CONSTRUCTION":
+				if float(definition.get("construction_capacity_per_second", 0.0)) <= 0.0:
+					errors.append("factory construction building '%s' must provide construction capacity" % definition_id)
+	for recipe_value in factory_recipes.values():
+		var recipe := recipe_value as Dictionary
+		var recipe_id := str(recipe.get("id", "?"))
+		if float(recipe.get("duration_seconds", 0.0)) <= 0.0:
+			errors.append("factory recipe '%s' must define positive duration" % recipe_id)
+		if recipe.get("inputs", []).is_empty() or recipe.get("outputs", []).is_empty():
+			errors.append("factory recipe '%s' must define inputs and outputs" % recipe_id)
+		_validate_item_entries(recipe.get("inputs", []), "factory recipe '%s' inputs" % recipe_id)
+		_validate_item_entries(recipe.get("outputs", []), "factory recipe '%s' outputs" % recipe_id)
 
 
 func _validate_progression_supply_gates() -> void:
@@ -981,22 +1043,6 @@ func _validate_eighth_phase_geography_contract() -> void:
 				errors.append("Location '%s' is missing environment field '%s'" % [region.get("id", "?"), field])
 		if float(environment.get("gravity", -1.0)) < 0.0 or float(environment.get("solar_flux", -1.0)) < 0.0 or float(environment.get("transport_distance", -1.0)) < 0.0 or float(environment.get("construction_difficulty", 0.0)) <= 0.0:
 			errors.append("Location '%s' has invalid environment magnitudes" % region.get("id", "?"))
-	for method_value in extraction_methods.values():
-		var method := method_value as Dictionary
-		if float(method.get("potential_multiplier", 0.0)) <= 0.0 or str(method.get("survey_required", "")) not in survey_rules.get("state_order", []):
-			errors.append("Extraction Method '%s' has invalid Potential or Survey requirements" % method.get("id", "?"))
-	for location_value in mining_locations.values():
-		var mining_location := location_value as Dictionary
-		if not regions.has(str(mining_location.get("region", ""))) or float(mining_location.get("extraction_potential", 0.0)) <= 0.0 or mining_location.get("resource_profile", null) is not Dictionary:
-			errors.append("Resource Profile '%s' must reference a Location and positive Sustainable Extraction Potential" % mining_location.get("id", "?"))
-		var profile: Dictionary = mining_location.get("resource_profile", {})
-		if str(profile.get("resource_type", "")).is_empty() or not items.has(str(profile.get("resource_type", ""))):
-			errors.append("Resource Profile '%s' has an invalid resource type" % mining_location.get("id", "?"))
-		for method_id_value in profile.get("allowed_methods", []):
-			if not extraction_methods.has(str(method_id_value)):
-				errors.append("Resource Profile '%s' references unknown Extraction Method '%s'" % [mining_location.get("id", "?"), method_id_value])
-
-
 func _validate_fourth_phase_freight_contract() -> void:
 	var required_classes := ["BULK", "STANDARD", "PRECISION", "CRYOGENIC", "HAZARDOUS", "OVERSIZED"]
 	if freight_rules.get("classes", []) != required_classes:
@@ -1229,8 +1275,8 @@ func _bootstrap_requirements_reachable(requirements: Array, allowed_technologies
 
 
 func _validate_core_content_contract() -> void:
-	if str(pack_metadata.get("version", "")) != "1.29.0":
-		errors.append("Core content pack version must be 1.29.0")
+	if str(pack_metadata.get("version", "")) != "1.32.0":
+		errors.append("Core content pack version must be 1.32.0")
 	for legacy_activity_id in ["build_automated_metallurgy_network", "upgrade_automated_metallurgy_network", "build_automated_electronics_network", "build_automated_assembly_network"]:
 		if activities.has(legacy_activity_id):
 			errors.append("Core content still exposes retired background-capacity activity '%s'" % legacy_activity_id)
@@ -1293,6 +1339,8 @@ func _validate_core_content_contract() -> void:
 func _validate_closed_economy() -> void:
 	var stable_sources := {}
 	var consumers := {}
+	for item_id_value in industry_rules.get("bootstrap_contract", {}).get("progression_extractable_item_ids", []):
+		stable_sources[str(item_id_value)] = true
 	for activity_value in activities.values():
 		var activity := activity_value as Dictionary
 		if bool(activity.get("repeat", true)):
@@ -1391,21 +1439,6 @@ func get_item_name(item_id: String) -> String:
 	return str(items.get(item_id, {}).get("name", item_id.capitalize()))
 
 
-func get_location_mining_activities(location_id: String) -> Array:
-	var result: Array = []
-	for activity in activities_by_domain.get("mining", []):
-		if str(activity.get("location", "")) == location_id:
-			result.append(activity)
-	return result
-
-
-func get_mining_activity_for_site(site_id: String) -> Dictionary:
-	for activity in activities_by_domain.get("mining", []):
-		if str(activity.get("site", "")) == site_id:
-			return activity
-	return {}
-
-
 func ship_loadout_valid(ship_id: String, module_ids: Array) -> bool:
 	return ship_loadout_error(ship_id, module_ids).is_empty()
 
@@ -1422,6 +1455,8 @@ func ship_loadout_error(ship_id: String, module_ids: Array) -> String:
 		var module: Dictionary = modules.get(module_id, {})
 		if module.is_empty():
 			return "missing module '%s'" % module_id
+		if bool(module.get("retired", false)):
+			return "retired module '%s'" % module_id
 		var module_size := str(module.get("size", "S"))
 		if not allowed_sizes.has(module_size):
 			return "module '%s' size %s is not supported" % [module_id, module_size]
@@ -1453,8 +1488,6 @@ func _build_progression_graph() -> void:
 	progression_edges.clear()
 	for activity in activities.values():
 		var activity_node := "activity:%s" % activity.get("id", "")
-		if activity.get("domain", "") == "mining":
-			progression_edges.append({"from":"mining_location:%s" % activity.get("location", ""), "to":activity_node, "type":"REQUIRES_CAPABILITY"})
 		if activity.get("domain", "") == "industry":
 			progression_edges.append({"from":"facility:%s" % activity.get("facility", ""), "to":activity_node, "type":"REQUIRES_CAPABILITY"})
 		for cost in activity.get("costs", []):
@@ -1494,10 +1527,6 @@ func _build_progression_graph() -> void:
 	for module in modules.values():
 		for capability_id in module.get("capabilities", {}):
 			progression_edges.append({"from":"item:%s" % module.get("id", ""), "to":"capability:%s" % capability_id, "type":"PROVIDES_CAPABILITY"})
-	for location in mining_locations.values():
-		progression_edges.append({"from":"region:%s" % location.get("region", ""), "to":"mining_location:%s" % location.get("id", ""), "type":"UNLOCKS"})
-		for hazard_id in location.get("hazards", []):
-			progression_edges.append({"from":"capability:%s" % mining_hazards.get(str(hazard_id), {}).get("required_capability", ""), "to":"mining_location:%s" % location.get("id", ""), "type":"REQUIRES_CAPABILITY"})
 	for facility in facilities.values():
 		for capability_id in facility.get("capabilities", {}):
 			progression_edges.append({"from":"facility:%s" % facility.get("id", ""), "to":"capability:%s" % capability_id, "type":"PROVIDES_CAPABILITY"})
@@ -1668,21 +1697,9 @@ func _validate_effect(effect: Dictionary, owner: String) -> void:
 		"set_progression_tier":
 			if int(effect.get("tier", 0)) <= 0:
 				errors.append("%s has an invalid progression tier" % owner)
-		"discover_mining_site":
-			if not mining_sites.has(str(effect.get("id", ""))):
-				errors.append("%s discovers a missing permanent mining site" % owner)
 		"unlock_combat_area":
 			if not combat_areas.has(str(effect.get("id", ""))):
 				errors.append("%s unlocks a missing combat area" % owner)
-		"unlock_extraction_network":
-			if not extraction_networks.has(str(effect.get("id", ""))):
-				errors.append("%s unlocks a missing extraction network" % owner)
-		"upgrade_extraction_network":
-			if not extraction_networks.has(str(effect.get("id", ""))) or int(effect.get("levels", 0)) <= 0:
-				errors.append("%s upgrades an invalid extraction network" % owner)
-		"upgrade_extraction_command":
-			if int(effect.get("capacity", 0)) <= 0:
-				errors.append("%s has an invalid extraction command capacity" % owner)
 		"set_region_state":
 			if not regions.has(str(effect.get("region", ""))) or str(effect.get("field", "")) not in ["exploration_state", "strategic_state", "development_state"]:
 				errors.append("%s has an invalid regional-state effect" % owner)
@@ -1772,12 +1789,6 @@ func _validate_requirement(requirement: Dictionary, owner: String) -> void:
 		"infrastructure_site", "boss_defeated":
 			if str(requirement.get("id", "")).is_empty():
 				errors.append("%s has an empty progression requirement" % owner)
-		"mining_site_available":
-			if not mining_sites.has(str(requirement.get("id", ""))):
-				errors.append("%s requires a missing permanent mining site" % owner)
-		"mining_sites_mastered":
-			if not regions.has(str(requirement.get("region", ""))) or int(requirement.get("count", 0)) <= 0:
-				errors.append("%s has an invalid mastered-site requirement" % owner)
 		"survey_state":
 			if not regions.has(str(requirement.get("id", ""))) or str(requirement.get("state", "")) not in LocationState.SURVEY_STATE_ORDER:
 				errors.append("%s has an invalid Survey State requirement" % owner)

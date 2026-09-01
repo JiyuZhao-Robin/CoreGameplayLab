@@ -19,6 +19,7 @@
 <div id="helios-hull-roster" data-view="framework">
   <style>
     #helios-hull-roster {
+      box-sizing: border-box;
       color-scheme: dark;
       width: 100%;
       min-height: 720px;
@@ -348,47 +349,111 @@
     }
 
     #helios-hull-roster .atlas-baseline-label,
-    #helios-hull-roster .atlas-coordinate-label {
+    #helios-hull-roster .atlas-coordinate-label,
+    #helios-hull-roster .atlas-zone-label {
       fill: #52645c;
       font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
       font-size: 12px;
       letter-spacing: .06em;
     }
 
-    #helios-hull-roster .atlas-hull-surface {
-      fill: rgba(16, 26, 22, .96);
-      stroke-width: 1.7;
-      stroke-linejoin: round;
-      vector-effect: non-scaling-stroke;
-      filter: drop-shadow(0 0 5px rgba(0, 0, 0, .75));
+    #helios-hull-roster .atlas-zone-label {
+      fill: #71877e;
+      font-weight: 650;
+      letter-spacing: .14em;
     }
 
-    #helios-hull-roster .atlas-inner-line,
+    #helios-hull-roster .atlas-zone-line {
+      fill: none;
+      stroke: #354b43;
+      stroke-width: 1;
+      stroke-dasharray: 9 8;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-hull-surface {
+      fill: #151d1a;
+      stroke-width: 1.15;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-hull-underlay {
+      fill: #090f0d;
+      stroke: #26332e;
+      stroke-width: 1.35;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      opacity: .94;
+    }
+
+    #helios-hull-roster .atlas-external-module {
+      fill: #111916;
+      stroke-width: 1.15;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-module-inset {
+      fill: rgba(4, 8, 7, .86);
+      stroke: #52645c;
+      stroke-width: .55;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-armor-dark,
+    #helios-hull-roster .atlas-armor-mid,
+    #helios-hull-roster .atlas-livery,
+    #helios-hull-roster .atlas-vent,
+    #helios-hull-roster .atlas-running-light {
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+
+    #helios-hull-roster .atlas-armor-dark {
+      fill: rgba(5, 10, 9, .76);
+      stroke: #29332f;
+      stroke-width: .7;
+    }
+
+    #helios-hull-roster .atlas-armor-mid {
+      fill: rgba(78, 91, 85, .22);
+      stroke: #46544e;
+      stroke-width: .55;
+    }
+
+    #helios-hull-roster .atlas-livery {
+      fill: none;
+      stroke-width: 1.15;
+      opacity: .78;
+    }
+
+    #helios-hull-roster .atlas-vent {
+      fill: #050908;
+      stroke: #718078;
+      stroke-width: .45;
+      opacity: .9;
+    }
+
+    #helios-hull-roster .atlas-running-light {
+      stroke: none;
+    }
+
     #helios-hull-roster .atlas-panel-line,
-    #helios-hull-roster .atlas-machinery-line,
-    #helios-hull-roster .atlas-center-line {
+    #helios-hull-roster .atlas-machinery-line {
       fill: none;
       vector-effect: non-scaling-stroke;
     }
 
-    #helios-hull-roster .atlas-inner-line {
-      stroke: #53655d;
-      stroke-width: .9;
-    }
-
     #helios-hull-roster .atlas-panel-line {
       stroke: #3a4b44;
-      stroke-width: .7;
+      stroke-width: .58;
+      opacity: .82;
     }
 
     #helios-hull-roster .atlas-machinery-line {
-      stroke-width: 1.05;
-    }
-
-    #helios-hull-roster .atlas-center-line {
-      stroke: #293a34;
-      stroke-width: .65;
-      stroke-dasharray: 3 3;
+      stroke-width: .78;
+      opacity: .86;
     }
 
     #helios-hull-roster .atlas-void {
@@ -398,17 +463,35 @@
       vector-effect: non-scaling-stroke;
     }
 
-    #helios-hull-roster .atlas-engine {
-      fill: #10241f;
-      stroke: #65d6c1;
-      stroke-width: 1;
+    #helios-hull-roster .atlas-engine-housing,
+    #helios-hull-roster .atlas-engine-throat,
+    #helios-hull-roster .atlas-engine-glow {
       vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-engine-housing {
+      fill: #19231f;
+      stroke: #52645c;
+      stroke-width: .85;
+    }
+
+    #helios-hull-roster .atlas-engine-throat {
+      fill: #030706;
+      stroke: #345e55;
+      stroke-width: .55;
+    }
+
+    #helios-hull-roster .atlas-engine-glow {
+      fill: none;
+      stroke: #65d6c1;
+      stroke-width: .7;
+      opacity: .62;
     }
 
     #helios-hull-roster .atlas-hardpoint {
       fill: #07100d;
       stroke: #d8a66a;
-      stroke-width: 1;
+      stroke-width: .75;
       vector-effect: non-scaling-stroke;
     }
 
@@ -428,7 +511,7 @@
     }
 
     #helios-hull-roster .atlas-ship.is-selected .atlas-hull-surface {
-      filter: drop-shadow(0 0 7px rgba(101, 214, 193, .48));
+      stroke-width: 1.45;
     }
 
     #helios-hull-roster .atlas-ship.is-selected .atlas-selection-bracket {
@@ -808,14 +891,65 @@
     }
 
     #helios-hull-roster .blueprint-sheet {
+      position: relative;
       height: 376px;
       padding: 8px 12px 0;
+      overflow: hidden;
     }
 
     #helios-hull-roster .blueprint-sheet svg {
       display: block;
       width: 100%;
       height: 100%;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    #helios-hull-roster .blueprint-sheet svg.is-dragging {
+      cursor: grabbing;
+    }
+
+    #helios-hull-roster .blueprint-controls {
+      position: absolute;
+      z-index: 3;
+      top: 14px;
+      right: 18px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    #helios-hull-roster .blueprint-control {
+      min-width: 27px;
+      height: 25px;
+      padding: 0 7px;
+      border: 1px solid #35443e;
+      border-radius: 0;
+      color: #83918a;
+      background: rgba(8, 16, 14, .92);
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+      cursor: pointer;
+    }
+
+    #helios-hull-roster .blueprint-control:hover {
+      color: #e9eeeb;
+      border-color: #65d6c1;
+    }
+
+    #helios-hull-roster .blueprint-control:focus-visible {
+      outline: 2px solid #65d6c1;
+      outline-offset: -2px;
+    }
+
+    #helios-hull-roster .blueprint-scale-readout {
+      min-width: 112px;
+      margin-right: 3px;
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+      text-align: right;
     }
 
     #helios-hull-roster .blueprint-shell {
@@ -837,6 +971,53 @@
       stroke: #35443e;
       stroke-width: 0.8;
       stroke-dasharray: 2 2;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .blueprint-panel-detail {
+      fill: none;
+      stroke: #53655d;
+      stroke-width: 0.72;
+      opacity: .84;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .blueprint-dimension,
+    #helios-hull-roster .scale-reference-line {
+      fill: none;
+      stroke: #60716a;
+      stroke-width: 0.7;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .blueprint-dimension {
+      stroke-dasharray: 2 2;
+    }
+
+    #helios-hull-roster .blueprint-dimension-text,
+    #helios-hull-roster .blueprint-grid-label,
+    #helios-hull-roster .scale-reference-text {
+      fill: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      paint-order: stroke;
+      stroke: #08100e;
+      stroke-width: 2px;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+
+    #helios-hull-roster .scale-reference-hull {
+      fill: rgba(101, 214, 193, .05);
+      stroke: #65d6c1;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .scale-reference-human {
+      fill: none;
+      stroke: #e3b35b;
+      stroke-width: 0.75;
       vector-effect: non-scaling-stroke;
     }
 
@@ -1084,8 +1265,7 @@
     }
 
     #helios-hull-roster .rank-legend svg {
-      width: 12px;
-      height: 12px;
+      flex: 0 0 auto;
       overflow: visible;
     }
 
@@ -1342,7 +1522,7 @@
   <section class="atlas-page" aria-label="同尺度舰体图谱">
     <div class="atlas-toolbar">
       <div class="atlas-filters" role="group" aria-label="按舰体尺寸筛选">
-        <button class="atlas-filter" type="button" aria-pressed="true" data-atlas-filter="all">全部 · 12</button>
+        <button class="atlas-filter" type="button" aria-pressed="true" data-atlas-filter="all">全部 · 42</button>
         <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="small">小型 &lt;100m</button>
         <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="medium">中型 100–400m</button>
         <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="large">大型 400–900m</button>
@@ -1368,7 +1548,7 @@
 
       <div class="atlas-main">
         <div class="atlas-viewport" tabindex="0" aria-label="可缩放平移的同尺度舰船画布。滚轮缩放，拖动画布。">
-          <svg class="atlas-canvas" role="img" aria-label="十二艘原创舰船的统一比例俯视线稿"></svg>
+          <svg class="atlas-canvas" role="img" aria-label="四十二艘原创舰船的统一比例彩色俯视图鉴"></svg>
           <div class="atlas-hud atlas-hud-top">
             ORTHOGRAPHIC TOP / TRUE SCALE<br>
             细格 2m · 中格 10m · 粗格 50m<br>
@@ -1471,7 +1651,7 @@
         {id:"bc01",class:"battlecruiser",name:"破阵",en:"Linebreaker",role:"重装突击战列巡洋舰",profile:"p15",accent:"#d87562",span:36,budget:[548,612,566],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["kinetic","L",3],["fire","L",1],["hull","L",2],["kinetic","S",4]],note:"三门大型主炮负责突破，四门小炮维持近防；舰首装甲明显厚于舰尾。"},
         {id:"bc02",class:"battlecruiser",name:"风暴",en:"Tempest Rack",role:"远程导弹战列巡洋舰",profile:"p16",accent:"#e58f55",span:37,budget:[506,658,498],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["missile","L",4],["fire","L",1],["sensor","M",1],["kinetic","S",2],["thermal","M",1]],note:"四座大型发射系统沿侧舷排列，用较薄结构换取超视距齐射能力。"},
         {id:"bc03",class:"battlecruiser",name:"元帅",en:"Marshal Array",role:"舰队指挥战列巡洋舰",profile:"p17",accent:"#76aee8",span:34,budget:[522,704,582],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["fire","L",2],["sensor","L",2],["ewar","M",2],["support","M",2],["kinetic","M",2]],note:"高耸指挥冠和成对传感器阵列表明它是舰队节点，而非单纯火力平台。"},
-        {id:"bc04",class:"battlecruiser",name:"代达罗斯",en:"Daedalus Works",role:"移动建设战列巡洋舰",profile:"p18",accent:"#e1b452",span:35,budget:[624,646,678],mounts:[["core","L",1],["engine","L",1],["shield","L",1],["engineering","L",3],["cargo","L",2],["support","M",2],["drone","M",2],["thermal","L",1]],note:"非对称作业坞只承载工程插件，外置桁架没有槽位；它是一座会移动的施工平台。"},
+        {id:"bc04",class:"battlecruiser",name:"代达罗斯",en:"Daedalus Works",role:"移动建设战列巡洋舰",profile:"p18",accent:"#e1b452",span:35,budget:[624,646,678],mounts:[["core","L",1],["engine","L",1],["shield","L",1],["engineering","L",3],["cargo","L",2],["support","M",2],["drone","M",2],["thermal","L",1]],note:"轴对称承力舰体允许工程插件采用偏置作业编组，外置桁架没有槽位；它是一座会移动的施工平台。"},
 
         {id:"bs01",class:"battleship",name:"利维坦",en:"Leviathan Siege",role:"三联超级巨炮战列舰",profile:"p19",accent:"#d87562",span:38,budget:[1080,1420,1260],pattern:"trident",mounts:[["core","XL",1],["engine","L",1],["shield","L",2],["kinetic","XL",3],["fire","XL",1],["hull","L",3],["thermal","L",2]],note:"三座 T4 后坐炮沿舰首三角承力架布置。槽位少而昂贵，一次齐射会占用绝大部分电力与散热预算。"},
         {id:"bs02",class:"battleship",name:"铁幕",en:"Ironwall Arsenal",role:"多炮位防空战列舰",profile:"p20",accent:"#d87562",span:43,budget:[1240,1180,1460],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["kinetic","M",6],["kinetic","S",8],["fire","L",2],["sensor","M",1],["thermal","L",2],["hull","L",2]],note:"十四个 T1/T2 实弹炮位形成密集火网，适合点防御和多目标压制，但没有 T4 主炮的单次破坏力。"},
@@ -1479,18 +1659,18 @@
         {id:"bs04",class:"battleship",name:"天火",en:"Skyfire Arsenal",role:"饱和导弹战列舰",profile:"p22",accent:"#e58f55",span:42,budget:[1170,1320,1390],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["missile","L",6],["missile","M",4],["fire","L",2],["cargo","M",2],["sensor","M",1]],note:"十组发射接口和专用弹药舱支撑饱和攻击，宽侧舷是最醒目的识别特征。"},
         {id:"bs05",class:"battleship",name:"城塞",en:"Citadel Command",role:"指挥防御战列舰",profile:"p23",accent:"#65a9d8",span:38,budget:[1360,1490,1510],mounts:[["core","XL",1],["engine","L",1],["shield","XL",1],["shield","L",2],["fire","XL",1],["fire","L",2],["sensor","L",2],["drone","L",2],["support","L",2],["hull","L",2],["kinetic","M",4]],note:"牺牲主炮数量，换取 T4 指挥节点、舰队护盾和无人机支援，是大型编队的稳定中心。"},
 
-        {id:"cap01",class:"capital",name:"碎界者",en:"Worldbreaker",role:"无畏舰 Dreadnought",profile:"p24",accent:"#d87562",span:44,budget:[2480,3180,2920],mounts:[["core","XXL",1],["engine","XL",2],["shield","XL",2],["kinetic","XXL",4],["fire","XXL",2],["hull","XXL",3],["thermal","XL",2]],note:"四座 T5 攻城炮围绕脊柱核心布置，狭长舰体将后坐力传向舰尾，进入攻城状态后成为固定火力节点。"},
+        {id:"cap01",class:"capital",name:"碎界者",en:"Worldbreaker",role:"无畏舰 Dreadnought",profile:"p24",accent:"#d87562",span:44,budget:[2480,3180,2920],mounts:[["core","XXL",1],["engine","XL",2],["shield","XL",2],["kinetic","XXL",4],["fire","XXL",2],["hull","XXL",3],["thermal","XL",2]],note:"参考尺度图中的黑色长枪型巨舰重建：四座 Ø88m T5 攻城炮围绕纵向脊柱布置，深轴对称承力梁把后坐力传向舰尾。"},
         {id:"cap02",class:"capital",name:"星群",en:"Constellation",role:"航空母舰 Carrier",profile:"p25",accent:"#b6c96a",span:46,budget:[2720,3360,3040],mounts:[["core","XL",1],["engine","XL",2],["shield","XL",2],["drone","XXL",2],["drone","XL",2],["fire","XL",2],["sensor","L",2],["support","L",2],["cargo","L",2],["kinetic","S",8]],note:"中央开放式飞行甲板把舰体分成两条承力臂，两座 T5 主机库承担重型舰载机，小型实弹槽负责近防。"},
         {id:"cap03",class:"capital",name:"圣所",en:"Sanctuary",role:"力量辅助舰 Force Auxiliary",profile:"p26",accent:"#70bb85",span:40,budget:[2960,3820,3540],mounts:[["core","XXL",2],["engine","XL",1],["shield","XXL",1],["shield","XL",2],["support","XXL",4],["fire","L",2],["sensor","L",2],["cargo","L",2],["thermal","XL",2],["kinetic","S",6]],note:"环形船体围绕空心维护井展开，四个 T5 支援接口与双核心共同服务舰队维修、护盾传输和补给。"},
-        {id:"cap04",class:"capital",name:"统御",en:"Dominion",role:"超级航母 Supercarrier",profile:"p27",accent:"#b6c96a",span:48,budget:[3680,4460,4180],mounts:[["core","XXL",2],["engine","XL",2],["shield","XXL",1],["shield","XL",2],["drone","XXL",6],["fire","XXL",2],["sensor","XL",1],["support","L",2],["kinetic","S",10],["missile","M",4]],note:"两座不等长开放机库与偏置舰桥构成明显的不对称轮廓；六个 T5 机库和十个近防炮位让它成为移动航空基地。"},
-        {id:"cap05",class:"capital",name:"赫利俄斯",en:"Helios Titan",role:"泰坦 Titan",profile:"p28",accent:"#e3b35b",span:45,budget:[4860,6120,5740],mounts:[["core","XXL",3],["engine","XXL",3],["shield","XXL",4],["beam","XXL",2],["kinetic","XXL",2],["fire","XXL",3],["hull","XXL",4],["thermal","XXL",3],["sensor","XXL",2]],note:"十字要塞轮廓拥有清晰的纵向主脊和横向火力翼；它不靠堆叠低级槽位，而是让二十六个槽位全部达到 T5。"},
+        {id:"cap04",class:"capital",name:"统御",en:"Dominion",role:"超级航母 Supercarrier",profile:"p27",accent:"#b6c96a",span:48,budget:[3680,4460,4180],mounts:[["core","XXL",2],["engine","XL",2],["shield","XXL",1],["shield","XL",2],["drone","XXL",6],["fire","XXL",2],["sensor","XL",1],["support","L",2],["kinetic","S",10],["missile","M",4]],note:"轴对称双机库承担主结构载荷，舰桥、升降机与近防插件允许偏置安装；六个 T5 机库让它成为移动航空基地。"},
+        {id:"cap05",class:"capital",name:"赫利俄斯",en:"Helios Titan",role:"舰队旗舰 Flagship / Titan",profile:"p28",accent:"#e3b35b",span:45,budget:[4860,6120,5740],mounts:[["core","XXL",3],["engine","XXL",3],["shield","XXL",4],["beam","XXL",2],["kinetic","XXL",2],["fire","XXL",3],["hull","XXL",4],["thermal","XXL",3],["sensor","XXL",2]],note:"参考尺度图中的灰色堡垒型大船重建：厚重轴对称主脊、分层装甲肩与成对深舱容纳二十六个 Ø88m T5 旗舰级接口。"},
         {id:"cap06",class:"capital",name:"阿特拉斯方舟",en:"Atlas Ark",role:"货舰 Freighter",profile:"p29",accent:"#65d6c1",span:47,budget:[4240,2860,3380],mounts:[["core","XL",1],["engine","XL",2],["shield","L",2],["cargo","XXL",12],["hull","XXL",4],["thermal","L",2],["support","L",1]],note:"钝首箱式船体把十二个 T5 货舱组织成规则货运矩阵，轮廓像移动仓库，几乎不具备自主作战能力。"},
         {id:"cap07",class:"capital",name:"跃迁行者",en:"Wayfarer",role:"跳跃货舰 Jump Freighter",profile:"p30",accent:"#62b5ae",span:43,budget:[3960,4280,3920],mounts:[["core","XXL",2],["engine","XXL",3],["shield","XL",2],["cargo","XXL",8],["sensor","L",2],["fire","L",1],["thermal","XL",2],["hull","XXL",3]],note:"双跃迁舱把货运脊柱夹在中央，牺牲四个货舱换取双核心、三组 T5 跃迁驱动和更强导航系统。"}
       ];
 
       const shipDimensions = {
-        f01:[42,9], f02:[58,24], f03:[74,38], f04:[68,34], f05:[52,22],
-        d01:[118,32], d02:[142,58], d03:[176,82], d04:[132,54],
+        f01:[72,22], f02:[76,30], f03:[82,42], f04:[76,38], f05:[64,26],
+        d01:[132,44], d02:[142,58], d03:[176,82], d04:[132,54],
         c01:[250,90], c02:[238,62], c03:[320,138], c04:[286,126], c05:[222,54],
         bc01:[470,180], bc02:[510,206], bc03:[560,218], bc04:[620,260],
         bs01:[780,240], bs02:[860,360], bs03:[740,190], bs04:[920,390], bs05:[980,420],
@@ -1536,7 +1716,6 @@
       }
 
       function profileDetails(half, ribs) {
-        const center = "M60 3V87";
         const ribPaths = ribs.map(y => {
           const width = halfWidthAt(half,y)*.78;
           return `M${60-width} ${45+y}H${60+width}`;
@@ -1546,7 +1725,7 @@
         const innerLeft = stations.map(([x,y]) => `${60-x*.42} ${45+y}`).join("L");
         const outerRight = stations.map(([x,y]) => `${60+x*.76} ${45+y}`).join("L");
         const outerLeft = stations.map(([x,y]) => `${60-x*.76} ${45+y}`).join("L");
-        return `${center}${innerRight ? `M${innerRight}M${innerLeft}M${outerRight}M${outerLeft}` : ""}${ribPaths}`;
+        return `${innerRight ? `M${innerRight}M${innerLeft}M${outerRight}M${outerLeft}` : ""}${ribPaths}`;
       }
 
       function makeSymmetricProfile(spec) {
@@ -1610,6 +1789,13 @@
         profiles[id] = makeSymmetricProfile(spec);
       });
 
+      /*
+       * Keep the complete framework catalogue available to the true-scale atlas.
+       * The two views deliberately remain separate renderers, but they now share
+       * one source of truth instead of the atlas maintaining a small demo subset.
+       */
+      root.hullCatalog = {classes,profiles,ships};
+
       const typeMeta = {
         core:{label:"核心",key:"PWR-CIRCLE",color:"#e3b35b",shape:"circle",zone:"core"},
         hull:{label:"船体",key:"STR-RECT",color:"#95a29c",shape:"rect",zone:"structure"},
@@ -1650,8 +1836,8 @@
 
       const sizeRank = {S:1,M:2,L:3,XL:4,XXL:5};
       const classLabels = Object.fromEntries(classes.map(item => [item.id, item]));
-      let currentClass = "battleship";
-      let selectedShipId = "bs01";
+      let currentClass = "capital";
+      let selectedShipId = "cap01";
 
       const classTabs = root.querySelector(".class-tabs");
       const shipList = root.querySelector(".ship-list");
@@ -1678,14 +1864,38 @@
         `;
       }
 
-      const canvasByClass = {
-        frigate:{w:120,h:90,marker:2.5,grid:4},
-        destroyer:{w:145,h:104,marker:2.75,grid:5},
-        cruiser:{w:175,h:124,marker:3.0,grid:6},
-        battlecruiser:{w:205,h:145,marker:3.15,grid:7},
-        battleship:{w:260,h:180,marker:3.25,grid:8},
-        capital:{w:360,h:240,marker:3.45,grid:10}
+      const mountRadiusBySize = {
+        S:2.5,
+        M:5.5,
+        L:11,
+        XL:22,
+        XXL:44
       };
+
+      function engineeringGridStep(value) {
+        const exponent = Math.floor(Math.log10(Math.max(value,.001)));
+        const scaled = value/Math.pow(10,exponent);
+        const nice = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+        return nice*Math.pow(10,exponent);
+      }
+
+      function canvasForShip(ship) {
+        const maxRadius = Math.max(...ship.mounts.map(([,size]) => mountRadiusBySize[size]));
+        const padding = Math.max(ship.length*.095,maxRadius*1.65,14);
+        const height = ship.length+padding*2;
+        const sheet = root.querySelector(".blueprint-sheet");
+        const rect = sheet ? sheet.getBoundingClientRect() : {width:680,height:376};
+        const aspect = rect.width > 0 && rect.height > 0 ? rect.width/rect.height : 1.8;
+        const width = Math.max(ship.beam+padding*2,height*aspect);
+        const majorGrid = engineeringGridStep(height/18);
+        return {
+          w:width,
+          h:height,
+          padding,
+          majorGrid,
+          minorGrid:majorGrid/5
+        };
+      }
 
       function rankGlyph(rank, x, y, radius) {
         const cx = x + radius * .72;
@@ -1716,10 +1926,10 @@
       }
 
       function mountSeat(x, y, radius) {
-        const e = radius+.55;
+        const e = radius*1.13;
         const notch = radius*.34;
         return `
-          <circle cx="${x}" cy="${y}" r="${radius+.32}" class="mount-seat"/>
+          <circle cx="${x}" cy="${y}" r="${radius*1.08}" class="mount-seat"/>
           <path d="M${x-e} ${y-notch}V${y+notch}M${x+e} ${y-notch}V${y+notch}M${x-notch} ${y-e}H${x+notch}M${x-notch} ${y+e}H${x+notch}" class="mount-lug"/>
         `;
       }
@@ -1857,14 +2067,27 @@
       }
 
       function scaledGeometry(ship) {
-        const canvas = canvasByClass[ship.class];
-        const pad = 6;
-        const sx = (canvas.w - pad * 2) / 120;
-        const sy = (canvas.h - pad * 2) / 90;
+        const canvas = canvasForShip(ship);
         const profile = profiles[ship.profile];
+        const localPolygon = pathPoints(profile.outer);
+        const localXs = localPolygon.map(point => point.x);
+        const localYs = localPolygon.map(point => point.y);
+        const localBounds = {
+          left:Math.min(...localXs),
+          right:Math.max(...localXs),
+          top:Math.min(...localYs),
+          bottom:Math.max(...localYs)
+        };
+        const localCenter = {
+          x:(localBounds.left+localBounds.right)/2,
+          y:(localBounds.top+localBounds.bottom)/2
+        };
+        const sx = ship.beam/(localBounds.right-localBounds.left);
+        const sy = ship.length/(localBounds.bottom-localBounds.top);
+        const hullCenter = {x:canvas.w/2,y:canvas.h/2};
         const scalePolygon = path => pathPoints(path).map(point => ({
-          x:pad + point.x * sx,
-          y:pad + point.y * sy
+          x:hullCenter.x+(point.x-localCenter.x)*sx,
+          y:hullCenter.y+(point.y-localCenter.y)*sy
         }));
         const polygon = scalePolygon(profile.outer);
         const holes = (profile.voids || []).map(scalePolygon);
@@ -1890,7 +2113,21 @@
           top:Math.min(...ys),
           bottom:Math.max(...ys)
         };
-        return {canvas,pad,sx,sy,profile,polygon,holes,datum,bounds};
+        const hullTransform = `translate(${hullCenter.x} ${hullCenter.y}) scale(${sx} ${sy}) translate(${-localCenter.x} ${-localCenter.y})`;
+        return {
+          canvas,
+          sx,
+          sy,
+          profile,
+          polygon,
+          holes,
+          datum,
+          bounds,
+          localBounds,
+          localCenter,
+          hullCenter,
+          hullTransform
+        };
       }
 
       function pointInside(point, polygon) {
@@ -2025,32 +2262,32 @@
       }
 
       function safeCandidates(ship, geometry) {
-        const margin = geometry.canvas.marker + 3.35;
-        const step = geometry.canvas.marker * 2.75;
-        const bounds = {
-          left:geometry.bounds.left+margin,
-          right:geometry.bounds.right-margin,
-          top:geometry.bounds.top+margin,
-          bottom:geometry.bounds.bottom-margin
-        };
         const result = [];
-        const xCount = Math.ceil(Math.max(geometry.datum.x-bounds.left,bounds.right-geometry.datum.x)/step);
-        const yCount = Math.ceil(Math.max(geometry.datum.y-bounds.top,bounds.bottom-geometry.datum.y)/step);
-        for (let yi = -yCount; yi <= yCount; yi++) {
-          for (let xi = -xCount; xi <= xCount; xi++) {
-            const x = geometry.datum.x+xi*step;
-            const y = geometry.datum.y+yi*step;
-            if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) continue;
+        const width = geometry.bounds.right-geometry.bounds.left;
+        const height = geometry.bounds.bottom-geometry.bounds.top;
+        const xDivisions = 44;
+        const yDivisions = 68;
+        for (let yi = 0; yi <= yDivisions; yi++) {
+          for (let xi = 0; xi <= xDivisions; xi++) {
+            const x = geometry.bounds.left+width*xi/xDivisions;
+            const y = geometry.bounds.top+height*yi/yDivisions;
             const point = {x,y};
-            if (insideHull(point,geometry) && hullEdgeDistance(point,geometry) >= margin) {
-              result.push(point);
+            if (insideHull(point,geometry)) {
+              result.push({...point,edge:hullEdgeDistance(point,geometry)});
             }
           }
+        }
+        if (insideHull(geometry.datum,geometry)) {
+          result.push({...geometry.datum,edge:hullEdgeDistance(geometry.datum,geometry)});
         }
         return result.sort((a,b) =>
           Math.hypot(a.x-geometry.datum.x,a.y-geometry.datum.y)
           - Math.hypot(b.x-geometry.datum.x,b.y-geometry.datum.y)
         );
+      }
+
+      function mountEnvelope(size) {
+        return mountRadiusBySize[size]*1.26+.7;
       }
 
       function layoutMounts(ship) {
@@ -2076,17 +2313,20 @@
         let overlapViolations = 0;
         let overflowViolations = 0;
         let unplacedCount = 0;
-        const minimumSeparation = Math.max(
-          geometry.canvas.marker*2.68,
-          geometry.canvas.marker*2+1.1
-        );
         const zoneOrder = ["core","drive","command","weapon","defense","hangar","cargo","support","thermal","structure"];
         const assignments = [];
         zoneOrder.forEach(zone => {
           const items = groups[zone];
           const targets = zoneTargets(zone,geometry,items.length,ship.pattern === "trident");
           items.forEach((item,index) => {
-            assignments.push({item,target:targets[index] || [geometry.datum.x,geometry.datum.y]});
+            assignments.push({
+              item:{
+                ...item,
+                radius:mountRadiusBySize[item.size],
+                envelope:mountEnvelope(item.size)
+              },
+              target:targets[index] || [geometry.datum.x,geometry.datum.y]
+            });
           });
         });
         const targetCenter = assignments.length
@@ -2106,17 +2346,25 @@
             const centeredTarget = [target[0]+targetShift.x,target[1]+targetShift.y];
             let best = null;
             let bestScore = Infinity;
+            const occupiedWeight = occupied.reduce((sum,point) => sum+point.radius*point.radius,0);
+            const occupiedWeightedX = occupied.reduce((sum,point) => sum+point.x*point.radius*point.radius,0);
+            const occupiedWeightedY = occupied.reduce((sum,point) => sum+point.y*point.radius*point.radius,0);
+            const itemWeight = item.radius*item.radius;
             candidates.forEach(candidate => {
-              if (occupied.some(point => Math.hypot(point.x-candidate.x,point.y-candidate.y) < minimumSeparation)) return;
+              if (candidate.edge < item.envelope) return;
+              if (occupied.some(point => {
+                const clearance = item.envelope+point.envelope+Math.max(1,Math.min(item.radius,point.radius)*.14);
+                return Math.hypot(point.x-candidate.x,point.y-candidate.y) < clearance;
+              })) return;
               const distance = Math.hypot(candidate.x-centeredTarget[0],candidate.y-centeredTarget[1]);
-              const projectedCenter = (occupied.reduce((sum,point) => sum+point.x,0)+candidate.x)/(occupied.length+1);
-              const projectedCenterY = (occupied.reduce((sum,point) => sum+point.y,0)+candidate.y)/(occupied.length+1);
+              const projectedCenter = (occupiedWeightedX+candidate.x*itemWeight)/(occupiedWeight+itemWeight);
+              const projectedCenterY = (occupiedWeightedY+candidate.y*itemWeight)/(occupiedWeight+itemWeight);
               const centerPenalty = Math.abs(projectedCenter-geometry.datum.x)*.18
                 + Math.abs(projectedCenterY-geometry.datum.y)*.14;
               const targetSide = Math.sign(centeredTarget[0]-geometry.datum.x);
               const candidateSide = Math.sign(candidate.x-geometry.datum.x);
               const sidePenalty = targetSide !== 0 && candidateSide !== 0 && targetSide !== candidateSide
-                ? geometry.canvas.marker*5
+                ? item.radius*5
                 : 0;
               const score = distance+centerPenalty+sidePenalty;
               if (score < bestScore) {
@@ -2129,42 +2377,44 @@
               unplacedCount += 1;
               return;
             }
-            occupied.push(best);
-            placed.push({...item,x:best.x,y:best.y});
+            const installed = {...item,x:best.x,y:best.y};
+            occupied.push(installed);
+            placed.push(installed);
         });
 
         placed.forEach(item => {
-          if (!insideHull(item,geometry) || hullEdgeDistance(item,geometry) < geometry.canvas.marker+3.25) {
+          if (!insideHull(item,geometry) || hullEdgeDistance(item,geometry) < item.envelope) {
             violations += 1;
             overflowViolations += 1;
           }
         });
         for (let left = 0; left < placed.length; left++) {
           for (let right = left+1; right < placed.length; right++) {
+            const minimumSeparation = placed[left].envelope+placed[right].envelope
+              + Math.max(1,Math.min(placed[left].radius,placed[right].radius)*.14);
             if (Math.hypot(placed[left].x-placed[right].x,placed[left].y-placed[right].y) < minimumSeparation) {
               violations += 1;
               overlapViolations += 1;
             }
           }
         }
-        const mountCenterX = placed.length
-          ? placed.reduce((sum,item) => sum+item.x,0)/placed.length
+        const totalMountWeight = placed.reduce((sum,item) => sum+item.radius*item.radius,0);
+        const mountCenterX = totalMountWeight
+          ? placed.reduce((sum,item) => sum+item.x*item.radius*item.radius,0)/totalMountWeight
           : geometry.datum.x;
-        const mountCenterY = placed.length
-          ? placed.reduce((sum,item) => sum+item.y,0)/placed.length
+        const mountCenterY = totalMountWeight
+          ? placed.reduce((sum,item) => sum+item.y*item.radius*item.radius,0)/totalMountWeight
           : geometry.datum.y;
         const centerDriftX = Math.abs(mountCenterX-geometry.datum.x);
         const centerDriftY = Math.abs(mountCenterY-geometry.datum.y);
-        const centerLimitX = Math.max(geometry.canvas.marker*1.35,(geometry.bounds.right-geometry.bounds.left)*.025);
-        const centerLimitY = Math.max(geometry.canvas.marker*2.4,(geometry.bounds.bottom-geometry.bounds.top)*.075);
-        if (centerDriftX > centerLimitX || centerDriftY > centerLimitY) violations += 1;
+        const centerLimitX = (geometry.bounds.right-geometry.bounds.left)*.14;
+        const centerLimitY = (geometry.bounds.bottom-geometry.bounds.top)*.14;
         return {
           placed,
           violations,
           overlapViolations,
           overflowViolations,
           unplacedCount,
-          minimumSeparation,
           geometry,
           centerDriftX,
           centerDriftY,
@@ -2192,8 +2442,8 @@
           return `<path d="M${anchor.x.toFixed(2)} ${anchor.y.toFixed(2)}H${laneX.toFixed(2)}V${item.y.toFixed(2)}H${item.x.toFixed(2)}" class="installation-branch" stroke="${typeMeta[item.type].color}" data-bus-type="${item.type}"/>`;
         }).join("");
         const junctions = endpoints
-          .filter(item => Math.abs(item.x-datum.x) > layout.geometry.canvas.marker*1.5)
-          .map(item => `<circle cx="${(datum.x+(item.x-datum.x)*.28).toFixed(2)}" cy="${item.y.toFixed(2)}" r="${(layout.geometry.canvas.marker*.18).toFixed(2)}" class="installation-junction"/>`)
+          .filter(item => Math.abs(item.x-datum.x) > item.radius*1.5)
+          .map(item => `<circle cx="${(datum.x+(item.x-datum.x)*.28).toFixed(2)}" cy="${item.y.toFixed(2)}" r="${Math.max(.55,item.radius*.12).toFixed(2)}" class="installation-junction"/>`)
           .join("");
         return `
           <g class="installation-bus" aria-hidden="true">
@@ -2204,39 +2454,213 @@
         `;
       }
 
+      let blueprintState = null;
+
+      function scaleReferenceMarkup(ship, geometry) {
+        const reference = profiles.p01;
+        const points = pathPoints(reference.outer);
+        const xs = points.map(point => point.x);
+        const ys = points.map(point => point.y);
+        const bounds = {
+          left:Math.min(...xs),
+          right:Math.max(...xs),
+          top:Math.min(...ys),
+          bottom:Math.max(...ys)
+        };
+        const sx = 9/(bounds.right-bounds.left);
+        const sy = 42/(bounds.bottom-bounds.top);
+        const referenceCenterX = geometry.bounds.left-Math.max(14,ship.beam*.045)-4.5;
+        const referenceBottom = geometry.bounds.bottom;
+        const transform = `translate(${referenceCenterX} ${referenceBottom-21}) scale(${sx} ${sy}) translate(${-(bounds.left+bounds.right)/2} ${-(bounds.top+bounds.bottom)/2})`;
+        const humanX = referenceCenterX+9;
+        const humanBottom = referenceBottom;
+        const humanHead = humanBottom-1.72;
+        const labelY = referenceBottom+Math.max(5,geometry.canvas.h*.012);
+        return `
+          <g class="scale-reference" aria-hidden="true">
+            <path d="${reference.outer}" transform="${transform}" class="scale-reference-hull"/>
+            <path d="M${referenceCenterX-4.5} ${referenceBottom+2.5}H${referenceCenterX+4.5}M${referenceCenterX-4.5} ${referenceBottom}V${referenceBottom+4.2}M${referenceCenterX+4.5} ${referenceBottom}V${referenceBottom+4.2}" class="scale-reference-line"/>
+            <text x="${referenceCenterX}" y="${labelY}" text-anchor="middle" class="scale-reference-text camera-text">42m 护卫舰</text>
+            <circle cx="${humanX}" cy="${humanHead}" r=".18" class="scale-reference-human"/>
+            <path d="M${humanX} ${humanHead+.2}V${humanBottom-.72}M${humanX-.45} ${humanHead+.62}H${humanX+.45}M${humanX} ${humanBottom-.72}L${humanX-.34} ${humanBottom}M${humanX} ${humanBottom-.72}L${humanX+.34} ${humanBottom}" class="scale-reference-human"/>
+            <text x="${humanX}" y="${labelY}" text-anchor="middle" class="scale-reference-text camera-text">2m</text>
+          </g>
+        `;
+      }
+
+      function dimensionMarkup(ship, geometry) {
+        const offset = Math.max(7,Math.min(ship.beam*.08,geometry.canvas.padding*.45));
+        const rightX = geometry.bounds.right+offset;
+        const topY = geometry.bounds.top-offset;
+        const tick = Math.max(2,geometry.canvas.h*.004);
+        return `
+          <g class="blueprint-dimensions" aria-hidden="true">
+            <path d="M${rightX} ${geometry.bounds.top}V${geometry.bounds.bottom}M${rightX-tick} ${geometry.bounds.top}H${rightX+tick}M${rightX-tick} ${geometry.bounds.bottom}H${rightX+tick}" class="blueprint-dimension"/>
+            <text x="${rightX+tick*1.8}" y="${geometry.hullCenter.y}" dominant-baseline="middle" class="blueprint-dimension-text camera-text">L ${ship.length}m</text>
+            <path d="M${geometry.bounds.left} ${topY}H${geometry.bounds.right}M${geometry.bounds.left} ${topY-tick}V${topY+tick}M${geometry.bounds.right} ${topY-tick}V${topY+tick}" class="blueprint-dimension"/>
+            <text x="${geometry.hullCenter.x}" y="${topY-tick*1.8}" text-anchor="middle" class="blueprint-dimension-text camera-text">W ${ship.beam}m</text>
+          </g>
+        `;
+      }
+
       function blueprintSvg(ship) {
         const profile = profiles[ship.profile];
         const path = profilePath(profile);
         const layout = layoutMounts(ship);
         const geometry = layout.geometry;
         const canvas = geometry.canvas;
-        const mounts = layout.placed.map(item => mountShape(item.type,item.x,item.y,item.size,typeMeta[item.type].color,canvas.marker,item.variant)).join("");
+        const mounts = layout.placed.map(item => mountShape(item.type,item.x,item.y,item.size,typeMeta[item.type].color,item.radius,item.variant)).join("");
         const buses = installationBus(layout);
         const accent = ship.accent;
-        const hullTransform = `translate(${geometry.pad} ${geometry.pad}) scale(${geometry.sx} ${geometry.sy})`;
+        const hullTransform = geometry.hullTransform;
+        const datumSize = Math.max(1.2,canvas.h/230);
+        const initialTextSize = canvas.h/52;
+        blueprintState = {
+          ship,
+          layout,
+          camera:{x:0,y:0,w:canvas.w,h:canvas.h},
+          fit:{x:0,y:0,w:canvas.w,h:canvas.h}
+        };
         return `
-          <svg viewBox="0 0 ${canvas.w} ${canvas.h}" role="img" aria-label="${ship.name}舰体槽位结构图" data-layout-status="${layout.violations === 0 ? "pass" : "fail"}" data-mount-violations="${layout.violations}" data-overlap-violations="${layout.overlapViolations}" data-overflow-violations="${layout.overflowViolations}" data-unplaced-count="${layout.unplacedCount}" data-mount-count="${layout.placed.length}" data-center-drift-x="${layout.centerDriftX.toFixed(2)}" data-center-drift-y="${layout.centerDriftY.toFixed(2)}" data-center-limit-x="${layout.centerLimitX.toFixed(2)}" data-center-limit-y="${layout.centerLimitY.toFixed(2)}">
+          <svg class="blueprint-canvas" viewBox="0 0 ${canvas.w} ${canvas.h}" role="img" aria-label="${ship.name}舰体槽位结构图；滚轮缩放，拖动画布" data-layout-status="${layout.violations === 0 ? "pass" : "fail"}" data-mount-violations="${layout.violations}" data-overlap-violations="${layout.overlapViolations}" data-overflow-violations="${layout.overflowViolations}" data-unplaced-count="${layout.unplacedCount}" data-mount-count="${layout.placed.length}" data-ship-length="${ship.length}" data-ship-beam="${ship.beam}" data-center-drift-x="${layout.centerDriftX.toFixed(2)}" data-center-drift-y="${layout.centerDriftY.toFixed(2)}" data-center-limit-x="${layout.centerLimitX.toFixed(2)}" data-center-limit-y="${layout.centerLimitY.toFixed(2)}">
             <defs>
-              <pattern id="grid-${ship.id}" width="${canvas.grid}" height="${canvas.grid}" patternUnits="userSpaceOnUse">
-                <path d="M${canvas.grid} 0H0V${canvas.grid}" fill="none" stroke="#18231f" stroke-width=".35"/>
+              <pattern id="minor-grid-${ship.id}" class="minor-grid-pattern" width="${canvas.minorGrid}" height="${canvas.minorGrid}" patternUnits="userSpaceOnUse">
+                <path class="minor-grid-path" d="M${canvas.minorGrid} 0H0V${canvas.minorGrid}" fill="none" stroke="#14201c" stroke-width=".34" vector-effect="non-scaling-stroke"/>
+              </pattern>
+              <pattern id="major-grid-${ship.id}" class="major-grid-pattern" width="${canvas.majorGrid}" height="${canvas.majorGrid}" patternUnits="userSpaceOnUse">
+                <rect width="${canvas.majorGrid}" height="${canvas.majorGrid}" fill="url(#minor-grid-${ship.id})"/>
+                <path class="major-grid-path" d="M${canvas.majorGrid} 0H0V${canvas.majorGrid}" fill="none" stroke="#26342f" stroke-width=".58" vector-effect="non-scaling-stroke"/>
               </pattern>
               <clipPath id="clip-${ship.id}"><path d="${path}" transform="${hullTransform}" fill-rule="evenodd" clip-rule="evenodd"/></clipPath>
             </defs>
-            <rect x="1" y="1" width="${canvas.w-2}" height="${canvas.h-2}" fill="url(#grid-${ship.id})"/>
-            <rect x="1" y="1" width="${canvas.w-2}" height="${canvas.h-2}" fill="none" stroke="#26342f" stroke-width=".5"/>
-            <path d="M${geometry.datum.x} 2V${canvas.h-2}M4 ${geometry.datum.y}H${canvas.w-4}" class="blueprint-axis"/>
+            <rect class="blueprint-grid-field" x="0" y="0" width="${canvas.w}" height="${canvas.h}" fill="url(#major-grid-${ship.id})"/>
+            <rect x=".5" y=".5" width="${canvas.w-1}" height="${canvas.h-1}" fill="none" stroke="#26342f" stroke-width=".5" vector-effect="non-scaling-stroke"/>
+            <text x="${canvas.w*.022}" y="${canvas.h*.065}" class="blueprint-grid-label camera-text" style="font-size:${initialTextSize}px">细格 ${canvas.minorGrid}m · 粗格 ${canvas.majorGrid}m</text>
+            <path d="M${geometry.datum.x} 0V${canvas.h}M0 ${geometry.datum.y}H${canvas.w}" class="blueprint-axis"/>
+            ${scaleReferenceMarkup(ship,geometry)}
             <g transform="${hullTransform}">
               <path d="${path}" class="blueprint-shell" stroke="${accent}" fill-rule="evenodd"/>
               <path d="${path}" class="blueprint-inner" transform="${innerTransform()}" fill-rule="evenodd"/>
+              <path d="${profile.details || ""}" class="blueprint-panel-detail"/>
             </g>
             <g clip-path="url(#clip-${ship.id})">
               <path d="M${geometry.datum.x} ${geometry.bounds.top}V${geometry.bounds.bottom}M${geometry.bounds.left} ${geometry.datum.y}H${geometry.bounds.right}" class="blueprint-spine"/>
               ${buses}
             </g>
-            <path d="M${geometry.datum.x} ${geometry.datum.y-canvas.marker*.7}L${geometry.datum.x+canvas.marker*.7} ${geometry.datum.y}L${geometry.datum.x} ${geometry.datum.y+canvas.marker*.7}L${geometry.datum.x-canvas.marker*.7} ${geometry.datum.y}Z" class="datum-mark"/>
+            ${dimensionMarkup(ship,geometry)}
+            <path d="M${geometry.datum.x} ${geometry.datum.y-datumSize}L${geometry.datum.x+datumSize} ${geometry.datum.y}L${geometry.datum.x} ${geometry.datum.y+datumSize}L${geometry.datum.x-datumSize} ${geometry.datum.y}Z" class="datum-mark"/>
             <g class="blueprint-mounts">${mounts}</g>
           </svg>
+          <div class="blueprint-controls" aria-label="舰体图缩放控制">
+            <span class="blueprint-scale-readout"></span>
+            <button class="blueprint-control" type="button" data-blueprint-action="out" title="缩小">−</button>
+            <button class="blueprint-control" type="button" data-blueprint-action="in" title="放大">＋</button>
+            <button class="blueprint-control" type="button" data-blueprint-action="fit">全图</button>
+          </div>
         `;
+      }
+
+      function bindBlueprintNavigation() {
+        const sheet = root.querySelector(".blueprint-sheet");
+        const svg = sheet.querySelector(".blueprint-canvas");
+        const state = blueprintState;
+        if (!svg || !state) return;
+        let drag = null;
+
+        function updateGrid() {
+          const major = engineeringGridStep(state.camera.h/18);
+          const minor = major/5;
+          const minorPattern = svg.querySelector(".minor-grid-pattern");
+          const majorPattern = svg.querySelector(".major-grid-pattern");
+          const minorPath = svg.querySelector(".minor-grid-path");
+          const majorPath = svg.querySelector(".major-grid-path");
+          minorPattern.setAttribute("width",minor);
+          minorPattern.setAttribute("height",minor);
+          minorPath.setAttribute("d",`M${minor} 0H0V${minor}`);
+          majorPattern.setAttribute("width",major);
+          majorPattern.setAttribute("height",major);
+          majorPattern.querySelector("rect").setAttribute("width",major);
+          majorPattern.querySelector("rect").setAttribute("height",major);
+          majorPath.setAttribute("d",`M${major} 0H0V${major}`);
+          svg.querySelector(".blueprint-grid-label").textContent = `细格 ${minor}m · 粗格 ${major}m`;
+        }
+
+        function applyCamera() {
+          const camera = state.camera;
+          svg.setAttribute("viewBox",`${camera.x} ${camera.y} ${camera.w} ${camera.h}`);
+          const textSize = camera.h/52;
+          svg.querySelectorAll(".camera-text").forEach(label => label.style.fontSize = `${textSize}px`);
+          updateGrid();
+          const metersPerHundredPixels = camera.w/Math.max(svg.clientWidth,1)*100;
+          const readout = sheet.querySelector(".blueprint-scale-readout");
+          readout.textContent = `100px ≈ ${metersPerHundredPixels < 10 ? metersPerHundredPixels.toFixed(1) : Math.round(metersPerHundredPixels)}m`;
+        }
+
+        function clampCamera() {
+          const camera = state.camera;
+          const fit = state.fit;
+          const marginX = camera.w*.35;
+          const marginY = camera.h*.35;
+          camera.x = Math.max(fit.x-marginX,Math.min(fit.x+fit.w-camera.w+marginX,camera.x));
+          camera.y = Math.max(fit.y-marginY,Math.min(fit.y+fit.h-camera.h+marginY,camera.y));
+        }
+
+        function zoomAt(factor,clientX,clientY) {
+          const rect = svg.getBoundingClientRect();
+          const camera = state.camera;
+          const px = clientX == null ? .5 : Math.max(0,Math.min(1,(clientX-rect.left)/Math.max(rect.width,1)));
+          const py = clientY == null ? .5 : Math.max(0,Math.min(1,(clientY-rect.top)/Math.max(rect.height,1)));
+          const nextW = Math.max(state.fit.w/40,Math.min(state.fit.w*1.15,camera.w*factor));
+          const nextH = nextW/(state.fit.w/state.fit.h);
+          const worldX = camera.x+camera.w*px;
+          const worldY = camera.y+camera.h*py;
+          camera.x = worldX-nextW*px;
+          camera.y = worldY-nextH*py;
+          camera.w = nextW;
+          camera.h = nextH;
+          clampCamera();
+          applyCamera();
+        }
+
+        svg.addEventListener("wheel",event => {
+          event.preventDefault();
+          zoomAt(event.deltaY > 0 ? 1.18 : .84,event.clientX,event.clientY);
+        },{passive:false});
+        svg.addEventListener("pointerdown",event => {
+          if (event.button !== 0) return;
+          svg.setPointerCapture(event.pointerId);
+          drag = {x:event.clientX,y:event.clientY,cameraX:state.camera.x,cameraY:state.camera.y};
+          svg.classList.add("is-dragging");
+        });
+        svg.addEventListener("pointermove",event => {
+          if (!drag) return;
+          const rect = svg.getBoundingClientRect();
+          state.camera.x = drag.cameraX-(event.clientX-drag.x)*state.camera.w/Math.max(rect.width,1);
+          state.camera.y = drag.cameraY-(event.clientY-drag.y)*state.camera.h/Math.max(rect.height,1);
+          clampCamera();
+          applyCamera();
+        });
+        const endDrag = event => {
+          if (!drag) return;
+          drag = null;
+          svg.classList.remove("is-dragging");
+          if (event.pointerId != null && svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+        };
+        svg.addEventListener("pointerup",endDrag);
+        svg.addEventListener("pointercancel",endDrag);
+        svg.addEventListener("dblclick",event => zoomAt(.55,event.clientX,event.clientY));
+        sheet.querySelectorAll("[data-blueprint-action]").forEach(button => {
+          button.addEventListener("click",() => {
+            const action = button.dataset.blueprintAction;
+            if (action === "fit") {
+              state.camera = {...state.fit};
+              applyCamera();
+            } else {
+              zoomAt(action === "in" ? .72 : 1.38);
+            }
+          });
+        });
+        applyCamera();
       }
 
       function maxMount(ship) {
@@ -2304,12 +2728,20 @@
       }
 
       function renderRankLegend() {
-        root.querySelector(".rank-legend").innerHTML = [1,2,3,4,5].map(rank => `
+        const sizes = ["S","M","L","XL","XXL"];
+        const visualDiameters = [10,15,22,32,46];
+        root.querySelector(".rank-legend").innerHTML = sizes.map((size,index) => {
+          const rank = index+1;
+          const diameter = visualDiameters[index];
+          const radius = mountRadiusBySize[size];
+          const extent = radius*1.55;
+          return `
           <span class="rank-legend-item">
-            <svg viewBox="0 0 12 12" aria-hidden="true">${rankGlyph(rank,5.2,7,2.4)}</svg>
-            <span>T${rank}</span>
+            <svg viewBox="${-extent} ${-extent} ${extent*2} ${extent*2}" width="${diameter}" height="${diameter}" aria-hidden="true">${mountShape("kinetic",0,0,size,"#d87562",radius,rank-1)}</svg>
+            <span>T${rank} · Ø${radius*2}m</span>
           </span>
-        `).join("");
+        `;
+        }).join("");
       }
 
       function renderClassTabs() {
@@ -2338,7 +2770,7 @@
             ${thumbSvg(ship)}
             <div class="card-name">${ship.name}</div>
             <div class="card-role">${ship.role}</div>
-            <div class="card-meta"><span>${slotCount(ship)} 槽</span><span>MAX T${sizeRank[maxMount(ship)]}</span></div>
+            <div class="card-meta"><span>${ship.length}m · ${slotCount(ship)}槽</span><span>MAX T${sizeRank[maxMount(ship)]}</span></div>
           </button>
         `).join("");
         shipList.querySelectorAll(".ship-card").forEach(card => {
@@ -2356,14 +2788,16 @@
         root.querySelector(".blueprint-name").textContent = ship.name;
         root.querySelector(".blueprint-en").textContent = ship.en;
         root.querySelector(".blueprint-class").textContent = `${classInfo.cn.toUpperCase()} / ${classInfo.en}`;
-        const canvas = canvasByClass[ship.class];
         root.querySelector(".blueprint-sheet").innerHTML = blueprintSvg(ship);
-        const layoutStatus = root.querySelector(".blueprint-sheet svg").dataset.layoutStatus.toUpperCase();
-        root.querySelector(".blueprint-role").textContent = `${ship.role} · ${slotCount(ship)} 槽 · 最大 T${sizeRank[maxMount(ship)]} · 工程画布 ${canvas.w}×${canvas.h} · 安装校验 ${layoutStatus}`;
+        const svg = root.querySelector(".blueprint-sheet svg");
+        const layoutStatus = svg.dataset.layoutStatus.toUpperCase();
+        const maxSize = maxMount(ship);
+        root.querySelector(".blueprint-role").textContent = `${ship.role} · L ${ship.length}m × W ${ship.beam}m · ${slotCount(ship)} 槽 · 最大 T${sizeRank[maxSize]} / Ø${mountRadiusBySize[maxSize]*2}m · 安装校验 ${layoutStatus}`;
         root.querySelector(".design-note").textContent = ship.note;
         root.querySelector(".installation-doctrine").textContent = installationDoctrine(ship);
         root.querySelector(".mount-manifest").innerHTML = manifest(ship);
         root.querySelector(".budget-list").innerHTML = budgetMarkup(ship);
+        bindBlueprintNavigation();
       }
 
       function renderAll() {
@@ -2384,8 +2818,8 @@
       const viewport = root.querySelector(".atlas-viewport");
       const canvas = root.querySelector(".atlas-canvas");
       const list = root.querySelector(".atlas-list");
-      const baseline = 1660;
-      const world = {x:0,y:0,w:3260,h:1780};
+      const baseline = 2700;
+      const world = {x:0,y:0,w:3260,h:2840};
 
       const atlasShips = [
         {
@@ -2496,10 +2930,10 @@
           name:"统御者", en:"SOVEREIGN / CV-1280", role:"舰队航空母舰", family:"远征主力舰",
           color:"#b6c96a", note:"贯通式双机库占据两舷，中央岛式舰桥和装甲脊柱维持指挥、动力与结构连续性。",
           outer:"M0 -50L8 -46L11 -38L17 -33L16 -25L22 -19L20 -8L22 2L19 10L21 22L17 31L12 35L10 44L0 50L-10 44L-12 35L-17 31L-21 22L-19 10L-22 2L-20 -8L-22 -19L-16 -25L-17 -33L-11 -38L-8 -46Z",
-          panels:"M0 -46V45M-8 -41L0 -36L8 -41M-12 -33H12M-16 -25L-9 -19H9L16 -25M-18 -13H18M-17 -2L-10 4H10L17 -2M-18 12H18M-16 24L-8 30H8L16 24M-10 38H10",
+          panels:"M-8 -41L0 -36L8 -41M-12 -33H12M-16 -25L-9 -19H9L16 -25M-18 -13H18M-17 -2L-10 4H10L17 -2M-18 12H18M-16 24L-8 30H8L16 24M-10 38H10",
           machinery:"M-20 -17L-14 -12M20 -17L14 -12M-20 6L-14 11M20 6L14 11M-16 29L-10 33M16 29L10 33",
           voids:["M-18 -14L-12 -18L-9 -10L-9 20L-14 27L-19 20Z","M18 -14L12 -18L9 -10L9 20L14 27L19 20Z"],
-          engines:[[-15,37,7,8],[-5,40,7,8],[5,40,7,8],[8,37,7,8]], hardpoints:[[0,-39,2],[-15,-29,1.6],[15,-29,1.6],[-19,-4,1.5],[19,-4,1.5],[-17,31,1.4],[17,31,1.4]],
+          engines:[[-16.5,39,6,8],[-7.5,39,6,8],[1.5,39,6,8],[10.5,39,6,8]], hardpoints:[[0,-39,2],[-15,-29,1.6],[15,-29,1.6],[-19,-4,1.5],[19,-4,1.5],[-17,31,1.4],[17,31,1.4]],
           bridge:"M-5 -28L2 -35L8 -28L7 -16L1 -11L-5 -17Z"
         },
         {
@@ -2515,6 +2949,128 @@
         }
       ];
 
+      const frameworkClassNames = {
+        frigate:"护卫舰谱系", destroyer:"驱逐舰谱系", cruiser:"巡洋舰谱系",
+        battlecruiser:"战列巡洋舰谱系", battleship:"战列舰谱系", capital:"旗舰谱系"
+      };
+      const frameworkClassCodes = {
+        frigate:"FF", destroyer:"DD", cruiser:"CA",
+        battlecruiser:"BC", battleship:"BB", capital:"CX"
+      };
+      const systemFamilyNames = {
+        kinetic:"动能火力", beam:"定向能", missile:"导弹火力", mining:"工业采掘",
+        drone:"航空作业", cargo:"战略运输", support:"舰队支援", engineering:"工程建造",
+        ewar:"电子战", sensor:"远程侦察", shield:"防御指挥"
+      };
+      const weaponTypes = new Set(["kinetic","beam","missile","mining","support","engineering"]);
+      const rankRadius = {S:1.15,M:1.45,L:1.8,XL:2.15,XXL:2.55};
+
+      function sizeGroup(length) {
+        if (length < 100) return "small";
+        if (length < 400) return "medium";
+        if (length < 900) return "large";
+        return "capital";
+      }
+
+      function formatAtlasMass(length,beam) {
+        const tonnes = length*length*beam*.0018;
+        if (tonnes >= 1e6) return `${(tonnes/1e6).toFixed(1)} Mt`;
+        if (tonnes >= 1e3) return `${Math.round(tonnes/1e3)} kt`;
+        return `${Math.round(tonnes)} t`;
+      }
+
+      function frameworkEngines(ship) {
+        const signatureLayouts = {
+          cap01:[[-7.2,40,5.4,7.5],[1.8,40,5.4,7.5]],
+          cap02:[[-10,40,6,7.5],[4,40,6,7.5]],
+          cap06:[[-11,40,6,7.5],[5,40,6,7.5]]
+        };
+        if (signatureLayouts[ship.id]) return signatureLayouts[ship.id];
+        const count = Math.max(1,Math.min(4,ship.mounts
+          .filter(([type]) => type === "engine")
+          .reduce((total,[, ,amount]) => total+amount,0)));
+        const half = Math.max(4,ship.beam/ship.length*50);
+        const width = Math.max(2.6,Math.min(5.5,half*.32));
+        const gap = Math.min(width*1.3,half*1.18/Math.max(1,count-1));
+        const start = -(count-1)*gap/2-width/2;
+        return Array.from({length:count},(_,index) => [start+index*gap,40,width,7.5]);
+      }
+
+      function frameworkHardpoints(ship) {
+        const mounts = [];
+        ship.mounts.forEach(([type,size,count]) => {
+          if (!weaponTypes.has(type)) return;
+          for (let index=0; index<count; index++) mounts.push({type,size});
+        });
+        const visible = mounts.slice(0,12);
+        const half = Math.max(4,ship.beam/ship.length*50);
+        return visible.map((mount,index) => {
+          const row = Math.floor(index/2);
+          const paired = index < visible.length-1 || index%2 === 1;
+          const side = paired ? (index%2 === 0 ? -1 : 1) : 0;
+          return [side*half*(.54+(row%3)*.08),-29+row*10.5,rankRadius[mount.size] || 1.4];
+        });
+      }
+
+      function primaryFamily(ship) {
+        const priority = ["drone","cargo","support","engineering","mining","ewar","sensor","missile","beam","kinetic","shield"];
+        const primary = priority.find(type => ship.mounts.some(([mountType]) => mountType === type));
+        return `${frameworkClassNames[ship.class]} · ${systemFamilyNames[primary] || "通用舰体"}`;
+      }
+
+      const frameworkAtlasShips = root.hullCatalog.ships.map((ship,index) => {
+        const profile = root.hullCatalog.profiles[ship.profile];
+        const half = Math.max(4,ship.beam/ship.length*50);
+        const bridgeOffset = (index%5 === 3 ? half*.12 : 0);
+        const code = `${frameworkClassCodes[ship.class]}-${String(index+1).padStart(2,"0")}`;
+        return {
+          id:`framework-${ship.id}`,
+          sourceId:ship.id,
+          sourceProfile:true,
+          group:sizeGroup(ship.length),
+          x:0,
+          length:ship.length,
+          span:ship.beam,
+          decks:Math.max(2,Math.round(ship.length/31)),
+          crew:String(Math.max(5,Math.round(ship.length*ship.beam/145))),
+          mass:formatAtlasMass(ship.length,ship.beam),
+          name:ship.name,
+          en:`${ship.en.toUpperCase()} / ${code}`,
+          role:ship.role,
+          family:primaryFamily(ship),
+          color:ship.accent,
+          note:ship.note,
+          systems:[...new Set(ship.mounts.map(([type]) => type))],
+          outer:profile.outer,
+          panels:profile.details || "",
+          machinery:`M${-half*.72} -4L${-half*.38} 1M${half*.72} -4L${half*.38} 1M${-half*.62} 22L${-half*.28} 27M${half*.62} 22L${half*.28} 27`,
+          voids:profile.voids || [],
+          engines:frameworkEngines(ship),
+          hardpoints:frameworkHardpoints(ship),
+          bridge:`M${bridgeOffset-4.8} -26L${bridgeOffset} -33L${bridgeOffset+4.8} -26L${bridgeOffset+4} -17L${bridgeOffset} -13L${bridgeOffset-4} -17Z`,
+          detailSeed:index+12
+        };
+      });
+
+      atlasShips.forEach((ship,index) => { ship.detailSeed = index; });
+      atlasShips.push(...frameworkAtlasShips);
+      atlasShips.sort((a,b) => a.length-b.length || a.span-b.span);
+
+      let atlasCursor = 64;
+      atlasShips.forEach(ship => {
+        const gap = Math.max(24,Math.min(96,ship.length*.075));
+        ship.x = atlasCursor+ship.span/2;
+        atlasCursor = ship.x+ship.span/2+gap;
+      });
+      world.w = Math.ceil(atlasCursor+64);
+
+      root.querySelectorAll("[data-atlas-filter]").forEach(button => {
+        const filter = button.dataset.atlasFilter;
+        const count = filter === "all" ? atlasShips.length : atlasShips.filter(ship => ship.group === filter).length;
+        const label = button.textContent.split(" · ")[0];
+        button.textContent = `${label} · ${count}`;
+      });
+
       const camera = {x:0,y:0,w:world.w,h:world.h};
       let activeFilter = "all";
       let selectedId = "bastion";
@@ -2522,28 +3078,209 @@
       let initialized = false;
       let drag = null;
 
+      function pathBounds(path) {
+        const values = (path.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+        const xs = values.filter((_,index) => index%2 === 0);
+        const ys = values.filter((_,index) => index%2 === 1);
+        return {
+          left:Math.min(...xs), right:Math.max(...xs),
+          top:Math.min(...ys), bottom:Math.max(...ys)
+        };
+      }
+
+      function profileDrawing(ship) {
+        if (!ship.sourceProfile) return {transform:"",cx:0,cy:0};
+        const bounds = pathBounds(ship.outer);
+        const width = bounds.right-bounds.left;
+        const height = bounds.bottom-bounds.top;
+        const targetWidth = ship.span/ship.length*100;
+        const sx = targetWidth/width;
+        const sy = 100/height;
+        const cx = (bounds.left+bounds.right)/2;
+        const cy = (bounds.top+bounds.bottom)/2;
+        return {transform:`scale(${sx} ${sy}) translate(${-cx} ${-cy})`,cx,cy};
+      }
+
+      function externalModules(ship) {
+        const half = Math.max(4,ship.span/ship.length*50);
+        const systems = ship.systems || [];
+        if (ship.id === "sovereign") return `
+          <path d="M${-half} -29L${-half*.57} -33L${-half*.45} -18L${-half*.48} 27L${-half*.9} 33L${-half} 18ZM${half} -29L${half*.57} -33L${half*.45} -18L${half*.48} 27L${half*.9} 33L${half} 18Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <rect x="${-half*.83}" y="-18" width="${half*.22}" height="41" rx="1" class="atlas-module-inset atlas-mid-detail"/>
+          <rect x="${half*.61}" y="-18" width="${half*.22}" height="41" rx="1" class="atlas-module-inset atlas-mid-detail"/>
+        `;
+        if (ship.sourceId === "cap01") return `
+          <path d="M${-half*.98} -18L${-half*.58} -27L${-half*.48} 27L${-half*.82} 35L${-half*.98} 19ZM${half*.98} -18L${half*.58} -27L${half*.48} 27L${half*.82} 35L${half*.98} 19Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        if (ship.sourceId === "cap02") return `
+          <path d="M${-half} -30L${-half*.47} -25L${-half*.4} 28L${-half*.9} 34L${-half} 13ZM${half} -30L${half*.47} -25L${half*.4} 28L${half*.9} 34L${half} 13Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.86} -21V24M${half*.86} -21V24" class="atlas-livery atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        if (ship.sourceId === "cap04") return `
+          <path d="M${-half} -34L${-half*.5} -29L${-half*.43} 30L${-half*.86} 37L${-half} 18ZM${half} -34L${half*.5} -29L${half*.43} 30L${half*.86} 37L${half} 18Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.9} -24V28M${half*.9} -24V28" class="atlas-livery atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        if (ship.sourceId === "cap06") return `
+          <path d="M${-half} -22L${-half*.64} -27L${-half*.58} 31L${-half} 26ZM${half} -22L${half*.64} -27L${half*.58} 31L${half} 26Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        let variant = ship.detailSeed%6;
+        if (systems.includes("cargo")) variant = 1;
+        else if (systems.includes("drone")) variant = 4;
+        else if (systems.includes("engineering") || systems.includes("mining")) variant = 3;
+        else if (systems.includes("support")) variant = 2;
+        else if (systems.includes("ewar") || systems.includes("sensor")) variant = 0;
+        else if (systems.includes("missile")) variant = 5;
+
+        if (variant === 0) return `
+          <path d="M-2 -24L${-half} -11L${-half*.9} 2L${-half*.28} -5ZM2 -24L${half} -11L${half*.9} 2L${half*.28} -5Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.84} -10L${-half*.42} -8M${half*.84} -10L${half*.42} -8" class="atlas-livery atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        if (variant === 1) return `
+          <path d="M${-half} -18L${-half*.5} -21L${-half*.48} 27L${-half} 24ZM${half} -18L${half*.5} -21L${half*.48} 27L${half} 24Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.88} -12V19M${-half*.72} -14V21M${half*.88} -12V19M${half*.72} -14V21" class="atlas-module-inset atlas-mid-detail"/>
+        `;
+        if (variant === 2) return `
+          <path d="M${-half*.96} -20L${-half*.57} -25L${-half*.45} -7L${-half*.78} 1ZM${half*.96} -20L${half*.57} -25L${half*.45} -7L${half*.78} 1Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.9} 9L${-half*.5} 4L${-half*.43} 25L${-half*.77} 30ZM${half*.9} 9L${half*.5} 4L${half*.43} 25L${half*.77} 30Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        if (variant === 3) return `
+          <path d="M${-half} -13L${-half*.45} -19L${-half*.4} 20L${-half*.86} 28L${-half*.96} 12Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${half*.42} -8L${half*.82} -4L${half*.76} 16L${half*.4} 12Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <circle cx="${-half*.76}" cy="3" r="${Math.max(1.8,half*.12)}" class="atlas-module-inset atlas-mid-detail"/>
+        `;
+        if (variant === 4) return `
+          <path d="M${-half} -29L${-half*.43} -24L${-half*.4} 28L${-half*.92} 32L${-half*.98} 12ZM${half} -29L${half*.43} -24L${half*.4} 28L${half*.92} 32L${half*.98} 12Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.82} -19V23M${half*.82} -19V23" class="atlas-livery atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+        return `
+          <path d="M${-half} -20L${-half*.46} -25L${-half*.4} 10L${-half*.88} 15ZM${half} -20L${half*.46} -25L${half*.4} 10L${half*.88} 15Z" class="atlas-external-module atlas-mid-detail" stroke="${ship.color}"/>
+          <path d="M${-half*.82} -14H${-half*.5}M${-half*.82} -7H${-half*.48}M${half*.82} -14H${half*.5}M${half*.82} -7H${half*.48}" class="atlas-livery atlas-mid-detail" stroke="${ship.color}"/>
+        `;
+      }
+
+      function signatureHullDetail(ship, thumbnail) {
+        const half = Math.max(4,ship.span/ship.length*50);
+        const minorClass = thumbnail ? "atlas-mid-detail" : "atlas-full-detail";
+        if (ship.id === "sovereign") return `
+          <path d="M0 -45L${half*.3} -35L${half*.25} 22L${half*.38} 35L0 42L${-half*.38} 35L${-half*.25} 22L${-half*.3} -35Z" class="atlas-armor-mid atlas-mid-detail"/>
+          <path d="M${-half*.42} -28L${-half*.27} -34L${-half*.25} 27L${-half*.4} 31Z" class="atlas-module-inset atlas-mid-detail"/>
+          <path d="M${half*.42} -28L${half*.27} -34L${half*.25} 27L${half*.4} 31Z" class="atlas-module-inset atlas-mid-detail"/>
+          <path d="M${-half*.76} -15H${-half*.51}M${-half*.76} -4H${-half*.5}M${-half*.76} 8H${-half*.5}M${-half*.76} 20H${-half*.51}M${half*.76} -15H${half*.51}M${half*.76} -4H${half*.5}M${half*.76} 8H${half*.5}M${half*.76} 20H${half*.51}" class="atlas-panel-line ${minorClass}"/>
+          <path d="M${-half*.35} -17L${-half*.2} -22M${half*.35} -17L${half*.2} -22M${-half*.32} 14L${-half*.18} 20M${half*.32} 14L${half*.18} 20" class="atlas-machinery-line ${minorClass}" stroke="${ship.color}"/>
+          <path d="M${half*.1} -18L${half*.24} -22L${half*.28} -13L${half*.2} -8L${half*.1} -10Z" class="atlas-bridge atlas-mid-detail"/>
+        `;
+        if (ship.sourceId === "cap01") return `
+          <path d="M0 -46L${half*.27} -36L${half*.2} 34L0 43L${-half*.2} 34L${-half*.27} -36Z" class="atlas-armor-mid atlas-mid-detail"/>
+          <path d="M${-half*.76} -27L${-half*.43} -31L${-half*.34} 24L${-half*.62} 31Z" class="atlas-module-inset atlas-mid-detail"/>
+          <path d="M${half*.76} -27L${half*.43} -31L${half*.34} 24L${half*.62} 31Z" class="atlas-module-inset atlas-mid-detail"/>
+          ${[-.68,-.37,.37,.68].map(position => {
+            const x = half*position;
+            const width = Math.max(1.6,half*.14);
+            return `<path d="M${x} -31L${x+width*.48} -26L${x+width*.42} 24L${x} 29L${x-width*.42} 24L${x-width*.48} -26Z" class="atlas-module-inset ${minorClass}"/>`;
+          }).join("")}
+          <path d="M${-half*.68} -22V20M${-half*.46} -27V24M${half*.46} -27V24M${half*.68} -22V20" class="atlas-machinery-line ${minorClass}" stroke="${ship.color}"/>
+          <path d="M${-half*.3} -18H${half*.3}M${-half*.27} 3H${half*.27}M${-half*.24} 24H${half*.24}" class="atlas-panel-line ${minorClass}"/>
+          <path d="M${-half*.12} 5L0 1L${half*.12} 5L${half*.1} 11L0 14L${-half*.1} 11Z" class="atlas-bridge atlas-mid-detail"/>
+        `;
+        if (ship.sourceId === "cap02") return `
+          <path d="M${-half*.8} -27L${-half*.42} -24L${-half*.36} 28L${-half*.73} 32Z" class="atlas-armor-mid atlas-mid-detail"/>
+          <path d="M${half*.8} -27L${half*.42} -24L${half*.36} 28L${half*.73} 32Z" class="atlas-armor-mid atlas-mid-detail"/>
+          <path d="M${-half*.72} -18V23M${half*.72} -18V23" class="atlas-machinery-line ${minorClass}" stroke="${ship.color}"/>
+          <path d="M${-half*.76} -11H${-half*.43}M${-half*.76} 1H${-half*.42}M${-half*.76} 13H${-half*.41}M${half*.76} -11H${half*.43}M${half*.76} 1H${half*.42}M${half*.76} 13H${half*.41}" class="atlas-panel-line ${minorClass}"/>
+          <path d="M${half*.18} -12L${half*.34} -16L${half*.37} -7L${half*.29} -2L${half*.18} -4Z" class="atlas-bridge atlas-mid-detail"/>
+        `;
+        if (ship.sourceId === "cap04") {
+          const hangars = [-18,-2,14].flatMap(y => [-1,1].map(side => `
+            <rect x="${side*half*.58-half*.13}" y="${y}" width="${half*.26}" height="11" rx=".8" class="atlas-module-inset ${minorClass}"/>
+          `)).join("");
+          return `
+            <path d="M0 -43L${half*.2} -34L${half*.17} 34L0 42L${-half*.17} 34L${-half*.2} -34Z" class="atlas-armor-mid atlas-mid-detail"/>
+            ${hangars}
+            <path d="M${-half*.72} -24V29M${half*.72} -24V29" class="atlas-machinery-line ${minorClass}" stroke="${ship.color}"/>
+            <path d="M${half*.16} -20L${half*.31} -24L${half*.34} -14L${half*.27} -8L${half*.16} -11Z" class="atlas-bridge atlas-mid-detail"/>
+          `;
+        }
+        if (ship.sourceId === "cap06") {
+          const cargoCells = [-1,0,1].flatMap(column => [-12,-1,10,21].map(y => `
+            <rect x="${column*half*.62-half*.14}" y="${y}" width="${half*.28}" height="8" rx=".7" class="atlas-module-inset ${minorClass}"/>
+          `)).join("");
+          return `
+            <path d="M${-half*.82} -31H${half*.82}L${half*.68} 35H${-half*.68}Z" class="atlas-armor-mid atlas-mid-detail"/>
+            ${cargoCells}
+            <path d="M${-half*.39} -27L${-half*.39} 30M${half*.39} -27L${half*.39} 30M${-half*.31} -25H${half*.31}M${-half*.31} 30H${half*.31}" class="atlas-panel-line ${minorClass}"/>
+            <path d="M${-half*.12} -24L0 -28L${half*.12} -24L${half*.1} -17L0 -14L${-half*.1} -17Z" class="atlas-bridge atlas-mid-detail"/>
+          `;
+        }
+        return null;
+      }
+
+      function layeredHullDetail(ship, thumbnail) {
+        const signature = signatureHullDetail(ship,thumbnail);
+        if (signature !== null) return signature;
+        const half = Math.max(4,ship.span/ship.length*50);
+        const variant = ship.detailSeed%6;
+        const aftY = 25-(variant%2)*4;
+        const accentSide = variant%2 === 0 ? -1 : 1;
+        const vents = [-1,1].map(side => `
+          <rect x="${side*half*.56-1.7}" y="${aftY-4}" width="3.4" height="8" rx=".5" class="atlas-vent atlas-full-detail"/>
+          <path d="M${side*half*.56-1.1} ${aftY-2}h2.2M${side*half*.56-1.1} ${aftY}h2.2M${side*half*.56-1.1} ${aftY+2}h2.2" class="atlas-panel-line atlas-full-detail"/>
+        `).join("");
+        return `
+          <path d="M${-half*.48} ${aftY-8}L0 ${aftY-13}L${half*.48} ${aftY-8}L${half*.35} ${aftY+7}L0 ${aftY+12}L${-half*.35} ${aftY+7}Z" class="atlas-armor-mid atlas-mid-detail"/>
+          <path d="M${accentSide*half*.26} ${aftY-7}L${accentSide*half*.43} ${aftY+2}" class="atlas-livery atlas-mid-detail" stroke="${ship.color}"/>
+          ${thumbnail ? "" : vents}
+          <circle cx="${-half*.72}" cy="9" r=".8" class="atlas-running-light atlas-full-detail" fill="#d87562"/>
+          <circle cx="${half*.72}" cy="9" r=".8" class="atlas-running-light atlas-full-detail" fill="#65a9d8"/>
+        `;
+      }
+
+      function cleanAtlasPanelPath(path) {
+        return (path || "").replace(/^M-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?V-?\d+(?:\.\d+)?/,"");
+      }
+
+      function isSignatureShip(ship) {
+        return ship.id === "sovereign" || ["cap01","cap02","cap04","cap06"].includes(ship.sourceId);
+      }
+
       function shipLocalMarkup(ship, thumbnail = false) {
+        const drawing = profileDrawing(ship);
+        const signature = isSignatureShip(ship);
+        const panelPath = signature ? "" : cleanAtlasPanelPath(ship.panels);
         const voids = (ship.voids || []).map(path => `<path d="${path}" class="atlas-void atlas-mid-detail"/>`).join("");
-        const engines = ship.engines.map(([x,y,w,h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1" class="atlas-engine atlas-full-detail"/>`).join("");
+        const aftDatum = 47.5;
+        const engines = ship.engines.map(([left,,width,height]) => {
+          const centerX = left+width/2;
+          const x = centerX-width/2;
+          const y = aftDatum-height;
+          return `
+            <g class="atlas-full-detail">
+              <path d="M${x} ${y}H${x+width}L${x+width*.88} ${aftDatum}H${x+width*.12}Z" class="atlas-engine-housing"/>
+              <rect x="${x+width*.22}" y="${y+2}" width="${width*.56}" height="${Math.max(1,height-3.2)}" rx=".5" class="atlas-engine-throat"/>
+              <path d="M${x+width*.24} ${aftDatum-1.1}H${x+width*.76}" class="atlas-engine-glow"/>
+            </g>
+          `;
+        }).join("");
         const hardpoints = ship.hardpoints.map(([x,y,r]) => `
           <g class="atlas-full-detail">
-            <circle cx="${x}" cy="${y}" r="${r}" class="atlas-hardpoint"/>
-            <path d="M${x-r*.55} ${y}H${x+r*.55}M${x} ${y-r*.55}V${y+r*.55}" class="atlas-machinery-line" stroke="#d8a66a"/>
+            <circle cx="${x}" cy="${y}" r="${Math.min(1.35,r*.58)}" class="atlas-hardpoint"/>
           </g>
         `).join("");
         const commonClass = thumbnail ? "atlas-card" : "atlas";
         return `
-          <path d="${ship.outer}" class="${commonClass}-outline atlas-hull-surface" stroke="${ship.color}"/>
-          <path d="${ship.outer}" transform="scale(.86 .9)" class="${commonClass}-line atlas-inner-line atlas-mid-detail"/>
-          ${thumbnail ? "" : `
-            <path d="M0 -46V46" class="atlas-center-line atlas-mid-detail"/>
-            <path d="${ship.panels}" class="atlas-panel-line atlas-mid-detail"/>
-            <path d="${ship.machinery}" class="atlas-machinery-line atlas-full-detail" stroke="${ship.color}"/>
+          ${externalModules(ship)}
+          <g${drawing.transform ? ` transform="${drawing.transform}"` : ""}>
+            <path d="${ship.outer}" class="atlas-hull-underlay"/>
+            <path d="${ship.outer}" class="${commonClass}-outline atlas-hull-surface" stroke="${ship.color}"/>
+            ${panelPath ? `<path d="${panelPath}" class="atlas-panel-line atlas-mid-detail"/>` : ""}
             ${voids}
+            ${thumbnail ? "" : `<path d="${ship.outer}" class="atlas-ship-hit"/>`}
+          </g>
+          ${layeredHullDetail(ship,thumbnail)}
+          ${signature ? "" : `<path d="${ship.bridge}" class="atlas-bridge atlas-mid-detail"/>`}
+          ${thumbnail ? "" : `
+            ${signature ? "" : `<path d="${ship.machinery}" class="atlas-machinery-line atlas-full-detail" stroke="${ship.color}"/>`}
             ${engines}
             ${hardpoints}
-            <path d="${ship.bridge}" class="atlas-bridge atlas-full-detail"/>
-            <path d="${ship.outer}" class="atlas-ship-hit"/>
           `}
         `;
       }
@@ -2551,7 +3288,6 @@
       function thumbSvg(ship) {
         return `
           <svg viewBox="-38 -54 76 108" aria-hidden="true">
-            <path d="M0 -51V51" stroke="#1d2925" stroke-width=".7" stroke-dasharray="2 3"/>
             ${shipLocalMarkup(ship,true)}
           </svg>
         `;
@@ -2571,14 +3307,26 @@
       }
 
       function sceneMarkup() {
-        const coordinateLabels = Array.from({length:7},(_,index) => {
+        const coordinateLabels = Array.from({length:Math.floor(world.w/500)+1},(_,index) => {
           const x = index * 500;
           return `
             <path d="M${x} 0V17" stroke="#52645c" stroke-width="1" vector-effect="non-scaling-stroke"/>
             <text x="${x+8}" y="27" class="atlas-coordinate-label">${x}m</text>
           `;
         }).join("");
-        const ships = getVisibleShips().map(ship => {
+        const visibleShips = getVisibleShips();
+        const groupNames = {small:"01 / 小型舰艇",medium:"02 / 中型舰艇",large:"03 / 大型舰艇",capital:"04 / 旗舰与巨舰"};
+        const zoneBands = ["small","medium","large","capital"].map((group,groupIndex) => {
+          const members = visibleShips.filter(ship => ship.group === group);
+          if (!members.length) return "";
+          const left = Math.min(...members.map(ship => ship.x-ship.span/2))-18;
+          const right = Math.max(...members.map(ship => ship.x+ship.span/2))+18;
+          return `
+            <path d="M${left} 42V${baseline+35}M${right} 42V${baseline+35}" class="atlas-zone-line"/>
+            <text x="${left+12}" y="${62+groupIndex*105}" class="atlas-zone-label">${groupNames[group]} · ${members.length} HULLS</text>
+          `;
+        }).join("");
+        const ships = visibleShips.map(ship => {
           const scale = ship.length / 100;
           const y = baseline - ship.length / 2;
           const selected = ship.id === selectedId ? " is-selected" : "";
@@ -2614,6 +3362,7 @@
           <rect x=".5" y=".5" width="${world.w-1}" height="${world.h-1}" class="atlas-world-frame"/>
           <path d="M36 ${baseline}H${world.w-36}" class="atlas-baseline"/>
           ${coordinateLabels}
+          ${zoneBands}
           <g aria-label="两米人体比例标记">
             <circle cx="66" cy="${baseline-1.55}" r=".25" fill="#e3b35b"/>
             <path d="M66 ${baseline-1.3}V${baseline}M65.4 ${baseline-.9}H66.6" stroke="#e3b35b" stroke-width=".3"/>
@@ -2711,7 +3460,7 @@
         const minor = canvas.querySelector(".atlas-grid-minor");
         if (micro) micro.style.opacity = worldPerPixel < .65 ? ".75" : worldPerPixel < 1.4 ? ".28" : "0";
         if (minor) minor.style.opacity = worldPerPixel < 5 ? ".9" : ".25";
-        canvas.querySelectorAll(".atlas-baseline-label,.atlas-coordinate-label").forEach(label => {
+        canvas.querySelectorAll(".atlas-baseline-label,.atlas-coordinate-label,.atlas-zone-label").forEach(label => {
           label.style.fontSize = `${worldPerPixel*8}px`;
         });
 
@@ -2725,7 +3474,7 @@
           const isSelected = ship.id === selectedId;
           label.style.display = pixelLength < 110 && !isSelected ? "none" : "block";
           const fontSize = worldPerPixel*8.5;
-          const labelGap = worldPerPixel*(16+(atlasShips.indexOf(ship)%2)*14);
+          const labelGap = worldPerPixel*(15+(atlasShips.indexOf(ship)%4)*11);
           label.setAttribute("transform",`translate(${ship.x} ${baseline+labelGap})`);
           const name = label.querySelector(".atlas-label-name");
           const size = label.querySelector(".atlas-label-size");
@@ -2783,10 +3532,12 @@
           const atlas = view === "atlas";
           root.querySelector("[data-header-title]").textContent = atlas ? "舰体尺度图谱 · 船坞正投影" : "舰船框架谱系 · 第二版";
           root.querySelector("[data-header-subtitle]").textContent = atlas
-            ? "十二艘原创船体按真实米制统一绘制；小艇需拉近读图，旗舰需拉远观看全貌"
+            ? "四十二艘原创船体按真实米制统一绘制；多层装甲、舱段、涂装、舰桥与推进系统共同定义舰型"
             : "六级舰体、三十种定位；形状表示接口，颜色表示系统，内标表示实装配件，军衔角标表示 T1–T5";
-          root.querySelector("[data-header-count]").textContent = atlas ? "12 TRUE-SCALE HULLS" : "30 HULL FRAMEWORKS";
-          if (atlas) requestAnimationFrame(initializeAtlas);
+          root.querySelector("[data-header-count]").textContent = atlas ? "42 TRUE-SCALE HULLS" : "30 HULL FRAMEWORKS";
+          if (atlas) {
+            initializeAtlas();
+          }
         });
       });
 
@@ -2886,7 +3637,7 @@
       if (atlasHash) {
         root.querySelector('[data-view-target="atlas"]').click();
         if (atlasHash[1] && atlasShips.some(ship => ship.id === atlasHash[1])) {
-          requestAnimationFrame(() => selectShip(atlasHash[1],true));
+          selectShip(atlasHash[1],true);
         }
       }
 

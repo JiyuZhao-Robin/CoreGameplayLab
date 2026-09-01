@@ -5,7 +5,7 @@ var failures: Array[String] = []
 
 func _init() -> void:
 	var database := ContentDatabase.new()
-	_check(database.load_from_file("res://data/content.json"), "content 1.29 loads and validates: %s" % str(database.errors))
+	_check(database.load_from_file("res://data/content.json"), "content 1.30 loads and validates: %s" % str(database.errors))
 	if database.errors.is_empty():
 		_test_content_contract(database)
 		_test_planner_contract(database)
@@ -13,7 +13,7 @@ func _init() -> void:
 
 
 func _test_content_contract(database: ContentDatabase) -> void:
-	_check(str(database.pack_metadata.get("version", "")) == "1.29.0", "content pack metadata is aligned to 1.29.0")
+	_check(str(database.pack_metadata.get("version", "")) == "1.32.0", "content pack metadata is aligned to 1.32.0")
 	var capital_goods: Array = database.industry_rules.get("capital_goods", [])
 	_check(capital_goods.size() == 8, "the core contains exactly eight reusable Capital Goods")
 	for item_id_value in capital_goods:
@@ -61,6 +61,10 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	var before: Dictionary = state.to_dictionary()
 	simulation.system_production_overview(state, SpaceGameState.SYSTEM_ID)
 	_check(state.to_dictionary() == before, "System production overview is a read-only query")
+	var economy: Dictionary = planner.current_economy_analysis(state, "earth_orbit")
+	var scrap_rows: Array = economy.get("products", []).filter(func(value): return str((value as Dictionary).get("product_id", "")) == "scrap_metal")
+	var scrap_row: Dictionary = scrap_rows[0] if not scrap_rows.is_empty() else {}
+	_check(int(scrap_row.get("factory_on_hand", 0)) == 12 and int(scrap_row.get("location_on_hand", -1)) == 0 and int(scrap_row.get("on_hand", 0)) == 12, "economy analysis reports physical factory buffers without duplicating them into Location Inventory")
 	var ship_plan: Dictionary = database.ship_construction_projects["construct_bulk_freighter"]
 	var expected_ship_bom: Dictionary = simulation.ship_construction_material_totals(ship_plan)
 	for fixed_value in ship_plan.get("fixed_costs", []):
@@ -83,22 +87,18 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	state.technology_spillovers.erase("stellar_thermal_routing")
 	_check(state.to_dictionary() == before, "all target planners are read-only and do not mutate live state")
 
-	for location_id_value in state.locations.keys():
-		var location_id := str(location_id_value)
-		state.location_state(location_id)["discovery_state"] = LocationState.DISCOVERED
-	state.mining_site_states["lunar_deep_ice_lens"]["survey_state"] = LocationState.SURVEYED
-	state.location_state("lunar_space")["survey_state"] = LocationState.SURVEYED
 	var resource_before: Dictionary = state.to_dictionary()
-	var resource_plan: Dictionary = planner.plan_targets(state, {"mixed_raw_gas":500.0}, "earth_orbit")
-	var geography: Dictionary = resource_plan.get("industrial_geography", {}).get("products", {}).get("mixed_raw_gas", {})
-	_check(float(geography.get("shortfall", 0.0)) > 0.0 and geography.get("potential_solutions", []).has("DEEP_SURVEY_EXISTING_SITES"), "planner reports surveyed Sustainable Extraction Potential shortfall and a valid remedy")
-	var logistics_rows: Array = resource_plan.get("logistics", [])
-	var logistics_row: Dictionary = logistics_rows[0] if not logistics_rows.is_empty() else {}
-	_check(logistics_row.get("route_ids", []).has("earth_lunar_freight") and float(logistics_row.get("cargo_mass_per_hour", 0.0)) > 0.0 and float(logistics_row.get("cargo_volume_per_hour", 0.0)) > 0.0, "raw-resource planning includes the real route plus mass and volume throughput")
-	var bottleneck: Dictionary = planner.trace_bottleneck(state, "mixed_raw_gas", "earth_orbit", 500.0)
+	var production_plan: Dictionary = planner.plan_targets(state, {"iron_ingot":1800.0}, "earth_orbit")
+	var factory_requirement: Dictionary = production_plan.get("factory_requirements", [])[0] if not production_plan.get("factory_requirements", []).is_empty() else {}
+	_check(str(production_plan.get("method_selections", {}).get("iron_ingot", "")) == "grid_refine_iron" and str(factory_requirement.get("building_definition_id", "")) == "grid_arc_smelter" and int(factory_requirement.get("recommended", 0)) == 1, "throughput planning selects the physical grid recipe and recommends a concrete machine entity")
+	var resource_plan: Dictionary = planner.plan_targets(state, {"iron_ore":500.0}, "earth_orbit")
+	var geography: Dictionary = resource_plan.get("industrial_geography", {}).get("products", {}).get("iron_ore", {})
+	_check(float(geography.get("shortfall", 0.0)) > 0.0 and geography.get("potential_solutions", []).has("PLACE_EXTRACTOR") and str(geography.get("deposits", [])[0].get("deposit_id", "")) == "starter-iron-field", "planner reads fixed grid deposits and recommends a physical extractor when installed capacity is absent")
+	_check(resource_plan.get("logistics", []).is_empty(), "a deposit in the destination factory world does not create a phantom inter-location freight route")
+	var bottleneck: Dictionary = planner.trace_bottleneck(state, "iron_ore", "earth_orbit", 500.0)
 	var chain_kinds: Array = bottleneck.get("shortest_chain", []).map(func(value): return str((value as Dictionary).get("kind", "")))
-	_check(chain_kinds.has("SITE") and chain_kinds.has("ROUTE") and chain_kinds.has("DESTINATION") and str(bottleneck.get("primary_bottleneck", "")) in ["RESOURCE_POTENTIAL_SHORTAGE", "LOGISTICS_CAPACITY_SHORTAGE"], "resource bottleneck traces a deterministic SITE -> ROUTE/HUB -> DESTINATION chain")
-	_check(state.to_dictionary() == resource_before, "resource geography and logistics planning remain read-only")
+	_check(chain_kinds.has("DEPOSIT") and chain_kinds.has("WORLD") and chain_kinds.has("DESTINATION") and str(bottleneck.get("primary_bottleneck", "")) == "EXTRACTION_CAPACITY_SHORTAGE", "resource bottleneck traces the authoritative DEPOSIT -> WORLD -> DESTINATION chain")
+	_check(state.to_dictionary() == resource_before, "grid recipe, deposit and logistics planning remain read-only")
 
 
 func _entry_quantity(entries: Array, item_id: String) -> int:

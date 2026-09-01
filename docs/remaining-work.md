@@ -1,6 +1,6 @@
-# Core Complete 剩余工作 Ledger
+# 1.29 Core Complete 历史 Ledger
 
-此清单是发布门槛，不是未来愿望列表。完成后停止扩展核心系统，转入正式美术与 Polish。
+> 归档状态：以下清单记录 1.29 地点级聚合玩法达到 Core Complete 时的发布证据。2026-09-01 起，普通采矿—生产—建造已经转向方格实体工厂；当前未完成工作和发布门槛见[方格工厂玩法重构计划](./grid-factory-rewrite-plan-zh_CN.md)。本页的勾选项不表示 1.30 新方向已经完成。
 
 ## P0 — 产品范围和终局
 
@@ -39,6 +39,6 @@
 - [x] Planner、UI、Diagnostics 调用 Simulation Rules 单一来源。
 - [x] 完整运行内容校验、headless、UI playflow、Golden Path、迁移和格式检查已纳入 `tests/run_core_complete.sh`。
 
-## Core Complete 之后
+## 1.29 Core Complete 之后
 
-本 Ledger 已清零。后续工作属于正式视觉资产、动画、音效、UI Polish、性能采样和玩家平衡测试，不再继续扩展核心系统或新增第二恒星系。
+本历史 Ledger 在 1.29 时已经清零。1.30 已经批准重构普通工业核心，工作包括二维方格画布、实体生产内容、物流路径、星港所有权移交、旧存档引导和旧聚合入口退役；第二恒星系仍不在范围内。

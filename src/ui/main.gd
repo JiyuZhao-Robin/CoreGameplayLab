@@ -9,6 +9,7 @@ const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_
 const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
 const ShipAssemblyMapViewScript = preload("res://src/ui/components/ship_assembly_map_view.gd")
 const ShipAssemblyPaletteItemScript = preload("res://src/ui/components/ship_assembly_palette_item.gd")
+const ShipHullProfiles = preload("res://src/ui/components/ship_hull_profiles.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
 const COLOR_BG := UiTokens.COLOR_CANVAS
@@ -55,6 +56,7 @@ var _location_section := "overview"
 var _industry_section := "production"
 var _industry_view_mode := "network"
 var _fleet_section := "roster"
+var _selected_formation_id := SpaceGameState.DEFAULT_FORMATION_ID
 var _logistics_item_selection := {}
 var _logistics_advanced := false
 var _planner_product_id := ""
@@ -1032,7 +1034,7 @@ func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
 
 
 func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> void:
-	box.add_child(_section_title(I18n.core("location.resources.known_sites")))
+	box.add_child(_section_title(I18n.core("location.resources.known_sites", "Mapped fixed deposits")))
 	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
 	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 	var resources: Array = intelligence.get("resources", [])
@@ -1041,37 +1043,18 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 		return
 	for profile_value in resources:
 		var profile := profile_value as Dictionary
-		var mining_location_id := String(profile.get("mining_location_id", ""))
-		var mining_location: Dictionary = Game.content.mining_locations.get(mining_location_id, {})
-		var site_id := ""
-		for site_value in Game.content.mining_sites.values():
-			if String((site_value as Dictionary).get("location", "")) == mining_location_id:
-				site_id = String((site_value as Dictionary).get("id", ""))
-				break
-		var site: Dictionary = Game.content.mining_sites.get(site_id, {})
-		var runtime: Dictionary = Game.state.mining_site_states.get(site_id, {})
 		var card := _card()
-		card.add_child(_label(_content_name(site, mining_location_id), 16, COLOR_TEXT))
+		var deposit_id := String(profile.get("deposit_id", ""))
+		var resource_id := String(profile.get("resource_type", ""))
+		var title := I18n.category(String(profile.get("resource_category", "UNKNOWN"))) if resource_id.is_empty() else _content_name(Game.content.items.get(resource_id, {}), resource_id)
+		card.add_child(_label(title, 16, COLOR_TEXT))
 		if survey_state == LocationState.DETECTED:
-			card.add_child(_label(I18n.core("location.resources.detected") % [I18n.category(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
+			card.add_child(_label(I18n.core("location.resources.grid_detected", "Fixed deposit signal · %s · potential %s") % [I18n.category(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
 		else:
-			var item_id := String(profile.get("resource_type", ""))
-			var grade_range: Array = profile.get("grade_range", [])
-			var grade_text := I18n.core("format.range_decimal") % [float(grade_range[0]), float(grade_range[1])] if grade_range.size() >= 2 else I18n.core("status.UNKNOWN")
-			card.add_child(_label(I18n.core("location.resources.surveyed") % [_content_name(Game.content.items.get(item_id, {}), item_id), grade_text, float(profile.get("extraction_potential", 0.0)), float(profile.get("survey_confidence", 0.0)) * 100.0], 13, COLOR_MUTED))
+			card.add_child(_label(I18n.core("location.resources.grid_surveyed", "Deposit %s · grade %.2f · mapped potential %.1f/h") % [deposit_id, float(profile.get("grade", 0.0)), float(profile.get("mapped_potential_per_hour", 0.0))], 13, COLOR_MUTED))
 			if survey_state == LocationState.DEEP_SURVEYED:
-				card.add_child(_label(I18n.core("location.resources.deep_surveyed") % [float(profile.get("grade", 0.0)), float(profile.get("advanced_potential", 0.0)), I18n.core("format.list_separator").join(profile.get("byproducts", []))], 13, COLOR_ACCENT))
-			card.add_child(_label(I18n.core("location.resources.site_status") % [_status_text(String(runtime.get("state", "AVAILABLE"))), I18n.core("status.COMPLETED") if bool(runtime.get("developed", false)) else I18n.core("status.INCOMPLETE"), _content_name(Game.content.extraction_methods.get(String(runtime.get("extraction_method_id", "")), {}), I18n.core("status.NOT_SELECTED"))], 13, COLOR_MUTED))
-			if not bool(runtime.get("developed", false)):
-				for method_id_value in profile.get("allowed_methods", []):
-					var method_id := String(method_id_value)
-					var method: Dictionary = Game.content.extraction_methods.get(method_id, {})
-					if not bool(method.get("permanent", false)):
-						continue
-					var available := Game.simulation.extraction_method_available(Game.state, site_id, method_id)
-					var button := _button(I18n.core("location.resources.develop_site") % [_content_name(method, method_id), Game.simulation.extraction_site_sustainable_potential(Game.state, site_id, method_id)], _command.bind(I18n.core("command.develop_site"), Game.queue_site_development.bind(site_id, method_id)), not available, COLOR_GOOD)
-					button.name = "DevelopSite_%s_%s" % [site_id, method_id]
-					card.add_child(button)
+				var footprint: Dictionary = profile.get("footprint", {}).get("size", {})
+				card.add_child(_label(I18n.core("location.resources.grid_deep_surveyed", "Exact footprint %d × %d m · fixed world resource") % [int(footprint.get("x", 0)), int(footprint.get("y", 0))], 13, COLOR_ACCENT))
 		box.add_child(_wrap_card(card))
 
 
@@ -1741,78 +1724,23 @@ func _rebuild_frontier() -> void:
 	_clear(box)
 	box.add_child(_page_title(I18n.core("survey.title"), I18n.core("survey.subtitle")))
 	_add_unlock_banner(box, "frontier")
-
-	box.add_child(_section_title(I18n.core("survey.extraction_sites")))
-	var visible_site := false
-	for site_value in Game.content.mining_sites.values():
-		var site := site_value as Dictionary
-		var site_id := String(site.get("id", ""))
-		var site_state := Game.state.mining_site_states.get(site_id, {}) as Dictionary
-		if site_state.is_empty() or not bool(site_state.get("discovered", false)):
-			continue
-		visible_site = true
-		var card := _card()
-		card.add_child(_label(_content_name(site, site_id), 17, COLOR_TEXT))
-		var mining_location := Game.content.mining_locations.get(String(site.get("location", "")), {}) as Dictionary
-		var region_id := String(mining_location.get("region", ""))
-		var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, region_id)
-		var resource_intelligence := {}
+	box.add_child(_card_text(I18n.core("survey.factory_authority", "Survey fleets reveal resource intelligence. All extraction and processing is built on the factory grid; ships do not mine or provide production labor."), COLOR_ACCENT))
+	box.add_child(_section_title(I18n.core("survey.resource_intelligence", "Resource Intelligence")))
+	var visible_deposit := false
+	for location_id_value in Game.state.locations.keys():
+		var location_id := String(location_id_value)
+		var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, location_id)
+		var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 		for profile_value in intelligence.get("resources", []):
 			var profile := profile_value as Dictionary
-			if String(profile.get("mining_location_id", "")) == String(mining_location.get("id", "")):
-				resource_intelligence = profile
-				break
-		var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
-		if survey_state == LocationState.DETECTED:
-			card.add_child(_label(I18n.core("survey.intelligence.detected") % [_status_text(survey_state), I18n.category(String(resource_intelligence.get("resource_category", "UNKNOWN"))), _status_text(String(resource_intelligence.get("potential_band", "UNKNOWN")))], 14, COLOR_MUTED))
-		elif survey_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
-			var resource_id := String(resource_intelligence.get("resource_type", ""))
-			var grade_text := "%.2f" % float(resource_intelligence.get("grade", 0.0)) if resource_intelligence.has("grade") else str(resource_intelligence.get("grade_range", []))
-			card.add_child(_label(I18n.core("survey.intelligence.surveyed") % [_status_text(survey_state), grade_text, float(resource_intelligence.get("extraction_potential", 0.0)), _content_name(Game.content.items.get(resource_id, {}), resource_id)], 14, COLOR_MUTED))
-		else:
-			card.add_child(_label(I18n.core("survey.intelligence.hidden") % _status_text(survey_state), 14, COLOR_MUTED))
-		var integrated_network_id := String(site_state.get("integrated_network_id", ""))
-		if not integrated_network_id.is_empty():
-			var network_runtime: Dictionary = Game.state.extraction_network_states.get(integrated_network_id, {})
-			var network_status := String(network_runtime.get("status", "IDLE"))
-			var network_color := COLOR_GOOD if network_status == "RUNNING" else (COLOR_WARN if network_status == "BLOCKED_OUTPUT" else COLOR_MUTED)
-			card.add_child(_label(I18n.core("survey.network_status") % ["✓" if network_status == "RUNNING" else "!", _content_name(Game.content.extraction_networks.get(integrated_network_id, {}), integrated_network_id), _status_text(network_status), _resource_dictionary(network_runtime.get("production_totals", {}))], 13, network_color))
-			if network_status == "BLOCKED_OUTPUT":
-				var storage_blocker := Game.blocker_info({"primary_reason":"STORAGE_FULL", "domain":"mining", "location_id":region_id, "network_id":integrated_network_id})
-				card.add_child(_button(I18n.core("diagnostics.why", "Why?") + " · " + _blocker_text(storage_blocker), _navigate_blocker.bind(storage_blocker), false, COLOR_WARN))
-		var operation := _mining_operation_for_site(site_id)
-		if not operation.is_empty() and String(operation.get("status", "")) in ["RUNNING", "BLOCKED"]:
-			var hazard_profile := Game.simulation.mining_hazard_profile(Game.state, operation)
-			var operation_color := COLOR_ACCENT if String(operation.get("status", "")) == "RUNNING" else COLOR_WARN
-			card.add_child(_label(I18n.core("survey.extraction_performance") % [float(operation.get("installed_extraction_power", 0.0)), float(operation.get("site_extraction_potential", mining_location.get("extraction_potential", 0.0))), float(operation.get("method_efficiency", 1.0)), float(hazard_profile.get("uptime", 1.0)) * 100.0], 13, operation_color))
-			card.add_child(_operation_progress(operation, I18n.core("survey.mining_active")))
-			var stop_mining_button := _button(I18n.core("survey.stop_mining"), _command.bind(I18n.core("command.stop_mining"), Game.stop_mining_operation.bind(int(operation.get("slot", 0)))), false, COLOR_WARN)
-			stop_mining_button.name = "StopMining_%s" % site_id
-			card.add_child(stop_mining_button)
-		elif integrated_network_id.is_empty():
-			var site_activity := _activity_for_mining_site(site_id)
-			var reason := _activity_block_reason("mining", String(site_activity.get("id", "")))
-			var start_mining_button := _button(I18n.core("survey.start_mining"), _command.bind(I18n.core("command.start_mining"), Game.start_extraction_operation.bind(site_id)), not reason.is_empty())
-			start_mining_button.name = "StartMining_%s" % site_id
-			card.add_child(start_mining_button)
-			if not reason.is_empty():
-				card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
-		if integrated_network_id.is_empty():
-			for network_value in Game.content.extraction_networks.values():
-				var network := network_value as Dictionary
-				if not network.get("site_ids", []).has(site_id):
-					continue
-				var network_id := String(network.get("id", ""))
-				var eligibility := Game.simulation.mining_site_network_eligibility(Game.state, site_id, network_id)
-				var network_button := _button(I18n.core("survey.integrate_network") % _content_name(network, network_id), _command.bind(I18n.core("command.integrate_mining_network"), Game.integrate_mining_site.bind(site_id, network_id)), not bool(eligibility.get("eligible", false)), COLOR_GOOD)
-				network_button.name = "IntegrateMining_%s" % site_id
-				if not bool(eligibility.get("eligible", false)):
-					network_button.tooltip_text = I18n.core("survey.automation_not_ready") % [I18n.core("status.COMPLETED") if bool(eligibility.get("network_unlocked", false)) else I18n.core("status.INCOMPLETE"), int(eligibility.get("technology_current", 0)), int(eligibility.get("technology_required", 0)), int(eligibility.get("mastery_current", 0)), int(eligibility.get("mastery_required", 0))]
-				card.add_child(network_button)
-				if not bool(eligibility.get("eligible", false)):
-					card.add_child(_label(I18n.core("survey.automation_not_ready") % [I18n.core("status.COMPLETED") if bool(eligibility.get("network_unlocked", false)) else I18n.core("status.INCOMPLETE"), int(eligibility.get("technology_current", 0)), int(eligibility.get("technology_required", 0)), int(eligibility.get("mastery_current", 0)), int(eligibility.get("mastery_required", 0))], 12, COLOR_MUTED))
-		box.add_child(_wrap_card(card))
-	if not visible_site:
+			visible_deposit = true
+			var resource_id := String(profile.get("resource_type", ""))
+			var title := I18n.category(String(profile.get("resource_category", "UNKNOWN"))) if resource_id.is_empty() else _content_name(Game.content.items.get(resource_id, {}), resource_id)
+			var card := _card()
+			card.add_child(_label(title, 17, COLOR_TEXT))
+			card.add_child(_label(I18n.core("survey.grid_deposit", "%s · %s · world %s · deposit %s") % [_location_name(location_id), _status_text(survey_state), String(profile.get("world_id", "")), String(profile.get("deposit_id", ""))], 14, COLOR_MUTED))
+			box.add_child(_wrap_card(card))
+	if not visible_deposit:
 		box.add_child(_card_text(I18n.core("survey.no_sites"), COLOR_MUTED))
 
 
@@ -2551,7 +2479,7 @@ func _planner_chain_text(chain: Array) -> String:
 			"PRODUCT": parts.append(_content_name(Game.content.items.get(node_id, {}), node_id))
 			"METHOD": parts.append(_content_name(Game.content.activities.get(node_id, {}), node_id))
 			"FACTORY": parts.append(_content_name(Game.content.facilities.get(node_id, {}), node_id))
-			"SITE": parts.append(_content_name(Game.content.mining_sites.get(node_id, {}), node_id))
+			"SITE": parts.append(node_id)
 			"ROUTE": parts.append(_content_name(Game.content.logistics_routes.get(node_id, {}), node_id))
 			"HUB", "DESTINATION": parts.append(_location_name(node_id))
 			_: parts.append(_status_text(node_id))
@@ -3015,9 +2943,30 @@ func _rebuild_fleet() -> void:
 	_clear(box)
 	box.add_child(_page_title(I18n.core("ships.title"), I18n.core("ships.subtitle")))
 	_add_unlock_banner(box, "fleet")
-	var expedition_ids: Array = Game.state.fleet_ship_ids("expedition")
-	var command_used := Game.simulation.fleet_command_usage(Game.state, expedition_ids)
-	var command_capacity := Game.simulation.fleet_command_capacity(Game.state)
+	_ensure_selected_formation()
+	var formation_selector := HFlowContainer.new()
+	formation_selector.add_theme_constant_override("h_separation", 6)
+	for formation_id_value in Game.state.formation_ids():
+		var formation_id := String(formation_id_value)
+		var formation_name := _formation_name(formation_id)
+		var formation_button := _button(formation_name, _select_formation.bind(formation_id), formation_id == _selected_formation_id, COLOR_ACCENT)
+		formation_button.name = "SelectFormation_%s" % formation_id
+		formation_selector.add_child(formation_button)
+	var new_formation_name := LineEdit.new()
+	new_formation_name.placeholder_text = I18n.core("ships.formation.new_name", "New task force name")
+	new_formation_name.custom_minimum_size.x = 190.0
+	formation_selector.add_child(new_formation_name)
+	var create_formation_button := _button(I18n.core("ships.formation.create", "Create Formation"), _create_formation.bind(new_formation_name), false, COLOR_GOOD)
+	create_formation_button.name = "CreateFormation"
+	formation_selector.add_child(create_formation_button)
+	if _selected_formation_id != SpaceGameState.DEFAULT_FORMATION_ID:
+		var delete_formation_button := _button(I18n.core("ships.formation.delete", "Delete Empty Formation"), _delete_selected_formation, not Game.state.formation_ship_ids(_selected_formation_id).is_empty(), COLOR_WARN)
+		delete_formation_button.name = "DeleteFormation_%s" % _selected_formation_id
+		formation_selector.add_child(delete_formation_button)
+	box.add_child(formation_selector)
+	var formation_ship_ids: Array = Game.state.formation_ship_ids(_selected_formation_id)
+	var command_used := Game.simulation.fleet_command_usage(Game.state, formation_ship_ids)
+	var command_capacity := Game.simulation.fleet_command_capacity(Game.state, _selected_formation_id)
 	var active_count := Game.state.ships.filter(func(ship): return String(ship.get("maintenance_state", "ACTIVE")) == "ACTIVE").size()
 	var repair_count := Game.state.ships.filter(func(ship): return String(ship.get("status", "")) == "REPAIRING").size()
 	var summary := HBoxContainer.new()
@@ -3057,15 +3006,46 @@ func _select_fleet_section(section: String) -> void:
 	_request_active_page_refresh(true)
 
 
+func _ensure_selected_formation() -> void:
+	if not Game.state.fleet_formations.has(_selected_formation_id):
+		_selected_formation_id = SpaceGameState.DEFAULT_FORMATION_ID
+		if not Game.state.fleet_formations.has(_selected_formation_id) and not Game.state.formation_ids().is_empty():
+			_selected_formation_id = String(Game.state.formation_ids()[0])
+
+
+func _select_formation(formation_id: String) -> void:
+	if not Game.state.fleet_formations.has(formation_id):
+		return
+	_selected_formation_id = formation_id
+	_save_ui_preferences()
+	_request_active_page_refresh(true)
+
+
+func _create_formation(name_input: LineEdit) -> void:
+	if Game.create_fleet_formation(name_input.text):
+		_selected_formation_id = Game.last_created_formation_id
+		_save_ui_preferences()
+	_request_active_page_refresh(true)
+
+
+func _delete_selected_formation() -> void:
+	if Game.delete_fleet_formation(_selected_formation_id):
+		_selected_formation_id = SpaceGameState.DEFAULT_FORMATION_ID
+		_save_ui_preferences()
+	_request_active_page_refresh(true)
+
+
 func _build_fleet_readiness(box: VBoxContainer) -> void:
-	var formation: Dictionary = Game.state.fleet_logistics_runtime("expedition").get("formation", {})
+	var formation_id := _selected_formation_id
+	box.add_child(_section_title(_formation_name(formation_id)))
+	var formation: Dictionary = Game.state.fleet_logistics_runtime(formation_id).get("formation", {})
 	var formation_card := _card()
 	formation_card.add_child(_label(I18n.core("ships.readiness.doctrine"), 16, COLOR_ACCENT))
 	var doctrine_row := HFlowContainer.new()
 	doctrine_row.add_theme_constant_override("h_separation", 6)
 	doctrine_row.add_theme_constant_override("v_separation", 6)
 	for doctrine in ["HOLD_FORMATION", "AGGRESSIVE_PUSH", "MISSILE_SATURATION", "LONG_RANGE_ENGAGEMENT"]:
-		var doctrine_button := _button(_status_text(doctrine), _command.bind(I18n.core("command.ships.set_doctrine"), Game.set_fleet_doctrine.bind(doctrine)), String(formation.get("doctrine", "HOLD_FORMATION")) == doctrine, COLOR_ACCENT)
+		var doctrine_button := _button(_status_text(doctrine), _command.bind(I18n.core("command.ships.set_doctrine"), Game.set_fleet_doctrine.bind(doctrine, formation_id)), String(formation.get("doctrine", "HOLD_FORMATION")) == doctrine, COLOR_ACCENT)
 		doctrine_button.name = "FleetDoctrine_%s" % doctrine
 		doctrine_row.add_child(doctrine_button)
 	formation_card.add_child(doctrine_row)
@@ -3075,10 +3055,10 @@ func _build_fleet_readiness(box: VBoxContainer) -> void:
 	retreat_row.add_theme_constant_override("h_separation", 6)
 	retreat_row.add_theme_constant_override("v_separation", 6)
 	for threshold in [0.15, 0.25, 0.40]:
-		var retreat_button := _button(I18n.core("ships.readiness.hull_threshold") % (threshold * 100.0), _command.bind(I18n.core("command.ships.set_retreat_policy"), Game.set_fleet_retreat_policy.bind("HULL_THRESHOLD", threshold)), String(retreat_policy.get("mode", "")) == "HULL_THRESHOLD" and is_equal_approx(float(retreat_policy.get("threshold", 0.25)), threshold), COLOR_ACCENT)
+		var retreat_button := _button(I18n.core("ships.readiness.hull_threshold") % (threshold * 100.0), _command.bind(I18n.core("command.ships.set_retreat_policy"), Game.set_fleet_retreat_policy.bind("HULL_THRESHOLD", threshold, formation_id)), String(retreat_policy.get("mode", "")) == "HULL_THRESHOLD" and is_equal_approx(float(retreat_policy.get("threshold", 0.25)), threshold), COLOR_ACCENT)
 		retreat_button.name = "FleetRetreatPolicy_HULL_THRESHOLD_%d" % int(round(threshold * 100.0))
 		retreat_row.add_child(retreat_button)
-	var never_retreat_button := _button(I18n.core("ships.readiness.never_retreat"), _command.bind(I18n.core("command.ships.disable_retreat"), Game.set_fleet_retreat_policy.bind("NEVER", 0.25)), String(retreat_policy.get("mode", "")) == "NEVER", COLOR_WARN)
+	var never_retreat_button := _button(I18n.core("ships.readiness.never_retreat"), _command.bind(I18n.core("command.ships.disable_retreat"), Game.set_fleet_retreat_policy.bind("NEVER", 0.25, formation_id)), String(retreat_policy.get("mode", "")) == "NEVER", COLOR_WARN)
 	never_retreat_button.name = "FleetRetreatPolicy_NEVER"
 	retreat_row.add_child(never_retreat_button)
 	formation_card.add_child(retreat_row)
@@ -3090,7 +3070,7 @@ func _build_fleet_readiness(box: VBoxContainer) -> void:
 		for ship_value in Game.state.ships:
 			var ship := ship_value as Dictionary
 			var ship_id := String(ship.get("instance_id", ""))
-			if Game.state.ship_fleet_domain(ship_id) == "expedition" and String(formation.get("ship_zones", {}).get(ship_id, "FRONT")) == zone:
+			if Game.state.ship_formation_id(ship_id) == formation_id and String(formation.get("ship_zones", {}).get(ship_id, "FRONT")) == zone:
 				names.append(String(ship.get("name", ship_id)))
 		var zone_card := _stat_card(_zone_text(zone), "\n".join(names) if not names.is_empty() else I18n.core("ships.readiness.unconfigured"), COLOR_TEXT if not names.is_empty() else COLOR_MUTED)
 		zone_columns.add_child(zone_card)
@@ -3098,32 +3078,33 @@ func _build_fleet_readiness(box: VBoxContainer) -> void:
 	box.add_child(_wrap_card(formation_card))
 
 	box.add_child(_section_title(I18n.core("ships.readiness.supply_plan")))
-	var logistics: Dictionary = Game.state.fleet_logistics_runtime("expedition")
+	var logistics: Dictionary = Game.state.fleet_logistics_runtime(formation_id)
 	var plan: Dictionary = logistics.get("supply_plan", {})
 	for item_id in ["kinetic_munitions", "chemical_propellant", "repair_supplies"]:
 		var item := Game.content.items.get(item_id, {}) as Dictionary
 		var input := _number_input(int(plan.get(item_id, 0)), 0, 100000, 1)
 		input.name = "FleetSupplyTarget_%s" % item_id
-		var row := _labeled_control(I18n.core("ships.readiness.carried") % [_content_name(item, item_id), Game.state.fleet_supply_quantity(item_id)], input)
+		var row := _labeled_control(I18n.core("ships.readiness.carried") % [_content_name(item, item_id), Game.state.fleet_supply_quantity(item_id, formation_id)], input)
 		var save_supply_button := _button(I18n.core("ships.readiness.save_target"), _save_fleet_supply_plan.bind(item_id, input))
 		save_supply_button.name = "SetFleetSupplyPlan_%s" % item_id
 		row.add_child(save_supply_button)
 		box.add_child(row)
-	var expedition_fleet_empty := Game.state.fleet_ship_ids("expedition").is_empty()
-	var auto_resupply_button := _button(I18n.core("ships.readiness.auto_resupply"), _command.bind(I18n.core("command.ships.auto_resupply"), Game.auto_resupply_fleet), expedition_fleet_empty, COLOR_GOOD)
+	var formation_empty := Game.state.formation_ship_ids(formation_id).is_empty()
+	var auto_resupply_button := _button(I18n.core("ships.readiness.auto_resupply"), _command.bind(I18n.core("command.ships.auto_resupply"), Game.auto_resupply_fleet.bind(formation_id)), formation_empty, COLOR_GOOD)
 	auto_resupply_button.name = "AutoResupplyFleet"
-	if expedition_fleet_empty:
-		auto_resupply_button.tooltip_text = I18n.t("notice.expedition_fleet_empty", "Assign ships to the Expedition Fleet at Starport first")
+	if formation_empty:
+		auto_resupply_button.tooltip_text = I18n.t("notice.expedition_fleet_empty", "Assign ships to a tactical formation at Starport first")
 	box.add_child(auto_resupply_button)
 
 
 func _save_fleet_supply_plan(item_id: String, input: SpinBox) -> void:
-	_command(I18n.core("command.ships.save_supply_plan"), Game.set_fleet_supply_plan.bind(item_id, int(input.value), "expedition"))
+	_command(I18n.core("command.ships.save_supply_plan"), Game.set_fleet_supply_plan.bind(item_id, int(input.value), _selected_formation_id))
 
 
 func _build_fleet_roster(box: VBoxContainer) -> void:
 	box.add_child(_section_title(I18n.core("ships.roster.title")))
-	var formation: Dictionary = Game.state.fleet_logistics_runtime("expedition").get("formation", {})
+	var formation_id := _selected_formation_id
+	var formation: Dictionary = Game.state.fleet_logistics_runtime(formation_id).get("formation", {})
 	for ship_value in Game.state.ships:
 		var ship := ship_value as Dictionary
 		var ship_id := String(ship.get("instance_id", ""))
@@ -3131,7 +3112,7 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		var card := _card()
 		card.add_child(_label(I18n.core("ships.roster.identity") % [String(ship.get("name", ship_id)), _content_name(blueprint, String(ship.get("blueprint_id", "")))], 18, COLOR_TEXT))
 		var status_color := COLOR_WARN if String(ship.get("status", "")) in ["REPAIRING", "REFITTING", "REACTIVATING"] else COLOR_GOOD
-		card.add_child(_label(I18n.core("ships.roster.status") % [_status_text(String(ship.get("status", "DOCKED"))), _assignment_name(Game.state.ship_fleet_domain(ship_id)), _zone_text(String(Game.state.fleet_logistics_runtime("expedition").get("formation", {}).get("ship_zones", {}).get(ship_id, "FRONT")))], 14, status_color))
+		card.add_child(_label(I18n.core("ships.roster.status") % [_status_text(String(ship.get("status", "DOCKED"))), _assignment_name(Game.state.ship_formation_id(ship_id)), _zone_text(String(formation.get("ship_zones", {}).get(ship_id, "FRONT")))], 14, status_color))
 		card.add_child(_label(I18n.core("ships.roster.maintenance") % [_status_text(String(ship.get("maintenance_state", "ACTIVE"))), float(ship.get("maintenance_coverage", 1.0)) * 100.0, float(ship.get("maintenance_debt", 0.0))], 13, COLOR_MUTED))
 		var service_record: Dictionary = ship.get("service_record", {})
 		card.add_child(_label(I18n.core("ships.roster.service_record") % [int(service_record.get("combat_deployments", 0)), int(service_record.get("victories", 0)), int(service_record.get("defeats", 0)), float(service_record.get("combat_experience", 0.0)), float(service_record.get("damage_dealt", 0.0))], 13, COLOR_MUTED))
@@ -3162,31 +3143,17 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		var assignment_row := HFlowContainer.new()
 		assignment_row.add_theme_constant_override("h_separation", 6)
 		assignment_row.add_theme_constant_override("v_separation", 6)
-		var standby_availability := Game.ship_fleet_assignment_availability(ship_id, "")
-		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_fleet_assignment.bind(ship_id, "")), not bool(standby_availability.get("allowed", false)))
+		var standby_availability := Game.ship_formation_assignment_availability(ship_id, "")
+		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_formation_assignment.bind(ship_id, "")), not bool(standby_availability.get("allowed", false)))
 		standby_button.name = "AssignStandby_%s" % ship_id
 		if standby_button.disabled: standby_button.tooltip_text = String(standby_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 		assignment_row.add_child(standby_button)
-		var mining_availability := Game.ship_fleet_assignment_availability(ship_id, "mining")
-		var mining_button := _button(I18n.core("ships.assignment.mining"), _command.bind(I18n.core("command.ships.assign_mining"), Game.set_ship_fleet_assignment.bind(ship_id, "mining")), not bool(mining_availability.get("allowed", false)))
-		mining_button.name = "AssignMining_%s" % ship_id
-		if mining_button.disabled: mining_button.tooltip_text = String(mining_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-		assignment_row.add_child(mining_button)
-		var expedition_availability := Game.ship_fleet_assignment_availability(ship_id, "expedition")
-		var expedition_button := _button(I18n.core("ships.assignment.expedition"), _command.bind(I18n.core("command.ships.assign_expedition"), Game.set_ship_fleet_assignment.bind(ship_id, "expedition")), not bool(expedition_availability.get("allowed", false)))
-		expedition_button.name = "AssignExpedition_%s" % ship_id
-		if expedition_button.disabled: expedition_button.tooltip_text = String(expedition_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-		assignment_row.add_child(expedition_button)
-		var construction_assignment: Dictionary = ship.get("assignment", {})
-		if String(construction_assignment.get("type", "")) == "CONSTRUCTION_SUPPORT":
-			var release_support := _button(I18n.core("ships.release_construction", "Release Construction Support"), _command.bind(I18n.core("command.ships.release_construction"), Game.release_ship_from_construction_support.bind(ship_id)), false, COLOR_WARN)
-			release_support.name = "ReleaseConstructionSupport_%s" % ship_id
-			assignment_row.add_child(release_support)
-		elif Game.simulation.ship_loadout_capability_value(Game.state, ship, "construction_support") > 0.0:
-			var support_location := String(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-			var assign_support := _button(I18n.core("ships.assign_construction", "Assign Construction Support"), _command.bind(I18n.core("command.ships.assign_construction"), Game.assign_ship_to_construction_support.bind(ship_id, support_location)), not Game.state.ship_is_unassigned_docked(ship_id) or not Game.state.ship_is_deployment_ready(ship_id), COLOR_ACCENT)
-			assign_support.name = "AssignConstructionSupport_%s" % ship_id
-			assignment_row.add_child(assign_support)
+		var formation_availability := Game.ship_formation_assignment_availability(ship_id, formation_id)
+		var formation_name := _formation_name(formation_id)
+		var formation_button := _button(I18n.core("ships.assignment.formation", "Join %s") % formation_name, _command.bind(I18n.core("command.ships.assign_formation", "Assign to tactical formation"), Game.set_ship_formation_assignment.bind(ship_id, formation_id)), not bool(formation_availability.get("allowed", false)))
+		formation_button.name = "AssignFormation_%s" % ship_id
+		if formation_button.disabled: formation_button.tooltip_text = String(formation_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
+		assignment_row.add_child(formation_button)
 		card.add_child(assignment_row)
 		card.add_child(_label(I18n.core("ships.roster.combat_position"), 14, COLOR_ACCENT))
 		var zone_row := HFlowContainer.new()
@@ -3194,7 +3161,7 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		zone_row.add_theme_constant_override("v_separation", 6)
 		var current_zone := String(formation.get("ship_zones", {}).get(ship_id, "FRONT"))
 		for zone in ["FRONT", "MID", "REAR"]:
-			var zone_button := _button(_zone_text(zone), _command.bind(I18n.core("command.ships.set_combat_position"), Game.set_ship_combat_zone.bind(ship_id, zone)), current_zone == zone, COLOR_ACCENT)
+			var zone_button := _button(_zone_text(zone), _command.bind(I18n.core("command.ships.set_combat_position"), Game.set_ship_combat_zone.bind(ship_id, zone, formation_id)), Game.state.ship_formation_id(ship_id) != formation_id or current_zone == zone, COLOR_ACCENT)
 			zone_button.name = "ShipCombatZone_%s_%s" % [ship_id, zone]
 			zone_row.add_child(zone_button)
 		card.add_child(zone_row)
@@ -3283,7 +3250,7 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 				if remove_button.disabled:
 					remove_button.tooltip_text = String(removal_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
 				card.add_child(remove_button)
-		if String(ship.get("status", "")) == "DOCKED" and Game.state.ship_fleet_domain(ship_id).is_empty():
+		if String(ship.get("status", "")) == "DOCKED" and Game.state.ship_formation_id(ship_id).is_empty():
 			card.add_child(_button(I18n.core("ships.action.scrap"), _command.bind(I18n.core("command.ships.scrap"), Game.scrap_ship.bind(ship_id)), false, COLOR_WARN))
 		box.add_child(_wrap_card(card))
 	if Game.state.ships.is_empty():
@@ -3296,9 +3263,7 @@ func _ship_loadout_roles_text(ship: Dictionary) -> String:
 		"bulk_freight":I18n.core("ships.role.bulk_freight"),
 		"cryogenic_freight":I18n.core("ships.role.cryogenic_freight"),
 		"repair_support":I18n.core("ships.role.repair_support"),
-		"construction_support":I18n.core("ships.role.construction_support"),
 		"survey_support":I18n.core("ships.role.survey_support"),
-		"mining":I18n.core("ships.role.mining"),
 		"armed":I18n.core("ships.role.armed")
 	}
 	for capability_id_value in role_capabilities.keys():
@@ -3370,7 +3335,7 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 	box.add_child(_section_title(I18n.core("ships.shipyard.saved_designs", "SAVED SHIP DESIGNS")))
 	box.add_child(_build_ship_design_library())
 	box.add_child(_section_title(I18n.core("ships.shipyard.canvas_title")))
-	box.add_child(_card_text(I18n.core("ships.shipyard.canvas_help", "Start with an empty canvas. Drag a hull from the Ship tab, add parts from the Parts tab, then connect matching shapes yourself."), COLOR_MUTED))
+	box.add_child(_card_text(I18n.core("ships.shipyard.canvas_help", "Start with an empty canvas. Drag a hull from the Ship tab, add parts from the Parts tab, then connect matching shapes yourself. Grid spacing is a physical scale: zoom out for capital ships and zoom in for small hulls. A part must also fit the socket tier and diameter."), COLOR_MUTED))
 	box.add_child(_build_ship_assembly_palette())
 	var controls := HFlowContainer.new()
 	controls.add_theme_constant_override("h_separation", 6)
@@ -3456,7 +3421,10 @@ func _build_ship_assembly_palette() -> Control:
 			continue
 		var item := ShipAssemblyPaletteItemScript.new()
 		item.name = "ShipPaletteHull_%s" % plan_id
-		item.configure({"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id}, "%s\n%s · %d slots" % [_content_name(hull, hull_id), String(hull.get("class", "Ship")), int(hull.get("module_slots", 0))], true, I18n.core("ships.shipyard.drag_hull", "Drag this hull onto the empty canvas"))
+		var visual_spec := ShipHullProfiles.visual_spec(hull)
+		var ui_visual := hull.get("ui_visual", {}) as Dictionary
+		var scale_label := I18n.core("ships.shipyard.hull_scale", "L %.0fm × W %.0fm · MAX T%d / Ø%.0fm") % [float(visual_spec.get("length_m", 0.0)), float(visual_spec.get("beam_m", 0.0)), int(visual_spec.get("tier", 1)), ShipHullProfiles.socket_diameter_m(String(visual_spec.get("socket_size", "S")))]
+		item.configure({"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id}, "%s\n%s · %d slots\n%s" % [_content_name(hull, hull_id), String(hull.get("class", "Ship")), int(hull.get("module_slots", 0)), scale_label], true, I18n.core("ships.shipyard.drag_hull", "Drag this hull onto the empty canvas"), String(ui_visual.get("topdown_texture", "")))
 		hull_row.add_child(item)
 	hull_scroll.add_child(hull_row)
 	tabs.add_child(hull_scroll)
@@ -3533,6 +3501,7 @@ func _on_ship_assembly_notice(code: String) -> void:
 		"HULL_ALREADY_PLACED":I18n.core("ships.shipyard.notice.hull_already_placed", "Only one hull can be placed. Clear or delete it before choosing another."),
 		"PORT_DIRECTION_INVALID":I18n.core("ships.shipyard.notice.port_direction", "Connect a part plug to a hull socket."),
 		"PORT_SHAPE_MISMATCH":I18n.core("ships.shipyard.notice.port_mismatch", "That part does not match the socket's connector and mount family."),
+		"PORT_SIZE_MISMATCH":I18n.core("ships.shipyard.notice.port_size_mismatch", "That part is physically larger than this socket tier. Choose a larger socket or a smaller part."),
 		"PORT_ALREADY_OCCUPIED":I18n.core("ships.shipyard.notice.port_occupied", "That part or socket is already connected.")
 	}
 	_append_log(String(messages.get(code, code)))
@@ -3610,20 +3579,21 @@ func _rebuild_expedition() -> void:
 	_clear(box)
 	box.add_child(_page_title(I18n.core("page.expedition"), I18n.core("expedition.subtitle")))
 
-	var expedition_ids: Array = Game.state.fleet_ship_ids("expedition")
+	_ensure_selected_formation()
+	var expedition_ids: Array = Game.state.formation_ship_ids(_selected_formation_id)
 	var roster: Array[String] = []
 	for ship_id_value in expedition_ids:
 		var ship := Game.state.ship_by_id(String(ship_id_value))
 		roster.append(String(ship.get("name", ship_id_value)))
 	var command_used := Game.simulation.fleet_command_usage(Game.state, expedition_ids)
-	var command_capacity := Game.simulation.fleet_command_capacity(Game.state)
-	var cargo_used := Game.simulation.fleet_cargo_used(Game.state)
+	var command_capacity := Game.simulation.fleet_command_capacity(Game.state, _selected_formation_id)
+	var cargo_used := Game.simulation.fleet_cargo_used(Game.state, _selected_formation_id)
 	var cargo_capacity := Game.simulation.fleet_cargo_capacity(Game.state, expedition_ids)
-	var ready := Game.fleet_ready("expedition")
+	var ready := Game.formation_ready(_selected_formation_id)
 	box.add_child(_card_text(I18n.core("expedition.fleet_summary") % [I18n.core("status.READY") if ready else I18n.core("status.NOT_READY"), I18n.core("format.list_separator").join(roster) if not roster.is_empty() else I18n.core("expedition.fleet.empty"), command_used, command_capacity, cargo_used, cargo_capacity], COLOR_GOOD if ready else COLOR_WARN))
 	var fleet_actions := HFlowContainer.new()
 	fleet_actions.add_theme_constant_override("h_separation", 6)
-	var expedition_resupply_button := _button(I18n.core("expedition.action.auto_resupply"), _command.bind(I18n.core("command.expedition.auto_resupply"), Game.auto_resupply_fleet), roster.is_empty())
+	var expedition_resupply_button := _button(I18n.core("expedition.action.auto_resupply"), _command.bind(I18n.core("command.expedition.auto_resupply"), Game.auto_resupply_fleet.bind(_selected_formation_id)), roster.is_empty())
 	expedition_resupply_button.name = "AutoResupplyExpeditionFleet"
 	fleet_actions.add_child(expedition_resupply_button)
 	fleet_actions.add_child(_button(I18n.core("expedition.action.open_readiness"), _open_fleet_section.bind("readiness"), false, COLOR_GOOD))
@@ -3669,7 +3639,7 @@ func _rebuild_expedition() -> void:
 		card.add_child(_label(("✓ " if completed else "") + _content_name(route, route_id), 16, COLOR_GOOD if completed else COLOR_TEXT))
 		card.add_child(_label(_project_summary(route), 13, COLOR_MUTED))
 		var reason := _activity_block_reason("expedition", route_id)
-		var start_route_button := _button(I18n.core("expedition.action.start_route"), _command.bind(I18n.core("command.expedition.start_route"), Game.start_expedition_route.bind(route_id)), completed or not reason.is_empty() or roster.is_empty())
+		var start_route_button := _button(I18n.core("expedition.action.start_route"), _command.bind(I18n.core("command.expedition.start_route"), Game.start_expedition_route.bind(route_id, [], _selected_formation_id)), completed or not reason.is_empty() or roster.is_empty())
 		start_route_button.name = "StartRoute_%s" % route_id
 		card.add_child(start_route_button)
 		if not reason.is_empty():
@@ -3689,7 +3659,7 @@ func _rebuild_expedition() -> void:
 		card.add_child(_label(_activity_summary(activity), 13, COLOR_MUTED))
 		var reason := _direct_activity_block_reason("expedition", activity)
 		var busy := not String(repeat_runtime.get("activity_id", "")).is_empty() or String(Game.state.active_expedition.get("status", "")) == "RUNNING"
-		var start_combat_button := _button(I18n.core("expedition.action.start_combat"), _command.bind(I18n.core("command.expedition.start_combat"), Game.start_activity.bind("expedition", activity_id)), busy or not reason.is_empty() or roster.is_empty())
+		var start_combat_button := _button(I18n.core("expedition.action.start_combat"), _command.bind(I18n.core("command.expedition.start_combat"), Game.start_activity.bind("expedition", activity_id, _selected_formation_id)), busy or not reason.is_empty() or roster.is_empty())
 		start_combat_button.name = "StartCombat_%s" % activity_id
 		card.add_child(start_combat_button)
 		if not reason.is_empty():
@@ -3748,7 +3718,7 @@ func _combat_event_text(event: Dictionary) -> String:
 
 
 func _direct_activity_block_reason(domain_id: String, activity: Dictionary) -> String:
-	if Game.can_start_activity(domain_id, activity):
+	if Game.can_start_activity(domain_id, activity, _selected_formation_id):
 		return ""
 	var unmet := _unmet_requirements(activity.get("requirements", []))
 	return unmet if not unmet.is_empty() else I18n.core("expedition.blocker.fleet_conflict")
@@ -3820,6 +3790,8 @@ func _installable_loadout_modules(ship: Dictionary) -> Array[String]:
 	for module_id_value in Game.content.modules.keys():
 		var module_id := String(module_id_value)
 		var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
+		if bool(module_definition.get("retired", false)):
+			continue
 		if bool(module_definition.get("special_equipment", false)):
 			if Game.state.stored_equipment_ids(module_id).is_empty():
 				continue
@@ -3843,14 +3815,6 @@ func _ship_modules_text(ship: Dictionary) -> String:
 	return " / ".join(names)
 
 
-func _mining_operation_for_site(site_id: String) -> Dictionary:
-	for operation_value in Game.state.mining_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("site_id", "")) == site_id:
-			return operation
-	return {}
-
-
 func _industrial_runtime_for_facility(facility_id: String) -> Dictionary:
 	for operation_value in Game.state.industrial_operations:
 		var operation := operation_value as Dictionary
@@ -3860,25 +3824,14 @@ func _industrial_runtime_for_facility(facility_id: String) -> Dictionary:
 	return {}
 
 
-func _activity_for_mining_site(site_id: String) -> Dictionary:
-	for activity_value in Game.content.activities.values():
-		var activity := activity_value as Dictionary
-		if String(activity.get("domain", "")) == "mining" and String(activity.get("site", "")) == site_id:
-			return activity
-	return {}
-
-
 func _activity_block_reason(domain_id: String, activity_id: String) -> String:
 	if activity_id.is_empty():
 		return I18n.core("block_reason.missing_activity")
 	var activity := Game.content.activities.get(activity_id, {}) as Dictionary
 	if domain_id == "expedition":
 		activity = Game.content.expedition_routes.get(activity_id, {}) as Dictionary
-	if not activity.is_empty() and Game.can_start_activity(domain_id, activity):
+	if not activity.is_empty() and Game.can_start_activity(domain_id, activity, _selected_formation_id):
 		return ""
-	if domain_id == "mining":
-		var availability := Game.extraction_operation_availability(String(activity.get("site", "")))
-		return String(availability.get("reason", I18n.core("block_reason.mining_ship")))
 	var unmet := _unmet_requirements(activity.get("requirements", []))
 	if not unmet.is_empty():
 		return unmet
@@ -4027,10 +3980,15 @@ func _system_name(system_id: String) -> String:
 
 
 func _assignment_name(assignment: String) -> String:
-	match assignment:
-		"mining": return I18n.core("ships.assignment.mining")
-		"expedition": return I18n.core("ships.assignment.expedition")
-		_: return I18n.core("ships.assignment.standby")
+	if assignment.is_empty():
+		return I18n.core("ships.assignment.standby")
+	return _formation_name(assignment)
+
+
+func _formation_name(formation_id: String) -> String:
+	if formation_id == SpaceGameState.DEFAULT_FORMATION_ID:
+		return I18n.core("ships.formation.primary", "First Task Force")
+	return String(Game.state.formation_runtime(formation_id).get("name", formation_id))
 
 
 func _zone_text(zone: String) -> String:
@@ -4302,6 +4260,7 @@ func _load_ui_preferences() -> void:
 		_industry_section = String(_ui_config.get_value("navigation", "industry_section", "production"))
 		_industry_view_mode = String(_ui_config.get_value("navigation", "industry_view_mode", "network"))
 		_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
+		_selected_formation_id = String(_ui_config.get_value("navigation", "formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
 		_developer_details = bool(_ui_config.get_value("display", "developer_details", false))
 		_reduced_motion = bool(_ui_config.get_value("display", "reduced_motion", false))
 		if not has_session_scale:
@@ -4335,6 +4294,7 @@ func _save_ui_preferences() -> void:
 	_ui_config.set_value("navigation", "industry_section", _industry_section)
 	_ui_config.set_value("navigation", "industry_view_mode", _industry_view_mode)
 	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
+	_ui_config.set_value("navigation", "formation_id", _selected_formation_id)
 	_ui_config.set_value("display", "developer_details", _developer_details)
 	_ui_config.set_value("display", "reduced_motion", _reduced_motion)
 	_ui_config.set_value("display", "ui_scale", _ui_scale)

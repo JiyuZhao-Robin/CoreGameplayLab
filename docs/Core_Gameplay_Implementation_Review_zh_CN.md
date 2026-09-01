@@ -1,6 +1,6 @@
 # 《Helios / Space Idle》核心玩法实现审计与扩展评审稿
 
-> 历史审计归档：本文记录 `1.21.0 / schema 27` 基线，不再代表当前实现。当前 `1.29.0 / schema 35` 的权威状态见[实现状态](./implementation-status.md)、[当前架构](./current-architecture.md)与[剩余工作 Ledger](./remaining-work.md)。
+> 历史审计归档：本文记录 `1.21.0 / schema 27` 基线，其中的舰船采矿、固定采掘网络与常驻打捞设想均已失效。当前 `1.32.0 / schema 38` 的权威状态见[实现状态](./implementation-status.md)、[当前架构](./current-architecture.md)与[剩余工作 Ledger](./remaining-work.md)。
 
 > 审计时间：2026-08-26  
 > 审计对象：当前工作区代码、`data/content.json`、中文本地化、自动化测试，以及 `designFile/Space_Idle_Design_Mindmap_v02.xmind`  

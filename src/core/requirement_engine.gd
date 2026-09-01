@@ -66,10 +66,6 @@ func evaluate(state: SpaceGameState, requirement: Dictionary) -> bool:
 			return bool(state.infrastructure_sites.get(str(requirement.get("id", "")), false))
 		"boss_defeated":
 			return int(state.completed_activities.get("boss:%s" % requirement.get("id", ""), 0)) > 0
-		"mining_site_available":
-			return state.mining_site_available(str(requirement.get("id", "")))
-		"mining_sites_mastered":
-			return state.mastered_mining_site_count(str(requirement.get("region", "")), int(requirement.get("level", 1))) >= int(requirement.get("count", 1))
 		"survey_state":
 			var location: Dictionary = state.location_state(str(requirement.get("id", "")))
 			return LocationState.SURVEY_STATE_ORDER.find(str(location.get("survey_state", LocationState.UNKNOWN))) >= LocationState.SURVEY_STATE_ORDER.find(str(requirement.get("state", LocationState.SURVEYED)))

@@ -591,50 +591,6 @@ func _demand_rows(state: SpaceGameState) -> Array[Dictionary]:
 			row["location_id"] = str(location_id)
 			row["item_id"] = str(item_id)
 			result.append(row)
-	# Every live ConstructionProject is a real material sink at its owning
-	# Location. Targets are cumulative in priority order, so two projects cannot
-	# both claim the same local or in-transit units while dispatching freight.
-	var construction_projects: Array = state.construction_operations.filter(func(project): return str(project.get("status", "")) in ["RUNNING", "BLOCKED", "QUEUED"] and not str(project.get("project_id", "")).is_empty())
-	construction_projects.sort_custom(func(a, b):
-		if int(a.get("priority", 50)) != int(b.get("priority", 50)):
-			return int(a.get("priority", 50)) > int(b.get("priority", 50))
-		if int(a.get("enqueued_at_ms", 0)) != int(b.get("enqueued_at_ms", 0)):
-			return int(a.get("enqueued_at_ms", 0)) < int(b.get("enqueued_at_ms", 0))
-		return str(a.get("project_id", "")) < str(b.get("project_id", ""))
-	)
-	var cumulative_targets := {}
-	for project_value in construction_projects:
-		var project := project_value as Dictionary
-		var location_id := str(project.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-		var material_plan: Dictionary = project.get("material_plan", {})
-		if not state.has_location(location_id) or material_plan.is_empty():
-			continue
-		var consumed: Dictionary = project.get("consumed", {})
-		for item_id_value in material_plan.keys():
-			var item_id := str(item_id_value)
-			var remaining := maxi(0, int(material_plan.get(item_id, 0)) - int(consumed.get(item_id, 0)))
-			if remaining <= 0:
-				continue
-			# Freight only the next balanced construction tranche. Asking for every
-			# remaining unit lets the alphabetically first Component fill a finite
-			# staging depot and prevent the complementary BOM from ever arriving.
-			var staged_quantity := mini(remaining, maxi(1, ceili(float(material_plan.get(item_id, 0)) * 0.05)))
-			var target_key := "%s:%s" % [location_id, item_id]
-			cumulative_targets[target_key] = int(cumulative_targets.get(target_key, 0)) + staged_quantity
-			result.append({
-				"mode":MODE_DEMAND,
-				"reserve":0,
-				"target":int(cumulative_targets[target_key]),
-				"priority":clampi(int(project.get("priority", 50)), 0, 100),
-				"dispatch_threshold":1,
-				"source_lock":"",
-				"route_lock":"",
-				"location_id":location_id,
-				"item_id":item_id,
-				"demand_kind":"CONSTRUCTION_PROJECT",
-				"project_id":project.get("project_id", ""),
-				"project_type":project.get("project_type", "")
-			})
 	return result
 
 

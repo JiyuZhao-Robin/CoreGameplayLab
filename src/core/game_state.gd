@@ -1,10 +1,12 @@
 class_name SpaceGameState
 extends RefCounted
 
+const WreckSiteSystemScript = preload("res://src/core/wreck_site_system.gd")
 const SAVE_VERSION := GameVersion.SAVE_SCHEMA_VERSION
 const GAME_VERSION := GameVersion.PRODUCT_VERSION
 const MAIN_BASE_LOCATION_ID := "earth_orbit"
 const SYSTEM_ID := "sol"
+const DEFAULT_FORMATION_ID := "task_force_1"
 const MAX_INDUSTRIAL_OPERATIONS := 6
 const MAX_PRODUCTION_LINES := 24
 const MAX_CONSTRUCTION_OPERATIONS := 6
@@ -19,6 +21,14 @@ const MANUFACTURING_FACILITY_IDS := [
 	"assembly_yard",
 	"field_engineering_complex",
 	"frontier_matterworks"
+]
+const RETIRED_AGGREGATE_FACILITY_IDS := MANUFACTURING_FACILITY_IDS + [
+	"fission_reactor", "energy_array", "orbital_construction_yard",
+	"earth_extraction_network", "lunar_extraction_network"
+]
+const RETIRED_SHIP_WORK_MODULE_IDS := [
+	"mining_laser", "deep_core_drill", "heavy_mining_array",
+	"gas_collector", "exotic_containment", "construction_support_system"
 ]
 
 var save_id := ""
@@ -46,10 +56,13 @@ var completed_activities := {}
 var statistics := {"items_produced": 0, "items_consumed":0, "item_consumed_totals":{}, "cycles_completed": 0, "enemies_defeated": 0, "bosses_defeated":0, "expeditions_failed": 0, "research_completed":0, "ships_developed":0}
 var rng := {"algorithm_version":1, "master_seed":730201, "streams":{}}
 
-var extraction_assets := {"ship_ids":[]}
-var extraction_command := {"capacity":40}
-var expedition_fleet := {"ship_ids":[]}
-var mining_operations: Array = []
+## Formations are operational groups, never work-type buckets. A formation may
+## be dispatched to combat or exploration, while extraction and production are
+## owned exclusively by factory worlds.
+var fleet_formations := {
+	DEFAULT_FORMATION_ID:{"id":DEFAULT_FORMATION_ID, "name":"First Task Force", "ship_ids":[]}
+}
+var next_formation_serial := 2
 var industrial_operations: Array = []
 var next_production_line_serial := 1
 var construction_operations: Array = []
@@ -80,6 +93,10 @@ var infrastructure_sites := {"earth_orbit":true}
 var megastructures := {}
 var megastructure_projects := {}
 var retired_megastructure_archive := {}
+## Immutable migration evidence from the removed location-level mining,
+## Production Line, extraction-network and generic Construction runtimes.
+## Nothing in the live simulation may read this archive as operational state.
+var retired_aggregate_industry_archive := {}
 var major_discoveries := {}
 var game_complete := false
 var completed_at_ms := 0
@@ -109,9 +126,16 @@ var next_loadout_serial := 1
 var ship_designs := {}
 var next_ship_design_serial := 1
 var region_states := {}
-var mining_site_states := {}
 var combat_area_states := {}
-var extraction_network_states := {}
+## Finite aftermath points created by future invasion events. These are not
+## ship jobs: salvage and analysis systems consume a shared work budget and the
+## active point is removed when that budget is exhausted.
+var wreck_sites := {}
+var wreck_site_history: Array = []
+var next_wreck_site_serial := 1
+## Schema 36 introduces the authoritative Factorio-style square-grid worlds.
+## Removed aggregate records are never loaded into live runtime state.
+var factory_worlds := {}
 var equipment_instances := {}
 var next_equipment_serial := 1
 ## v4 makes ordinary ship modules Loadout definitions rather than inventory
@@ -124,7 +148,7 @@ var ship_service_projects: Array = []
 var naval_archive: Array = []
 var fleet_maintenance := {"fractional":{}, "debt":{}, "coverage":{}, "consumption_totals":{}}
 var fleet_logistics := {
-	"expedition":{
+	DEFAULT_FORMATION_ID:{
 		"command_capacity":100,
 		"supplies":{},
 		"recovered":{},
@@ -152,7 +176,7 @@ var automation_rules: Array = []
 var automation_audit: Array = []
 var next_automation_rule_serial := 1
 ## Phase-eight survey work is a real asset-backed mission, not a point pool.
-var survey_mission := {"status":"IDLE", "mission_id":"", "origin":"", "target":"", "target_state":"", "survey_capability":"", "duration_ms":0.0, "progress_ms":0.0, "costs":{}, "assigned_ship_ids":[]}
+var survey_mission := {"status":"IDLE", "mission_id":"", "formation_id":"", "origin":"", "target":"", "target_state":"", "survey_capability":"", "duration_ms":0.0, "progress_ms":0.0, "costs":{}, "assigned_ship_ids":[]}
 var next_survey_mission_serial := 1
 
 
@@ -175,28 +199,16 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	state.device_id = OS.get_unique_id()
 	for domain_id in domain_ids:
 		state.domains[domain_id] = {"level":1, "xp":0, "cycles":0}
-	state.extraction_assets = {"ship_ids":[]}
-	state.extraction_command = {"capacity":40}
-	state.expedition_fleet = {"ship_ids":[]}
-	for index in MAX_INDUSTRIAL_OPERATIONS:
-		state.industrial_operations.append(_empty_industrial_operation(index, MANUFACTURING_FACILITY_IDS[index], MAIN_BASE_LOCATION_ID))
-	state.next_production_line_serial = MAX_INDUSTRIAL_OPERATIONS + 1
-	for index in MAX_CONSTRUCTION_OPERATIONS:
-		state.construction_operations.append(_empty_construction_project(index))
+	state.fleet_formations = {DEFAULT_FORMATION_ID:{"id":DEFAULT_FORMATION_ID, "name":"First Task Force", "ship_ids":[]}}
+	state.next_formation_serial = 2
 	state.active_expedition = _empty_operation(0, "expedition")
 	state.active_expedition.merge({"phase":"IDLE", "route_id":"", "node_index":0, "node_progress_ms":0.0, "safe_node_index":0, "combat_state":{}}, true)
 	state.research = empty_research_program()
 	for technology_domain_id in TECHNOLOGY_DOMAIN_IDS:
 		state.technology_domains[technology_domain_id] = {"level":1, "xp":0.0}
-	state.facilities = {
-		"makeshift_workshop":{"level":1, "status":"ACTIVE"},
-		"fission_reactor":{"level":1, "status":"ACTIVE"},
-		"orbital_construction_yard":{"level":1, "status":"ACTIVE", "installed_modules":[]},
-		"orbital_starport":{"level":1, "status":"ACTIVE", "installed_modules":[]}
-	}
-	state.ensure_main_location_industries()
+	state.facilities = {"orbital_starport":{"level":1, "status":"ACTIVE", "installed_modules":[]}}
 	state.ships = []
-	state._create_ship_instance("patchwork_prospector", ["light_autocannon", "civilian_shield", "basic_drive", "mining_laser", "civilian_reactor_core"], "ISS Pioneer")
+	state._create_ship_instance("patchwork_prospector", ["light_autocannon", "civilian_shield", "basic_drive", "sensor_array", "civilian_reactor_core"], "ISS Pioneer")
 	# The founding stockpile prevents an early circular dependency before basic
 	# electronics production comes online.
 	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":12, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}
@@ -223,6 +235,9 @@ static func migrate_save_dictionary(source: Dictionary) -> Dictionary:
 			32: migrated = _migrate_32_33(migrated)
 			33: migrated = _migrate_33_34(migrated)
 			34: migrated = _migrate_34_35(migrated)
+			35: migrated = _migrate_35_36(migrated)
+			36: migrated = _migrate_36_37(migrated)
+			37: migrated = _migrate_37_38(migrated)
 			_: break
 		var next_version := int(migrated.get("save_version", version))
 		if next_version <= version:
@@ -326,8 +341,253 @@ static func _migrate_34_35(data: Dictionary) -> Dictionary:
 	return migrated
 
 
+static func _migrate_35_36(data: Dictionary) -> Dictionary:
+	var migrated := _stamp_schema(data, 36)
+	# Grid worlds are not synthesized from aggregate slots: doing so would invent
+	# placement and duplicate ownership. The removed runtimes survive only as
+	# immutable audit evidence and never resume after migration.
+	var archive: Dictionary = migrated.get("retired_aggregate_industry_archive", {}).duplicate(true)
+	archive.merge({
+		"retired_in_schema":36,
+		"mining_operations":migrated.get("mining_operations", []).duplicate(true),
+		"industrial_operations":migrated.get("industrial_operations", []).duplicate(true),
+		"construction_operations":migrated.get("construction_operations", []).duplicate(true),
+		"extraction_network_states":migrated.get("extraction_network_states", {}).duplicate(true),
+		"extraction_assets":migrated.get("extraction_assets", {}).duplicate(true),
+		"extraction_command":migrated.get("extraction_command", {}).duplicate(true),
+		"mining_site_states":migrated.get("mining_site_states", {}).duplicate(true),
+		"automation":migrated.get("automation", {}).duplicate(true),
+		"automation_rules":migrated.get("automation_rules", []).duplicate(true),
+		"automation_audit":migrated.get("automation_audit", []).duplicate(true),
+		"background_economy":migrated.get("background_economy", {}).duplicate(true)
+	}, true)
+	migrated["retired_aggregate_industry_archive"] = archive
+	for field in ["mining_operations", "industrial_operations", "construction_operations"]:
+		migrated[field] = []
+	migrated["extraction_network_states"] = {}
+	migrated["extraction_assets"] = {"ship_ids":[]}
+	migrated["extraction_command"] = {"capacity":0}
+	migrated["mining_site_states"] = {}
+	migrated["automation"] = {"rates":{}, "fractional":{}, "rules":[], "next_rule_serial":1, "execution_log":[]}
+	migrated["automation_rules"] = []
+	migrated["automation_audit"] = []
+	migrated["next_automation_rule_serial"] = 1
+	migrated["background_economy"] = {}
+	for ship_value in migrated.get("ships", []):
+		var ship := ship_value as Dictionary
+		var assignment: Dictionary = ship.get("assignment", {})
+		if str(assignment.get("domain", "")) == "mining" or str(assignment.get("type", "")) == "CONSTRUCTION_SUPPORT" or str(ship.get("status", "")) in ["EXTRACTION_OPERATION", "CONSTRUCTION_SUPPORT"]:
+			ship["assignment"] = {}
+			ship["status"] = "DOCKED"
+	for location_value in migrated.get("locations", {}).values():
+		var location := location_value as Dictionary
+		for industry_value in location.get("industry", {}).get("industries", {}).values():
+			var industry := industry_value as Dictionary
+			industry["production_method_id"] = ""
+			industry["status"] = "IDLE"
+	for project_value in migrated.get("megastructure_projects", {}).values():
+		var project := project_value as Dictionary
+		if not str(project.get("active_project_id", "")).is_empty():
+			project["active_project_id"] = ""
+			project["status"] = "MIGRATION_REQUIRED"
+	migrated["factory_worlds"] = migrated.get("factory_worlds", {}).duplicate(true)
+	return _retire_aggregate_industry_metadata_in_dictionary(migrated)
+
+
+static func _migrate_36_37(data: Dictionary) -> Dictionary:
+	var migrated := _stamp_schema(data, 37)
+	var legacy_expedition: Dictionary = migrated.get("expedition_fleet", {})
+	var legacy_ship_ids: Array = legacy_expedition.get("ship_ids", []).duplicate()
+	var existing_formations: Dictionary = migrated.get("fleet_formations", {}).duplicate(true)
+	if existing_formations.is_empty():
+		existing_formations[DEFAULT_FORMATION_ID] = {
+			"id":DEFAULT_FORMATION_ID,
+			"name":"First Task Force",
+			"ship_ids":legacy_ship_ids
+		}
+	migrated["fleet_formations"] = existing_formations
+	migrated["next_formation_serial"] = maxi(2, int(migrated.get("next_formation_serial", 2)))
+	var old_logistics: Dictionary = migrated.get("fleet_logistics", {}).duplicate(true)
+	if old_logistics.has("expedition") and not old_logistics.has(DEFAULT_FORMATION_ID):
+		old_logistics[DEFAULT_FORMATION_ID] = old_logistics["expedition"].duplicate(true)
+	old_logistics.erase("expedition")
+	migrated["fleet_logistics"] = old_logistics
+	for retired_field in ["extraction_assets", "expedition_fleet"]:
+		migrated.erase(retired_field)
+	for ship_value in migrated.get("ships", []):
+		var ship := ship_value as Dictionary
+		var retained_modules: Array = []
+		for module_value in ship.get("modules", []):
+			if str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS:
+				retained_modules.append(module_value)
+		ship["modules"] = retained_modules
+		var assignment: Dictionary = ship.get("assignment", {})
+		if str(assignment.get("domain", "")) in ["mining", "expedition"] or str(assignment.get("type", "")) == "CONSTRUCTION_SUPPORT":
+			ship["assignment"] = {}
+			if str(ship.get("status", "")) in ["EXTRACTION_OPERATION", "CONSTRUCTION_SUPPORT"]:
+				ship["status"] = "DOCKED"
+	for loadout_value in migrated.get("saved_loadouts", {}).values():
+		var loadout := loadout_value as Dictionary
+		loadout["modules"] = (loadout.get("modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+	for design_value in migrated.get("ship_designs", {}).values():
+		var design := design_value as Dictionary
+		design["modules"] = (design.get("modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+	for queue_value in migrated.get("shipyard_queue", []):
+		var queue_entry := queue_value as Dictionary
+		queue_entry["custom_modules"] = (queue_entry.get("custom_modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+	return _retire_aggregate_industry_metadata_in_dictionary(migrated)
+
+
+static func _migrate_37_38(data: Dictionary) -> Dictionary:
+	var migrated := _stamp_schema(data, 38)
+	# Schema 38 is the hard ship-role cutover. Extraction equipment cannot remain
+	# in a current-schema save, including projects that were mid-refit.
+	var archive: Dictionary = migrated.get("retired_aggregate_industry_archive", {}).duplicate(true)
+	var retired_assets := {"retired_in_schema":38, "locations":{}, "legacy_inventory":{}}
+	var locations: Dictionary = migrated.get("locations", {}).duplicate(true)
+	for location_id_value in locations.keys():
+		var location := locations[location_id_value] as Dictionary
+		var removed_at_location := {}
+		for field in ["inventory", "reserves"]:
+			var stock: Dictionary = location.get(field, {}).duplicate(true)
+			for retired_id in RETIRED_SHIP_WORK_MODULE_IDS:
+				var quantity := maxi(0, int(stock.get(retired_id, 0)))
+				if quantity > 0:
+					removed_at_location["%s:%s" % [field, retired_id]] = quantity
+				stock.erase(retired_id)
+			location[field] = stock
+		if not removed_at_location.is_empty():
+			retired_assets["locations"][str(location_id_value)] = removed_at_location
+	migrated["locations"] = locations
+	for field in ["inventory", "inventory_reserves"]:
+		var legacy_stock: Dictionary = migrated.get(field, {}).duplicate(true)
+		for retired_id in RETIRED_SHIP_WORK_MODULE_IDS:
+			var quantity := maxi(0, int(legacy_stock.get(retired_id, 0)))
+			if quantity > 0:
+				retired_assets["legacy_inventory"]["%s:%s" % [field, retired_id]] = quantity
+			legacy_stock.erase(retired_id)
+		migrated[field] = legacy_stock
+	if not retired_assets["locations"].is_empty() or not retired_assets["legacy_inventory"].is_empty():
+		archive["ship_work_assets"] = retired_assets
+	migrated["retired_aggregate_industry_archive"] = archive
+	migrated["pinned_items"] = (migrated.get("pinned_items", []) as Array).filter(func(item_value): return str(item_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+	for ship_value in migrated.get("ships", []):
+		var ship := ship_value as Dictionary
+		ship["modules"] = (ship.get("modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+		if str(ship.get("blueprint_id", "")) == "ultimate_miner":
+			ship["blueprint_id"] = "ultimate_transport"
+		elif str(ship.get("blueprint_id", "")) == "mobile_constructor":
+			ship["blueprint_id"] = "heavy_lift_transport"
+	for loadout_value in migrated.get("saved_loadouts", {}).values():
+		var loadout := loadout_value as Dictionary
+		loadout["modules"] = (loadout.get("modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+		if str(loadout.get("blueprint_id", "")) == "ultimate_miner":
+			loadout["blueprint_id"] = "ultimate_transport"
+		elif str(loadout.get("blueprint_id", "")) == "mobile_constructor":
+			loadout["blueprint_id"] = "heavy_lift_transport"
+	for design_value in migrated.get("ship_designs", {}).values():
+		var design := design_value as Dictionary
+		design["modules"] = (design.get("modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+		if str(design.get("hull_id", "")) == "ultimate_miner":
+			design["hull_id"] = "ultimate_transport"
+		elif str(design.get("hull_id", "")) == "mobile_constructor":
+			design["hull_id"] = "heavy_lift_transport"
+	for queue_value in migrated.get("shipyard_queue", []):
+		var queue_entry := queue_value as Dictionary
+		queue_entry["custom_modules"] = (queue_entry.get("custom_modules", []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+		if str(queue_entry.get("plan_id", "")) == "construct_ultimate_miner":
+			queue_entry["plan_id"] = "construct_ultimate_transport"
+		elif str(queue_entry.get("plan_id", "")) == "construct_mobile_constructor":
+			queue_entry["plan_id"] = "construct_heavy_lift_transport"
+	for project_value in migrated.get("refit_projects", []):
+		var project := project_value as Dictionary
+		for field in ["desired_definitions", "original_modules", "desired_modules"]:
+			project[field] = (project.get(field, []) as Array).filter(func(module_value): return str(module_value) not in RETIRED_SHIP_WORK_MODULE_IDS)
+	var unlocked_plans: Dictionary = migrated.get("unlocked_ship_plans", {}).duplicate(true)
+	if unlocked_plans.has("construct_ultimate_miner"):
+		unlocked_plans["construct_ultimate_transport"] = unlocked_plans.get("construct_ultimate_miner", false)
+		unlocked_plans.erase("construct_ultimate_miner")
+	if unlocked_plans.has("construct_mobile_constructor"):
+		unlocked_plans["construct_heavy_lift_transport"] = unlocked_plans.get("construct_mobile_constructor", false)
+		unlocked_plans.erase("construct_mobile_constructor")
+	migrated["unlocked_ship_plans"] = unlocked_plans
+	var completed: Dictionary = migrated.get("completed_projects", {}).duplicate(true)
+	if completed.has("develop_ultimate_miner"):
+		completed["develop_ultimate_transport"] = completed.get("develop_ultimate_miner", false)
+		completed.erase("develop_ultimate_miner")
+	if completed.has("develop_mobile_constructor"):
+		completed["develop_heavy_lift_transport"] = completed.get("develop_mobile_constructor", false)
+		completed.erase("develop_mobile_constructor")
+	migrated["completed_projects"] = completed
+	var research: Dictionary = migrated.get("research", {}).duplicate(true)
+	if str(research.get("project_id", "")) == "develop_ultimate_miner":
+		research["project_id"] = "develop_ultimate_transport"
+	elif str(research.get("project_id", "")) == "develop_mobile_constructor":
+		research["project_id"] = "develop_heavy_lift_transport"
+	migrated["research"] = research
+	for history_value in migrated.get("research_program_history", []):
+		var history_entry := history_value as Dictionary
+		if str(history_entry.get("project_id", "")) == "develop_ultimate_miner":
+			history_entry["project_id"] = "develop_ultimate_transport"
+		elif str(history_entry.get("project_id", "")) == "develop_mobile_constructor":
+			history_entry["project_id"] = "develop_heavy_lift_transport"
+	migrated["wreck_sites"] = migrated.get("wreck_sites", {}).duplicate(true)
+	migrated["wreck_site_history"] = migrated.get("wreck_site_history", []).duplicate(true)
+	migrated["next_wreck_site_serial"] = maxi(1, int(migrated.get("next_wreck_site_serial", 1)))
+	return _retire_aggregate_industry_metadata_in_dictionary(migrated)
+
+
+static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary) -> Dictionary:
+	var migrated := source.duplicate(true)
+	var archive: Dictionary = migrated.get("retired_aggregate_industry_archive", {}).duplicate(true)
+	for field in ["extraction_command", "mining_site_states"]:
+		var retired_value = migrated.get(field, {})
+		if retired_value is Dictionary and not retired_value.is_empty() and not archive.has(field):
+			archive[field] = retired_value.duplicate(true)
+	migrated["extraction_command"] = {"capacity":0}
+	migrated["mining_site_states"] = {}
+	var facilities: Dictionary = migrated.get("facilities", {}).duplicate(true)
+	var retired_facilities := {}
+	for facility_id in RETIRED_AGGREGATE_FACILITY_IDS:
+		if facilities.has(facility_id):
+			retired_facilities[facility_id] = facilities[facility_id].duplicate(true)
+			facilities.erase(facility_id)
+	if not retired_facilities.is_empty() and not archive.has("facilities"):
+		archive["facilities"] = retired_facilities
+	var retired_locations := {}
+	var locations: Dictionary = migrated.get("locations", {}).duplicate(true)
+	for location_id_value in locations.keys():
+		var location_id := str(location_id_value)
+		var location := locations[location_id] as Dictionary
+		var industry: Dictionary = location.get("industry", {})
+		var construction: Dictionary = location.get("construction", {})
+		var automation: Dictionary = location.get("automation", {})
+		if not industry.get("industries", {}).is_empty() or not construction.get("active_project_ids", []).is_empty() or not str(automation.get("industrial_template_id", "")).is_empty():
+			retired_locations[location_id] = {"industry":industry.duplicate(true), "construction":construction.duplicate(true), "automation":automation.duplicate(true)}
+		location["industry"] = {"industries":{}, "specialization_id":"", "power_capacity":0.0, "cooling_capacity":0.0, "structural_capacity":0.0}
+		location["construction"] = {"capacity":0.0, "active_project_ids":[]}
+		location["automation"] = {"industrial_template_id":"", "managed_policy_items":[], "status":"RETIRED", "auto_expand_enabled":false, "target_industry_level":1, "expansion_progress_ms":0.0, "last_blocked_reason":"", "blocker":{}}
+	if not retired_locations.is_empty() and not archive.has("location_industry"):
+		archive["location_industry"] = retired_locations
+	for field in ["manufacturing_module_inventory", "manufacturing_modules_built", "unlocked_industrial_transformations", "adopted_industrial_transformations"]:
+		var retired_value = migrated.get(field, {})
+		if retired_value is Dictionary and not retired_value.is_empty() and not archive.has(field):
+			archive[field] = retired_value.duplicate(true)
+		migrated[field] = {}
+	migrated["facilities"] = facilities
+	migrated["locations"] = locations
+	migrated["retired_aggregate_industry_archive"] = archive
+	return migrated
+
+
 static func from_dictionary(data: Dictionary, domain_ids: Array, location_definitions: Dictionary = {}) -> SpaceGameState:
 	data = migrate_save_dictionary(data)
+	# Schema 38 was introduced on this feature branch before its content hard cut
+	# was complete. Reapply the idempotent role invariant on load so an interim
+	# schema-38 developer save cannot retain deleted work modules or hull IDs.
+	if SAVE_VERSION == 38:
+		data = _migrate_37_38(data)
+	data = _retire_aggregate_industry_metadata_in_dictionary(data)
 	var state := create_new(domain_ids, location_definitions)
 	state.save_id = str(data.get("save_id", state.save_id))
 	state.revision = int(data.get("revision", 0))
@@ -349,29 +609,15 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.statistics = data.get("statistics", state.statistics).duplicate(true)
 	state.statistics["item_consumed_totals"] = state.statistics.get("item_consumed_totals", {}).duplicate(true) if state.statistics.get("item_consumed_totals", null) is Dictionary else {}
 	state.rng = data.get("rng", state.rng).duplicate(true)
-	state.extraction_assets = data.get("extraction_assets", state.extraction_assets).duplicate(true)
-	state.extraction_command = data.get("extraction_command", state.extraction_command).duplicate(true)
-	state.extraction_command["capacity"] = maxi(1, int(state.extraction_command.get("capacity", 40)))
-	state.expedition_fleet = data.get("expedition_fleet", state.expedition_fleet).duplicate(true)
-	state.mining_operations = _normalized_operations(data.get("mining_operations", []), 0, "mining", true)
-	state.industrial_operations = _normalized_industrial_operations(data.get("industrial_operations", []))
-	state.next_production_line_serial = _normalized_next_production_line_serial(int(data.get("next_production_line_serial", 1)), state.industrial_operations)
-	state.construction_operations = _normalized_construction_projects(data.get("construction_operations", []))
+	state.fleet_formations = _normalized_fleet_formations(data.get("fleet_formations", {}))
+	state.next_formation_serial = maxi(2, int(data.get("next_formation_serial", 2)))
+	state.industrial_operations = []
+	state.next_production_line_serial = 1
+	state.construction_operations = []
 	state.construction_history = data.get("construction_history", []).duplicate(true)
-	state.next_construction_project_serial = _normalized_next_construction_project_serial(int(data.get("next_construction_project_serial", 1)), state.construction_operations, state.construction_history)
-	for operation in state.construction_operations:
-		operation["productivity_progress"] = 0.0
+	state.next_construction_project_serial = 1
 	state.active_expedition = data.get("active_expedition", state.active_expedition).duplicate(true)
 	state.facilities = data.get("facilities", state.facilities).duplicate(true)
-	state.ensure_main_location_industries()
-	for operation in state.industrial_operations:
-		var industry_location_id := str(operation.get("location_id", MAIN_BASE_LOCATION_ID))
-		if state.has_location(industry_location_id):
-			var local_industry := state.ensure_location_industry(industry_location_id, str(operation.get("facility_id", "")), 1)
-			if not str(operation.get("activity_id", "")).is_empty():
-				local_industry["production_method_id"] = str(operation.get("activity_id", ""))
-	if not state.facilities.has("orbital_construction_yard"):
-		state.facilities["orbital_construction_yard"] = {"level":1, "status":"ACTIVE", "installed_modules":[]}
 	if not state.facilities.has("orbital_starport"):
 		state.facilities["orbital_starport"] = {"level":1, "status":"ACTIVE", "installed_modules":[]}
 	state.expedition_reports = data.get("expedition_reports", []).duplicate(true)
@@ -408,14 +654,15 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.megastructures = data.get("megastructures", {}).duplicate(true)
 	state.megastructure_projects = _normalized_megastructure_projects(data.get("megastructure_projects", {}), state.megastructures)
 	state.retired_megastructure_archive = data.get("retired_megastructure_archive", {}).duplicate(true)
+	state.retired_aggregate_industry_archive = data.get("retired_aggregate_industry_archive", {}).duplicate(true)
 	state.major_discoveries = data.get("major_discoveries", {}).duplicate(true)
 	state.game_complete = bool(data.get("game_complete", false))
 	state.completed_at_ms = int(data.get("completed_at_ms", 0))
 	state.combat_log = data.get("combat_log", []).duplicate(true)
-	state.automation = data.get("automation", state.automation).duplicate(true)
+	state.automation = {"rates":{}, "fractional":{}, "rules":[], "next_rule_serial":1, "execution_log":[]}
 	state.progression_tier = maxi(1, int(data.get("progression_tier", 1)))
 	state.resource_maturity = data.get("resource_maturity", {}).duplicate(true)
-	state.background_economy = _normalized_background_economy(data.get("background_economy", {}))
+	state.background_economy = _normalized_background_economy({})
 	state.energy_system = _normalized_energy_system(data.get("energy_system", {}))
 	state.manufacturing_module_inventory = data.get("manufacturing_module_inventory", {}).duplicate(true)
 	state.manufacturing_modules_built = data.get("manufacturing_modules_built", {}).duplicate(true)
@@ -425,15 +672,17 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.ship_designs = _normalized_ship_designs(data.get("ship_designs", {}))
 	state.next_ship_design_serial = _serial_after_identifiers(int(data.get("next_ship_design_serial", 1)), state.ship_designs.keys(), "DESIGN-")
 	state.region_states = data.get("region_states", {}).duplicate(true)
-	state.mining_site_states = data.get("mining_site_states", {}).duplicate(true)
-	if int(data.get("save_version", 0)) <= 33:
-		for site_runtime_value in state.mining_site_states.values():
-			var site_runtime := site_runtime_value as Dictionary
-			if bool(site_runtime.get("discovered", false)):
-				site_runtime["developed"] = true
-				site_runtime["extraction_method_id"] = str(site_runtime.get("extraction_method_id", "fixed_excavation"))
 	state.combat_area_states = data.get("combat_area_states", {}).duplicate(true)
-	state.extraction_network_states = data.get("extraction_network_states", {}).duplicate(true)
+	state.wreck_sites = WreckSiteSystemScript.normalize_sites(data.get("wreck_sites", {}))
+	state.wreck_site_history = WreckSiteSystemScript.normalize_history(data.get("wreck_site_history", []))
+	state.next_wreck_site_serial = _serial_after_identifiers(int(data.get("next_wreck_site_serial", 1)), state.wreck_sites.keys(), "WRECK-")
+	state.factory_worlds = {}
+	var factory_world_normalizer := FactoryGridSimulation.new()
+	for world_id_value in data.get("factory_worlds", {}).keys():
+		var world_id := str(world_id_value)
+		var world_value = data.get("factory_worlds", {}).get(world_id)
+		if world_value is Dictionary:
+			state.factory_worlds[world_id] = factory_world_normalizer.normalize_world(world_value)
 	state.equipment_instances = data.get("equipment_instances", {}).duplicate(true)
 	state.next_equipment_serial = _serial_after_identifiers(int(data.get("next_equipment_serial", 1)), state.equipment_instances.keys(), "EQUIP-")
 	state.asset_semantics_version = maxi(1, int(data.get("asset_semantics_version", 1)))
@@ -451,12 +700,9 @@ static func from_dictionary(data: Dictionary, domain_ids: Array, location_defini
 	state.operations_maintenance = _normalized_operations_maintenance(data.get("operations_maintenance", {}))
 	state.economy_telemetry = _normalized_economy_telemetry(data.get("economy_telemetry", {}))
 	state.planning_scenarios = data.get("planning_scenarios", {}).duplicate(true)
-	state.automation_rules = _normalized_automation_rules(data.get("automation_rules", []))
-	state.automation_audit = data.get("automation_audit", []).duplicate(true)
-	var automation_ids: Array = []
-	for loaded_rule_value in state.automation_rules:
-		automation_ids.append(str((loaded_rule_value as Dictionary).get("rule_id", "")))
-	state.next_automation_rule_serial = _serial_after_identifiers(int(data.get("next_automation_rule_serial", 1)), automation_ids, "AUTOMATION-")
+	state.automation_rules = []
+	state.automation_audit = []
+	state.next_automation_rule_serial = 1
 	state.survey_mission = _normalized_survey_mission(data.get("survey_mission", {}))
 	state.next_survey_mission_serial = _serial_after_identifiers(int(data.get("next_survey_mission_serial", 1)), [str(state.survey_mission.get("mission_id", ""))], "SURVEY-")
 	var loaded_domains: Dictionary = data.get("domains", {})
@@ -494,15 +740,9 @@ func to_dictionary() -> Dictionary:
 		"completed_activities":completed_activities,
 		"statistics":statistics,
 		"rng":rng,
-		"extraction_assets":extraction_assets,
-		"extraction_command":extraction_command,
-		"expedition_fleet":expedition_fleet,
-		"mining_operations":mining_operations,
-		"industrial_operations":industrial_operations,
-		"next_production_line_serial":next_production_line_serial,
-		"construction_operations":construction_operations,
+		"fleet_formations":fleet_formations,
+		"next_formation_serial":next_formation_serial,
 		"construction_history":construction_history,
-		"next_construction_project_serial":next_construction_project_serial,
 		"active_expedition":active_expedition,
 		"facilities":facilities,
 		"expedition_reports":expedition_reports,
@@ -514,34 +754,31 @@ func to_dictionary() -> Dictionary:
 		"research_program_history":research_program_history,
 		"technology_spillovers":technology_spillovers,
 		"experimental_maturity":experimental_maturity,
-		"unlocked_industrial_transformations":unlocked_industrial_transformations,
-		"adopted_industrial_transformations":adopted_industrial_transformations,
 		"unlocked_ship_plans":unlocked_ship_plans,
 		"shipyard_queue":shipyard_queue,
 		"infrastructure_sites":infrastructure_sites,
 		"megastructures":megastructures,
 		"megastructure_projects":megastructure_projects,
 		"retired_megastructure_archive":retired_megastructure_archive,
+		"retired_aggregate_industry_archive":retired_aggregate_industry_archive,
 		"major_discoveries":major_discoveries,
 		"game_complete":game_complete,
 		"completed_at_ms":completed_at_ms,
 		"combat_log":combat_log,
-		"automation":automation,
 		"progression_tier":progression_tier,
 		"resource_maturity":resource_maturity,
-		"background_economy":background_economy,
 		"energy_system":energy_system,
-		"manufacturing_module_inventory":manufacturing_module_inventory,
-		"manufacturing_modules_built":manufacturing_modules_built,
 		"pinned_items":pinned_items,
 		"saved_loadouts":saved_loadouts,
 		"next_loadout_serial":next_loadout_serial,
 		"ship_designs":ship_designs,
 		"next_ship_design_serial":next_ship_design_serial,
 		"region_states":region_states,
-		"mining_site_states":mining_site_states,
 		"combat_area_states":combat_area_states,
-		"extraction_network_states":extraction_network_states,
+		"wreck_sites":wreck_sites,
+		"wreck_site_history":wreck_site_history,
+		"next_wreck_site_serial":next_wreck_site_serial,
+		"factory_worlds":factory_worlds,
 		"equipment_instances":equipment_instances,
 		"next_equipment_serial":next_equipment_serial,
 		"asset_semantics_version":asset_semantics_version,
@@ -556,9 +793,6 @@ func to_dictionary() -> Dictionary:
 		"operations_maintenance":operations_maintenance,
 		"economy_telemetry":economy_telemetry,
 		"planning_scenarios":planning_scenarios,
-		"automation_rules":automation_rules,
-		"automation_audit":automation_audit,
-		"next_automation_rule_serial":next_automation_rule_serial,
 		"survey_mission":survey_mission,
 		"next_survey_mission_serial":next_survey_mission_serial
 	}
@@ -604,13 +838,7 @@ func location_reserves(location_id: String = MAIN_BASE_LOCATION_ID) -> Dictionar
 
 
 func location_industries(location_id: String = MAIN_BASE_LOCATION_ID) -> Dictionary:
-	if not locations.has(location_id):
-		return {}
-	var industry: Dictionary = locations[location_id].get("industry", {})
-	if industry.get("industries", null) is not Dictionary:
-		industry["industries"] = {}
-	locations[location_id]["industry"] = industry
-	return industry["industries"]
+	return {}
 
 
 func location_industry(location_id: String, facility_id: String) -> Dictionary:
@@ -618,97 +846,31 @@ func location_industry(location_id: String, facility_id: String) -> Dictionary:
 
 
 func ensure_location_industry(location_id: String, facility_id: String, initial_level: int = 1) -> Dictionary:
-	if not has_location(location_id) or facility_id.is_empty():
-		return {}
-	var industries := location_industries(location_id)
-	if not industries.has(facility_id):
-		industries[facility_id] = {
-			"facility_id":facility_id,
-			"level":maxi(1, initial_level),
-			"scale_stage":scale_stage_for_level(maxi(1, initial_level)),
-			"production_method_id":"",
-			"installed_process_modules":[],
-			"installed_plugins":[],
-			"expertise_cycles":0,
-			"expertise_level":0,
-			"product_mastery":{}
-		}
-	var runtime: Dictionary = industries[facility_id]
-	runtime["level"] = maxi(1, int(runtime.get("level", initial_level)))
-	runtime["scale_stage"] = str(runtime.get("scale_stage", scale_stage_for_level(int(runtime["level"]))))
-	if runtime["scale_stage"] not in ["WORKSHOP", "FACTORY", "INDUSTRIAL_COMPLEX", "AUTOMATED_DISTRICT"]:
-		runtime["scale_stage"] = scale_stage_for_level(int(runtime["level"]))
-	runtime["production_method_id"] = str(runtime.get("production_method_id", ""))
-	runtime["installed_process_modules"] = runtime.get("installed_process_modules", []).duplicate()
-	runtime["installed_plugins"] = runtime.get("installed_plugins", []).duplicate()
-	if location_id == MAIN_BASE_LOCATION_ID and facilities.has(facility_id):
-		for field in ["installed_process_modules", "installed_plugins"]:
-			if (runtime[field] as Array).is_empty() and facilities[facility_id].get(field, null) is Array:
-				runtime[field] = facilities[facility_id].get(field, []).duplicate()
-	runtime["expertise_cycles"] = maxi(0, int(runtime.get("expertise_cycles", 0)))
-	runtime["expertise_level"] = maxi(0, int(runtime.get("expertise_level", 0)))
-	runtime["product_mastery"] = runtime.get("product_mastery", {}).duplicate(true)
-	return runtime
+	return {}
 
 
 func ensure_main_location_industries() -> void:
-	if not has_location(MAIN_BASE_LOCATION_ID):
-		return
-	for facility_id in MANUFACTURING_FACILITY_IDS:
-		if facilities.has(facility_id) and str(facilities[facility_id].get("status", "")) == "ACTIVE":
-			ensure_location_industry(MAIN_BASE_LOCATION_ID, facility_id, 1)
+	return
 
 
 func industrial_operation_for(location_id: String, facility_id: String) -> Dictionary:
-	for operation in industrial_operations:
-		if str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) == location_id and str(operation.get("facility_id", "")) == facility_id:
-			return operation
 	return {}
 
 
 func production_lines_for(location_id: String, facility_id: String) -> Array:
-	var result: Array = []
-	for operation in industrial_operations:
-		if str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) == location_id and str(operation.get("facility_id", "")) == facility_id:
-			result.append(operation)
-	result.sort_custom(func(a, b): return int(a.get("slot", 0)) < int(b.get("slot", 0)))
-	return result
+	return []
 
 
 func production_line_by_id(line_id: String) -> Dictionary:
-	for operation in industrial_operations:
-		if str(operation.get("line_id", "")) == line_id:
-			return operation
 	return {}
 
 
 func ensure_industrial_operation(location_id: String, facility_id: String) -> Dictionary:
-	var existing := industrial_operation_for(location_id, facility_id)
-	if not existing.is_empty():
-		return existing
-	var operation := _empty_industrial_operation(industrial_operations.size(), facility_id, location_id)
-	industrial_operations.append(operation)
-	return operation
+	return {}
 
 
 func create_production_line(location_id: String, facility_id: String) -> Dictionary:
-	if not has_location(location_id) or facility_id.is_empty() or industrial_operations.size() >= MAX_PRODUCTION_LINES:
-		return {}
-	var operation := _empty_industrial_operation(industrial_operations.size(), facility_id, location_id)
-	operation["line_id"] = "LINE-%06d" % next_production_line_serial
-	next_production_line_serial += 1
-	industrial_operations.append(operation)
-	return operation
-
-
-static func scale_stage_for_level(level: int) -> String:
-	if level >= 20:
-		return "AUTOMATED_DISTRICT"
-	if level >= 10:
-		return "INDUSTRIAL_COMPLEX"
-	if level >= 5:
-		return "FACTORY"
-	return "WORKSHOP"
+	return {}
 
 
 func item_quantity(item_id: String, location_id: String = MAIN_BASE_LOCATION_ID) -> int:
@@ -730,9 +892,101 @@ func aggregate_inventory() -> Dictionary:
 	return result
 
 
+## Physical items owned by square-grid factory worlds. This is intentionally
+## separate from aggregate_inventory(), whose compatibility contract remains
+## Location Inventory only. Entity buffers and delivered construction materials
+## are disjoint custody domains and therefore safe to add together.
+func factory_world_item_ledger() -> Dictionary:
+	var all_items := {}
+	var all_entity_buffers := {}
+	var all_construction_staging := {}
+	var all_produced := {}
+	var all_consumed := {}
+	var by_world := {}
+	for world_id_value in factory_worlds.keys():
+		var world_id := str(world_id_value)
+		var world_value = factory_worlds.get(world_id_value)
+		if world_value is not Dictionary:
+			continue
+		var world := world_value as Dictionary
+		var entity_buffers := {}
+		var construction_staging := {}
+		var entities := {}
+		var orders := {}
+		for entity_id_value in world.get("entities", {}).keys():
+			var entity_id := str(entity_id_value)
+			var entity_value = world.get("entities", {}).get(entity_id_value)
+			if entity_value is not Dictionary:
+				continue
+			var entity := entity_value as Dictionary
+			var entity_items := {}
+			for field in ["inputs", "outputs", "inventory"]:
+				var item_map_value = entity.get(field, {})
+				if item_map_value is not Dictionary:
+					continue
+				for item_id_value in (item_map_value as Dictionary).keys():
+					var item_id := str(item_id_value)
+					var quantity := maxi(0, int((item_map_value as Dictionary).get(item_id_value, 0)))
+					_ledger_add(entity_items, item_id, quantity)
+					_ledger_add(entity_buffers, item_id, quantity)
+					_ledger_add(all_entity_buffers, item_id, quantity)
+			if not entity_items.is_empty():
+				entities[entity_id] = entity_items
+		for order_id_value in world.get("construction_orders", {}).keys():
+			var order_id := str(order_id_value)
+			var order_value = world.get("construction_orders", {}).get(order_id_value)
+			if order_value is not Dictionary:
+				continue
+			var delivered_value = (order_value as Dictionary).get("delivered_items", {})
+			if delivered_value is not Dictionary:
+				continue
+			var order_items := {}
+			for item_id_value in (delivered_value as Dictionary).keys():
+				var item_id := str(item_id_value)
+				var quantity := maxi(0, int((delivered_value as Dictionary).get(item_id_value, 0)))
+				_ledger_add(order_items, item_id, quantity)
+				_ledger_add(construction_staging, item_id, quantity)
+				_ledger_add(all_construction_staging, item_id, quantity)
+			if not order_items.is_empty():
+				orders[order_id] = order_items
+		var world_items := entity_buffers.duplicate(true)
+		for item_id_value in construction_staging.keys():
+			_ledger_add(world_items, str(item_id_value), int(construction_staging.get(item_id_value, 0)))
+		for item_id_value in world_items.keys():
+			_ledger_add(all_items, str(item_id_value), int(world_items.get(item_id_value, 0)))
+		var produced: Dictionary = world.get("statistics", {}).get("produced", {}).duplicate(true) if world.get("statistics", {}).get("produced", null) is Dictionary else {}
+		var consumed: Dictionary = world.get("statistics", {}).get("consumed", {}).duplicate(true) if world.get("statistics", {}).get("consumed", null) is Dictionary else {}
+		for item_id_value in produced.keys():
+			_ledger_add(all_produced, str(item_id_value), maxi(0, int(produced.get(item_id_value, 0))))
+		for item_id_value in consumed.keys():
+			_ledger_add(all_consumed, str(item_id_value), maxi(0, int(consumed.get(item_id_value, 0))))
+		by_world[world_id] = {
+			"Items":world_items,
+			"EntityBuffers":entity_buffers,
+			"ConstructionStaging":construction_staging,
+			"Entities":entities,
+			"Orders":orders,
+			"Produced":produced,
+			"Consumed":consumed
+		}
+	return {
+		"Items":all_items,
+		"EntityBuffers":all_entity_buffers,
+		"ConstructionStaging":all_construction_staging,
+		"Produced":all_produced,
+		"Consumed":all_consumed,
+		"ByWorld":by_world
+	}
+
+
+func factory_world_item_holdings() -> Dictionary:
+	return factory_world_item_ledger().get("Items", {}).duplicate(true)
+
+
 ## Read-only ownership view used by integrity tests, diagnostics and completion
 ## statistics. Reservations remain claims on Inventory rather than duplicated
-## assets; ProjectStaging is an explicitly bounded subset of Reserved.
+## assets; ProjectStaging is an explicitly bounded subset of Reserved. FactoryWorld
+## is a separate physical ownership domain and includes its construction staging.
 func asset_ledger_snapshot() -> Dictionary:
 	var inventory_on_hand := {}
 	var inventory_available := {}
@@ -748,7 +1002,7 @@ func asset_ledger_snapshot() -> Dictionary:
 		for item_id_value in location_reserves(location_id).keys():
 			if not item_ids.has(item_id_value):
 				item_ids.append(item_id_value)
-		for collection in [industrial_operations, construction_operations, shipyard_queue]:
+		for collection in [shipyard_queue]:
 			for runtime_value in collection:
 				var runtime := runtime_value as Dictionary
 				if str(runtime.get("location_id", MAIN_BASE_LOCATION_ID)) != location_id:
@@ -784,24 +1038,6 @@ func asset_ledger_snapshot() -> Dictionary:
 			"Reserved":location_reserved,
 			"ReservedRequested":location_requested
 		}
-	for runtime_value in construction_operations:
-		var runtime := runtime_value as Dictionary
-		if str(runtime.get("status", "IDLE")) not in ["RUNNING", "BLOCKED", "QUEUED"] or str(runtime.get("project_id", "")).is_empty():
-			continue
-		var location_id := str(runtime.get("location_id", MAIN_BASE_LOCATION_ID))
-		var staged := {}
-		var requested := {}
-		for item_id_value in runtime.get("reserved_costs", {}).keys():
-			var item_id := str(item_id_value)
-			var raw_quantity := maxi(0, int(runtime.get("reserved_costs", {}).get(item_id, 0)))
-			# Construction reservations have already been disjointly assigned by the
-			# normal reservation allocator. Do not borrow strategic, Research,
-			# Industry or Shipyard claims merely because they share Reserved stock.
-			_ledger_add(staged, item_id, raw_quantity)
-			_ledger_add(requested, item_id, raw_quantity)
-			_ledger_add(project_staging_items, item_id, raw_quantity)
-			_ledger_add(project_staging_requested, item_id, raw_quantity)
-		projects[str(runtime.get("project_id", ""))] = {"LocationId":location_id, "Items":staged, "Requested":requested}
 	var in_transit_items := {}
 	var shipments := {}
 	for shipment_value in logistics_network.get("shipments", []):
@@ -846,6 +1082,7 @@ func asset_ledger_snapshot() -> Dictionary:
 			_ledger_add(lost_items, str(item_id_value), maxi(0, int(lost.get(item_id_value, 0))))
 	return {
 		"Inventory":{"OnHand":inventory_on_hand, "Available":inventory_available, "Reserved":inventory_reserved, "ReservedRequested":inventory_reserved_requested, "ByLocation":inventory_by_location},
+		"FactoryWorld":factory_world_item_ledger(),
 		"InTransit":{"Items":in_transit_items, "Shipments":shipments},
 		"ProjectStaging":{"Items":project_staging_items, "Requested":project_staging_requested, "Projects":projects, "ReservationSubset":true},
 		"InstalledAssigned":{"ManufacturingModules":installed_modules, "SpecialEquipment":special_equipment, "Ships":assigned_ships},
@@ -931,21 +1168,11 @@ func research_committed_quantity(item_id: String, location_id: String = MAIN_BAS
 
 
 func industrial_committed_quantity(item_id: String, excluded_slot: int = -1, location_id: String = MAIN_BASE_LOCATION_ID) -> int:
-	var result := 0
-	for operation in industrial_operations:
-		if int(operation.get("slot", -1)) == excluded_slot or operation.get("status", "IDLE") not in ["RUNNING", "BLOCKED"] or str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) != location_id:
-			continue
-		result += maxi(0, int(operation.get("reserved_costs", {}).get(item_id, 0)))
-	return result
+	return 0
 
 
 func construction_committed_quantity(item_id: String, excluded_slot: int = -1, location_id: String = MAIN_BASE_LOCATION_ID) -> int:
-	var result := 0
-	for operation in construction_operations:
-		if int(operation.get("slot", -1)) == excluded_slot or operation.get("status", "IDLE") not in ["RUNNING", "BLOCKED", "QUEUED"] or str(operation.get("location_id", MAIN_BASE_LOCATION_ID)) != location_id:
-			continue
-		result += maxi(0, int(operation.get("reserved_costs", {}).get(item_id, 0)))
-	return result
+	return 0
 
 
 func shipyard_committed_quantity(item_id: String, excluded_project_id: String = "", location_id: String = MAIN_BASE_LOCATION_ID) -> int:
@@ -1031,37 +1258,11 @@ func install_facility_module(facility_id: String, module_id: String) -> bool:
 
 
 func install_manufacturing_module(facility_id: String, module_id: String, module_kind: String, location_id: String = MAIN_BASE_LOCATION_ID) -> bool:
-	if not facilities.has(facility_id) or str(facilities[facility_id].get("status", "")) != "ACTIVE":
-		return false
-	var field := "installed_process_modules" if module_kind == "process" else "installed_plugins"
-	var local_industry := ensure_location_industry(location_id, facility_id, 1)
-	var installed: Array = local_industry.get(field, []).duplicate()
-	if installed.has(module_id):
-		return false
-	installed.append(module_id)
-	local_industry[field] = installed
-	# Main-base mirrors preserve schema compatibility for old save/UI consumers.
-	if location_id == MAIN_BASE_LOCATION_ID:
-		facilities[facility_id][field] = installed.duplicate()
-	if int(manufacturing_module_inventory.get(module_id, 0)) > 0:
-		manufacturing_module_inventory[module_id] = int(manufacturing_module_inventory[module_id]) - 1
-	return true
+	return false
 
 
 func uninstall_manufacturing_module(facility_id: String, module_id: String, module_kind: String, location_id: String = MAIN_BASE_LOCATION_ID) -> bool:
-	if not facilities.has(facility_id):
-		return false
-	var field := "installed_process_modules" if module_kind == "process" else "installed_plugins"
-	var local_industry := ensure_location_industry(location_id, facility_id, 1)
-	var installed: Array = local_industry.get(field, []).duplicate()
-	if not installed.has(module_id):
-		return false
-	installed.erase(module_id)
-	local_industry[field] = installed
-	if location_id == MAIN_BASE_LOCATION_ID:
-		facilities[facility_id][field] = installed.duplicate()
-	manufacturing_module_inventory[module_id] = int(manufacturing_module_inventory.get(module_id, 0)) + 1
-	return true
+	return false
 
 
 func remove_item(item_id: String, quantity: int, location_id: String = MAIN_BASE_LOCATION_ID) -> bool:
@@ -1074,7 +1275,7 @@ func remove_item(item_id: String, quantity: int, location_id: String = MAIN_BASE
 	return true
 
 
-func transfer_inventory_to_fleet_supply(item_id: String, requested: int, fleet_id: String = "expedition", location_id: String = MAIN_BASE_LOCATION_ID) -> int:
+func transfer_inventory_to_fleet_supply(item_id: String, requested: int, fleet_id: String = DEFAULT_FORMATION_ID, location_id: String = MAIN_BASE_LOCATION_ID) -> int:
 	if item_id.is_empty() or requested <= 0:
 		return 0
 	var transferred := mini(requested, available_item_quantity(item_id, location_id))
@@ -1236,81 +1437,75 @@ func ship_is_unassigned_docked(instance_id: String) -> bool:
 	return ship_is_docked(instance_id) and ship.get("assignment", {}).is_empty()
 
 
-func ship_in_extraction_assets(instance_id: String) -> bool:
-	return extraction_assets.get("ship_ids", []).has(instance_id)
+func formation_ids() -> Array[String]:
+	var result: Array[String] = []
+	for formation_id_value in fleet_formations.keys():
+		result.append(str(formation_id_value))
+	result.sort()
+	return result
 
 
-func fleet_ship_ids(domain_id: String) -> Array:
-	match domain_id:
-		"mining":
-			return extraction_assets.get("ship_ids", []).duplicate()
-		"expedition":
-			return expedition_fleet.get("ship_ids", []).duplicate()
-	return []
+func formation_runtime(formation_id: String = DEFAULT_FORMATION_ID) -> Dictionary:
+	if formation_id in ["mining", "industry", "construction", "expedition"] or not fleet_formations.has(formation_id):
+		return {}
+	return fleet_formations[formation_id]
 
 
-func ship_fleet_domain(instance_id: String) -> String:
-	for domain_id in ["mining", "expedition"]:
-		if fleet_ship_ids(domain_id).has(instance_id):
-			return domain_id
+func formation_ship_ids(formation_id: String = DEFAULT_FORMATION_ID) -> Array:
+	if not fleet_formations.has(formation_id):
+		return []
+	return fleet_formations[formation_id].get("ship_ids", []).duplicate()
+
+
+func ship_formation_id(instance_id: String) -> String:
+	for formation_id in formation_ids():
+		if formation_ship_ids(formation_id).has(instance_id):
+			return formation_id
 	return ""
 
 
-func set_fleet_ship_ids(domain_id: String, ship_ids: Array) -> void:
-	match domain_id:
-		"mining":
-			extraction_assets = {"ship_ids":ship_ids.duplicate()}
-		"expedition":
-			expedition_fleet = {"ship_ids":ship_ids.duplicate()}
+func set_formation_ship_ids(formation_id: String, ship_ids: Array) -> void:
+	var formation := formation_runtime(formation_id)
+	if formation.is_empty():
+		return
+	formation["ship_ids"] = ship_ids.duplicate()
 
 
 func has_external_activity() -> bool:
 	if active_expedition.get("status", "IDLE") == "RUNNING":
 		return true
-	for operation in mining_operations:
-		if operation.get("status", "IDLE") == "RUNNING":
-			return true
-	return false
+	return survey_mission.get("status", "IDLE") == "RUNNING"
+
+
+## Compatibility helper for archived aggregate-industry diagnostics. Live
+## production no longer consumes this scale-stage model.
+static func scale_stage_for_level(level: int) -> String:
+	if level >= 20:
+		return "AUTOMATED_DISTRICT"
+	if level >= 10:
+		return "INDUSTRIAL_COMPLEX"
+	if level >= 5:
+		return "FACTORY"
+	return "WORKSHOP"
 
 
 func ship_can_refit(instance_id: String) -> bool:
 	return ship_is_docked(instance_id)
 
 
-func mining_site_available(site_id: String) -> bool:
-	var runtime: Dictionary = mining_site_states.get(site_id, {})
-	return (
-		bool(runtime.get("discovered", false))
-		and bool(runtime.get("unlocked", true))
-		and str(runtime.get("survey_state", LocationState.UNKNOWN)) in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]
-		and str(runtime.get("state", "AVAILABLE")) not in ["LOCKED", "INTEGRATED"]
-		and str(runtime.get("integrated_network_id", "")).is_empty()
-	)
-
-
-func mastered_mining_site_count(region_id: String, required_level: int = 1) -> int:
-	var count := 0
-	for runtime in mining_site_states.values():
-		if str(runtime.get("region", "")) == region_id and int(runtime.get("mastery_level", 0)) >= required_level:
-			count += 1
-	return count
-
-
-func extraction_command_capacity() -> int:
-	return maxi(1, int(extraction_command.get("capacity", 40)))
-
-
-func fleet_logistics_runtime(fleet_id: String = "expedition") -> Dictionary:
+func fleet_logistics_runtime(fleet_id: String = DEFAULT_FORMATION_ID) -> Dictionary:
+	if fleet_id in ["mining", "industry", "construction", "expedition"] or not fleet_formations.has(fleet_id):
+		return {}
 	if not fleet_logistics.has(fleet_id):
 		fleet_logistics[fleet_id] = {"command_capacity":100, "supplies":{}, "recovered":{}, "supply_plan":{}, "policies":{}, "formation":{"doctrine":"HOLD_FORMATION", "ship_zones":{}, "retreat_policy":{"mode":"HULL_THRESHOLD", "threshold":0.25}}}
 	return fleet_logistics[fleet_id]
 
 
-func fleet_supply_quantity(item_id: String, fleet_id: String = "expedition") -> int:
+func fleet_supply_quantity(item_id: String, fleet_id: String = DEFAULT_FORMATION_ID) -> int:
 	return int(fleet_logistics_runtime(fleet_id).get("supplies", {}).get(item_id, 0))
 
 
-func consume_fleet_supply(item_id: String, quantity: int, fleet_id: String = "expedition") -> bool:
+func consume_fleet_supply(item_id: String, quantity: int, fleet_id: String = DEFAULT_FORMATION_ID) -> bool:
 	var runtime := fleet_logistics_runtime(fleet_id)
 	var supplies: Dictionary = runtime.get("supplies", {})
 	if int(supplies.get(item_id, 0)) < quantity:
@@ -1321,7 +1516,7 @@ func consume_fleet_supply(item_id: String, quantity: int, fleet_id: String = "ex
 	return true
 
 
-func add_recovered_cargo(item_id: String, quantity: int, fleet_id: String = "expedition") -> void:
+func add_recovered_cargo(item_id: String, quantity: int, fleet_id: String = DEFAULT_FORMATION_ID) -> void:
 	var runtime := fleet_logistics_runtime(fleet_id)
 	var recovered: Dictionary = runtime.get("recovered", {})
 	recovered[item_id] = int(recovered.get(item_id, 0)) + quantity
@@ -1346,14 +1541,12 @@ static func _empty_operation(index: int, domain_id: String) -> Dictionary:
 		"allocated_capacity":1.0,
 		"location_id":MAIN_BASE_LOCATION_ID,
 		"site_id":"",
-		"raw_material_id":"",
-		"allocated_mining_power":0.0,
-		"effective_mining_power":0.0
+		"raw_material_id":""
 	}
 
 
 static func create_operation_record(index: int, domain_id: String) -> Dictionary:
-	# A permanent site owns one runtime record and may bind multiple equipped ships.
+	# Compatibility constructor for the remaining expedition runtime record.
 	return _empty_operation(index, domain_id)
 
 
@@ -1605,14 +1798,6 @@ func _load_locations(source: Dictionary, location_definitions: Dictionary) -> vo
 
 func _normalize_location_ownership() -> void:
 	_ensure_location(MAIN_BASE_LOCATION_ID, LocationState.ARTIFICIAL, true)
-	for operation in industrial_operations:
-		operation["location_id"] = str(operation.get("location_id", MAIN_BASE_LOCATION_ID))
-		if str(operation["location_id"]).is_empty():
-			operation["location_id"] = MAIN_BASE_LOCATION_ID
-	for operation in construction_operations:
-		operation["location_id"] = str(operation.get("location_id", MAIN_BASE_LOCATION_ID))
-		if str(operation["location_id"]).is_empty():
-			operation["location_id"] = MAIN_BASE_LOCATION_ID
 	for runtime in shipyard_queue:
 		runtime["location_id"] = str(runtime.get("location_id", MAIN_BASE_LOCATION_ID))
 		if str(runtime["location_id"]).is_empty():
@@ -1696,7 +1881,7 @@ static func _normalized_automation_rules(source: Array) -> Array:
 
 
 static func _normalized_survey_mission(source: Dictionary) -> Dictionary:
-	var result := {"status":"IDLE", "mission_id":"", "origin":"", "target":"", "target_state":"", "survey_capability":"", "duration_ms":0.0, "progress_ms":0.0, "costs":{}, "assigned_ship_ids":[]}
+	var result := {"status":"IDLE", "mission_id":"", "formation_id":"", "origin":"", "target":"", "target_state":"", "survey_capability":"", "duration_ms":0.0, "progress_ms":0.0, "costs":{}, "assigned_ship_ids":[]}
 	for key in result:
 		if source.has(key):
 			result[key] = source[key].duplicate(true) if source[key] is Dictionary or source[key] is Array else source[key]
@@ -1720,9 +1905,31 @@ static func _normalized_energy_system(source: Dictionary) -> Dictionary:
 	return result
 
 
+static func _normalized_fleet_formations(source: Dictionary) -> Dictionary:
+	var result := {}
+	for formation_id_value in source.keys():
+		var formation_id := str(formation_id_value)
+		if formation_id.is_empty() or formation_id in ["mining", "industry", "construction", "expedition"] or source[formation_id_value] is not Dictionary:
+			continue
+		var source_formation := source[formation_id_value] as Dictionary
+		var ship_ids: Array[String] = []
+		for ship_id_value in source_formation.get("ship_ids", []):
+			var ship_id := str(ship_id_value)
+			if not ship_id.is_empty() and not ship_ids.has(ship_id):
+				ship_ids.append(ship_id)
+		result[formation_id] = {
+			"id":formation_id,
+			"name":str(source_formation.get("name", formation_id.replace("_", " ").capitalize())),
+			"ship_ids":ship_ids
+		}
+	if result.is_empty():
+		result[DEFAULT_FORMATION_ID] = {"id":DEFAULT_FORMATION_ID, "name":"First Task Force", "ship_ids":[]}
+	return result
+
+
 static func _normalized_fleet_logistics(source: Dictionary) -> Dictionary:
 	var result := {
-		"expedition":{
+		DEFAULT_FORMATION_ID:{
 			"command_capacity":100,
 			"supplies":{},
 			"recovered":{},
@@ -1732,6 +1939,8 @@ static func _normalized_fleet_logistics(source: Dictionary) -> Dictionary:
 		}
 	}
 	for fleet_id in source:
+		if str(fleet_id) in ["mining", "industry", "construction", "expedition"]:
+			continue
 		if source[fleet_id] is not Dictionary:
 			continue
 		var normalized: Dictionary = result.get(fleet_id, {"command_capacity":100, "supplies":{}, "recovered":{}, "supply_plan":{}, "policies":{}, "formation":{"doctrine":"HOLD_FORMATION", "ship_zones":{}, "retreat_policy":{"mode":"HULL_THRESHOLD", "threshold":0.25}}}).duplicate(true)
@@ -1909,15 +2118,14 @@ func _normalize_activity_fleets() -> void:
 	var claimed: Array[String] = []
 	var logistics_assignments := {}
 	var survey_assignments := {}
-	var construction_assignments := {}
+	# Schema 37 retires ship work assignments. Repair stale in-memory records even
+	# when a caller constructed state without passing through save migration.
 	for ship_value in ships:
-		var construction_ship := ship_value as Dictionary
-		var construction_ship_id := str(construction_ship.get("instance_id", ""))
-		var construction_assignment: Dictionary = construction_ship.get("assignment", {})
-		if str(construction_assignment.get("type", "")) != "CONSTRUCTION_SUPPORT" or construction_ship_id.is_empty() or str(construction_ship.get("condition", "OPERATIONAL")) != "OPERATIONAL" or str(construction_ship.get("maintenance_state", "ACTIVE")) != "ACTIVE":
-			continue
-		claimed.append(construction_ship_id)
-		construction_assignments[construction_ship_id] = construction_assignment.duplicate(true)
+		var stale_ship := ship_value as Dictionary
+		var stale_assignment: Dictionary = stale_ship.get("assignment", {})
+		if str(stale_assignment.get("domain", "")) == "mining" or str(stale_assignment.get("type", "")) == "CONSTRUCTION_SUPPORT" or str(stale_ship.get("status", "")) in ["EXTRACTION_OPERATION", "CONSTRUCTION_SUPPORT"]:
+			stale_ship["status"] = "DOCKED"
+			stale_ship["assignment"] = {}
 	if str(survey_mission.get("status", "IDLE")) == "RUNNING":
 		var normalized_survey_ship_ids: Array = []
 		for ship_id_value in survey_mission.get("assigned_ship_ids", []):
@@ -1947,15 +2155,16 @@ func _normalize_activity_fleets() -> void:
 			claimed.append(ship_id)
 			logistics_assignments[ship_id] = {"domain":"logistics", "service_id":str(service.get("id", "")), "route_id":str(service.get("route_id", ""))}
 		service["assigned_ship_ids"] = normalized_service_ship_ids
-	for domain_id in ["mining", "expedition"]:
+	var formation_claimed: Array[String] = []
+	for formation_id in formation_ids():
 		var normalized_ids: Array = []
-		for ship_id in fleet_ship_ids(domain_id):
+		for ship_id in formation_ship_ids(formation_id):
 			var id := str(ship_id)
 			var candidate := ship_by_id(id)
-			if not id.is_empty() and not claimed.has(id) and not candidate.is_empty() and str(candidate.get("maintenance_state", "ACTIVE")) == "ACTIVE":
+			if not id.is_empty() and not formation_claimed.has(id) and not candidate.is_empty() and str(candidate.get("maintenance_state", "ACTIVE")) == "ACTIVE":
 				normalized_ids.append(id)
-				claimed.append(id)
-		set_fleet_ship_ids(domain_id, normalized_ids)
+				formation_claimed.append(id)
+		set_formation_ship_ids(formation_id, normalized_ids)
 	for ship in ships:
 		if ship.get("status", "") in ["REPAIRING", "DISABLED", "BUILDING", "REFITTING", "REACTIVATING"]:
 			continue
@@ -1968,24 +2177,12 @@ func _normalize_activity_fleets() -> void:
 			ship["status"] = "EXPEDITION"
 			ship["assignment"] = survey_assignments[ship_id].duplicate(true)
 			continue
-		if construction_assignments.has(ship_id):
-			ship["status"] = "CONSTRUCTION_SUPPORT"
-			ship["assignment"] = construction_assignments[ship_id].duplicate(true)
-			continue
-		var domain_id := ship_fleet_domain(ship_id)
+		var formation_id := ship_formation_id(ship_id)
 		ship["status"] = "DOCKED"
-		ship["assignment"] = {} if domain_id.is_empty() or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" else {"domain":domain_id, "fleet":"default"}
-	for operation in mining_operations:
-		if operation.get("status", "IDLE") != "RUNNING":
-			continue
-		for ship_id in operation.get("assigned_ship_ids", []):
-			var ship := ship_by_id(str(ship_id))
-			if not ship.is_empty() and ship.get("condition", "OPERATIONAL") == "OPERATIONAL":
-				ship["status"] = "EXTRACTION_OPERATION"
-				ship["assignment"] = {"domain":"mining", "slot":int(operation.get("slot", 0))}
+		ship["assignment"] = {} if formation_id.is_empty() or str(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" else {"formation_id":formation_id}
 	if active_expedition.get("status", "IDLE") == "RUNNING":
 		for ship_id in active_expedition.get("assigned_ship_ids", []):
 			var ship := ship_by_id(str(ship_id))
 			if not ship.is_empty() and ship.get("condition", "OPERATIONAL") == "OPERATIONAL":
 				ship["status"] = "EXPEDITION"
-				ship["assignment"] = {"domain":"expedition", "fleet":"default"}
+				ship["assignment"] = {"type":"EXPEDITION", "formation_id":str(active_expedition.get("formation_id", DEFAULT_FORMATION_ID))}

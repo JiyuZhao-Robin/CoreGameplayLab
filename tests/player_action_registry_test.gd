@@ -9,8 +9,7 @@ const REQUIRED_FIELDS := [
 ]
 const REQUIRED_CORE_ACTIONS := [
 	"SAVE_GAME",
-	"START_SURVEY_MISSION", "DEVELOP_SITE", "START_EXTRACTION", "STOP_EXTRACTION",
-	"INTEGRATE_EXTRACTION_SITE",
+	"START_SURVEY_MISSION",
 	"START_PRODUCTION", "STOP_PRODUCTION", "CHANGE_PRODUCTION_METHOD", "ADD_PRODUCTION_LINE",
 	"CHANGE_PRODUCTION_PRIORITY", "SET_PRODUCTION_CONTROL_PINNED", "SET_PRODUCTION_CONTROL_OFF",
 	"EXPAND_FACTORY", "UPGRADE_SCALE_STAGE", "ADOPT_INDUSTRIAL_TRANSFORMATION",
@@ -19,8 +18,7 @@ const REQUIRED_CORE_ACTIONS := [
 	"SET_LOGISTICS_POLICY", "CLEAR_LOGISTICS_POLICY", "CHANGE_TRANSPORT_MODE",
 	"ASSIGN_LOGISTICS_SHIP", "CHANGE_ROUTE_PRIORITY", "SET_ROUTE_PAUSED",
 	"START_CONSTRUCTION", "PAUSE_CONSTRUCTION", "RESUME_CONSTRUCTION",
-	"CHANGE_PROJECT_PRIORITY", "CANCEL_CONSTRUCTION", "ASSIGN_CONSTRUCTION_SUPPORT",
-	"RELEASE_CONSTRUCTION_SUPPORT",
+	"CHANGE_PROJECT_PRIORITY", "CANCEL_CONSTRUCTION",
 	"START_RESEARCH", "SELECT_RESEARCH_ROUTE", "STOP_RESEARCH",
 	"BUILD_SHIP", "REORDER_SHIP_BUILD", "CANCEL_SHIP_BUILD", "ASSIGN_SHIP",
 	"SET_FLEET_SUPPLY_PLAN", "RESUPPLY_FLEET", "SET_FLEET_DOCTRINE",
@@ -29,7 +27,11 @@ const REQUIRED_CORE_ACTIONS := [
 	"START_EXPEDITION", "RECALL_EXPEDITION", "START_COMBAT_ACTION",
 	"SELECT_MEGASTRUCTURE_SITE", "START_MEGASTRUCTURE_PHASE", "CANCEL_MEGASTRUCTURE_PHASE"
 ]
-const RETIRED_ACTIONS := ["SET_PRODUCTION_CONTROL_AUTO"]
+const RETIRED_ACTIONS := [
+	"SET_PRODUCTION_CONTROL_AUTO", "DEVELOP_SITE", "START_EXTRACTION",
+	"STOP_EXTRACTION", "INTEGRATE_EXTRACTION_SITE",
+	"ASSIGN_CONSTRUCTION_SUPPORT", "RELEASE_CONSTRUCTION_SUPPORT"
+]
 
 var failures: Array[String] = []
 var _ui_source := ""
@@ -96,7 +98,6 @@ func _ready() -> void:
 	actual_core_actions.sort()
 	expected_core_actions.sort()
 	_check(actual_core_actions == expected_core_actions, "registry contains exactly the declared core player action inventory")
-	_check(_domain_source.contains('control_mode not in ["PINNED", "OFF"]'), "Domain rejects the retired AUTO production alias")
 	_check(not _ui_source.contains('Game.set_production_line_control.bind(slot, "AUTO"'), "UI does not recreate the retired AUTO production action")
 	_check(_ui_source.contains("Game.install_ship_module.bind"), "ship-module install has a real UI callback")
 	_check(_ui_source.contains("Game.remove_ship_module.bind"), "ship-module removal has a real UI callback")

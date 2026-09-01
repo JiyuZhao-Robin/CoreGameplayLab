@@ -665,9 +665,9 @@
     "format.requirement_separator": "；",
     "research.stage_cost_progress": "%s 已投入 %d / %d · 本地库存 %d",
     "ships.title": "星港与舰队",
-    "ships.subtitle": "管理永久舰船实体、前列 / 中列 / 后列编队、补给、改装、建造和生命周期。",
+    "ships.subtitle": "将永久存在的战斗与探索舰船组织成通用战术编队；采集和生产完全由工厂承担。",
     "ships.stat.entities": "舰船实体",
-    "ships.stat.expedition_command": "远征指挥",
+    "ships.stat.expedition_command": "编队指挥",
     "ships.tab.roster": "舰船名册",
     "ships.tab.readiness": "编队与补给",
     "ships.tab.shipyard": "造船与改装",
@@ -701,12 +701,17 @@
     "command.ships.set_ready_reserve": "转入战备储备",
     "ships.action.mothball": "封存",
     "command.ships.mothball": "封存舰船",
-    "ships.roster.assignment": "舰队调配",
+    "ships.roster.assignment": "战术编队",
     "ships.assignment.standby": "待命",
     "command.ships.assign_standby": "舰船待命",
     "ships.assignment.mining": "采矿舰队",
     "command.ships.assign_mining": "调入采矿舰队",
     "ships.assignment.expedition": "远征舰队",
+    "ships.assignment.formation": "加入%s",
+    "ships.formation.new_name": "新特遣队名称",
+    "ships.formation.primary": "第一特遣队",
+    "ships.formation.create": "新建编队",
+    "ships.formation.delete": "删除空编队",
     "command.ships.assign_expedition": "调入远征舰队",
     "command.ships.release_construction": "结束建设支援",
     "command.ships.assign_construction": "分配建设支援",
@@ -759,7 +764,7 @@
     "ships.shipyard.starting_loadout": "初始装配：%s（制造资源已计入整舰物料清单）",
     "ships.shipyard.build_batch": "建造 ×%d",
     "ships.shipyard.canvas_title": "舰船装配图",
-    "ships.shipyard.canvas_help": "画布初始为空。从“舰船”页拖入一个舰体，从“零件”页加入组件，再由你亲自连接形状匹配的接口；系统不会预先连线。",
+    "ships.shipyard.canvas_help": "画布初始为空。从“舰船”页拖入舰体，从“零件”页加入组件，再亲自连接形状匹配的接口。方格采用真实尺度：主力舰需要拉远看全体，小型舰需要拉近查看；零件也必须符合插槽的 T 级与物理直径。",
     "ships.shipyard.socket_label": "%s %d · %s",
     "ships.shipyard.part_label": "%s · %s · %s",
     "ships.shipyard.hull_backplane": "%s 舰体背板 · %d 个实体插槽",
@@ -770,6 +775,19 @@
     "ships.shipyard.palette_ships": "舰船",
     "ships.shipyard.palette_parts": "零件",
     "ships.shipyard.drag_hull": "将该舰体拖到空白画布",
+    "ships.shipyard.hull_scale": "长 %.0fm × 宽 %.0fm · 最大 T%d / Ø%.0fm",
+    "ships.shipyard.projection_summary": "%s · 长 %.0fm × 宽 %.0fm · 最大 T%d / Ø%.0fm",
+    "ships.shipyard.socket_physical_scale": "%s · T%d / Ø%.0fm",
+    "ships.shipyard.module_physical_scale": "%s · T%d / Ø%.0fm",
+    "ships.shipyard.projection_grid": "方格 %.0fm / %.0fm",
+    "ships.shipyard.projection_reference": "42m 参照舰 · 2m 人形",
+    "ships.shipyard.projection_beam": "宽 %.0fm",
+    "ships.shipyard.projection_length": "长 %.0fm",
+    "ships.shipyard.projection_socket_limit": "最大 T%d · Ø%.0fm",
+    "ships.shipyard.audit.missing_position": "%s 没有布局位置",
+    "ships.shipyard.audit.outside_hull": "%s 位于舰体之外",
+    "ships.shipyard.audit.crosses_edge": "%s 越过舰体边缘",
+    "ships.shipyard.audit.overlap": "%s 与 %s 重叠",
     "ships.shipyard.drag_part": "将该零件拖到画布，再连接它的异形插头",
     "ships.shipyard.design_name_placeholder": "设计名称",
     "ships.shipyard.validate_design": "校验设计",
@@ -783,6 +801,7 @@
     "ships.shipyard.notice.hull_already_placed": "画布只能放置一个舰体。请先清空或删除现有舰体。",
     "ships.shipyard.notice.port_direction": "请把零件插头连接到舰体插槽。",
     "ships.shipyard.notice.port_mismatch": "该零件与插槽的接口形状或安装类型不匹配。船体结构件只能安装在底部方形槽，特殊插件只能安装在左右翼槽。",
+    "ships.shipyard.notice.port_size_mismatch": "该零件的物理尺寸超过了这个插槽的 T 级。请选择更大的插槽或更小的零件。",
     "ships.shipyard.notice.port_occupied": "该零件或插槽已经被连接。",
     "ships.shipyard.canvas_index": "舰体计划索引 · 选择计划或直接下达单舰订单",
     "ships.shipyard.canvas_build_tooltip": "消耗完整整舰物料清单，并通过真实船厂队列创建持久舰船实体。",
@@ -804,8 +823,8 @@
     "command.ships.enqueue": "加入造船队列",
     "command.ships.save_design": "保存舰船设计",
     "command.ships.delete_design": "删除舰船设计",
-    "expedition.subtitle": "远征需要专门调配的舰船、补给计划以及满足路线需求的战斗与航行能力。",
-    "expedition.fleet_summary": "远征舰队 · %s\n舰船 %s\n指挥容量 %d / %d · 货舱 %d / %d",
+    "expedition.subtitle": "派遣通用战术编队执行战斗或探索任务，并为航线准备足够的补给、航行与战斗能力。",
+    "expedition.fleet_summary": "战术编队 · %s\n舰船 %s\n指挥容量 %d / %d · 货舱 %d / %d",
     "status.NOT_READY": "未就绪",
     "expedition.fleet.empty": "尚未调配舰船",
     "expedition.action.auto_resupply": "自动补给远征舰队",
@@ -849,7 +868,9 @@
     "overview.operations": "运行状态",
     "overview.no_operations": "当前没有正在运行的作业。",
     "survey.title": "前线作业",
-    "survey.subtitle": "将装备采矿模块的舰船编入采矿舰队，建立稳定原料来源。",
+    "survey.subtitle": "派遣装备传感器的战术编队揭示地点与资源情报；实际开采由工厂完成。",
+    "survey.factory_authority": "调查舰队只负责揭示资源情报。所有采集与加工都在工厂网格上建设；舰船不再采矿，也不提供生产劳动力。",
+    "survey.resource_intelligence": "资源情报",
     "survey.extraction_sites": "资源采集点",
     "survey.network_status": "%s 已接入 %s · %s · 累计 %s",
     "survey.extraction_performance": "已安装开采力 %.1f / 潜力 %.1f · 工艺效率 ×%.2f · 风险可用率 %.0f%%",
@@ -1202,7 +1223,7 @@
     "panel.no_exceptions": "当前没有异常",
     "panel.warehouse_snapshot": "仓库概览",
     "content.revision": "内容 %s  •  存档 R%d",
-    "notice.frontier_ready": "舰船是永久实体资产。请将每艘可用舰船投入开采或远征舰队。",
+    "notice.frontier_ready": "舰船是永久实体资产。请为战斗与探索组织战术编队；采集和生产由工厂负责。",
     "notice.extraction_ship_required": "请选择至少一艘正常且具备开采能力的舰船。",
     "notice.extraction_ship_unavailable": "所选舰船必须正常停泊、当前可用且具备开采能力。",
     "notice.extraction_ship_requirements": "每艘所选舰船都必须满足该采掘点的开采设备要求。",
@@ -1293,7 +1314,7 @@
     "capability.matter_state_engineering": "物态工程",
     "capability.vacuum_state_engineering": "真空态工程",
     "ships.title": "星港",
-    "ships.subtitle": "检阅永久存在的实体舰船，管理命名装配方案与稀缺特殊装备，并为开采、探索与战斗准备任务配置。",
+    "ships.subtitle": "检阅永久存在的实体舰船，管理装配与稀缺特殊装备，并为战斗和探索组织通用战术编队。",
     "ships.unknown": "未知舰船",
     "ships.unique": "实体资产",
     "ships.class.frigate": "护卫舰",
@@ -1310,7 +1331,7 @@
     "ships.available_modules": "可用插件设计 / 特殊装备",
     "ships.refit_locked": "舰船必须正常停泊在星港才能改装",
     "expedition.title": "远征前线",
-    "expedition.subtitle": "唯一世界前线：航行、探索、危险、战斗、检查点与首领。",
+    "expedition.subtitle": "派遣当前战术编队执行航行、探索、危险应对、战斗与首领任务。",
     "expedition.report": "最近远征报告  //  %s  //  %s\n原因：%s",
     "expedition.route_report": "最近报告 // %s // %s // %s",
     "expedition.current_node": "%s  //  %s  %d / %d",
@@ -1538,8 +1559,8 @@
     "notice.ship_assignment_locked": "舰船必须正常停泊后才能调整分配",
     "notice.ship_assignment_changed": "%s已调整为%s",
     "notice.fleet_active": "请先召回或停止正在运行的远征舰队，再调整成员",
-    "notice.expedition_fleet_empty": "请先在星港为远征舰队分配舰船",
-    "notice.expedition_fleet_unavailable": "远征舰队的所有舰船必须正常停泊在星港",
+    "notice.expedition_fleet_empty": "请先在星港为当前战术编队分配舰船",
+    "notice.expedition_fleet_unavailable": "当前战术编队内的所有舰船必须状态正常并停泊在星港",
     "notice.module_unknown": "未知舰船插件设计",
     "notice.module_missing": "尚未掌握该插件设计",
     "notice.module_full": "该舰船没有空余兼容槽位",
@@ -1596,6 +1617,7 @@
     "notice.ship_design_hull_invalid": "请从所选方案放置且仅放置一个舰体",
     "notice.ship_design_connection_invalid": "零件连线缺失、重复或连接到未知插槽",
     "notice.ship_design_socket_mismatch": "接口形状与舰体插槽不匹配",
+    "notice.ship_design_socket_size_mismatch": "组件的物理尺寸超过了所选舰体插槽",
     "notice.ship_design_module_unconnected": "每个已放置零件都必须连接到一个匹配的舰体插槽",
     "notice.ship_design_core_required": "必须把能源核心安装并连接到舰体中央核心插槽",
     "notice.ship_design_fitting_invalid": "装配配置无效：%s",
@@ -1938,7 +1960,7 @@
     "expedition.active_front": "当前远征 / 战斗行动",
     "expedition.no_active": "当前没有远征或战斗。请准备星港远征舰队并从下方选择行动。",
     "expedition.current_phase": "当前阶段 // %s // 路线 %d%% // 预计 %s",
-    "expedition.fleet_summary": "舰队 // %d 艘 // 推进 %s // 传感 %s // 防御 %s",
+    "expedition.fleet_summary": "战术编队 · %s\n舰船 %s\n指挥容量 %d / %d · 货舱 %d / %d",
     "expedition.encounter": "当前遭遇 // %s // 船体 %d  护盾 %d  伤害 %d",
     "expedition.routes": "可用远征路线",
     "combat.zone_title": "可重复战区",
@@ -2459,8 +2481,8 @@
     "outer_titan": {
       "name": "外太阳系泰坦"
     },
-    "ultimate_miner": {
-      "name": "噬界工业方舟"
+    "ultimate_transport": {
+      "name": "界桥物流方舟"
     },
     "ultimate_explorer": {
       "name": "地平线之针"
@@ -2480,8 +2502,8 @@
     "repair_tender": {
       "name": "仁慈号支援舰体"
     },
-    "mobile_constructor": {
-      "name": "代达罗斯工程舰体"
+    "heavy_lift_transport": {
+      "name": "代达罗斯重型运输舰"
     },
     "deep_survey_vessel": {
       "name": "远望号长程舰体"
@@ -3004,8 +3026,8 @@
     "develop_repair_tender": {
       "name": "研发仁慈号支援舰体"
     },
-    "develop_mobile_constructor": {
-      "name": "研发代达罗斯工程舰体"
+    "develop_heavy_lift_transport": {
+      "name": "研发代达罗斯重型运输舰"
     },
     "develop_deep_survey_vessel": {
       "name": "研发远望号长程舰体"
@@ -3022,8 +3044,8 @@
     "develop_outer_titan": {
       "name": "研发外太阳系泰坦"
     },
-    "develop_ultimate_miner": {
-      "name": "研发噬界工业方舟"
+    "develop_ultimate_transport": {
+      "name": "研发界桥物流方舟"
     },
     "develop_ultimate_explorer": {
       "name": "研发地平线之针"
@@ -3157,8 +3179,8 @@
     "construct_repair_tender": {
       "name": "建造仁慈号支援舰体"
     },
-    "construct_mobile_constructor": {
-      "name": "建造代达罗斯工程舰体"
+    "construct_heavy_lift_transport": {
+      "name": "建造代达罗斯重型运输舰"
     },
     "construct_deep_survey_vessel": {
       "name": "建造远望号长程舰体"
@@ -3178,8 +3200,8 @@
     "construct_outer_titan": {
       "name": "建造外太阳系泰坦"
     },
-    "construct_ultimate_miner": {
-      "name": "建造噬界工业方舟"
+    "construct_ultimate_transport": {
+      "name": "建造界桥物流方舟"
     },
     "construct_ultimate_explorer": {
       "name": "建造地平线之针"

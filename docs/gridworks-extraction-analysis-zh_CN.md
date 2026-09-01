@@ -10,22 +10,26 @@
 >
 > 文档性质：只读源码分析、领域映射和实施建议；本文没有改动玩法代码。
 
+> 方向更新：产品于 2026-09-01 明确推翻旧的地点级“点选活动”模式，并进一步确认不保留并行兼容玩法。方格实体、缓存、线路和建设订单成为普通采矿—生产—建造的唯一权威；旧 Mining Operation、Production Line、Extraction Network 和普通 Construction 只进入不可执行迁移档案。实施状态见 [方格工厂玩法重构计划](./grid-factory-rewrite-plan-zh_CN.md)。
+>
+> 舰船职责更新：schema 38 已删除舰船采矿能力、采矿插件与采集活动。舰船只负责战斗、探索和真实运输。战斗掉落与远征产品仍可回收；未来入侵战后的打捞/分析通过有限残骸点接口实现，不建立常驻打捞职业。
+
 ## 1. 结论
 
-Gridworks 的采集逻辑可以用于本项目，但应该采用“规则移植 + 架构融合”，不能直接复制 JavaScript，也不应让 Gridworks 的平面逐格工厂模型取代本项目现有的文明级地点、舰船、建设、库存和跨地点物流模型。
+Gridworks 的采集逻辑可以用于本项目，应采用“规则移植 + Godot 独立实现”，不能直接复制 JavaScript。新方向明确要求它与 DSPONLINE 的实体、线路、配方、电网和建设队列共同取代普通采矿—生产—建造的旧地点聚合操作；舰船、科研、远征、跨地点运输和巨构则分阶段接入新工厂端点。
 
 推荐方案是：
 
 ```text
 Factorio 式二维方格行星画布（1 格 = 1 平方米）
-→ 提供地表类型、固定资源点、宏观采集设施和星球内连接的可交互表现
-→ 将有效采集网络解析为本项目已有 Mining Site / Mining Operation / Extraction Network
-→ 产出进入现有 Location Inventory
-→ 跨地点运输继续由现有 Logistics Engine 负责
-→ 建设、能源、散热、仓储、维护和离线推进继续由现有领域系统结算
+→ 固定矿体、宏观设施 Footprint、端口和线路形成真实工厂拓扑
+→ FactoryGridSimulation 结算采矿、电网、货运、配方、实体缓存、反压和建设
+→ 普通产出进入方格 Storage Entity，而不是直接进入旧 Location Inventory
+→ 星港/装卸端点以后通过显式所有权事务接入现有跨地点 Logistics Engine
+→ 舰船、科研、远征和维护继续由各自领域系统结算，巨构施工等待重接新建设实体
 ```
 
-也就是说，方格行星画布负责回答“这平方米是什么地表、资源在哪里、设施占多大面积、如何接入、为什么停机”；现有核心经济负责回答“实际产出多少、进入哪个地点库存、谁消耗、怎样运输、离线期间发生了什么”。
+也就是说，方格行星世界既负责空间交互，也拥有普通工厂的实际实体、缓存、产量和局部运输；UI 仍然只提交意图和读取快照。跨地点物流等尚未迁移系统不能通过隐式库存镜像与方格世界重复拥有同一批物资。
 
 Gridworks 最值得采用的五项规则是：
 
@@ -33,7 +37,7 @@ Gridworks 最值得采用的五项规则是：
 2. 资源种类、品位、设备能力、电力比例、线路吞吐和输出空间共同决定实际产量。
 3. 满仓必须反压采集，释放空间后自动恢复，资源不能凭空丢失。
 4. 地图生成必须“先按丰度选择资源，再按该资源的地理权重选择位置”。
-5. 前台舰船采集成熟后，可以把资源点并入稳定但较低效的永久自动采集网络。
+5. 玩家先在方格上建立可见采掘拓扑，成熟后再用蓝图、物流策略和工厂自动化管理重复扩建。
 
 不建议采用的部分：
 
@@ -104,7 +108,7 @@ Gridworks 将程序明确分成两层：
 ```text
 SimulationEngine / GameState / ContentDatabase
 ≠
-Planet renderer / Hex picking / Flow animation
+Planet grid renderer / square-tile picking / Flow animation
 ```
 
 星球表现层不能直接增加库存、修改资源点品位或自行计算最终产量。
@@ -253,7 +257,7 @@ Gridworks 本身是“采矿机一直运行”的自动化游戏。与本项目�
 → 地点获得稳定后台产出
 ```
 
-因此不需要新造一套自动采集成熟度系统；只需要让方格行星画布把这个过程表现出来。
+旧 Site Mastery 可以迁移为采掘设施或矿体开发进度，但新方格工厂本身从建成起就是持续网络，不再需要“点击采矿若干次才转换成另一个后台产能对象”。
 
 ## 4. Gridworks 的地图生成逻辑
 
@@ -264,7 +268,7 @@ Gridworks 使用 `mulberry32(seed)`。同一 seed 生成相同矿点种类、位
 - 相同 seed 的地图完全相同。
 - 不同 seed 的地图不同。
 
-本项目已有 `DomainRng` 与版本化 RNG 状态，应保留当前 RNG 权威，不需要照搬 `mulberry32`；但星球拓扑和资源分布必须同样满足“seed + topology version → 稳定结果”。
+本项目已有 `DomainRng` 与版本化 RNG 状态，不需要照搬 `mulberry32`；方格世界基础数据必须满足“seed + generator version + Chunk coordinate → 稳定结果”。
 
 ### 4.2 资源分层
 
@@ -373,34 +377,32 @@ UNKNOWN
 | SURVEYED | 显示资源类型、品位区间和可用采集方式 |
 | DEEP_SURVEYED | 显示精确品位、潜力、危险和高级方法收益 |
 
-### 5.3 舰船采集公式
+### 5.3 方格采集公式
 
-当前舰船采集周期已经综合：
+舰船不再参与资源采集。采集能力完全来自覆盖固定矿体的方格 Extractor：
 
 ```text
-installed_extraction = min(ship_mining_power, site_extraction_potential)
+installed_extraction = extractor_base_rate × covered_deposit_potential
 
-cycle_duration = extraction_cost
-  / (installed_extraction
-     × site_grade
-     × extraction_method_efficiency
-     × hazard_uptime
-     × simulation_profile_multiplier)
+theoretical_rate = installed_extraction
+  × deposit_grade
+  × device_efficiency
+  × power_coverage
 ```
 
-这比 Gridworks 的 `base rate × purity × power ratio` 更适合当前产品，因为它还包含：
+实际产量还必须受以下硬瓶颈限制：
 
-- 舰船的真实装配与采矿模块。
-- 维护覆盖率。
-- 资源点可持续潜力上限。
-- 可预测的环境危险 uptime。
-- 不同采集方法效率。
+- Extractor 输出缓存剩余空间。
+- CARGO Link 吞吐。
+- 下游 Machine / Storage 接收能力。
+- 电网连通分量的供电比例。
+- 未来实体化的维护与环境适应能力。
 
-因此应该保留当前公式，将 Gridworks 的电力、线路和缓存限制作为新的乘数或硬瓶颈接入，而不是用 Gridworks 公式覆盖它。
+因此 Gridworks 的 `base rate × purity × power ratio` 成为方格采集的基础，DSPONLINE 式线路、缓存和反压决定实际产出；舰船装配不得提供任何采矿乘数。
 
 ### 5.4 永久采掘点建设
 
-`queue_site_development()` 已经通过普通 Construction Project 建设永久采掘点，并消耗：
+已退役基线中的 `queue_site_development()` 曾通过旧 Construction Project 建设永久采掘点，并消耗：
 
 - 建设能力。
 - 工业机床。
@@ -408,13 +410,13 @@ cycle_duration = extraction_cost
 - 电子设备。
 - 受地点建设难度影响的工期。
 
-方格画布中的“建设采矿设施”必须调用该命令或后续等价领域命令，不能点击地块后立刻免费生成矿机。
+这些 BOM 与能力约束可以迁移到方格 Construction Order；方格画布不能点击后免费生成矿机，也不应继续调用旧 Site Development 作为最终实现。
 
 ### 5.5 地点库存与满仓反压
 
-采集产出进入资源所在地的 `Location Inventory`。当前模拟已经检查 Storage Class 容量，出现 `STORAGE_FULL` 时阻塞采集，并在空间恢复后自动继续。
+旧采集曾把产出写入资源所在地的 `Location Inventory`，并用 Storage Class 容量实现 `STORAGE_FULL`。这条运行路径已删除，只作为迁移前语义记录。
 
-这与 Gridworks 的缓存反压完全兼容，而且当前实现更严格：库存有地点所有权、货物类别、预留、在途状态和资产守恒审计。
+新方格工厂把这条语义下放到 Extractor/Machine Buffer 与 Storage Entity，并保留反压和资产守恒；Location Inventory 只在显式星港装卸后取得跨地点货物所有权。
 
 ### 5.6 自动采集网络
 
@@ -434,20 +436,20 @@ cycle_duration = extraction_cost
 
 | Gridworks 规则 | 当前项目对应 | 结论 |
 | --- | --- | --- |
-| 固定 Deposit 节点 | `mining_sites` + `mining_site_states` | 直接采用语义，在固定方格坐标上显示资源矿体 |
+| 固定 Deposit 节点 | `factory_worlds.entities[kind=DEPOSIT]` | 作为新权威实体，在固定方格坐标上形成多格矿体 |
 | purity 0.5/1/2 | `density`、`grade_range`、深度勘测 `grade` | 使用现有连续品位，不退化为三档 |
-| Miner Category | 舰船模块 capability + Activity requirements | 使用现有能力系统 |
-| Miner Base Rate | `mining_power` | 使用现有舰船装配计算 |
-| Deposit output port | Site 到 Extractor 的资源绑定 | 适配为矿体与宏观采集设施的连接 |
-| Belt/Pipe rate | 本地处理/装卸/路线吞吐 | 采用思想，不直接复制皮带 Mk 数值 |
-| Power ratio | 地点能源容量、舰船 power budget | 需要接入采掘设施运行态 |
-| Output buffer | Location Storage | 以地点库存为权威，不新增平行库存真相 |
-| Output full | `STORAGE_FULL` / `BLOCKED_OUTPUT` | 已具备，保留 |
+| Miner Category | `factory_buildings.resource_categories` | 由宏观采集设施内容定义直接校验 |
+| Miner Base Rate | `mining_rate_per_second` | 使用新实体采集速率并受矿体潜力封顶 |
+| Deposit output port | RESOURCE Link | 已实现矿体到采集设施的单资源绑定 |
+| Belt/Pipe rate | CARGO Link | 已实现逐线容量、累计进度、优先级和实际流量 |
+| Power ratio | POWER Link 连通分量 | 已实现独立电网 `Supply / Demand` 比例降速 |
+| Output buffer | Extractor/Machine Buffer + Storage Entity | 方格实体库存成为普通工厂物资权威 |
+| Output full | `OUTPUT_FULL` 与逐级反压 | 已实现并测试自动恢复 |
 | Status light | 当前 Blocker / Gameplay State | 直接映射为地块边框与图标状态 |
 | Site mastery | `mastery_cycles` / `mastery_level` | 已具备，保留 |
-| Automated mining | `extraction_network_states` | 已具备，保留 |
+| Automated mining | 连续运行的方格工厂网络 | 旧 `extraction_network_states` 已归档并退出运行态 |
 | Offline tick | 事件边界 `advance()` | 不采用 Gridworks 粗步长 |
-| Seeded mapgen | `DomainRng` + 未来 planet topology seed | 采用确定性原则，使用现有 RNG 体系 |
+| Seeded mapgen | seed + generator version + Chunk coordinate | 采用确定性原则，不存储未修改全图 |
 | Distance-tier resources | 当前进度地点 + 方格画布距离权重 | 可采用，但要由内容和依赖图驱动 |
 | Gridworks Canvas | Godot 2D 分块方格画布 | 高度相符，但必须增加 Chunk、LOD 和宏观建造层 |
 
@@ -458,7 +460,7 @@ cycle_duration = extraction_cost
 地图生成原则复用价值：高
 状态表现复用价值：高
 源代码直接复用价值：低
-现有 CoreGameplayLab 采集核心被替换的必要性：无
+旧普通采矿—生产—建设核心被替换的必要性：高，按领域分阶段迁移
 ```
 
 ## 7. 推荐的融合架构
@@ -471,33 +473,34 @@ Planet Grid Canvas
   - chunk streaming / LOD / overview map
   - hover / selection / camera
   - terrain color / resource icon / facility footprint / flow animation
-  - 不拥有库存和最终产量
+  - 只负责渲染、Picking 和玩家意图，不直接写库存
 
-Planet Extraction Projection
-  - tile coordinate / deposit_id ↔ mining_site_id
-  - extractor / local link / hub 的可视投影
+Factory Grid Application Boundary
+  - tile coordinate / deposit / entity / link / construction order
+  - 将权威实体与流量翻译为可视投影
   - 将玩家意图翻译成应用命令
-  - 将 Simulation snapshot 翻译成地块状态
+  - 事务失败时不部分改变工厂
 
-Existing Core Domain
+Authoritative Domain
   - ContentDatabase
-  - SpaceGameState
+  - SpaceGameState.factory_worlds
+  - FactoryGridSimulation
   - SimulationEngine
   - LogisticsEngine
-  - Construction Project
-  - Location Inventory
+  - 舰船、科研、远征、跨地点物流和维护的独立领域模型
+  - 巨构施工等待接入方格建设或专用空间工程实体
 ```
 
 ### 7.2 权威数据流
 
 ```text
 玩家选择资源地块
-→ Planet UI 发出“开发 Site / 绑定采集器 / 建立本地连接”意图
+→ Planet UI 发出“提交建设 / 绑定采集器 / 建立线路”意图
 → Game 应用层开启事务
-→ SimulationEngine 校验勘测、能力、建设、能源、散热、仓储和物流
-→ 状态写入 mining_site_states / mining_operations / extraction_network_states
-→ 模拟在事件边界结算
-→ 产出写入对应 Location Inventory
+→ FactoryGridSimulation 校验坐标、Footprint、资源、端口、材料和线路
+→ 状态写入 factory_worlds 的实体、线路或建设订单
+→ SimulationEngine 统一时间入口推进方格工厂
+→ 产出写入实体缓存和 Storage Entity
 → UI 读取快照，播放采集器和流动动画
 ```
 
@@ -508,58 +511,49 @@ Existing Core Domain
 → UI 直接 state.add_item()
 ```
 
-### 7.3 建议新增的行星画布数据
+### 7.3 Schema 36 已新增的方格工厂数据
 
-第一版可以增加独立的地理与建造结构，但不要复制现有地点库存和最终产量状态：
+当前实现将本地工厂状态保存在 `SpaceGameState.factory_worlds`，持久化值只使用 JSON 安全的 Dictionary、Array、String 和数字：
 
 ```gdscript
-planet_surface_states[location_id] = {
+factory_worlds[world_id] = {
     "schema_version": 1,
-    "generator_version": 1,
     "seed": 12345,
+    "generator_version": 1,
     "tile_size_m": 1,
-    "bounds_m": {
-        "origin": Vector2i(0, 0),
-        "size": Vector2i(width_m, height_m)
+    "bounds": {
+        "origin": {"x": 0, "y": 0},
+        "size": {"x": width_m, "y": height_m}
     },
     "chunk_size_tiles": 64,
-    "hub_tile": Vector2i(x, y),
-    "site_deposits": {
-        "site_id": "deposit_id"
-    },
-    "revealed_chunks": {
-        "chunk_x:chunk_y": survey_level
-    },
-    "tile_deltas": {
-        "x:y": {
-            "remaining_resource": optional_amount,
-            "terrain_override": optional_terrain_id
-        }
-    },
-    "structures": {
-        "structure_id": {
-            "origin_tile": Vector2i(x, y),
-            "footprint_id": "...",
-            "kind": "EXTRACTOR|RELAY|DEPOT|POWER",
-            "site_id": "..."
+    "entities": {
+        "entity_id": {
+            "kind": "DEPOSIT|EXTRACTOR|MACHINE|STORAGE|POWER|CONSTRUCTION",
+            "footprint": {"origin": {"x": x, "y": y}, "size": {"x": w, "y": h}},
+            "inputs": {}, "outputs": {}, "inventory": {}
         }
     },
     "links": {
         "link_id": {
             "kind": "RESOURCE|CARGO|POWER",
-            "path_tiles": []
+            "source_id": "...", "target_id": "...",
+            "capacity_per_second": 1.0,
+            "total_transferred": 0
         }
-    }
+    },
+    "construction_orders": {},
+    "revealed_chunks": {},
+    "tile_deltas": {},
+    "statistics": {}
 }
 ```
 
 其中：
 
-- `site_id` 仍是采集领域身份。
-- `Vector2i(x, y)` 是 1 米方格的稳定逻辑地址。
+- `Vector2i(x, y)` 只用于运行时命令和 Picking；存档坐标拆成普通 `x/y` 数字。
 - 每个基础 Tile 由 seed、生成器版本和坐标确定性得到 `terrain_type`、生态、海拔带、`deposit_id`、资源类型、品位、潜力密度以及可选的初始储量。
 - 同一个连续矿体覆盖多个 Tile，并共享一个不可移动的 `deposit_id`；如果启用有限矿藏，单格再保存自己的初始储量与开采差量。
-- 品位、潜力、开发方式、熟练度和自动化归属仍由现有 `mining_site_states` 与内容定义拥有。
+- 方格 Deposit Entity 拥有资源类型、位置、品位和潜力；旧 `mining_site_states` 载入时只进入 `retired_aggregate_industry_archive`，不会留在运行态或新存档中。
 - 不保存可由 seed 和 generator version 重建的未修改基础地块。
 - 只保存勘测揭示、资源耗减、地形改造、设施和线路等不可重建差量。
 - 玩家放置的结构和线路必须保存，因为它们是玩家意图，不能载入后重新随机。
@@ -570,7 +564,7 @@ planet_surface_states[location_id] = {
 
 必须采用以下结构：
 
-- 世界边界以 64 位整数米坐标表示，不创建 `width × height` 数组。
+- 世界边界以稳定整数米坐标表示，不创建 `width × height` 数组；当前 Godot 实现使用 `Vector2i`，其范围足以覆盖行星尺度画布。
 - 推荐以 64×64 Tile 为一个 Chunk；生成、勘测、寻路、渲染和存档都以 Chunk 为基本分页单位。
 - 基础地表和初始资源由 `seed + generator_version + chunk_coordinate` 确定性生成。
 - 只实例化相机附近、正在模拟以及有玩家改动的 Chunk。
@@ -649,15 +643,11 @@ NO_ROUTE
 建议继续以当前公式为基础，新增星球内设施约束：
 
 ```text
-installed_capacity = min(
-  ship_or_extractor_power,
-  site_sustainable_potential
-)
+installed_capacity = min(extractor_rate, covered_deposit_potential)
 
 theoretical_rate = installed_capacity
   × grade
-  × extraction_method_efficiency
-  × hazard_uptime
+  × device_efficiency
 
 actual_rate = min(
   theoretical_rate × power_coverage × cooling_coverage × maintenance_coverage,
@@ -765,54 +755,40 @@ ARTIFICIAL_HABITAT
 
 ## 10. 分阶段实施建议
 
-### P0：无存档变更的视觉验证
+产品方向更新后，原先“先做只读投影、继续调用旧采集 API”的 P0 已取消。当前实施顺序以 [方格工厂玩法重构计划](./grid-factory-rewrite-plan-zh_CN.md) 为准：
 
-目标：证明 1 米逻辑坐标、分块渲染、固定资源投影和现有领域命令能够连接。
+### P0：领域纵向切片（已完成）
 
-- 定义一个有限的行星可用面积边界，但不全量创建 Tile。
-- 实现 64×64 Tile 的 Chunk 生成、加载和卸载。
-- 为每格使用稳定 `Vector2i` 米坐标。
-- 只把现有 Site 投影为少量固定资源矿体。
-- 支持平移、缩放、悬停、框选和远近两级 LOD。
-- 地块检查器显示当前 Site 的勘测、品位、潜力、方法和阻塞。
-- “开始采集”“开发 Site”仍调用现有 Game API。
-- 不保存可由 seed 重建的普通地表，不新增本地线路。
+- Schema 36、稀疏米制世界、固定矿体、宏观 Footprint。
+- RESOURCE、CARGO、POWER 连接与端口校验。
+- 电网欠压、线路吞吐、公平/优先路由、实体缓存与反压。
+- 配方机器、实体仓储、建设订单、施工暂存与资产账本。
+- 普通产出只进入方格实体，不镜像进 Location Inventory。
 
-完成标准：关闭星球界面后，所有产量、库存和阻塞与旧 UI 完全一致。
+### P1：可玩的二维画布（下一阶段）
 
-### P1：Gridworks 式固定矿点与采集器绑定
+- 64×64 Tile Chunk 加载、卸载、脏标记和两级 LOD。
+- 平移、缩放、悬停、框选、米制 Picking 和 Inspector。
+- Palette、Footprint 预览、端口拖线和建设订单反馈。
+- 流动动画读取 `last_flow`，状态颜色沿用 UI-reference 的深蓝、青色、琥珀和少量紫色。
 
-- 增加资源格到采集设施的 `RESOURCE` 连接。
-- 增加采集设施到本地仓库/星港的 `CARGO` 连接。
-- 增加最小 `POWER` 接入。
-- 明确端口单连接/总线规则。
-- 连线仅改变采集网络配置，不直接改库存。
-- 无有效链路时给出结构化 `NO_EXTRACTOR` / `NO_ROUTE` Blocker。
+### P2：内容链与确定性资源生成
 
-### P2：确定性星球资源生成
+- 采用“先按 abundance 选择资源，再按地理适配选择位置”。
+- 迁移钢铁、电子、能源、建设件和基础科研耗材链。
+- 将旧设施与 Production Method 翻译为宏观建筑、配方和模块，不再新增旧聚合生产入口。
 
-- 内容定义资源 abundance、生态适配、进度带和最低距离。
-- 采用“资源优先、位置其次”。
-- 新手保证资源计入总预算。
-- 明确使用方格图距离或归一化二维距离，并测试边界行为。
-- 保存 generator version、seed、世界边界、玩家差量和 Site 映射。
-- 增加存档 schema 迁移。
+### P3：物流、蓝图与星港
 
-### P3：吞吐、能源、散热与反压
+- 显式 Splitter、Merger、路径 Tile、升级成本和蓝图计划。
+- 星港通过所有权事务连接方格 Storage Entity 与跨地点 Logistics Engine。
+- 散热、维护和服务覆盖接入实体网络，不保留只声明不结算的配置。
 
-- 将本地连接吞吐并入采集有效产率。
-- 将 `cooling_demand` 正式纳入 Site 运行校验。
-- 决定并落实 `efficiency_ratio` 语义。
-- 使用统一请求—分配—提交事务，避免线路顺序影响。
-- 保持 Location Inventory 和 Logistics Engine 为唯一库存/运输权威。
+### P4：旧模式退役
 
-### P4：自动网络与表现
-
-- Site Mastery 达标后允许集成自动网络。
-- 集成时释放前台舰船，并把地块设施状态改为网络托管。
-- 流动动画读取实际吞吐，而不是只要连线存在就播放。
-- 状态变化播放一次克制脉冲，稳定运行不持续闪烁。
-- 状态颜色与现有 UI-reference 的深蓝、青色、琥珀和少量紫色统一。
+- 提供旧存档可视迁移向导，不猜测历史设施坐标。
+- 删除普通 Mining/Industry 的旧点击入口和重复产出路径。
+- 保留舰船、科研、远征、战斗与巨构的专用领域模型，并让它们从显式工厂端点取料。
 
 ## 11. 必须增加的测试
 
@@ -854,7 +830,8 @@ ARTIFICIAL_HABITAT
 - 采集器理论产量受 Site Sustainable Potential 封顶。
 - 线路吞吐和地点装卸吞吐正确限制实际产量。
 - 满仓不丢资源，空间释放后自动恢复。
-- `生产量 = 库存增量 + 已运输 + 已消费 + 明确定义损失`。
+- 工厂全域满足 `期初实物 + 生产 = 期末实物 + 消费 + 明确定义损失`；实体间运输只改变持有者，不重复计入或计为消费。
+- 仓储拨给建设订单只改变保管域；只有施工完成才把暂存材料计入消费。
 - 自动网络和前台采集不会重复计算同一个 Site。
 
 ### 11.5 在线、离线与存档
@@ -885,29 +862,31 @@ ARTIFICIAL_HABITAT
 4. 一种带大型 Footprint 的采集设施、一种本地仓库/星港入口。
 5. `RESOURCE`、`CARGO`、`POWER` 三类宏观连接。
 6. 勘测分层、悬停、框选、设施预览和检查器。
-7. 通过现有 `start_extraction_operation()` 与 `queue_site_development()` 执行真实命令。
-8. 产出仍进入现有 Location Inventory。
+7. 通过 `queue_factory_construction()`、`connect_factory_entities()` 和建设交付命令执行真实事务。
+8. 产出进入方格 Storage Entity；只有显式星港装卸事务才能转入跨地点物流所有权。
 9. 满仓、电力不足、散热不足、无路线四类可视 Blocker。
-10. 不引入逐台机器的星球内冶炼和制造，不修改跨地点 Logistics Engine。
+10. 冶炼和制造使用大型宏观设施，不要求进入设施内部逐台摆放机器；跨地点 Logistics Engine 在星港协议完成前保持独立。
 
 这批完成后再根据实际可玩性决定是否让玩家手工铺设更复杂的本地网络。
 
 ## 13. 最终判断
 
-“采用 Gridworks 的采集逻辑”是可行的，而且与当前系统并不冲突。实际上 CoreGameplayLab 已经拥有 Gridworks 采集逻辑的高级聚合版本；缺少的是把这些规则投射成一个有地理关系、可连接、能看见吞吐和阻塞的星球表面。
+“采用 Gridworks 的采集逻辑”是可行的，但它不是旧系统的表现层补丁，而是普通采矿—生产—建造的新领域核心。旧聚合实现可复用的只剩内容语义、勘测资料和独立领域规则；点击活动、Production Line、Extraction Network 与普通 Construction 的运行入口已经退役。
 
-正确的开发目标不是重写采集模拟，而是：
+正确的开发目标是：
 
 ```text
 用 Gridworks 的固定矿点、端口、连接、吞吐和状态反馈
-补齐 Factorio 式方格行星画布的局部交互层；
+建立 Factorio 式方格行星工厂的空间与局部物流真相；
 
-用 CoreGameplayLab 已有的勘测、舰船、建设、地点库存、
-可持续潜力、维护、物流和事件边界模拟
-继续承担最终领域结算。
+用 DSPONLINE 的实体、线路、配方、电网和建设队列原则
+建立新的普通工业结算；
+
+让 CoreGameplayLab 已有的舰船、科研、远征、维护、跨地点物流
+和巨构在明确所有权边界下逐步接入。
 ```
 
-如果按此边界开发，1 平方米方格能够提供清晰的空间和占地真相，宏观设施又能保持文明级操作尺度；Gridworks 则能显著提高采集玩法的可见性和操作感，同时不会破坏项目现有经济真相与存档兼容。
+Schema 36 已经实现新核心的第一段并完成旧运行态硬切换。后续重点是完成画布、内容迁移、实体星港，以及物理删除不再可达的旧源码和 UI。
 
 ## 14. 源码索引
 

@@ -29,6 +29,8 @@ func _test_survey_ship_claim_survives_transaction_and_roundtrip() -> void:
 	simulation.ensure_frontier_state(state)
 	var survey_ship := state._create_ship_instance("deep_survey_vessel", ["deep_survey_system"], "ISS Conservation Survey")
 	var ship_id := str(survey_ship.get("instance_id", ""))
+	state.set_formation_ship_ids(SpaceGameState.DEFAULT_FORMATION_ID, [ship_id])
+	survey_ship["assignment"] = {"formation_id":SpaceGameState.DEFAULT_FORMATION_ID}
 	for item_id_value in simulation.survey_mission_costs(LocationState.SURVEYED):
 		var item_id := str(item_id_value)
 		state.add_item(item_id, int(simulation.survey_mission_costs(LocationState.SURVEYED).get(item_id, 0)), MAIN_LOCATION)
@@ -68,28 +70,28 @@ func _test_fleet_resupply_is_reserve_safe_and_movement_neutral() -> void:
 	if not state.has_method("transfer_inventory_to_fleet_supply"):
 		return
 	var consumed_before := _consumed_quantity(state, item_id)
-	var transferred := int(state.call("transfer_inventory_to_fleet_supply", item_id, 10, "expedition", MAIN_LOCATION))
+	var transferred := int(state.call("transfer_inventory_to_fleet_supply", item_id, 10, SpaceGameState.DEFAULT_FORMATION_ID, MAIN_LOCATION))
 	_check(transferred == 0, "fleet resupply cannot take strategically Reserved inventory")
 	_check(state.item_quantity(item_id, MAIN_LOCATION) == on_hand, "a fully Reserved source retains all physical inventory")
-	_check(state.fleet_supply_quantity(item_id, "expedition") == 0, "a fully Reserved source produces no live Fleet supply")
+	_check(state.fleet_supply_quantity(item_id, SpaceGameState.DEFAULT_FORMATION_ID) == 0, "a fully Reserved source produces no live Fleet supply")
 	_check(_consumed_quantity(state, item_id) == consumed_before, "a rejected/zero Fleet transfer does not create consumption")
 
 	state.set_item_reserve(item_id, 0, MAIN_LOCATION)
-	var live_before := state.item_quantity(item_id, MAIN_LOCATION) + state.fleet_supply_quantity(item_id, "expedition")
+	var live_before := state.item_quantity(item_id, MAIN_LOCATION) + state.fleet_supply_quantity(item_id, SpaceGameState.DEFAULT_FORMATION_ID)
 	consumed_before = _consumed_quantity(state, item_id)
-	transferred = int(state.call("transfer_inventory_to_fleet_supply", item_id, 10, "expedition", MAIN_LOCATION))
-	var loaded := state.fleet_supply_quantity(item_id, "expedition")
+	transferred = int(state.call("transfer_inventory_to_fleet_supply", item_id, 10, SpaceGameState.DEFAULT_FORMATION_ID, MAIN_LOCATION))
+	var loaded := state.fleet_supply_quantity(item_id, SpaceGameState.DEFAULT_FORMATION_ID)
 	var live_after := state.item_quantity(item_id, MAIN_LOCATION) + loaded
 	_check(transferred == 10 and loaded == 10, "Available inventory loads the requested quantity into live Fleet cargo")
 	_check(live_after == live_before, "Inventory to Fleet resupply is a movement-neutral ownership transfer")
 	_check(_consumed_quantity(state, item_id) == consumed_before, "Inventory to Fleet transfer is not misclassified as Consumed")
 
 	var roundtrip := SpaceGameState.from_dictionary(state.to_dictionary(), database.domains.keys(), database.regions)
-	_check(roundtrip.item_quantity(item_id, MAIN_LOCATION) + roundtrip.fleet_supply_quantity(item_id, "expedition") == live_before, "Inventory plus Fleet supply survives save/load without duplication or loss")
-	var actual_consumption := mini(3, roundtrip.fleet_supply_quantity(item_id, "expedition"))
+	_check(roundtrip.item_quantity(item_id, MAIN_LOCATION) + roundtrip.fleet_supply_quantity(item_id, SpaceGameState.DEFAULT_FORMATION_ID) == live_before, "Inventory plus Fleet supply survives save/load without duplication or loss")
+	var actual_consumption := mini(3, roundtrip.fleet_supply_quantity(item_id, SpaceGameState.DEFAULT_FORMATION_ID))
 	consumed_before = _consumed_quantity(roundtrip, item_id)
-	_check(actual_consumption > 0 and roundtrip.consume_fleet_supply(item_id, actual_consumption, "expedition"), "Fleet propellant is consumed through its Domain operation")
-	_check(roundtrip.fleet_supply_quantity(item_id, "expedition") == loaded - actual_consumption, "real Fleet consumption removes the exact live quantity")
+	_check(actual_consumption > 0 and roundtrip.consume_fleet_supply(item_id, actual_consumption, SpaceGameState.DEFAULT_FORMATION_ID), "Fleet propellant is consumed through its Domain operation")
+	_check(roundtrip.fleet_supply_quantity(item_id, SpaceGameState.DEFAULT_FORMATION_ID) == loaded - actual_consumption, "real Fleet consumption removes the exact live quantity")
 	_check(_consumed_quantity(roundtrip, item_id) == consumed_before + actual_consumption, "real Fleet consumption enters the per-item Consumed ledger exactly once")
 
 
@@ -145,7 +147,7 @@ func _test_full_storage_retains_recovered_fleet_cargo() -> void:
 	var state := _new_state(simulation)
 	var item_id := "dark_matter"
 	var quantity := 2
-	state.add_recovered_cargo(item_id, quantity, "expedition")
+	state.add_recovered_cargo(item_id, quantity, SpaceGameState.DEFAULT_FORMATION_ID)
 	var storage_class := simulation.storage_class_for_item(item_id)
 	var used: Dictionary = simulation.location_storage_used(state, MAIN_LOCATION)
 	state.location_state(MAIN_LOCATION)["logistics"]["storage_capacities"][storage_class] = int(ceil(float(used.get(storage_class, 0.0))))
@@ -153,10 +155,10 @@ func _test_full_storage_retains_recovered_fleet_cargo() -> void:
 	_check(simulation.has_method("unload_fleet_cargo"), "Fleet unloading uses the capacity-aware Simulation transaction")
 	if not simulation.has_method("unload_fleet_cargo"):
 		return
-	var unloaded := bool(simulation.call("unload_fleet_cargo", state, "expedition", MAIN_LOCATION, false))
+	var unloaded := bool(simulation.call("unload_fleet_cargo", state, SpaceGameState.DEFAULT_FORMATION_ID, MAIN_LOCATION, false))
 	_check(not unloaded, "Fleet unload reports a blocked transfer when destination storage is full")
 	_check(state.item_quantity(item_id, MAIN_LOCATION) == inventory_before, "full storage does not accept recovered Fleet cargo")
-	_check(int(state.fleet_logistics_runtime("expedition").get("recovered", {}).get(item_id, 0)) == quantity, "blocked Fleet unload retains cargo under Fleet ownership")
+	_check(int(state.fleet_logistics_runtime(SpaceGameState.DEFAULT_FORMATION_ID).get("recovered", {}).get(item_id, 0)) == quantity, "blocked Fleet unload retains cargo under Fleet ownership")
 	_check(_storage_within_capacity(state, simulation, MAIN_LOCATION), "Fleet unloading never drives a storage class beyond capacity")
 
 

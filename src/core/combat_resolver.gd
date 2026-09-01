@@ -26,7 +26,8 @@ func begin(state: SpaceGameState, ship_ids: Array, enemy_id: String) -> Dictiona
 			actors.append(actor)
 	if actors.is_empty():
 		return {"status":"DEFEAT", "victory":false, "reason":"NO_OPERATIONAL_SHIP", "enemy_id":enemy_id, "ship_ids":ship_ids.duplicate(), "actors":[], "elapsed_ms":0.0, "events":0, "log":[]}
-	var formation: Dictionary = state.fleet_logistics_runtime("expedition").get("formation", {})
+	var formation_id := str(state.active_expedition.get("formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
+	var formation: Dictionary = state.fleet_logistics_runtime(formation_id).get("formation", {})
 	var doctrine := str(formation.get("doctrine", "HOLD_FORMATION"))
 	_apply_doctrine_defenses(actors, doctrine)
 	var combat_state := {
@@ -227,7 +228,8 @@ func _build_ship_actor(state: SpaceGameState, ship_id: String) -> Dictionary:
 	var shield_damage := minf(current_shield, prior_damage)
 	current_shield -= shield_damage
 	current_hull = maxf(0.0, current_hull - maxf(0.0, prior_damage - shield_damage))
-	var formation: Dictionary = state.fleet_logistics_runtime("expedition").get("formation", {})
+	var formation_id := str(state.active_expedition.get("formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
+	var formation: Dictionary = state.fleet_logistics_runtime(formation_id).get("formation", {})
 	var zone := str(formation.get("ship_zones", {}).get(ship_id, "FRONT")).to_upper()
 	if zone not in ZONE_ORDER:
 		zone = "FRONT"
@@ -336,7 +338,8 @@ func _ship_attack_cycle(state: SpaceGameState, combat_state: Dictionary, cohort_
 	var weapon: Dictionary = weapon_cycles[weapon_index]
 	var ammunition_item := str(weapon.get("ammunition_item", ""))
 	var ammunition_per_attack := int(weapon.get("ammunition_per_attack", 0)) * living_members.size() * _doctrine_ammunition_multiplier(combat_state, cohort, weapon)
-	if not ammunition_item.is_empty() and ammunition_per_attack > 0 and not state.consume_fleet_supply(ammunition_item, ammunition_per_attack):
+	var formation_id := str(state.active_expedition.get("formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
+	if not ammunition_item.is_empty() and ammunition_per_attack > 0 and not state.consume_fleet_supply(ammunition_item, ammunition_per_attack, formation_id):
 		weapon["next_ms"] = float(weapon.get("attack_interval_ms", 3000.0))
 		_sync_cohort_attack_next(cohort)
 		combat_state["status"] = "WITHDRAWN"

@@ -2,8 +2,8 @@ class_name GameVersion
 extends RefCounted
 
 ## Single source of truth for the standalone Lab product and save contract.
-const PRODUCT_VERSION := "1.29.0-single-system-core"
-const SAVE_SCHEMA_VERSION := 35
+const PRODUCT_VERSION := "1.32.0-ship-role-cutover"
+const SAVE_SCHEMA_VERSION := 38
 const MIN_MIGRATABLE_SAVE_SCHEMA_VERSION := 24
 
 
