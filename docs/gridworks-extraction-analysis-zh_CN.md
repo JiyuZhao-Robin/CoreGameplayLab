@@ -13,6 +13,8 @@
 > 方向更新：产品于 2026-09-01 明确推翻旧的地点级“点选活动”模式，并进一步确认不保留并行兼容玩法。方格实体、缓存、线路和建设订单成为普通采矿—生产—建造的唯一权威；旧 Mining Operation、Production Line、Extraction Network 和普通 Construction 只进入不可执行迁移档案。实施状态见 [方格工厂玩法重构计划](./grid-factory-rewrite-plan-zh_CN.md)。
 >
 > 舰船职责更新：schema 38 已删除舰船采矿能力、采矿插件与采集活动。舰船只负责战斗、探索和真实运输。战斗掉落与远征产品仍可回收；未来入侵战后的打捞/分析通过有限残骸点接口实现，不建立常驻打捞职业。
+>
+> 格子资源模型更新：本文对 Gridworks `Deposit Entity + RESOURCE Link` 的描述仍作为来源分析保留，但 CoreGameplayLab 已明确不采用该数据形态。当前权威模型是 `Tile Resource Field ⊂ Extractor Footprint`：资源是格子属性，不进入 `entities`，矿机直接扫描覆盖格，实体连接只保留 `CARGO / POWER`。3×3 矿机覆盖 9 个同类资源格为 100%，每缺 1 格降低 10%；异种资源田生成时必须满足“任何矿机都不能同时覆盖两种资源”的排斥约束。
 
 ## 1. 结论
 

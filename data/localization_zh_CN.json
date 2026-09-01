@@ -410,7 +410,7 @@
     "location.industry_summary": "%s · 已启用设施 %s · 运行作业 %s",
     "location.operations": "物流 / 工程 / 舰队",
     "location.operations_summary": "物流状态 %s\n进行中工程 %d\n驻留舰队 %d",
-    "location.resources.known_sites": "已知资源点",
+    "location.resources.known_sites": "已测绘格子资源田",
     "location.resources.none_visible": "当前勘测层级没有可公开的资源情报。",
     "location.resources.detected": "资源类别 %s · 潜力 %s",
     "format.range_decimal": "%.2f–%.2f",

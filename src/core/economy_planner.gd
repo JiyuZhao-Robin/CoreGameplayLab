@@ -110,8 +110,7 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 						rows[item_id]["factory_on_hand"] = int(rows[item_id].get("factory_on_hand", 0)) + quantity
 			match str(entity.get("kind", "")):
 				"EXTRACTOR":
-					var deposit := _deposit_for_extractor(world, entity_id)
-					var product_id := str(deposit.get("resource_id", ""))
+					var product_id := str(entity.get("resource_id", ""))
 					if product_id.is_empty() or not rows.has(product_id):
 						continue
 					rows[product_id]["production_rate"] = float(rows[product_id].get("production_rate", 0.0)) + maxf(0.0, float(entity.get("actual_rate", 0.0))) * 3600.0
@@ -413,12 +412,12 @@ func trace_bottleneck(state: SpaceGameState, product_id: String, location_id: St
 		if method.is_empty():
 			var source_transport := _known_source_transport(state, current_id, location_id)
 			if source_transport.is_empty():
-				primary = "NO_FIXED_DEPOSIT" if _has_resource_source(state, current_id) else "NO_FACTORY_RECIPE"
+				primary = "NO_RESOURCE_FIELD" if _has_resource_source(state, current_id) else "NO_FACTORY_RECIPE"
 				chain.append({"kind":"CONSTRAINT", "id":primary})
 				break
 			var geography: Dictionary = extraction_capacity_analysis(state, {current_id:target_rate}).get("products", {}).get(current_id, {})
 			primary = "EXTRACTION_CAPACITY_SHORTAGE" if target_rate > float(geography.get("installed_capacity", 0.0)) + 0.000001 else "LOGISTICS_CAPACITY_SHORTAGE"
-			chain.append({"kind":"DEPOSIT", "id":source_transport.get("deposit_id", ""), "world_id":source_transport.get("world_id", ""), "location_id":source_transport.get("origin", ""), "mapped_potential":source_transport.get("mapped_potential", 0.0)})
+			chain.append({"kind":"RESOURCE_FIELD", "id":source_transport.get("resource_field_id", ""), "world_id":source_transport.get("world_id", ""), "location_id":source_transport.get("origin", ""), "mapped_potential":source_transport.get("mapped_potential", 0.0)})
 			chain.append({"kind":"WORLD", "id":source_transport.get("world_id", ""), "location_id":source_transport.get("origin", "")})
 			var route_ids: Array = source_transport.get("route_ids", [])
 			var nodes: Array = source_transport.get("nodes", [])
@@ -480,7 +479,7 @@ func _planned_logistics(state: SpaceGameState, location_id: String, required: Di
 		var fallback_units := float(freight_profile.get("freight_units", 1.0))
 		var cargo_mass_per_item := float(freight_profile.get("cargo_mass", freight_profile.get("mass_per_unit", freight_profile.get("mass", fallback_units))))
 		var cargo_volume_per_item := float(freight_profile.get("cargo_volume", freight_profile.get("volume_per_unit", freight_profile.get("volume", fallback_units))))
-		result.append({"product_id":item_id, "source_deposit_id":source_transport.get("deposit_id", ""), "source_world_id":source_transport.get("world_id", ""), "origin":source_transport.get("origin", ""), "destination":location_id, "required_rate":required[item_id], "cargo_mass_per_hour":float(required[item_id]) * cargo_mass_per_item, "cargo_volume_per_hour":float(required[item_id]) * cargo_volume_per_item, "current_route_capacity":source_transport.get("bottleneck_capacity_per_hour", 0.0), "lead_time_ms":source_transport.get("lead_time_ms", INF), "route_ids":source_transport.get("route_ids", []).duplicate(), "nodes":source_transport.get("nodes", []).duplicate(), "potential_congestion":"ROUTE_UNAVAILABLE" if not bool(source_transport.get("service_available", false)) else "ROUTE_CAPACITY"})
+		result.append({"product_id":item_id, "source_resource_field_id":source_transport.get("resource_field_id", ""), "source_world_id":source_transport.get("world_id", ""), "origin":source_transport.get("origin", ""), "destination":location_id, "required_rate":required[item_id], "cargo_mass_per_hour":float(required[item_id]) * cargo_mass_per_item, "cargo_volume_per_hour":float(required[item_id]) * cargo_volume_per_item, "current_route_capacity":source_transport.get("bottleneck_capacity_per_hour", 0.0), "lead_time_ms":source_transport.get("lead_time_ms", INF), "route_ids":source_transport.get("route_ids", []).duplicate(), "nodes":source_transport.get("nodes", []).duplicate(), "potential_congestion":"ROUTE_UNAVAILABLE" if not bool(source_transport.get("service_available", false)) else "ROUTE_CAPACITY"})
 	return result
 
 
@@ -488,39 +487,41 @@ func extraction_capacity_analysis(state: SpaceGameState, requirements: Dictionar
 	var products := {}
 	for product_id_value in requirements.keys():
 		var product_id := str(product_id_value)
-		var deposits: Array = []
+		var resource_fields: Array = []
 		var mapped_potential := 0.0
 		var installed_capacity := 0.0
 		for world_id_value in state.factory_worlds.keys():
 			var world_id := str(world_id_value)
 			var world: Dictionary = state.factory_worlds.get(world_id_value, {})
-			for entity_value in world.get("entities", {}).values():
-				var deposit := entity_value as Dictionary
-				if str(deposit.get("kind", "")) != "DEPOSIT" or str(deposit.get("resource_id", "")) != product_id:
+			for field_value in world.get("resource_fields", {}).values():
+				var resource_field := field_value as Dictionary
+				if str(resource_field.get("resource_id", "")) != product_id:
 					continue
-				var potential := _deposit_mapped_potential_per_hour(deposit)
+				var potential := _resource_field_mapped_potential_per_hour(resource_field)
 				var extractor_ids: Array[String] = []
-				var deposit_installed := 0.0
-				for link_value in world.get("links", {}).values():
-					var link := link_value as Dictionary
-					if str(link.get("kind", "")) != "RESOURCE" or str(link.get("source_id", "")) != str(deposit.get("id", "")):
+				var field_installed := 0.0
+				var field_id := str(resource_field.get("id", ""))
+				for extractor_value in world.get("entities", {}).values():
+					var extractor := extractor_value as Dictionary
+					if str(extractor.get("kind", "")) != "EXTRACTOR" or not extractor.get("resource_field_ids", []).has(field_id):
 						continue
-					var extractor: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
 					extractor_ids.append(str(extractor.get("id", "")))
-					deposit_installed += maxf(0.0, float(extractor.get("actual_rate", 0.0))) * 3600.0
+					var field_tiles := maxi(0, int(extractor.get("covered_tiles_by_field", {}).get(field_id, 0)))
+					var total_tiles := maxi(1, int(extractor.get("covered_resource_tiles", 0)))
+					field_installed += maxf(0.0, float(extractor.get("actual_rate", 0.0))) * float(field_tiles) / float(total_tiles) * 3600.0
 				mapped_potential += potential
-				installed_capacity += deposit_installed
-				deposits.append({"deposit_id":str(deposit.get("id", "")), "world_id":world_id, "location_id":str(world.get("location_id", "")), "resource_id":product_id, "grade":float(deposit.get("grade", 1.0)), "mapped_potential":potential, "installed_capacity":deposit_installed, "extractor_ids":extractor_ids})
+				installed_capacity += field_installed
+				resource_fields.append({"resource_field_id":field_id, "world_id":world_id, "location_id":str(world.get("location_id", "")), "resource_id":product_id, "grade":float(resource_field.get("grade", 1.0)), "mapped_potential":potential, "installed_capacity":field_installed, "extractor_ids":extractor_ids})
 		var required_rate := maxf(0.0, float(requirements.get(product_id, 0.0)))
-		if deposits.is_empty():
+		if resource_fields.is_empty():
 			continue
 		var solutions: Array[String] = []
 		if required_rate > installed_capacity + 0.000001:
 			solutions.append("PLACE_EXTRACTOR" if installed_capacity <= 0.000001 else "EXPAND_EXTRACTOR_COVERAGE")
 			if mapped_potential <= installed_capacity + 0.000001:
-				solutions.append("MAP_ADDITIONAL_DEPOSITS")
+				solutions.append("MAP_ADDITIONAL_RESOURCE_FIELDS")
 			solutions.append("CONNECT_POWER_AND_CARGO")
-		products[product_id] = {"required_rate":required_rate, "mapped_potential":mapped_potential, "installed_capacity":installed_capacity, "shortfall":maxf(0.0, required_rate - installed_capacity), "deposits":deposits, "potential_solutions":solutions}
+		products[product_id] = {"required_rate":required_rate, "mapped_potential":mapped_potential, "installed_capacity":installed_capacity, "shortfall":maxf(0.0, required_rate - installed_capacity), "resource_fields":resource_fields, "potential_solutions":solutions}
 	return {"products":products, "read_only":true}
 
 
@@ -530,9 +531,9 @@ func _best_known_source_lead_time(state: SpaceGameState, item_id: String, destin
 
 func _has_resource_source(state: SpaceGameState, item_id: String) -> bool:
 	for world_value in state.factory_worlds.values():
-		for entity_value in (world_value as Dictionary).get("entities", {}).values():
-			var entity := entity_value as Dictionary
-			if str(entity.get("kind", "")) == "DEPOSIT" and str(entity.get("resource_id", "")) == item_id:
+		for field_value in (world_value as Dictionary).get("resource_fields", {}).values():
+			var resource_field := field_value as Dictionary
+			if str(resource_field.get("resource_id", "")) == item_id:
 				return true
 	return false
 
@@ -543,9 +544,9 @@ func _known_source_transport(state: SpaceGameState, item_id: String, destination
 		var world_id := str(world_id_value)
 		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
 		var origin := str(world.get("location_id", ""))
-		for entity_value in world.get("entities", {}).values():
-			var deposit := entity_value as Dictionary
-			if str(deposit.get("kind", "")) != "DEPOSIT" or str(deposit.get("resource_id", "")) != item_id:
+		for field_value in world.get("resource_fields", {}).values():
+			var resource_field := field_value as Dictionary
+			if str(resource_field.get("resource_id", "")) != item_id:
 				continue
 			if not state.has_location(origin) or not state.has_location(destination):
 				continue
@@ -564,10 +565,10 @@ func _known_source_transport(state: SpaceGameState, item_id: String, destination
 				bottleneck_capacity_per_hour = minf(bottleneck_capacity_per_hour, float(snapshot.get("capacity_per_minute", 0.0)) * 60.0)
 			if path.get("route_ids", []).is_empty():
 				bottleneck_capacity_per_hour = INF
-			candidates.append({"deposit_id":str(deposit.get("id", "")), "world_id":world_id, "origin":origin, "destination":destination, "nodes":path.get("nodes", [origin, destination]).duplicate(), "route_ids":path.get("route_ids", []).duplicate(), "lead_time_ms":float(path.get("transit_time_ms", simulation.logistics_lead_time_ms(state, origin, destination))), "score":float(path.get("score", path.get("transit_time_ms", INF))), "service_available":service_available, "route_snapshots":route_snapshots, "bottleneck_capacity_per_hour":0.0 if not service_available else bottleneck_capacity_per_hour, "mapped_potential":_deposit_mapped_potential_per_hour(deposit)})
+			candidates.append({"resource_field_id":str(resource_field.get("id", "")), "world_id":world_id, "origin":origin, "destination":destination, "nodes":path.get("nodes", [origin, destination]).duplicate(), "route_ids":path.get("route_ids", []).duplicate(), "lead_time_ms":float(path.get("transit_time_ms", simulation.logistics_lead_time_ms(state, origin, destination))), "score":float(path.get("score", path.get("transit_time_ms", INF))), "service_available":service_available, "route_snapshots":route_snapshots, "bottleneck_capacity_per_hour":0.0 if not service_available else bottleneck_capacity_per_hour, "mapped_potential":_resource_field_mapped_potential_per_hour(resource_field)})
 	if candidates.is_empty():
 		return {}
-	candidates.sort_custom(func(a, b): return float(a.get("score", INF)) < float(b.get("score", INF)) if not is_equal_approx(float(a.get("score", INF)), float(b.get("score", INF))) else str(a.get("deposit_id", "")) < str(b.get("deposit_id", "")))
+	candidates.sort_custom(func(a, b): return float(a.get("score", INF)) < float(b.get("score", INF)) if not is_equal_approx(float(a.get("score", INF)), float(b.get("score", INF))) else str(a.get("resource_field_id", "")) < str(b.get("resource_field_id", "")))
 	return (candidates[0] as Dictionary).duplicate(true)
 
 
@@ -657,18 +658,10 @@ func _factory_entity_count(state: SpaceGameState, location_id: String, building_
 	return result
 
 
-func _deposit_for_extractor(world: Dictionary, extractor_id: String) -> Dictionary:
-	for link_value in world.get("links", {}).values():
-		var link := link_value as Dictionary
-		if str(link.get("kind", "")) == "RESOURCE" and str(link.get("target_id", "")) == extractor_id:
-			return world.get("entities", {}).get(str(link.get("source_id", "")), {})
-	return {}
-
-
-func _deposit_mapped_potential_per_hour(deposit: Dictionary) -> float:
-	var size: Dictionary = deposit.get("footprint", {}).get("size", {})
+func _resource_field_mapped_potential_per_hour(resource_field: Dictionary) -> float:
+	var size: Dictionary = resource_field.get("footprint", {}).get("size", {})
 	var area := maxi(0, int(size.get("x", 0))) * maxi(0, int(size.get("y", 0)))
-	return maxf(0.0, float(deposit.get("potential_density", 0.0))) * float(area) * 3600.0
+	return maxf(0.0, float(resource_field.get("potential_density", 0.0))) * float(area) * 3600.0
 
 
 func _status_rank(status: String) -> int:

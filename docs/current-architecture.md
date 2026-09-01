@@ -26,9 +26,9 @@ data/content.json + localization
 
 - 内容层：产品、方格规则、宏观建筑、工厂配方、生产方式、舰船、科研、地点、勘测、路线、目标和终局工程均由内容数据定义。
 - 应用层：`src/application/game.gd` 对外提供带校验的事务命令，并负责存档加载、离线推进和事件转发。
-- 领域层：`src/core/factory_grid_simulation.gd` 结算固定矿体、实体占地、端口、电网、货运、配方、反压和方格建设；`src/core/simulation_engine.gd` 协调舰船、科研、跨地点物流与维护，但不再推进地点级采矿、Production Line、Extraction Network 或普通 Construction。
+- 领域层：`src/core/factory_grid_simulation.gd` 结算地形/资源格、矿机覆盖率、实体占地、电网、货运、配方、反压和方格建设；资源田不是实体，也不存在 RESOURCE 连接。`src/core/simulation_engine.gd` 协调舰船、科研、跨地点物流与维护，但不再推进地点级采矿、Production Line、Extraction Network 或普通 Construction。
 - 状态层：`src/core/game_state.gd` 的 `factory_worlds` 保存方格世界、实体、线路、建设订单和实体缓存；地点库存、运输中资产、舰船、研究、勘测、有限残骸点和终局状态继续保留。各保管域不得同时拥有同一批物资。
-- 查询层：`src/core/economy_planner.gd` 从 `factory_recipes`、方格建筑、实体缓存、固定 Deposit 与实际物流路线建立只读 DAG 和瓶颈链；舰船/月、研发阶段和巨构阶段只提供 BOM 目标，不再借用旧 Production Line 估算虚构产能。
+- 查询层：`src/core/economy_planner.gd` 从 `factory_recipes`、方格建筑、实体缓存、Tile Resource Field 与实际物流路线建立只读 DAG 和瓶颈链；舰船/月、研发阶段和巨构阶段只提供 BOM 目标，不再借用旧 Production Line 估算虚构产能。
 - 展示层：`src/ui/main.gd` 和组件只调用应用命令；所有核心流程必须能在 UI 中完成。`Game.guidance_snapshot()` 提供页面、子区域、地点、聚焦实体、阻塞原因和获取链。
 
 舰船装配遵循独立的编辑提交边界：`ShipAssemblyMapView` 只维护当前未保存草稿，Palette 拖拽只创建舰体/零件节点，GraphEdit 连接只表达玩家意图；船体节点根据内容定义的 `slot_layout` 形成不同规模的装配背板，并把能源核心作为中央必需插槽。装配线直接采用 DSPONLINE 画布的短引线/共享横轨/短接入正交路径与节点避让逻辑，未连接插槽为空心灰色，连接后才按类型填色。画布使用页面剩余高度并支持按全部节点边界动态适配全图，舰船 Palette 仅投影 `unlocked_ship_plans` 中当前可用的舰体方案。`Game.ship_design_validation/save_ship_design/enqueue_saved_ship_design` 负责领域校验、事务持久化和进入船厂。`SimulationEngine.shipyard_runtime_plan` 将已保存设计的真实模块清单用于 BOM 与完工舰船，不从 UI 草稿或模板默认连线推断结果。
@@ -48,7 +48,7 @@ FactoryWorld.EntityBuffers
 → FactoryWorld.Consumed
 ```
 
-普通生产只能通过 `Fixed Deposit → Extractor → Cargo Link → Machine + Recipe → Storage` 发生。线路有真实吞吐，电网欠压按比例降速，输出满仓逐级反压。旧 Factory/Production Method、舰船点选采矿、Extraction Network 和普通 Construction 已退出运行态，不存在兼容产出路径。
+普通生产只能通过 `Resource Tiles ⊂ Extractor Footprint → Cargo Link → Machine + Recipe → Storage` 发生。矿机覆盖 9 格时全覆盖为 100%，每少一个同类资源格降低 10%；异种资源田的生成排斥保证一个矿机不能同时触及两种矿。线路有真实吞吐，电网欠压按比例降速，输出满仓逐级反压。旧 Factory/Production Method、舰船点选采矿、Extraction Network 和普通 Construction 已退出运行态，不存在兼容产出路径。
 
 战斗掉落回收与远征产品继续进入编队的 `recovered` 货舱，随后通过容量受控的卸货事务进入地点仓库；它们不是采矿。未来入侵事件结束后可调用 `WreckSiteSystem.create_after_invasion()` 生成有限残骸点，`SALVAGE` 与 `ANALYSIS` 消耗同一份 `remaining_work`，归零后活动点立即消失。该接口不接受舰船或编队参数，当前也不提前结算奖励表，避免形成常驻“打捞职业”。
 

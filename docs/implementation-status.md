@@ -8,7 +8,7 @@
 
 | 领域 | 状态 | 当前实现与验收重点 |
 |---|---|---|
-| 方格工厂领域核心 | 部分实现 | Schema 36 已具备稀疏米制世界、固定矿体、宏观实体、RESOURCE/CARGO/POWER 连接、电网、吞吐、配方缓存、反压、实体仓储、建设订单和独立资产账本；画布、路径 Tile、星港和内容链尚待完成。 |
+| 方格工厂领域核心 | 部分实现 | Schema 36 + Factory World Schema 2 已具备稀疏米制世界、地形/资源双层 Tile、异种资源田排斥、矿机 Footprint 覆盖效率、宏观实体、CARGO/POWER 连接、电网、吞吐、配方缓存、反压、实体仓储、建设订单和独立资产账本；画布、路径 Tile、星港和内容链尚待完成。 |
 | 二维行星画布 | 待实现 | 需要 Chunk/LOD、相机与米制 Picking、Footprint 预览、端口拖线、Inspector 和实际流量动画。 |
 | 旧真实生产运行 | 已退役 | Schema 36 将 Mining Operation、Production Line、Extraction Network 和普通 Construction 归档；矿点/舰船采矿命令、查询、内容集合和实时状态字段已删除，其余旧工业命令不再结算。 |
 | 分域库存与仓储 | 部分实现 | Location Inventory 的容量/预留继续有效；方格实体缓存、仓储和施工暂存由 `FactoryWorld` 独立持有。两域之间的显式星港装卸协议尚待实现。 |
@@ -20,7 +20,7 @@
 | 入侵战后残骸 | 接口已立 | `WreckSiteSystem` 可由未来入侵事件生成有限残骸点；打捞与分析共享剩余工作量，耗尽后活动点消失。当前不接舰船能力，也尚未实现入侵事件、处理设施、风险与奖励结算。 |
 | 研发项目 | 已实现 | 能力域、阶段门槛、材料/设施/运行条件、原型和外溢已进入工业循环。 |
 | 库存驱动规划 | 已实现 | Current Economy Analysis、DAG 依赖、只读目标规划、瓶颈链和有限自动化已接入共享规则。 |
-| 勘测与工业地理 | 部分实现 | UNKNOWN→DETECTED→SURVEYED→DEEP_SURVEYED 与真实探索舰任务保留；资源揭示结果需要继续映射为方格固定矿体、品位和可用面积，旧永久采掘点/地点开发不再运行。 |
+| 勘测与工业地理 | 部分实现 | UNKNOWN→DETECTED→SURVEYED→DEEP_SURVEYED 与真实探索舰任务保留；资源揭示结果映射为方格资源田、品位和可用面积，旧永久采掘点/地点开发不再运行。 |
 | 唯一巨构终局 | 已实现 | 只有 `stellar_energy`；八阶段调用正常勘测、建设、工地库存、物流、能源、散热和维护，并给出完成统计。 |
 | Golden Path | 待重写 | 1.29 Golden Path 依赖已删除的聚合玩法，因此退出发布门禁；新路径必须从方格画布完成工业闭环。 |
 | 离线模拟 | 已实现 | `unprocessed_ms` 可持久化续算；60 分钟整段与 60×1 分钟在允许误差内一致。 |
@@ -37,7 +37,7 @@
 
 ## 发布证据
 
-- `tests/factory_grid_simulation_test.gd`：固定矿体、占地、端口、电网、吞吐、公平路由、反压、配方、建设、账本与存档纵向切片。
+- `tests/factory_grid_simulation_test.gd`：地形/资源 Tile、异种矿区排斥、9 格覆盖效率、占地、电网、吞吐、公平路由、反压、配方、建设、账本与存档纵向切片。
 - `tests/content_planner_contract_test.gd`：内容可达性、八资本品复用、四类只读目标与地理/物流链。
 - `tests/core_integrity_test.gd`：迁移、离线等价、满仓恢复、O&M、角色切换和资产守恒。
 - `tests/wreck_site_system_test.gd`：舰船采矿内容硬禁令、战斗/远征回收保留、有限残骸点耗尽与存档。

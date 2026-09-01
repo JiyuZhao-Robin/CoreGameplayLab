@@ -12,9 +12,9 @@
 
 ```text
 1 平方米方格组成行星可用面积
-→ 固定矿体占据确定坐标
+→ 每个格子分别携带地形属性与可选资源属性
 → 玩家规划宏观设施 Footprint
-→ 端口和线路形成资源、电力、货运网络
+→ 矿机直接读取覆盖格；端口和线路只形成电力、货运网络
 → 设备按真实输入、输出、功率和吞吐运行
 → 生产出的资本品进入实体仓储
 → 建设订单从实体仓储取得材料并完成新设施
@@ -28,9 +28,11 @@
 - 画布边界代表天体的全部可用面积，但不创建 `width × height` 常驻数组。
 - 64×64 Tile 组成一个 Chunk。
 - 未修改地表由 `seed + generator_version + chunk coordinate` 重建。
-- 存档只保留固定矿体、已揭示区域、Tile 差量、玩家设施、线路和建设订单。
-- 近景显示米制格线和精确占地；远景按 Chunk、区域、矿体和工业网络聚合。
+- 存档只保留资源田描述、已揭示区域、Tile 差量、玩家设施、线路和建设订单。
+- 近景显示米制格线和精确占地；远景按 Chunk、区域、资源田和工业网络聚合。
 - 玩家建造的是大型采掘场、冶炼区、仓储区、电站和运输走廊，不进入建筑内部逐台摆放机器。
+
+每格的地形层至少支持 `MOUNTAIN / WATER / FOREST / PLAIN / DESERT`，资源层独立保存 `resource_field_id / resource_id / resource_category / grade / potential_density`。地形视图使用地形色，资源视图使用资源色；切换视图只改变投影，不改变权威状态。
 
 ## 3. 新权威状态
 
@@ -39,7 +41,8 @@ Schema 36 在 `SpaceGameState.factory_worlds` 中加入：
 ```text
 Factory World
 ├── bounds / seed / chunk size
-├── fixed deposits
+├── resource fields（Tile 资源层，不属于 Entity）
+├── deterministic terrain attributes
 ├── placed entities
 │   ├── extractor
 │   ├── machine
@@ -47,7 +50,6 @@ Factory World
 │   ├── power
 │   └── construction facility
 ├── links
-│   ├── RESOURCE
 │   ├── CARGO
 │   └── POWER
 ├── construction orders
@@ -55,7 +57,7 @@ Factory World
 └── production / consumption / transfer statistics
 ```
 
-这一聚合由 `FactoryGridSimulation` 结算。UI 只能通过 `Game` 的事务命令创建世界、注册生成器矿体、提交建设、交付材料和建立连接。
+这一聚合由 `FactoryGridSimulation` 结算。UI 只能通过 `Game` 的事务命令创建世界、注册生成器资源田、提交建设、交付材料和建立连接。资源田不是实体，不能成为线路端点。
 
 ## 4. 第一阶段已经落地
 
@@ -63,11 +65,13 @@ Factory World
 
 - 行星级稀疏米制地址空间。
 - 稳定 Chunk 和 Chunk 内坐标。
-- 可确定性重建的基础地表属性。
-- 固定、多格连续资源矿体。
+- 可确定性重建的山脉、水域、森林、平原和沙漠地形属性及显示色。
+- 与地形正交的固定、多格资源田与资源显示色。
+- 资源田独立于 `entities`，旧 `DEPOSIT` 实体在 World Schema 2 规范化时迁入资源层，旧 `RESOURCE` link 被丢弃。
 - 宏观建筑 Footprint、边界和碰撞校验。
-- 只有兼容采集设施能够覆盖固定矿体。
-- RESOURCE、CARGO、POWER 三类连接。
+- 矿机直接扫描覆盖格，不需要 RESOURCE 连接；9 格全命中为 100%，每缺 1 格按当前矿机定义降低 10%。
+- 不同资源田具有生成排斥：只要任一可用矿机 Footprint 能同时触及两种资源，布局即被拒绝。
+- CARGO、POWER 两类实体连接。
 - 普通货运输入端口单连接约束，避免绕过合流设施。
 - 同优先级公平分配和高、中、低线路优先级。
 - 独立电网与按 `Supply / Demand` 比例执行的欠压降速。
@@ -81,8 +85,8 @@ Factory World
 首个验证链为：
 
 ```text
-固定铁矿体
-→ Surface Mining Field
+固定铁矿格（3×3 全覆盖）
+→ Surface Mining Field 自动读取 Footprint
 → iron_ore CARGO link
 → Macro Arc Smelter / grid_refine_iron
 → iron_ingot CARGO link
@@ -96,7 +100,7 @@ Factory World
 
 | 系统 | 当前权威 | 迁移状态 |
 | --- | --- | --- |
-| 方格矿体、采矿、局部货运、局部电网 | `FactoryGridSimulation` | 新核心已建立 |
+| 方格地形、资源田、覆盖采矿、局部货运、局部电网 | `FactoryGridSimulation` | 新核心已建立 |
 | 方格配方机器与实体仓储 | `FactoryGridSimulation` | 新核心已建立 |
 | 方格普通建设 | `FactoryGridSimulation` | 新核心已建立 |
 | 旧采矿活动与自动采集网络 | 无活跃权威 | Schema 36 归档并清空；命令永久拒绝 |
@@ -119,7 +123,7 @@ Schema 38 完成舰船职责硬切换：采矿/施工插件、舰船采集活动
 
 - Godot `Node2D` 方格画布、相机平移/缩放和米制 Picking。
 - Chunk 加载、卸载、脏标记和两级 LOD。
-- 地表、固定矿体和宏观设施的批量渲染。
+- 地形视图、资源视图和宏观设施的批量渲染。
 - Palette → Footprint 预览 → 碰撞/资源/科技校验 → 建设订单。
 - 端口拖线、线路预览、取消和 Inspector。
 - 实际流量驱动的货运动画与运行状态。
@@ -130,8 +134,8 @@ Schema 38 完成舰船职责硬切换：采矿/施工插件、舰船采集活动
 
 - 把现有活动中的生产输入、输出和周期整理为 `factory_recipes`。
 - 把旧设施、生产装置和方法整理为宏观建筑代际、兼容配方和模块。
-- 每条核心链至少拥有真实矿体、采集设施、加工设施、仓储和建设用途。
-- 建立资源地理、新手矿体闭包和确定性生成器。
+- 每条核心链至少拥有真实资源田、采集设施、加工设施、仓储和建设用途。
+- 建立资源地理、新手资源田闭包、异种资源排斥和确定性生成器。
 - 采用“先按 abundance 选择资源，再按地理适配选择位置”。
 
 完成标准：钢铁、电子、能源、建设件和基础科研耗材全部通过方格网络生产。
@@ -178,8 +182,11 @@ Schema 38 完成舰船职责硬切换：采矿/施工插件、舰船采集活动
 ## 8. 必须维持的测试门禁
 
 - 大世界创建不分配全图 Tile 数组。
-- 同 seed、版本和坐标生成相同地表与矿体。
-- 固定资源不能移动、复制或被普通建筑覆盖。
+- 同 seed、版本和坐标生成相同地形与资源属性。
+- 资源田不进入 Entity 注册表，也不能成为 CARGO/POWER 端点。
+- 地形层与资源层能独立投影；普通建筑覆盖资源格时不能删除资源属性。
+- 不同矿种之间必须留出足够距离，使任一矿机 Footprint 都不能同时覆盖两种资源。
+- 3×3 矿机覆盖 9 个同类资源格时效率为 100%，每缺一格降低 10%。
 - 建筑 Footprint 不越界、不互相重叠。
 - 端口方向、资源、物品和占用必须兼容。
 - 电力不足按网络统一比例降速。
@@ -195,7 +202,7 @@ Schema 38 完成舰船职责硬切换：采矿/施工插件、舰船采集活动
 ## 9. 尚未解决的关键问题
 
 - 行星画布实际宽高、可用面积和不可建设地表比例尚未定稿。
-- 固定矿体目前采用可持续产能；是否引入 Factorio 式有限储量仍是独立经济决策。
+- 固定资源格目前采用可持续产能；是否引入 Factorio 式有限储量仍是独立经济决策。
 - 本地线路当前以端点和容量结算，实际路径 Tile 与施工成本将在画布阶段加入。
 - 方格世界与星港/地点间物流的所有权移交协议尚未实现。
 - 旧存档不能自动推断历史抽象设施应该放在哪个坐标；旧运行态已归档且不会恢复，后续迁移向导只能显式创建新实体。

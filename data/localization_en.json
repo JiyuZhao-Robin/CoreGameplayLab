@@ -410,7 +410,7 @@
     "location.industry_summary": "%s · Active facilities %s · Running operations %s",
     "location.operations": "Logistics / Projects / Fleet",
     "location.operations_summary": "Logistics status %s\nActive projects %d\nStationed vessels %d",
-    "location.resources.known_sites": "Known Resource Sites",
+    "location.resources.known_sites": "Mapped Tile Resource Fields",
     "location.resources.none_visible": "The current survey level reveals no resource intelligence.",
     "location.resources.detected": "Resource category %s · Potential %s",
     "format.range_decimal": "%.2f–%.2f",

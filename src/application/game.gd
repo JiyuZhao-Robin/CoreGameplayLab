@@ -151,6 +151,12 @@ func factory_tile_snapshot(world_id: String, tile: Vector2i) -> Dictionary:
 	return simulation.factory_grid.tile_snapshot(state.factory_worlds[world_id], tile)
 
 
+func factory_tile_view_snapshot(world_id: String, tile: Vector2i, view_mode: String = "TERRAIN") -> Dictionary:
+	if not state.factory_worlds.has(world_id):
+		return {"valid":false, "reason_code":"UNKNOWN_FACTORY_WORLD"}
+	return simulation.factory_grid.tile_view_snapshot(state.factory_worlds[world_id], tile, view_mode)
+
+
 func factory_world_summary(world_id: String) -> Dictionary:
 	if not state.factory_worlds.has(world_id):
 		return {}

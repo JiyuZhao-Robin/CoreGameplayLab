@@ -1034,7 +1034,7 @@ func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
 
 
 func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> void:
-	box.add_child(_section_title(I18n.core("location.resources.known_sites", "Mapped fixed deposits")))
+	box.add_child(_section_title(I18n.core("location.resources.known_sites", "Mapped tile resource fields")))
 	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
 	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 	var resources: Array = intelligence.get("resources", [])
@@ -1044,14 +1044,14 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 	for profile_value in resources:
 		var profile := profile_value as Dictionary
 		var card := _card()
-		var deposit_id := String(profile.get("deposit_id", ""))
+		var resource_field_id := String(profile.get("resource_field_id", ""))
 		var resource_id := String(profile.get("resource_type", ""))
 		var title := I18n.category(String(profile.get("resource_category", "UNKNOWN"))) if resource_id.is_empty() else _content_name(Game.content.items.get(resource_id, {}), resource_id)
 		card.add_child(_label(title, 16, COLOR_TEXT))
 		if survey_state == LocationState.DETECTED:
-			card.add_child(_label(I18n.core("location.resources.grid_detected", "Fixed deposit signal · %s · potential %s") % [I18n.category(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
+			card.add_child(_label(I18n.core("location.resources.grid_detected", "Tile resource signal · %s · potential %s") % [I18n.category(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
 		else:
-			card.add_child(_label(I18n.core("location.resources.grid_surveyed", "Deposit %s · grade %.2f · mapped potential %.1f/h") % [deposit_id, float(profile.get("grade", 0.0)), float(profile.get("mapped_potential_per_hour", 0.0))], 13, COLOR_MUTED))
+			card.add_child(_label(I18n.core("location.resources.grid_surveyed", "Resource field %s · grade %.2f · mapped potential %.1f/h") % [resource_field_id, float(profile.get("grade", 0.0)), float(profile.get("mapped_potential_per_hour", 0.0))], 13, COLOR_MUTED))
 			if survey_state == LocationState.DEEP_SURVEYED:
 				var footprint: Dictionary = profile.get("footprint", {}).get("size", {})
 				card.add_child(_label(I18n.core("location.resources.grid_deep_surveyed", "Exact footprint %d × %d m · fixed world resource") % [int(footprint.get("x", 0)), int(footprint.get("y", 0))], 13, COLOR_ACCENT))
@@ -1726,21 +1726,21 @@ func _rebuild_frontier() -> void:
 	_add_unlock_banner(box, "frontier")
 	box.add_child(_card_text(I18n.core("survey.factory_authority", "Survey fleets reveal resource intelligence. All extraction and processing is built on the factory grid; ships do not mine or provide production labor."), COLOR_ACCENT))
 	box.add_child(_section_title(I18n.core("survey.resource_intelligence", "Resource Intelligence")))
-	var visible_deposit := false
+	var visible_resource_field := false
 	for location_id_value in Game.state.locations.keys():
 		var location_id := String(location_id_value)
 		var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, location_id)
 		var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 		for profile_value in intelligence.get("resources", []):
 			var profile := profile_value as Dictionary
-			visible_deposit = true
+			visible_resource_field = true
 			var resource_id := String(profile.get("resource_type", ""))
 			var title := I18n.category(String(profile.get("resource_category", "UNKNOWN"))) if resource_id.is_empty() else _content_name(Game.content.items.get(resource_id, {}), resource_id)
 			var card := _card()
 			card.add_child(_label(title, 17, COLOR_TEXT))
-			card.add_child(_label(I18n.core("survey.grid_deposit", "%s · %s · world %s · deposit %s") % [_location_name(location_id), _status_text(survey_state), String(profile.get("world_id", "")), String(profile.get("deposit_id", ""))], 14, COLOR_MUTED))
+			card.add_child(_label(I18n.core("survey.grid_deposit", "%s · %s · world %s · resource field %s") % [_location_name(location_id), _status_text(survey_state), String(profile.get("world_id", "")), String(profile.get("resource_field_id", ""))], 14, COLOR_MUTED))
 			box.add_child(_wrap_card(card))
-	if not visible_deposit:
+	if not visible_resource_field:
 		box.add_child(_card_text(I18n.core("survey.no_sites"), COLOR_MUTED))
 
 
@@ -2479,7 +2479,7 @@ func _planner_chain_text(chain: Array) -> String:
 			"PRODUCT": parts.append(_content_name(Game.content.items.get(node_id, {}), node_id))
 			"METHOD": parts.append(_content_name(Game.content.activities.get(node_id, {}), node_id))
 			"FACTORY": parts.append(_content_name(Game.content.facilities.get(node_id, {}), node_id))
-			"SITE": parts.append(node_id)
+			"SITE", "RESOURCE_FIELD": parts.append(node_id)
 			"ROUTE": parts.append(_content_name(Game.content.logistics_routes.get(node_id, {}), node_id))
 			"HUB", "DESTINATION": parts.append(_location_name(node_id))
 			_: parts.append(_status_text(node_id))

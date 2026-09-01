@@ -3,15 +3,16 @@ extends RefCounted
 
 ## Authoritative square-grid factory simulation used by the post-1.29 gameplay
 ## rewrite. One tile is one square metre, but worlds are sparse address spaces:
-## only deposits, player entities, links, construction orders and modified tiles
-## are persisted. Rendering and chunk caches are projections of this state.
+## only resource-field descriptors, player structures, links, construction
+## orders and modified tiles are persisted. Terrain and resources are tile
+## attributes; they are never physical entities or network endpoints.
 
-const WORLD_SCHEMA_VERSION := 1
+const WORLD_SCHEMA_VERSION := 2
 const DEFAULT_CHUNK_SIZE := 64
 const DEFAULT_STEP_SECONDS := 1.0
 const EPSILON := 0.000001
-const ENTITY_KINDS := ["DEPOSIT", "EXTRACTOR", "MACHINE", "STORAGE", "POWER", "CONSTRUCTION"]
-const LINK_KINDS := ["RESOURCE", "CARGO", "POWER"]
+const ENTITY_KINDS := ["EXTRACTOR", "MACHINE", "STORAGE", "POWER", "CONSTRUCTION"]
+const LINK_KINDS := ["CARGO", "POWER"]
 
 var building_definitions: Dictionary = {}
 var recipe_definitions: Dictionary = {}
@@ -44,6 +45,7 @@ func create_world(world_id: String, location_id: String, size_tiles: Vector2i, s
 		"bounds":{"origin":{"x":0, "y":0}, "size":{"x":maxi(1, size_tiles.x), "y":maxi(1, size_tiles.y)}},
 		"chunk_size_tiles":maxi(1, int(rules.get("chunk_size_tiles", DEFAULT_CHUNK_SIZE))),
 		"elapsed_ms":0.0,
+		"resource_fields":{},
 		"entities":{},
 		"links":{},
 		"construction_orders":{},
@@ -71,7 +73,7 @@ func normalize_world(source: Dictionary) -> Dictionary:
 	normalized["bounds"]["origin"] = {"x":int(origin.get("x", 0)), "y":int(origin.get("y", 0))}
 	normalized["chunk_size_tiles"] = maxi(1, int(source.get("chunk_size_tiles", normalized["chunk_size_tiles"])))
 	normalized["elapsed_ms"] = maxf(0.0, float(source.get("elapsed_ms", 0.0)))
-	for field in ["entities", "links", "construction_orders", "tile_deltas", "revealed_chunks", "statistics"]:
+	for field in ["resource_fields", "entities", "links", "construction_orders", "tile_deltas", "revealed_chunks", "statistics"]:
 		if source.get(field, null) is Dictionary:
 			normalized[field] = source.get(field, {}).duplicate(true)
 	for field in ["next_entity_serial", "next_link_serial", "next_construction_serial"]:
@@ -81,19 +83,44 @@ func normalize_world(source: Dictionary) -> Dictionary:
 
 
 func _normalize_runtime_records(world: Dictionary) -> void:
+	var structures := {}
 	for entity_value in world.get("entities", {}).values():
 		var entity := entity_value as Dictionary
+		if str(entity.get("kind", "")) == "DEPOSIT":
+			var legacy_id := str(entity.get("id", ""))
+			if not legacy_id.is_empty():
+				world["resource_fields"][legacy_id] = {
+					"id":legacy_id,
+					"resource_id":str(entity.get("resource_id", "")),
+					"resource_category":str(entity.get("resource_category", "solid")),
+					"footprint":entity.get("footprint", {}).duplicate(true),
+					"grade":maxf(EPSILON, float(entity.get("grade", 1.0))),
+					"potential_density":maxf(EPSILON, float(entity.get("potential_density", 1.0)))
+				}
+			continue
 		entity["inputs"] = entity.get("inputs", {}).duplicate(true)
 		entity["outputs"] = entity.get("outputs", {}).duplicate(true)
 		entity["inventory"] = entity.get("inventory", {}).duplicate(true)
 		entity["routing_cursor"] = entity.get("routing_cursor", {}).duplicate(true)
 		entity["progress"] = maxf(0.0, float(entity.get("progress", 0.0)))
 		entity["power_factor"] = clampf(float(entity.get("power_factor", 1.0)), 0.0, 1.0)
+		structures[str(entity.get("id", ""))] = entity
+	world["entities"] = structures
+	for field_value in world.get("resource_fields", {}).values():
+		var resource_field := field_value as Dictionary
+		resource_field["resource_category"] = str(resource_field.get("resource_category", "solid"))
+		resource_field["grade"] = maxf(EPSILON, float(resource_field.get("grade", 1.0)))
+		resource_field["potential_density"] = maxf(EPSILON, float(resource_field.get("potential_density", 1.0)))
+	var valid_links := {}
 	for link_value in world.get("links", {}).values():
 		var link := link_value as Dictionary
+		if str(link.get("kind", "")) not in LINK_KINDS or not structures.has(str(link.get("source_id", ""))) or not structures.has(str(link.get("target_id", ""))):
+			continue
 		link["capacity_progress"] = maxf(0.0, float(link.get("capacity_progress", 0.0)))
 		link["last_flow"] = maxf(0.0, float(link.get("last_flow", 0.0)))
 		link["total_transferred"] = maxi(0, int(link.get("total_transferred", 0)))
+		valid_links[str(link.get("id", ""))] = link
+	world["links"] = valid_links
 	for order_value in world.get("construction_orders", {}).values():
 		var order := order_value as Dictionary
 		order["required_items"] = order.get("required_items", {}).duplicate(true)
@@ -118,63 +145,140 @@ func chunk_local_coordinate(world: Dictionary, tile: Vector2i) -> Vector2i:
 func tile_snapshot(world: Dictionary, tile: Vector2i) -> Dictionary:
 	if not _tile_in_world(world, tile):
 		return {"valid":false, "coordinate":_point_dict(tile)}
-	var generator_seed := int(world.get("seed", 1)) + int(world.get("generator_version", 1)) * 104729
-	var noise := _coordinate_noise(generator_seed, tile.x, tile.y)
-	var terrain_type := "BASALT" if noise % 100 < 18 else ("ROCK" if noise % 100 < 52 else "REGOLITH")
+	var terrain_type := _terrain_type_at(world, tile)
+	var terrain_definition: Dictionary = rules.get("terrain_types", {}).get(terrain_type, {})
 	var snapshot := {
 		"valid":true,
 		"coordinate":_point_dict(tile),
 		"terrain_type":terrain_type,
-		"deposit_id":"",
+		"terrain_color":str(terrain_definition.get("color", "#808080")),
+		"terrain_buildable":bool(terrain_definition.get("buildable", true)),
+		"resource_field_id":"",
 		"resource_id":"",
+		"resource_color":"",
 		"resource_category":"",
 		"grade":0.0,
 		"potential_density":0.0
 	}
-	for entity_id_value in _sorted_keys(world.get("entities", {})):
-		var entity: Dictionary = world.get("entities", {}).get(entity_id_value, {})
-		if str(entity.get("kind", "")) == "DEPOSIT" and _footprint_contains(entity, tile):
-			snapshot["deposit_id"] = str(entity.get("id", ""))
-			snapshot["resource_id"] = str(entity.get("resource_id", ""))
-			snapshot["resource_category"] = str(entity.get("resource_category", "solid"))
-			snapshot["grade"] = float(entity.get("grade", 1.0))
-			snapshot["potential_density"] = float(entity.get("potential_density", 1.0))
+	for field_id_value in _sorted_keys(world.get("resource_fields", {})):
+		var resource_field: Dictionary = world.get("resource_fields", {}).get(field_id_value, {})
+		if _footprint_contains(resource_field, tile):
+			var resource_id := str(resource_field.get("resource_id", ""))
+			snapshot["resource_field_id"] = str(resource_field.get("id", ""))
+			snapshot["resource_id"] = resource_id
+			snapshot["resource_color"] = str(rules.get("resource_colors", {}).get(resource_id, "#FFFFFF"))
+			snapshot["resource_category"] = str(resource_field.get("resource_category", "solid"))
+			snapshot["grade"] = float(resource_field.get("grade", 1.0))
+			snapshot["potential_density"] = float(resource_field.get("potential_density", 1.0))
 			break
 	var tile_key := _tile_key(tile)
 	if world.get("tile_deltas", {}).has(tile_key):
 		var delta: Dictionary = world.get("tile_deltas", {}).get(tile_key, {})
 		if delta.has("terrain_override"):
-			snapshot["terrain_type"] = str(delta.get("terrain_override", terrain_type))
+			var override_type := str(delta.get("terrain_override", terrain_type))
+			var override_definition: Dictionary = rules.get("terrain_types", {}).get(override_type, {})
+			snapshot["terrain_type"] = override_type
+			snapshot["terrain_color"] = str(override_definition.get("color", snapshot.get("terrain_color", "#808080")))
+			snapshot["terrain_buildable"] = bool(override_definition.get("buildable", snapshot.get("terrain_buildable", true)))
+		if bool(delta.get("resource_cleared", false)):
+			snapshot["resource_field_id"] = ""
+			snapshot["resource_id"] = ""
+			snapshot["resource_color"] = ""
+			snapshot["resource_category"] = ""
+			snapshot["grade"] = 0.0
+			snapshot["potential_density"] = 0.0
 		if delta.has("remaining_resource"):
 			snapshot["remaining_resource"] = maxi(0, int(delta.get("remaining_resource", 0)))
 	return snapshot
 
 
-func add_deposit(world: Dictionary, deposit_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> Dictionary:
-	if deposit_id.is_empty() or resource_id.is_empty() or world.get("entities", {}).has(deposit_id):
-		return _failure("INVALID_DEPOSIT", "Deposit identity and resource must be unique")
+func tile_view_snapshot(world: Dictionary, tile: Vector2i, view_mode: String = "TERRAIN") -> Dictionary:
+	var snapshot := tile_snapshot(world, tile)
+	if not bool(snapshot.get("valid", false)):
+		return snapshot
+	var normalized_mode := view_mode.to_upper()
+	if normalized_mode not in ["TERRAIN", "RESOURCE"]:
+		normalized_mode = "TERRAIN"
+	var display_color := str(snapshot.get("terrain_color", "#808080"))
+	var display_value := str(snapshot.get("terrain_type", "UNKNOWN"))
+	if normalized_mode == "RESOURCE":
+		display_color = str(snapshot.get("resource_color", "")) if not str(snapshot.get("resource_id", "")).is_empty() else "#252A30"
+		display_value = str(snapshot.get("resource_id", "")) if not str(snapshot.get("resource_id", "")).is_empty() else "NO_RESOURCE"
+	snapshot["view_mode"] = normalized_mode
+	snapshot["display_color"] = display_color
+	snapshot["display_value"] = display_value
+	return snapshot
+
+
+func resource_coverage_for_footprint(world: Dictionary, footprint: Dictionary, loss_per_missing_tile: float = 0.1) -> Dictionary:
+	var origin := _point(footprint.get("origin", {}))
+	var size := _point(footprint.get("size", {}))
+	var footprint_tiles := maxi(0, size.x) * maxi(0, size.y)
+	var resource_ids := {}
+	var field_ids := {}
+	var covered_by_field := {}
+	var covered_tiles := 0
+	var grade_sum := 0.0
+	var sustainable_rate := 0.0
+	var resource_category := ""
+	for y in range(origin.y, origin.y + maxi(0, size.y)):
+		for x in range(origin.x, origin.x + maxi(0, size.x)):
+			var tile := tile_snapshot(world, Vector2i(x, y))
+			var resource_id := str(tile.get("resource_id", ""))
+			if resource_id.is_empty():
+				continue
+			var field_id := str(tile.get("resource_field_id", ""))
+			resource_ids[resource_id] = true
+			if not field_id.is_empty():
+				field_ids[field_id] = true
+				covered_by_field[field_id] = int(covered_by_field.get(field_id, 0)) + 1
+			covered_tiles += 1
+			grade_sum += maxf(EPSILON, float(tile.get("grade", 1.0)))
+			sustainable_rate += maxf(0.0, float(tile.get("potential_density", 0.0)))
+			if resource_category.is_empty():
+				resource_category = str(tile.get("resource_category", "solid"))
+	var sorted_resources := _sorted_keys(resource_ids)
+	var sorted_fields := _sorted_keys(field_ids)
+	var missing_tiles := maxi(0, footprint_tiles - covered_tiles)
+	var efficiency := 0.0 if covered_tiles <= 0 else clampf(1.0 - float(missing_tiles) * clampf(loss_per_missing_tile, 0.0, 1.0), 0.0, 1.0)
+	return {
+		"resource_id":"" if sorted_resources.is_empty() else str(sorted_resources[0]),
+		"resource_ids":sorted_resources,
+		"resource_category":resource_category,
+		"resource_field_ids":sorted_fields,
+		"covered_tiles_by_field":covered_by_field,
+		"covered_resource_tiles":covered_tiles,
+		"footprint_tiles":footprint_tiles,
+		"missing_resource_tiles":missing_tiles,
+		"coverage_efficiency":efficiency,
+		"average_grade":0.0 if covered_tiles <= 0 else grade_sum / float(covered_tiles),
+		"sustainable_rate_per_second":sustainable_rate,
+		"mixed_resource_types":sorted_resources.size() > 1
+	}
+
+
+func add_resource_field(world: Dictionary, resource_field_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> Dictionary:
+	if resource_field_id.is_empty() or resource_id.is_empty() or world.get("resource_fields", {}).has(resource_field_id) or world.get("entities", {}).has(resource_field_id):
+		return _failure("INVALID_RESOURCE_FIELD", "Resource-field identity and resource must be unique")
 	var footprint := _footprint(origin, size)
 	if not _footprint_in_world(world, footprint):
-		return _failure("OUT_OF_BOUNDS", "Deposit footprint is outside the world")
-	for entity_value in world.get("entities", {}).values():
-		var entity := entity_value as Dictionary
-		if str(entity.get("kind", "")) == "DEPOSIT" and _footprints_overlap(footprint, entity.get("footprint", {})):
-			return _failure("DEPOSIT_OVERLAP", "Deposit footprints cannot overlap")
-	world["entities"][deposit_id] = {
-		"id":deposit_id,
-		"kind":"DEPOSIT",
-		"definition_id":"",
+		return _failure("OUT_OF_BOUNDS", "Resource field is outside the world")
+	var candidate := {
+		"id":resource_field_id,
 		"footprint":footprint,
 		"resource_id":resource_id,
 		"resource_category":resource_category,
 		"grade":maxf(EPSILON, grade),
-		"potential_density":maxf(EPSILON, potential_density),
-		"fixed":true,
-		"status":"AVAILABLE",
-		"inputs":{}, "outputs":{}, "inventory":{}, "routing_cursor":{},
-		"progress":0.0, "power_factor":1.0
+		"potential_density":maxf(EPSILON, potential_density)
 	}
-	return {"ok":true, "deposit_id":deposit_id}
+	for field_value in world.get("resource_fields", {}).values():
+		var existing := field_value as Dictionary
+		if _footprints_overlap(footprint, existing.get("footprint", {})):
+			return _failure("RESOURCE_FIELD_OVERLAP", "Resource fields cannot overlap")
+		if str(existing.get("resource_id", "")) != resource_id and _resource_fields_share_extractor_span(candidate, existing):
+			return _failure("RESOURCE_FIELD_EXCLUSION", "Different resources are too close for the available extractor footprints")
+	world["resource_fields"][resource_field_id] = candidate
+	return {"ok":true, "resource_field_id":resource_field_id}
 
 
 func place_entity_immediate(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", requested_id: String = "") -> Dictionary:
@@ -186,13 +290,15 @@ func place_entity_immediate(world: Dictionary, definition_id: String, origin: Ve
 		entity_id = _next_id(world, "next_entity_serial", "ENTITY-")
 	elif world.get("entities", {}).has(entity_id):
 		return _failure("ENTITY_ID_OCCUPIED", "Entity id is already in use")
-	world["entities"][entity_id] = _create_entity(entity_id, definition_id, origin, recipe_id)
+	var entity := _create_entity(entity_id, definition_id, origin, recipe_id)
+	_apply_extractor_resource_profile(entity, placement.get("resource_profile", {}))
+	world["entities"][entity_id] = entity
 	return {"ok":true, "entity_id":entity_id}
 
 
 func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", ignored_order_id: String = "") -> Dictionary:
 	var definition: Dictionary = building_definitions.get(definition_id, {})
-	if definition.is_empty() or str(definition.get("kind", "")) not in ENTITY_KINDS or str(definition.get("kind", "")) == "DEPOSIT":
+	if definition.is_empty() or str(definition.get("kind", "")) not in ENTITY_KINDS:
 		return _failure("UNKNOWN_BUILDING", "Unknown or invalid building definition")
 	if str(definition.get("kind", "")) == "MACHINE":
 		var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
@@ -202,20 +308,11 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 	var footprint := _footprint(origin, Vector2i(maxi(1, int(size_data.get("width", 1))), maxi(1, int(size_data.get("height", 1)))))
 	if not _footprint_in_world(world, footprint):
 		return _failure("OUT_OF_BOUNDS", "Building footprint is outside the world")
-	var compatible_deposit_found := str(definition.get("kind", "")) != "EXTRACTOR"
 	for entity_value in world.get("entities", {}).values():
 		var entity := entity_value as Dictionary
 		if not _footprints_overlap(footprint, entity.get("footprint", {})):
 			continue
-		if str(entity.get("kind", "")) == "DEPOSIT":
-			if str(definition.get("kind", "")) != "EXTRACTOR":
-				return _failure("RESOURCE_OCCUPIED", "Only a compatible extractor may cover a fixed deposit")
-			if definition.get("resource_categories", []).has(str(entity.get("resource_category", ""))):
-				compatible_deposit_found = true
-			else:
-				return _failure("RESOURCE_INCOMPATIBLE", "Extractor is incompatible with this deposit")
-		else:
-			return _failure("FOOTPRINT_OCCUPIED", "Building footprint overlaps another structure")
+		return _failure("FOOTPRINT_OCCUPIED", "Building footprint overlaps another structure")
 	for order_id_value in world.get("construction_orders", {}).keys():
 		var order_id := str(order_id_value)
 		if order_id == ignored_order_id:
@@ -225,9 +322,17 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 			continue
 		if _footprints_overlap(footprint, order.get("footprint", {})):
 			return _failure("CONSTRUCTION_OCCUPIED", "Building footprint overlaps a construction order")
-	if not compatible_deposit_found:
-		return _failure("RESOURCE_REQUIRED", "Extractor must overlap a compatible fixed deposit")
-	return {"ok":true, "footprint":footprint}
+	var result := {"ok":true, "footprint":footprint}
+	if str(definition.get("kind", "")) == "EXTRACTOR":
+		var resource_profile := resource_coverage_for_footprint(world, footprint, float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+		if int(resource_profile.get("covered_resource_tiles", 0)) <= 0:
+			return _failure("RESOURCE_REQUIRED", "Extractor must cover at least one resource-bearing tile")
+		if bool(resource_profile.get("mixed_resource_types", false)):
+			return _failure("MIXED_RESOURCE_COVERAGE", "One extractor cannot cover different resource types")
+		if not definition.get("resource_categories", []).has(str(resource_profile.get("resource_category", ""))):
+			return _failure("RESOURCE_INCOMPATIBLE", "Extractor is incompatible with the covered tile resource")
+		result["resource_profile"] = resource_profile
+	return result
 
 
 func queue_construction(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", priority: int = 50) -> Dictionary:
@@ -244,6 +349,7 @@ func queue_construction(world: Dictionary, definition_id: String, origin: Vector
 		"definition_id":definition_id,
 		"recipe_id":recipe_id,
 		"footprint":placement.get("footprint", {}).duplicate(true),
+		"resource_profile":placement.get("resource_profile", {}).duplicate(true),
 		"required_items":costs,
 		"delivered_items":{},
 		"work_required":maxf(EPSILON, float(definition.get("construction_work", 1.0))),
@@ -300,19 +406,6 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 		if str(existing.get("kind", "")) == kind and str(existing.get("source_id", "")) == source_id and str(existing.get("target_id", "")) == target_id and str(existing.get("item_id", "")) == item_id:
 			return _failure("DUPLICATE_LINK", "This link already exists")
 	match kind:
-		"RESOURCE":
-			if str(source.get("kind", "")) != "DEPOSIT" or str(target.get("kind", "")) != "EXTRACTOR":
-				return _failure("INVALID_RESOURCE_LINK", "Resource links connect deposits to extractors")
-			if not _footprints_overlap(source.get("footprint", {}), target.get("footprint", {})):
-				return _failure("RESOURCE_NOT_COVERED", "Extractor must overlap its deposit")
-			var target_definition: Dictionary = building_definitions.get(str(target.get("definition_id", "")), {})
-			if not target_definition.get("resource_categories", []).has(str(source.get("resource_category", ""))):
-				return _failure("RESOURCE_INCOMPATIBLE", "Extractor cannot process this resource category")
-			for link_value in world.get("links", {}).values():
-				var occupied := link_value as Dictionary
-				if str(occupied.get("kind", "")) == "RESOURCE" and str(occupied.get("target_id", "")) == target_id:
-					return _failure("RESOURCE_PORT_OCCUPIED", "Extractor already has a deposit")
-			item_id = str(source.get("resource_id", ""))
 		"CARGO":
 			if item_id.is_empty() or capacity_per_second <= 0.0:
 				return _failure("INVALID_CARGO_LINK", "Cargo links require an item and positive capacity")
@@ -323,8 +416,6 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 				if str(occupied.get("kind", "")) == "CARGO" and str(occupied.get("target_id", "")) == target_id and str(occupied.get("item_id", "")) == item_id:
 					return _failure("CARGO_INPUT_OCCUPIED", "A target item port accepts one incoming cargo link")
 		"POWER":
-			if str(source.get("kind", "")) == "DEPOSIT" or str(target.get("kind", "")) == "DEPOSIT":
-				return _failure("INVALID_POWER_LINK", "Deposits cannot join a power network")
 			item_id = ""
 	var link_id := _next_id(world, "next_link_serial", "LINK-")
 	world["links"][link_id] = {
@@ -386,9 +477,7 @@ func _calculate_power_factors(world: Dictionary) -> Dictionary:
 	var parent := {}
 	for entity_id_value in world.get("entities", {}).keys():
 		var entity_id := str(entity_id_value)
-		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
-		if str(entity.get("kind", "")) != "DEPOSIT":
-			parent[entity_id] = entity_id
+		parent[entity_id] = entity_id
 	for link_value in world.get("links", {}).values():
 		var link := link_value as Dictionary
 		if str(link.get("kind", "")) != "POWER":
@@ -423,8 +512,10 @@ func _run_extractors(world: Dictionary, seconds: float, power_factors: Dictionar
 		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
 		if str(entity.get("kind", "")) != "EXTRACTOR":
 			continue
-		var deposit := _resource_deposit_for_extractor(world, entity_id)
-		if deposit.is_empty():
+		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+		var resource_profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+		_apply_extractor_resource_profile(entity, resource_profile)
+		if int(resource_profile.get("covered_resource_tiles", 0)) <= 0 or bool(resource_profile.get("mixed_resource_types", false)):
 			entity["status"] = "NO_RESOURCE"
 			entity["actual_rate"] = 0.0
 			continue
@@ -433,8 +524,7 @@ func _run_extractors(world: Dictionary, seconds: float, power_factors: Dictionar
 			entity["status"] = "NO_POWER"
 			entity["actual_rate"] = 0.0
 			continue
-		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
-		var resource_id := str(deposit.get("resource_id", ""))
+		var resource_id := str(resource_profile.get("resource_id", ""))
 		var output_capacity := maxi(0, int(definition.get("output_capacity", 0)))
 		var current := maxi(0, int(entity.get("outputs", {}).get(resource_id, 0)))
 		var free := maxi(0, output_capacity - _dictionary_total(entity.get("outputs", {})))
@@ -442,10 +532,9 @@ func _run_extractors(world: Dictionary, seconds: float, power_factors: Dictionar
 			entity["status"] = "OUTPUT_FULL"
 			entity["actual_rate"] = 0.0
 			continue
-		var overlap_tiles := _footprint_overlap_area(entity.get("footprint", {}), deposit.get("footprint", {}))
-		var sustainable_rate := float(deposit.get("potential_density", 1.0)) * float(overlap_tiles)
+		var sustainable_rate := float(resource_profile.get("sustainable_rate_per_second", 0.0))
 		var installed_rate := maxf(0.0, float(definition.get("mining_rate_per_second", 0.0)))
-		var unconstrained_rate := installed_rate * maxf(EPSILON, float(deposit.get("grade", 1.0))) * factor
+		var unconstrained_rate := installed_rate * maxf(EPSILON, float(resource_profile.get("average_grade", 1.0))) * float(resource_profile.get("coverage_efficiency", 0.0)) * factor
 		var actual_rate := minf(unconstrained_rate, sustainable_rate)
 		entity["progress"] = float(entity.get("progress", 0.0)) + actual_rate * seconds
 		var produced := mini(free, maxi(0, floori(float(entity.get("progress", 0.0)) + EPSILON)))
@@ -454,7 +543,7 @@ func _run_extractors(world: Dictionary, seconds: float, power_factors: Dictionar
 			entity["progress"] = 0.0 if produced >= free else maxf(0.0, float(entity.get("progress", 0.0)) - float(produced))
 			_add_statistic(world, "produced", resource_id, produced)
 		entity["actual_rate"] = actual_rate
-		entity["status"] = "POWER_LIMITED" if factor < 0.999 else "RUNNING"
+		entity["status"] = "POWER_LIMITED" if factor < 0.999 else ("PARTIAL_COVERAGE" if float(resource_profile.get("coverage_efficiency", 0.0)) < 0.999 else "RUNNING")
 
 
 func _run_machines(world: Dictionary, seconds: float, power_factors: Dictionary) -> void:
@@ -641,6 +730,10 @@ func _advance_construction(world: Dictionary, seconds: float, events: Array[Dict
 			_add_statistic(world, "consumed", item_id, maxi(0, int(order.get("delivered_items", {}).get(item_id, 0))))
 		var origin_data: Dictionary = order.get("footprint", {}).get("origin", {})
 		var entity := _create_entity(str(order.get("entity_id", "")), str(order.get("definition_id", "")), _point(origin_data), str(order.get("recipe_id", "")))
+		var definition: Dictionary = building_definitions.get(str(order.get("definition_id", "")), {})
+		if str(definition.get("kind", "")) == "EXTRACTOR":
+			var profile := resource_coverage_for_footprint(world, order.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+			_apply_extractor_resource_profile(entity, profile)
 		world["entities"][str(entity.get("id", ""))] = entity
 		world["statistics"]["construction_completed"] = int(world.get("statistics", {}).get("construction_completed", 0)) + 1
 		events.append({"type":"FactoryConstructionCompleted", "world_id":world.get("world_id", ""), "order_id":order_id, "entity_id":entity.get("id", ""), "definition_id":entity.get("definition_id", "")})
@@ -658,6 +751,7 @@ func world_summary(world: Dictionary) -> Dictionary:
 	return {
 		"world_id":world.get("world_id", ""),
 		"location_id":world.get("location_id", ""),
+		"resource_field_count":world.get("resource_fields", {}).size(),
 		"entity_counts":entity_counts,
 		"link_count":world.get("links", {}).size(),
 		"construction_count":world.get("construction_orders", {}).size(),
@@ -686,20 +780,19 @@ func _create_entity(entity_id: String, definition_id: String, origin: Vector2i, 
 	}
 
 
-func _resource_deposit_for_extractor(world: Dictionary, extractor_id: String) -> Dictionary:
-	for link_value in world.get("links", {}).values():
-		var link := link_value as Dictionary
-		if str(link.get("kind", "")) == "RESOURCE" and str(link.get("target_id", "")) == extractor_id:
-			return world.get("entities", {}).get(str(link.get("source_id", "")), {})
-	return {}
+func _apply_extractor_resource_profile(entity: Dictionary, profile: Dictionary) -> void:
+	if str(entity.get("kind", "")) != "EXTRACTOR" or profile.is_empty():
+		return
+	for field in ["resource_id", "resource_category", "resource_field_ids", "covered_tiles_by_field", "covered_resource_tiles", "footprint_tiles", "missing_resource_tiles", "coverage_efficiency", "average_grade", "sustainable_rate_per_second", "mixed_resource_types"]:
+		if profile.has(field):
+			entity[field] = profile.get(field)
 
 
 func _entity_can_output(world: Dictionary, entity: Dictionary, item_id: String) -> bool:
 	match str(entity.get("kind", "")):
 		"STORAGE": return true
 		"EXTRACTOR":
-			var deposit := _resource_deposit_for_extractor(world, str(entity.get("id", "")))
-			return not deposit.is_empty() and str(deposit.get("resource_id", "")) == item_id
+			return str(entity.get("resource_id", "")) == item_id
 		"MACHINE":
 			var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
 			return _item_entries_to_dictionary(recipe.get("outputs", [])).has(item_id)
@@ -797,6 +890,27 @@ func _tile_in_world(world: Dictionary, tile: Vector2i) -> bool:
 	return tile.x >= origin.x and tile.y >= origin.y and tile.x < origin.x + size.x and tile.y < origin.y + size.y
 
 
+func _terrain_type_at(world: Dictionary, tile: Vector2i) -> String:
+	var region_scale := maxi(4, int(rules.get("terrain_region_scale_tiles", 32)))
+	var detail_scale := maxi(2, region_scale / 4)
+	var seed := int(world.get("seed", 1)) + int(world.get("generator_version", 1)) * 104729
+	var region_x := floori(float(tile.x) / float(region_scale))
+	var region_y := floori(float(tile.y) / float(region_scale))
+	var detail_x := floori(float(tile.x) / float(detail_scale))
+	var detail_y := floori(float(tile.y) / float(detail_scale))
+	var value := posmod(_coordinate_noise(seed, region_x, region_y), 100)
+	value = clampi(value + posmod(_coordinate_noise(seed + 7919, detail_x, detail_y), 21) - 10, 0, 99)
+	if value < 12:
+		return "WATER"
+	if value < 30:
+		return "FOREST"
+	if value < 66:
+		return "PLAIN"
+	if value < 84:
+		return "DESERT"
+	return "MOUNTAIN"
+
+
 func _footprint_in_world(world: Dictionary, footprint: Dictionary) -> bool:
 	var origin := _point(footprint.get("origin", {}))
 	var size := _point(footprint.get("size", {}))
@@ -822,14 +936,34 @@ func _footprints_overlap(a: Dictionary, b: Dictionary) -> bool:
 	return a_origin.x < b_origin.x + b_size.x and a_origin.x + a_size.x > b_origin.x and a_origin.y < b_origin.y + b_size.y and a_origin.y + a_size.y > b_origin.y
 
 
-func _footprint_overlap_area(a: Dictionary, b: Dictionary) -> int:
+func _resource_fields_share_extractor_span(a: Dictionary, b: Dictionary) -> bool:
+	for definition_value in building_definitions.values():
+		var definition := definition_value as Dictionary
+		if str(definition.get("kind", "")) != "EXTRACTOR":
+			continue
+		var size_data: Dictionary = definition.get("footprint", {})
+		var extractor_size := Vector2i(maxi(1, int(size_data.get("width", 1))), maxi(1, int(size_data.get("height", 1))))
+		if _resource_fields_fit_one_footprint(a.get("footprint", {}), b.get("footprint", {}), extractor_size):
+			return true
+	return false
+
+
+func _resource_fields_fit_one_footprint(a: Dictionary, b: Dictionary, cover_size: Vector2i) -> bool:
 	var a_origin := _point(a.get("origin", {}))
 	var a_size := _point(a.get("size", {}))
 	var b_origin := _point(b.get("origin", {}))
 	var b_size := _point(b.get("size", {}))
-	var width := maxi(0, mini(a_origin.x + a_size.x, b_origin.x + b_size.x) - maxi(a_origin.x, b_origin.x))
-	var height := maxi(0, mini(a_origin.y + a_size.y, b_origin.y + b_size.y) - maxi(a_origin.y, b_origin.y))
-	return width * height
+	return _minimum_joint_span(a_origin.x, a_size.x, b_origin.x, b_size.x) <= cover_size.x and _minimum_joint_span(a_origin.y, a_size.y, b_origin.y, b_size.y) <= cover_size.y
+
+
+func _minimum_joint_span(a_start: int, a_size: int, b_start: int, b_size: int) -> int:
+	var a_end := a_start + maxi(1, a_size) - 1
+	var b_end := b_start + maxi(1, b_size) - 1
+	if a_start <= b_end and b_start <= a_end:
+		return 1
+	if a_end < b_start:
+		return b_start - a_end + 1
+	return a_start - b_end + 1
 
 
 func _point(value: Dictionary) -> Vector2i:

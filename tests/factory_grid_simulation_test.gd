@@ -12,11 +12,12 @@ func _initialize() -> void:
 		_finish()
 		return
 	factory = FactoryGridSimulation.new(database.factory_buildings, database.factory_recipes, database.factory_grid_rules)
-	_test_sparse_square_world_and_fixed_deposits()
+	_test_sparse_square_world_and_tile_resources()
+	_test_resource_field_exclusion_and_coverage()
 	_test_placement_and_port_contracts()
 	_test_fair_and_priority_routing()
 	_test_transport_capacity_does_not_bank()
-	_test_deposit_potential_caps_high_grade_extraction()
+	_test_resource_potential_caps_high_grade_extraction()
 	_test_mining_production_power_and_conservation()
 	_test_backpressure_and_recovery()
 	_test_production_funds_real_construction()
@@ -28,29 +29,59 @@ func _initialize() -> void:
 	_finish()
 
 
-func _test_sparse_square_world_and_fixed_deposits() -> void:
+func _test_sparse_square_world_and_tile_resources() -> void:
 	var world := factory.create_world("earth-grid", "earth_orbit", Vector2i(20_000_000, 20_000_000), 730201)
-	_check(world.get("entities", {}).is_empty() and world.get("tile_deltas", {}).is_empty(), "planet-scale bounds do not allocate a width-by-height tile array")
+	_check(world.get("entities", {}).is_empty() and world.get("resource_fields", {}).is_empty() and world.get("tile_deltas", {}).is_empty(), "planet-scale bounds do not allocate a width-by-height tile array")
 	_check(factory.chunk_coordinate(world, Vector2i(63, 63)) == Vector2i(0, 0), "tile 63 remains in chunk zero")
 	_check(factory.chunk_coordinate(world, Vector2i(64, 64)) == Vector2i(1, 1) and factory.chunk_local_coordinate(world, Vector2i(64, 64)) == Vector2i.ZERO, "tile 64 crosses to the next 64-metre chunk")
 	var first := factory.tile_snapshot(world, Vector2i(1000, 2000))
 	var second_world := factory.create_world("earth-grid-copy", "earth_orbit", Vector2i(20_000_000, 20_000_000), 730201)
 	var second := factory.tile_snapshot(second_world, Vector2i(1000, 2000))
-	_check(first.get("terrain_type", "") == second.get("terrain_type", ""), "seed plus integer metre coordinate deterministically regenerates base terrain")
+	_check(first.get("terrain_type", "") == second.get("terrain_type", "") and str(first.get("terrain_type", "")) in ["MOUNTAIN", "WATER", "FOREST", "PLAIN", "DESERT"] and not str(first.get("terrain_color", "")).is_empty(), "seed plus integer metre coordinate deterministically regenerates a colored terrain attribute")
 	_check(not bool(factory.tile_snapshot(world, Vector2i(-1, 0)).get("valid", true)), "world bounds reject negative out-of-canvas coordinates")
-	var deposit_result := factory.add_deposit(world, "iron-field-a", "iron_ore", Vector2i(128, 128), Vector2i(24, 20), 1.25, 0.5, "solid")
-	_check(bool(deposit_result.get("ok", false)), "a fixed iron deposit can be registered")
+	var field_result := factory.add_resource_field(world, "iron-field-a", "iron_ore", Vector2i(128, 128), Vector2i(24, 20), 1.25, 0.5, "solid")
+	_check(bool(field_result.get("ok", false)) and world.get("entities", {}).is_empty() and world.get("resource_fields", {}).has("iron-field-a"), "a resource field is registered as tile-layer data rather than an entity")
 	var mineral_tile := factory.tile_snapshot(world, Vector2i(130, 135))
-	_check(str(mineral_tile.get("deposit_id", "")) == "iron-field-a" and str(mineral_tile.get("resource_id", "")) == "iron_ore" and is_equal_approx(float(mineral_tile.get("grade", 0.0)), 1.25), "resource-bearing tiles expose terrain, fixed deposit identity, resource and grade")
+	_check(str(mineral_tile.get("resource_field_id", "")) == "iron-field-a" and str(mineral_tile.get("resource_id", "")) == "iron_ore" and not str(mineral_tile.get("resource_color", "")).is_empty() and is_equal_approx(float(mineral_tile.get("grade", 0.0)), 1.25), "resource view data exposes field identity, resource color and grade independently from terrain view data")
+	var terrain_view := factory.tile_view_snapshot(world, Vector2i(130, 135), "TERRAIN")
+	var resource_view := factory.tile_view_snapshot(world, Vector2i(130, 135), "RESOURCE")
+	_check(terrain_view.get("display_color", "") == mineral_tile.get("terrain_color", "") and resource_view.get("display_color", "") == mineral_tile.get("resource_color", "") and resource_view.get("display_value", "") == "iron_ore", "terrain and resource view modes project independent colors from the same authoritative tile")
 	var normalized := factory.normalize_world(world)
-	_check(factory.tile_snapshot(normalized, Vector2i(130, 135)).get("deposit_id", "") == "iron-field-a", "normalization preserves fixed deposit coordinates")
+	_check(factory.tile_snapshot(normalized, Vector2i(130, 135)).get("resource_field_id", "") == "iron-field-a", "normalization preserves fixed resource-tile coordinates")
+	var legacy_world := factory.create_world("legacy", "earth_orbit", Vector2i(256, 256), 1)
+	legacy_world["schema_version"] = 1
+	legacy_world.erase("resource_fields")
+	legacy_world["entities"]["legacy-iron"] = {"id":"legacy-iron", "kind":"DEPOSIT", "resource_id":"iron_ore", "resource_category":"solid", "footprint":{"origin":{"x":32, "y":32}, "size":{"x":3, "y":3}}, "grade":1.0, "potential_density":1.0}
+	var migrated := factory.normalize_world(legacy_world)
+	_check(int(migrated.get("schema_version", 0)) == 2 and migrated.get("resource_fields", {}).has("legacy-iron") and not migrated.get("entities", {}).has("legacy-iron"), "World Schema 1 deposit entities migrate into the Schema 2 tile resource layer")
+
+
+func _test_resource_field_exclusion_and_coverage() -> void:
+	var exclusion_world := factory.create_world("field-exclusion", "earth_orbit", Vector2i(128, 128), 41)
+	_check(bool(factory.add_resource_field(exclusion_world, "iron", "iron_ore", Vector2i(32, 32), Vector2i(3, 3), 1.0, 10.0, "solid").get("ok", false)), "exclusion fixture registers its first resource field")
+	var too_close := factory.add_resource_field(exclusion_world, "copper-close", "copper_ore", Vector2i(36, 32), Vector2i(3, 3), 1.0, 10.0, "solid")
+	_check(not bool(too_close.get("ok", true)) and str(too_close.get("reason_code", "")) == "RESOURCE_FIELD_EXCLUSION", "different resource fields are rejected when one 3x3 miner could touch both")
+	_check(bool(factory.add_resource_field(exclusion_world, "copper-safe", "copper_ore", Vector2i(37, 32), Vector2i(3, 3), 1.0, 10.0, "solid").get("ok", false)), "different resources are allowed once no available miner footprint can cover both")
+
+	var coverage_world := factory.create_world("coverage", "earth_orbit", Vector2i(128, 128), 42)
+	factory.add_resource_field(coverage_world, "iron", "iron_ore", Vector2i(32, 32), Vector2i(3, 3), 1.0, 10.0, "solid")
+	factory.place_entity_immediate(coverage_world, "grid_solar_array", Vector2i(0, 0), "", "power")
+	var placed := factory.place_entity_immediate(coverage_world, "grid_surface_mine", Vector2i(32, 32), "", "mine")
+	_check(bool(placed.get("ok", false)) and is_equal_approx(float(coverage_world["entities"]["mine"].get("coverage_efficiency", 0.0)), 1.0), "a 3x3 miner covering nine matching resource tiles starts at 100% efficiency")
+	coverage_world["tile_deltas"]["34:34"] = {"resource_cleared":true}
+	factory.connect_entities(coverage_world, "POWER", "power", "mine")
+	factory.advance_world(coverage_world, 1000.0)
+	var mine: Dictionary = coverage_world["entities"]["mine"]
+	_check(int(mine.get("covered_resource_tiles", 0)) == 8 and int(mine.get("missing_resource_tiles", 0)) == 1 and is_equal_approx(float(mine.get("coverage_efficiency", 0.0)), 0.9), "one missing resource tile lowers 3x3 mining efficiency from 100% to 90%")
+	_check(absf(float(mine.get("actual_rate", 0.0)) - 3.6) < 0.0001, "coverage efficiency directly scales physical extraction throughput")
 
 
 func _test_placement_and_port_contracts() -> void:
 	var world := factory.create_world("placement", "earth_orbit", Vector2i(256, 256), 42)
-	_check(bool(factory.add_deposit(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid").get("ok", false)), "placement fixture has a resource field")
+	_check(bool(factory.add_resource_field(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid").get("ok", false)), "placement fixture has a resource field")
 	var blocked_machine := factory.place_entity_immediate(world, "grid_arc_smelter", Vector2i(34, 34), "grid_refine_iron")
-	_check(not bool(blocked_machine.get("ok", true)) and str(blocked_machine.get("reason_code", "")) == "RESOURCE_OCCUPIED", "ordinary factories cannot erase or cover fixed resource points")
+	_check(bool(blocked_machine.get("ok", false)) and str(factory.tile_snapshot(world, Vector2i(35, 35)).get("resource_id", "")) == "iron_ore", "non-extractor structures may cover but never erase the independent resource tile layer")
+	world["entities"].erase(str(blocked_machine.get("entity_id", "")))
 	var missing_resource := factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(80, 80))
 	_check(not bool(missing_resource.get("ok", true)) and str(missing_resource.get("reason_code", "")) == "RESOURCE_REQUIRED", "extractors must physically overlap a compatible resource field")
 	var mine := factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "mine")
@@ -58,7 +89,7 @@ func _test_placement_and_port_contracts() -> void:
 	var smelter := factory.place_entity_immediate(world, "grid_arc_smelter", Vector2i(72, 32), "grid_refine_iron", "smelter")
 	var depot := factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(110, 32), "", "depot")
 	_check(bool(mine.get("ok", false)) and bool(power.get("ok", false)) and bool(smelter.get("ok", false)) and bool(depot.get("ok", false)), "compatible macro facilities occupy explicit square-metre footprints")
-	_check(bool(factory.connect_entities(world, "RESOURCE", "iron-field", "mine").get("ok", false)), "resource port binds the fixed field to its extractor")
+	_check(not bool(factory.connect_entities(world, "RESOURCE", "iron-field", "mine").get("ok", true)), "resource tiles are read through footprint coverage and cannot become network links")
 	_check(bool(factory.connect_entities(world, "POWER", "power", "mine").get("ok", false)) and bool(factory.connect_entities(world, "POWER", "power", "smelter").get("ok", false)), "power links form an explicit local network")
 	_check(bool(factory.connect_entities(world, "CARGO", "mine", "smelter", "iron_ore", 8.0).get("ok", false)), "cargo link accepts a compatible item route")
 	var second_input := factory.connect_entities(world, "CARGO", "depot", "smelter", "iron_ore", 8.0)
@@ -118,15 +149,14 @@ func _test_transport_capacity_does_not_bank() -> void:
 	_check(int(world["entities"]["target"]["inventory"].get("iron_ingot", 0)) == 2, "an idle cargo link cannot bank unused capacity for a later burst")
 
 
-func _test_deposit_potential_caps_high_grade_extraction() -> void:
+func _test_resource_potential_caps_high_grade_extraction() -> void:
 	var world := factory.create_world("potential-cap", "earth_orbit", Vector2i(128, 128), 10)
-	factory.add_deposit(world, "rich-small-field", "iron_ore", Vector2i(32, 32), Vector2i(12, 12), 2.0, 0.01, "solid")
+	factory.add_resource_field(world, "rich-small-field", "iron_ore", Vector2i(32, 32), Vector2i(3, 3), 2.0, 0.01, "solid")
 	factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", "power")
 	factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(32, 32), "", "mine")
-	factory.connect_entities(world, "RESOURCE", "rich-small-field", "mine")
 	factory.connect_entities(world, "POWER", "power", "mine")
 	factory.advance_world(world, 1000.0)
-	_check(absf(float(world["entities"]["mine"].get("actual_rate", 0.0)) - 1.44) < 0.0001, "deposit sustainable potential remains a hard cap after grade and power modifiers")
+	_check(absf(float(world["entities"]["mine"].get("actual_rate", 0.0)) - 0.09) < 0.0001, "covered tiles' sustainable potential remains a hard cap after grade and power modifiers")
 
 
 func _test_backpressure_and_recovery() -> void:
@@ -207,7 +237,7 @@ func _test_new_game_factory_bootstrap() -> void:
 	var world: Dictionary = state.factory_worlds.get("earth-surface-grid", {})
 	var depot: Dictionary = world.get("entities", {}).get("starter-depot", {})
 	_check(not world.is_empty() and int(world.get("bounds", {}).get("size", {}).get("x", 0)) == 20_000_000, "new saves bootstrap the configured sparse Earth factory world")
-	_check(str(world.get("entities", {}).get("starter-iron-field", {}).get("resource_id", "")) == "iron_ore", "new factory bootstrap has a fixed starter iron field")
+	_check(str(world.get("resource_fields", {}).get("starter-iron-field", {}).get("resource_id", "")) == "iron_ore" and not world.get("entities", {}).has("starter-iron-field"), "new factory bootstrap stores the starter iron field outside the entity registry")
 	_check(int(depot.get("inventory", {}).get("scrap_metal", 0)) == scrap_before and int(depot.get("inventory", {}).get("electronics", 0)) == electronics_before, "founding industrial cargo moves into the starter entity depot")
 	_check(state.item_quantity("scrap_metal", "earth_orbit") == 0 and state.item_quantity("electronics", "earth_orbit") == 0, "starter cargo is moved rather than duplicated in Location Inventory")
 
@@ -219,12 +249,12 @@ func _test_application_command_boundary() -> void:
 	game.simulation = SimulationEngine.new(database)
 	game.state = SpaceGameState.create_new(database.domains.keys(), database.regions)
 	_check(game.initialize_factory_world("command-grid", "earth_orbit", Vector2i(256, 256), 123), "Game command creates a factory world transactionally")
-	_check(game.register_factory_deposit("command-grid", "command-iron", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid"), "generator-facing Game command registers a fixed deposit transactionally")
+	_check(game.register_factory_resource_field("command-grid", "command-iron", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid"), "generator-facing Game command registers a tile resource field transactionally")
 	_check(game.queue_factory_construction("command-grid", "grid_surface_mine", Vector2i(34, 34)), "player-facing Game command creates a construction order rather than an instant mine")
 	var command_world: Dictionary = game.state.factory_worlds.get("command-grid", {})
-	_check(command_world.get("construction_orders", {}).size() == 1 and command_world.get("entities", {}).size() == 1, "application boundary persists the order while the only live entity remains the fixed deposit")
+	_check(command_world.get("construction_orders", {}).size() == 1 and command_world.get("entities", {}).is_empty() and command_world.get("resource_fields", {}).size() == 1, "application boundary persists the order while resource fields remain outside the entity registry")
 	var snapshot: Dictionary = game.factory_tile_snapshot("command-grid", Vector2i(35, 35))
-	_check(str(snapshot.get("deposit_id", "")) == "command-iron", "UI query reads a projection without owning tile or resource state")
+	_check(str(snapshot.get("resource_field_id", "")) == "command-iron", "UI query reads a terrain/resource projection without owning tile state")
 
 
 func _test_removed_aggregate_runtime_cannot_restart() -> void:
@@ -284,11 +314,10 @@ func _test_removed_aggregate_runtime_cannot_restart() -> void:
 
 func _working_factory(with_storage: bool) -> Dictionary:
 	var world := factory.create_world("fixture", "earth_orbit", Vector2i(256, 256), 99)
-	factory.add_deposit(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid")
+	factory.add_resource_field(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid")
 	factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", "power")
 	factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "mine")
 	factory.place_entity_immediate(world, "grid_arc_smelter", Vector2i(72, 32), "grid_refine_iron", "smelter")
-	factory.connect_entities(world, "RESOURCE", "iron-field", "mine")
 	factory.connect_entities(world, "POWER", "power", "mine")
 	factory.connect_entities(world, "POWER", "power", "smelter")
 	factory.connect_entities(world, "CARGO", "mine", "smelter", "iron_ore", 8.0)

@@ -282,19 +282,19 @@ func _ensure_factory_starter_world(state: SpaceGameState) -> void:
 	if world_id.is_empty() or not state.has_location(location_id):
 		return
 	var world := factory_grid.create_world(world_id, location_id, Vector2i(int(size.get("x", 1)), int(size.get("y", 1))), int(starter.get("seed", 1)))
-	for deposit_value in starter.get("deposits", []):
-		var deposit := deposit_value as Dictionary
-		var origin: Dictionary = deposit.get("origin", {})
-		var deposit_size: Dictionary = deposit.get("size", {})
-		factory_grid.add_deposit(
+	for field_value in starter.get("resource_fields", []):
+		var resource_field := field_value as Dictionary
+		var origin: Dictionary = resource_field.get("origin", {})
+		var field_size: Dictionary = resource_field.get("size", {})
+		factory_grid.add_resource_field(
 			world,
-			str(deposit.get("deposit_id", "")),
-			str(deposit.get("resource_id", "")),
+			str(resource_field.get("resource_field_id", "")),
+			str(resource_field.get("resource_id", "")),
 			Vector2i(int(origin.get("x", 0)), int(origin.get("y", 0))),
-			Vector2i(int(deposit_size.get("x", 1)), int(deposit_size.get("y", 1))),
-			float(deposit.get("grade", 1.0)),
-			float(deposit.get("potential_density", 1.0)),
-			str(deposit.get("resource_category", "solid"))
+			Vector2i(int(field_size.get("x", 1)), int(field_size.get("y", 1))),
+			float(resource_field.get("grade", 1.0)),
+			float(resource_field.get("potential_density", 1.0)),
+			str(resource_field.get("resource_category", "solid"))
 		)
 	for entity_value in starter.get("entities", []):
 		var entity := entity_value as Dictionary
@@ -371,26 +371,24 @@ func location_intelligence(state: SpaceGameState, location_id: String) -> Dictio
 		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
 		if str(world.get("location_id", "")) != location_id:
 			continue
-		for entity_value in world.get("entities", {}).values():
-			var deposit := entity_value as Dictionary
-			if str(deposit.get("kind", "")) != "DEPOSIT":
-				continue
-			var size: Dictionary = deposit.get("footprint", {}).get("size", {})
+		for field_value in world.get("resource_fields", {}).values():
+			var resource_field := field_value as Dictionary
+			var size: Dictionary = resource_field.get("footprint", {}).get("size", {})
 			var area := maxi(0, int(size.get("x", 0))) * maxi(0, int(size.get("y", 0)))
-			var mapped_potential := maxf(0.0, float(deposit.get("potential_density", 0.0))) * float(area) * 3600.0
-			var resource_id := str(deposit.get("resource_id", ""))
+			var mapped_potential := maxf(0.0, float(resource_field.get("potential_density", 0.0))) * float(area) * 3600.0
+			var resource_id := str(resource_field.get("resource_id", ""))
 			if survey_state == LocationState.DETECTED:
-				profiles.append({"deposit_id":str(deposit.get("id", "")), "world_id":world_id, "resource_category":content.items.get(resource_id, {}).get("category", "Resource"), "potential_band":_potential_band(mapped_potential)})
+				profiles.append({"resource_field_id":str(resource_field.get("id", "")), "world_id":world_id, "resource_category":content.items.get(resource_id, {}).get("category", "Resource"), "potential_band":_potential_band(mapped_potential)})
 				continue
 			profiles.append({
-				"deposit_id":str(deposit.get("id", "")),
+				"resource_field_id":str(resource_field.get("id", "")),
 				"world_id":world_id,
 				"resource_type":resource_id,
-				"resource_category":str(deposit.get("resource_category", "")),
-				"grade":float(deposit.get("grade", 1.0)),
-				"potential_density":float(deposit.get("potential_density", 0.0)),
+				"resource_category":str(resource_field.get("resource_category", "")),
+				"grade":float(resource_field.get("grade", 1.0)),
+				"potential_density":float(resource_field.get("potential_density", 0.0)),
 				"mapped_potential_per_hour":mapped_potential,
-				"footprint":deposit.get("footprint", {}).duplicate(true),
+				"footprint":resource_field.get("footprint", {}).duplicate(true),
 				"fixed":true
 			})
 	result["resources"] = profiles
@@ -561,8 +559,6 @@ func refresh_location_summaries(state: SpaceGameState) -> void:
 			grid_construction_count += world.get("construction_orders", {}).size()
 			for entity_value in world.get("entities", {}).values():
 				var entity := entity_value as Dictionary
-				if str(entity.get("kind", "")) == "DEPOSIT":
-					continue
 				entity_count += 1
 				var status := str(entity.get("status", "IDLE"))
 				if status == "RUNNING":
@@ -845,26 +841,28 @@ func industrial_network_snapshot(state: SpaceGameState, location_id: String = Sp
 		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
 		if str(world.get("location_id", "")) != location_id:
 			continue
+		for field_id_value in world.get("resource_fields", {}).keys():
+			var field_id := str(field_id_value)
+			var resource_field: Dictionary = world.get("resource_fields", {}).get(field_id_value, {})
+			var size: Dictionary = resource_field.get("footprint", {}).get("size", {})
+			var capacity := maxf(0.0, float(resource_field.get("potential_density", 0.0))) * float(maxi(0, int(size.get("x", 0))) * maxi(0, int(size.get("y", 0)))) * 3600.0
+			var actual_rate := 0.0
+			var extractor_ids: Array[String] = []
+			for extractor_value in world.get("entities", {}).values():
+				var extractor := extractor_value as Dictionary
+				if str(extractor.get("kind", "")) != "EXTRACTOR" or not extractor.get("resource_field_ids", []).has(field_id):
+					continue
+				extractor_ids.append(str(extractor.get("id", "")))
+				var field_tiles := maxi(0, int(extractor.get("covered_tiles_by_field", {}).get(field_id, 0)))
+				var total_tiles := maxi(1, int(extractor.get("covered_resource_tiles", 0)))
+				actual_rate += maxf(0.0, float(extractor.get("actual_rate", 0.0))) * float(field_tiles) / float(total_tiles) * 3600.0
+			var product_id := str(resource_field.get("resource_id", ""))
+			product_ids[product_id] = true
+			sources.append({"source_id":field_id, "source_type":"TILE_RESOURCE_FIELD", "world_id":world_id, "status":"FIXED", "extractor_ids":extractor_ids, "outputs":[{"item_id":product_id, "actual_rate":actual_rate, "requested_rate":actual_rate, "capacity":capacity}], "blocker":{}})
 		for entity_id_value in world.get("entities", {}).keys():
 			var entity_id := str(entity_id_value)
 			var entity: Dictionary = world.get("entities", {}).get(entity_id_value, {})
 			var kind := str(entity.get("kind", ""))
-			if kind == "DEPOSIT":
-				var size: Dictionary = entity.get("footprint", {}).get("size", {})
-				var capacity := maxf(0.0, float(entity.get("potential_density", 0.0))) * float(maxi(0, int(size.get("x", 0))) * maxi(0, int(size.get("y", 0)))) * 3600.0
-				var actual_rate := 0.0
-				var extractor_ids: Array[String] = []
-				for link_value in world.get("links", {}).values():
-					var link := link_value as Dictionary
-					if str(link.get("kind", "")) != "RESOURCE" or str(link.get("source_id", "")) != entity_id:
-						continue
-					var extractor: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
-					extractor_ids.append(str(extractor.get("id", "")))
-					actual_rate += maxf(0.0, float(extractor.get("actual_rate", 0.0))) * 3600.0
-				var product_id := str(entity.get("resource_id", ""))
-				product_ids[product_id] = true
-				sources.append({"source_id":entity_id, "source_type":"FIXED_DEPOSIT", "world_id":world_id, "status":str(entity.get("status", "AVAILABLE")), "extractor_ids":extractor_ids, "outputs":[{"item_id":product_id, "actual_rate":actual_rate, "requested_rate":actual_rate, "capacity":capacity}], "blocker":{}})
-				continue
 			var definition_id := str(entity.get("definition_id", ""))
 			var definition: Dictionary = content.factory_buildings.get(definition_id, {})
 			facilities.append({"facility_id":entity_id, "definition_id":definition_id, "world_id":world_id, "kind":kind, "status":str(entity.get("status", "IDLE")), "power_factor":float(entity.get("power_factor", 1.0)), "footprint":entity.get("footprint", {}).duplicate(true)})
@@ -1123,8 +1121,6 @@ func location_industry_constraint_profile(state: SpaceGameState, location_id: St
 		world_count += 1
 		for entity_value in world.get("entities", {}).values():
 			var entity := entity_value as Dictionary
-			if str(entity.get("kind", "")) == "DEPOSIT":
-				continue
 			entity_count += 1
 			var definition: Dictionary = content.factory_buildings.get(str(entity.get("definition_id", "")), {})
 			power_capacity += maxf(0.0, float(definition.get("power_generation_kw", 0.0)))

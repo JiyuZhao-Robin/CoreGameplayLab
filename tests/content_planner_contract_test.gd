@@ -93,11 +93,11 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	_check(str(production_plan.get("method_selections", {}).get("iron_ingot", "")) == "grid_refine_iron" and str(factory_requirement.get("building_definition_id", "")) == "grid_arc_smelter" and int(factory_requirement.get("recommended", 0)) == 1, "throughput planning selects the physical grid recipe and recommends a concrete machine entity")
 	var resource_plan: Dictionary = planner.plan_targets(state, {"iron_ore":500.0}, "earth_orbit")
 	var geography: Dictionary = resource_plan.get("industrial_geography", {}).get("products", {}).get("iron_ore", {})
-	_check(float(geography.get("shortfall", 0.0)) > 0.0 and geography.get("potential_solutions", []).has("PLACE_EXTRACTOR") and str(geography.get("deposits", [])[0].get("deposit_id", "")) == "starter-iron-field", "planner reads fixed grid deposits and recommends a physical extractor when installed capacity is absent")
+	_check(float(geography.get("shortfall", 0.0)) > 0.0 and geography.get("potential_solutions", []).has("PLACE_EXTRACTOR") and str(geography.get("resource_fields", [])[0].get("resource_field_id", "")) == "starter-iron-field", "planner reads tile resource fields and recommends a physical extractor when installed capacity is absent")
 	_check(resource_plan.get("logistics", []).is_empty(), "a deposit in the destination factory world does not create a phantom inter-location freight route")
 	var bottleneck: Dictionary = planner.trace_bottleneck(state, "iron_ore", "earth_orbit", 500.0)
 	var chain_kinds: Array = bottleneck.get("shortest_chain", []).map(func(value): return str((value as Dictionary).get("kind", "")))
-	_check(chain_kinds.has("DEPOSIT") and chain_kinds.has("WORLD") and chain_kinds.has("DESTINATION") and str(bottleneck.get("primary_bottleneck", "")) == "EXTRACTION_CAPACITY_SHORTAGE", "resource bottleneck traces the authoritative DEPOSIT -> WORLD -> DESTINATION chain")
+	_check(chain_kinds.has("RESOURCE_FIELD") and chain_kinds.has("WORLD") and chain_kinds.has("DESTINATION") and str(bottleneck.get("primary_bottleneck", "")) == "EXTRACTION_CAPACITY_SHORTAGE", "resource bottleneck traces the authoritative RESOURCE_FIELD -> WORLD -> DESTINATION chain")
 	_check(state.to_dictionary() == resource_before, "grid recipe, deposit and logistics planning remain read-only")
 
 
