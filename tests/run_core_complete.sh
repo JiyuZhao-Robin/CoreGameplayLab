@@ -29,6 +29,7 @@ for scene in \
   res://tests/ui_state_coverage_test.tscn \
   res://tests/ui_domain_integrity_test.tscn \
   res://tests/ui_input_accessibility_test.tscn \
+  res://tests/ui_scale_contract_test.tscn \
   res://tests/industrial_network_projection_test.tscn \
   res://tests/industrial_network_ui_test.tscn \
   res://tests/ui_localization_audit_test.tscn \

@@ -98,13 +98,13 @@ func _rebuild_content() -> void:
 	identity.add_child(icon)
 	var kind_label := Label.new()
 	kind_label.text = I18n.core("industrial_network.kind.%s" % kind.to_lower(), kind.capitalize())
-	kind_label.add_theme_font_size_override("font_size", 10)
+	kind_label.add_theme_font_size_override("font_size", UiTokens.font_size(10))
 	kind_label.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_MUTED)
 	kind_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	identity.add_child(kind_label)
 	_status_label = Label.new()
 	_status_label.text = I18n.status(status)
-	_status_label.add_theme_font_size_override("font_size", 10)
+	_status_label.add_theme_font_size_override("font_size", UiTokens.font_size(10))
 	_status_label.add_theme_color_override("font_color", _status_color(status))
 	identity.add_child(_status_label)
 	add_child(_margin(identity, 8, 8, 4, 2))
@@ -113,7 +113,7 @@ func _rebuild_content() -> void:
 	subtitle.text = str(projection.get("subtitle", ""))
 	subtitle.tooltip_text = subtitle.text
 	subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	subtitle.add_theme_font_size_override("font_size", 11)
+	subtitle.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	subtitle.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_MUTED)
 	add_child(_margin(subtitle, 10, 10, 2, 5))
 
@@ -153,13 +153,13 @@ func _rebuild_content() -> void:
 	metrics.custom_minimum_size.y = 26
 	var metric_name := Label.new()
 	metric_name.text = I18n.core("industrial_network.throughput", "THROUGHPUT")
-	metric_name.add_theme_font_size_override("font_size", 10)
+	metric_name.add_theme_font_size_override("font_size", UiTokens.font_size(10))
 	metric_name.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_MUTED)
 	metric_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	metrics.add_child(metric_name)
 	_actual_label = Label.new()
 	_actual_label.text = _rate_text(_display_actual, _theoretical)
-	_actual_label.add_theme_font_size_override("font_size", 11)
+	_actual_label.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	_actual_label.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_SECONDARY)
 	metrics.add_child(_actual_label)
 	add_child(_margin(metrics, 10, 10, 2, 0))
@@ -177,7 +177,7 @@ func _rebuild_content() -> void:
 		blocker_label.text = I18n.core("industrial_network.blocker_tag", "! %s") % _blocker_caption(blocker)
 		blocker_label.tooltip_text = _blocker_caption(blocker)
 		blocker_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		blocker_label.add_theme_font_size_override("font_size", 10)
+		blocker_label.add_theme_font_size_override("font_size", UiTokens.font_size(10))
 		blocker_label.add_theme_color_override("font_color", UiTokens.COLOR_WARNING if status != "BLOCKED_OUTPUT" else UiTokens.COLOR_CRITICAL)
 		add_child(_margin(blocker_label, 10, 10, 4, 7))
 
@@ -197,7 +197,7 @@ func _port_copy(port: Dictionary, input: bool) -> Control:
 	label.text = str(port.get("title", item_id))
 	label.tooltip_text = label.text
 	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_font_size_override("font_size", UiTokens.font_size(10))
 	label.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_SECONDARY)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if input:

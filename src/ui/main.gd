@@ -82,6 +82,8 @@ var _ship_assembly_draft: Dictionary = {}
 var _ship_assembly_view: ShipAssemblyMapView
 var _ship_design_name_input: LineEdit
 var _reduced_motion := false
+var _ui_scale := UiTokens.DEFAULT_UI_SCALE
+var _ui_scale_selector: OptionButton
 var _network_preferences_save_due_ms := 0
 var _audit_fast_refresh := false
 
@@ -99,6 +101,8 @@ func _ready() -> void:
 			_selected_location_id = String(argument).trim_prefix("--network-location=")
 		elif String(argument) == "--reduced-motion":
 			_reduced_motion = true
+		elif String(argument).begins_with("--ui-scale="):
+			_ui_scale = UiTokens.sanitize_ui_scale(float(String(argument).trim_prefix("--ui-scale=")))
 		elif String(argument) == "--ui-audit-fast-refresh":
 			# Test-only scheduling override. It changes neither simulation time nor
 			# command behavior; it only removes the production UI's normal redraw
@@ -106,6 +110,7 @@ func _ready() -> void:
 			_audit_fast_refresh = true
 	_build_theme()
 	_build_shell()
+	resized.connect(_on_root_resized)
 	_connect_game_signals()
 	_append_log(I18n.core("timeline.lab_started"))
 	_rebuild_all()
@@ -172,7 +177,7 @@ func _focus_active_navigation_if_empty() -> void:
 
 
 func _build_theme() -> void:
-	theme = UiTokens.build_theme()
+	theme = UiTokens.build_theme(_ui_scale)
 
 
 func _build_shell() -> void:
@@ -181,6 +186,8 @@ func _build_shell() -> void:
 	_shell.build()
 	_shell.left_rail_toggled.connect(_on_left_rail_toggled)
 	_shell.right_inspector_toggled.connect(_on_right_inspector_toggled)
+	if _requires_single_sidebar() and not _ui_state.left_rail_collapsed and not _ui_state.right_inspector_collapsed:
+		_ui_state.right_inspector_collapsed = true
 	_shell.set_left_collapsed(_ui_state.left_rail_collapsed)
 	_shell.set_right_collapsed(_ui_state.right_inspector_collapsed)
 	_shell.header_slot.add_child(_build_header())
@@ -193,7 +200,7 @@ func _build_shell() -> void:
 	_shell.left_slot.add_child(resource_scroll)
 	var resource_box := VBoxContainer.new()
 	resource_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	resource_box.add_theme_constant_override("separation", UiTokens.SPACING_SM)
+	resource_box.add_theme_constant_override("separation", UiTokens.layout_px(UiTokens.SPACING_SM))
 	resource_scroll.add_child(resource_box)
 	_pages["resource_rail"] = resource_box
 
@@ -228,7 +235,7 @@ func _build_shell() -> void:
 	_shell.right_slot.add_child(sidebar_scroll)
 	var sidebar_box := VBoxContainer.new()
 	sidebar_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sidebar_box.add_theme_constant_override("separation", UiTokens.SPACING_SM)
+	sidebar_box.add_theme_constant_override("separation", UiTokens.layout_px(UiTokens.SPACING_SM))
 	sidebar_scroll.add_child(sidebar_box)
 	_pages["sidebar"] = sidebar_box
 	_shell.bottom_slot.add_child(_build_command_dock())
@@ -237,15 +244,18 @@ func _build_shell() -> void:
 func _build_navigation_rail() -> Control:
 	var panel := _panel(UiTokens.COLOR_RAISED)
 	panel.name = "WorkspaceNavigationBar"
-	panel.custom_minimum_size.y = UiTokens.WORKSPACE_NAV_HEIGHT
+	panel.custom_minimum_size.y = UiTokens.workspace_navigation_height()
 	var margin := _margin(8, 6, 8, 6)
 	panel.add_child(margin)
-	var rail := HBoxContainer.new()
-	rail.add_theme_constant_override("separation", 4)
+	var rail := HFlowContainer.new()
+	rail.name = "WorkspaceNavigationFlow"
+	rail.add_theme_constant_override("h_separation", UiTokens.layout_px(4))
+	rail.add_theme_constant_override("v_separation", UiTokens.layout_px(4))
 	margin.add_child(rail)
 	var operations_title := _label(I18n.core("shell.workspaces", "WORKSPACES"), 10, COLOR_MUTED)
 	operations_title.name = "OperationsTitle"
-	operations_title.custom_minimum_size.x = 78
+	operations_title.custom_minimum_size.x = UiTokens.layout_px(78)
+	operations_title.visible = _ui_scale <= 1.0
 	operations_title.autowrap_mode = TextServer.AUTOWRAP_OFF
 	operations_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	operations_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -269,9 +279,8 @@ func _build_navigation_rail() -> Control:
 		var public_key := "ships" if key == "fleet" else ("survey" if key == "frontier" else key)
 		button.name = "Navigation_%s" % public_key
 		button.tooltip_text = I18n.core(String(entry[1]))
-		button.custom_minimum_size = Vector2(58, 34)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.add_theme_font_size_override("font_size", 12)
+		button.custom_minimum_size = UiTokens.layout_vector(Vector2(58, 34))
+		button.add_theme_font_size_override("font_size", UiTokens.font_size(12))
 		_nav_buttons[key] = button
 		rail.add_child(button)
 	return panel
@@ -311,10 +320,10 @@ func _update_navigation_state() -> void:
 
 func _build_header() -> Control:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	row.add_theme_constant_override("separation", UiTokens.layout_px(6))
 
 	var title_box := VBoxContainer.new()
-	title_box.custom_minimum_size.x = 214
+	title_box.custom_minimum_size.x = UiTokens.layout_px(190)
 	row.add_child(title_box)
 	var title := _label(I18n.core("shell.brand_short", "HELIOS"), 18, COLOR_TEXT)
 	title.name = "ShellTitle"
@@ -328,8 +337,9 @@ func _build_header() -> Control:
 
 	_header_status = _label("", 12, COLOR_MUTED)
 	_header_status.name = "HeaderStatus"
-	_header_status.custom_minimum_size.x = 300
+	_header_status.custom_minimum_size.x = UiTokens.layout_px(260)
 	_header_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_header_status.visible = _ui_scale <= 1.25
 	_header_status.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_header_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_header_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -340,7 +350,7 @@ func _build_header() -> Control:
 		var text_value := I18n.core("shell.pause") if speed == 0.0 else "%d×" % int(speed)
 		var speed_button := _button(text_value, _set_speed.bind(speed))
 		speed_button.name = "SpeedPause" if speed == 0.0 else "Speed%d" % int(speed)
-		speed_button.custom_minimum_size.x = 48 if speed >= 100.0 else 42
+		speed_button.custom_minimum_size.x = UiTokens.layout_px(48 if speed >= 100.0 else 42)
 		if speed >= 100.0:
 			speed_button.tooltip_text = I18n.core("shell.speed_100_tooltip", "Fast-forward 100× through the normal deterministic simulation; all costs and blockers still apply.")
 		_speed_buttons[speed] = speed_button
@@ -349,6 +359,17 @@ func _build_header() -> Control:
 	var locale_button := _button(I18n.core("shell.locale_toggle"), _toggle_locale)
 	locale_button.name = "ToggleLocale"
 	row.add_child(locale_button)
+	_ui_scale_selector = OptionButton.new()
+	_ui_scale_selector.name = "UIScaleSelector"
+	_ui_scale_selector.custom_minimum_size.x = UiTokens.layout_px(92)
+	_ui_scale_selector.tooltip_text = I18n.core("shell.ui_scale_tooltip", "Scale interface text and controls without changing map or canvas zoom.")
+	_ui_scale_selector.accessibility_name = I18n.core("shell.ui_scale", "UI scale")
+	for scale_value in UiTokens.SUPPORTED_UI_SCALES:
+		var percent := int(round(float(scale_value) * 100.0))
+		_ui_scale_selector.add_item("%d%%" % percent, percent)
+	_ui_scale_selector.select(_ui_scale_selector.get_item_index(int(round(_ui_scale * 100.0))))
+	_ui_scale_selector.item_selected.connect(_on_ui_scale_selected)
+	row.add_child(_ui_scale_selector)
 	var save_button := _button(I18n.core("shell.save"), _save_game)
 	save_button.name = "SaveButton"
 	row.add_child(save_button)
@@ -361,9 +382,9 @@ func _build_header() -> Control:
 func _build_command_dock() -> Control:
 	var row := HBoxContainer.new()
 	row.name = "CommandDock"
-	row.add_theme_constant_override("separation", UiTokens.SPACING_MD)
+	row.add_theme_constant_override("separation", UiTokens.layout_px(UiTokens.SPACING_MD))
 	var identity := VBoxContainer.new()
-	identity.custom_minimum_size.x = 148
+	identity.custom_minimum_size.x = UiTokens.layout_px(148)
 	var dock_title := _label(I18n.core("shell.command_dock", "COMMAND DOCK"), 10, COLOR_MUTED)
 	dock_title.name = "CommandDockTitle"
 	identity.add_child(dock_title)
@@ -377,15 +398,15 @@ func _build_command_dock() -> Control:
 	_notice_label.name = "AlertsTimelineTasks"
 	_notice_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_notice_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_notice_label.add_theme_font_size_override("font_size", 12)
+	_notice_label.add_theme_font_size_override("font_size", UiTokens.font_size(12))
 	_notice_label.add_theme_color_override("font_color", COLOR_MUTED)
 	_notice_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_notice_label.max_lines_visible = 3
 	_notice_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	row.add_child(_notice_label)
 	var actions := VBoxContainer.new()
-	actions.custom_minimum_size.x = 142
-	actions.add_theme_constant_override("separation", UiTokens.SPACING_XS)
+	actions.custom_minimum_size.x = UiTokens.layout_px(142)
+	actions.add_theme_constant_override("separation", UiTokens.layout_px(UiTokens.SPACING_XS))
 	var back_button := _button(I18n.core("shell.back", "Back"), _navigate_back)
 	back_button.name = "ShellBack"
 	actions.add_child(back_button)
@@ -537,7 +558,7 @@ func _rebuild_resource_rail() -> void:
 	storage_bar.max_value = 1.0
 	storage_bar.value = float(storage.get("utilization", 0.0))
 	storage_bar.show_percentage = false
-	storage_bar.custom_minimum_size.y = 6
+	storage_bar.custom_minimum_size.y = UiTokens.layout_px(6)
 	box.add_child(storage_bar)
 	box.add_child(_label(I18n.core("resource_rail.inventory", "LOCAL INVENTORY"), 10, COLOR_MUTED))
 
@@ -558,13 +579,13 @@ func _rebuild_resource_rail() -> void:
 			var item_id := String(row_data.get("item_id", ""))
 			var item_label := _label(_content_name(Game.content.items.get(item_id, {}), item_id), 12, COLOR_TEXT)
 			item_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			item_label.custom_minimum_size.x = 116
+			item_label.custom_minimum_size.x = UiTokens.layout_px(116)
 			item_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 			item_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 			item_label.tooltip_text = item_label.text
 			row.add_child(item_label)
 			var quantity_label := _label("%d" % int(row_data.get("quantity", 0)), 12, COLOR_TEXT)
-			quantity_label.custom_minimum_size.x = 42
+			quantity_label.custom_minimum_size.x = UiTokens.layout_px(42)
 			quantity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			quantity_label.tooltip_text = I18n.core("resource_rail.available", "Available: %d") % int(row_data.get("available", 0))
 			row.add_child(quantity_label)
@@ -1962,14 +1983,14 @@ func _rebuild_industry() -> void:
 		compact_header.add_theme_constant_override("separation", 10)
 		var compact_title := Label.new()
 		compact_title.text = I18n.core("industry.title")
-		compact_title.add_theme_font_size_override("font_size", 20)
+		compact_title.add_theme_font_size_override("font_size", UiTokens.font_size(20))
 		compact_title.add_theme_color_override("font_color", COLOR_TEXT)
 		compact_header.add_child(compact_title)
 		var compact_context := Label.new()
 		compact_context.text = I18n.core("industrial_network.workspace_context", "Orbital industrial operations console")
 		compact_context.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		compact_context.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		compact_context.add_theme_font_size_override("font_size", 12)
+		compact_context.add_theme_font_size_override("font_size", UiTokens.font_size(12))
 		compact_context.add_theme_color_override("font_color", COLOR_MUTED)
 		compact_context.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		compact_header.add_child(compact_context)
@@ -2646,7 +2667,7 @@ func _megastructure_progress(percent: int, stage_name: String) -> Control:
 	bar.max_value = 100.0
 	bar.value = percent
 	bar.show_percentage = false
-	bar.custom_minimum_size.y = 10
+	bar.custom_minimum_size.y = UiTokens.layout_px(10)
 	progress_box.add_child(bar)
 	return progress_box
 
@@ -2728,7 +2749,7 @@ func _rebuild_research() -> void:
 		var card := HBoxContainer.new()
 		card.add_theme_constant_override("separation", UiTokens.SPACING_MD)
 		var identity := VBoxContainer.new()
-		identity.custom_minimum_size.x = 310.0
+		identity.custom_minimum_size.x = UiTokens.layout_px(310.0)
 		identity.add_child(_label(I18n.core("research.current_project") % _content_name(current, current_id), 16, COLOR_ACCENT))
 		var current_route_id := String(Game.state.research.get("route_id", ""))
 		var current_route_name := current_route_id
@@ -2750,7 +2771,7 @@ func _rebuild_research() -> void:
 		var blocker_guidance := _research_blocker_guidance(Game.state.research.get("blocker", {}))
 		if not blocker_guidance.is_empty():
 			var guidance := _label(I18n.core("research.guidance") % blocker_guidance, 11, COLOR_WARN)
-			guidance.custom_minimum_size.x = 260.0
+			guidance.custom_minimum_size.x = UiTokens.layout_px(260.0)
 			card.add_child(guidance)
 		box.add_child(_wrap_card(card))
 
@@ -2773,7 +2794,7 @@ func _build_research_project_index(model: Dictionary) -> Control:
 	column.add_child(_label(I18n.core("research.graph.project_index"), 11, COLOR_MUTED))
 	var scroll := ScrollContainer.new()
 	scroll.name = "ResearchProjectIndex"
-	scroll.custom_minimum_size.y = 40.0
+	scroll.custom_minimum_size.y = UiTokens.layout_px(40.0)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	var actions := HBoxContainer.new()
@@ -2936,19 +2957,6 @@ func _open_research_unlock_guidance(project_id: String) -> void:
 	_switch_page("system_map")
 
 
-func _technology_domain_name(domain_id: String) -> String:
-	match domain_id:
-		"materials_science": return I18n.t("technology_domain.materials_science")
-		"manufacturing": return I18n.t("technology_domain.manufacturing")
-		"energy": return I18n.t("technology_domain.energy")
-		"propulsion": return I18n.t("technology_domain.propulsion")
-		"automation_computing": return I18n.t("technology_domain.automation_computing")
-		"ship_engineering": return I18n.t("technology_domain.ship_engineering")
-		"logistics": return I18n.t("technology_domain.logistics")
-		"anomaly_science": return I18n.t("technology_domain.anomaly_science")
-		_: return domain_id
-
-
 func _research_stage_kind_name(kind: String) -> String:
 	match kind:
 		"THEORY": return I18n.core("research.stage_kind.THEORY")
@@ -2996,17 +3004,6 @@ func _research_roadmap_text(project: Dictionary, active_stage_index: int) -> Str
 		var marker := "▶" if index == active_stage_index else ("✓" if active_stage_index >= 0 and index < active_stage_index else "○")
 		lines.append(I18n.core("research.roadmap.stage_demands") % [marker, _research_stage_kind_name(String(stage.get("kind", "THEORY"))), _research_stage_name(project, stage), I18n.core("format.requirement_separator").join(demands)] if not demands.is_empty() else I18n.core("research.roadmap.stage") % [marker, _research_stage_kind_name(String(stage.get("kind", "THEORY"))), _research_stage_name(project, stage)])
 	return "\n".join(lines)
-
-
-func _research_stage_cost_progress(stage: Dictionary, runtime: Dictionary) -> String:
-	var parts: Array[String] = []
-	for cost_value in stage.get("costs", []):
-		var cost := cost_value as Dictionary
-		var item_id := String(cost.get("item", ""))
-		var paid := int(runtime.get("stage_consumed", {}).get(item_id, 0))
-		var available := Game.state.item_quantity(item_id, String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
-		parts.append(I18n.core("research.stage_cost_progress") % [_content_name(Game.content.items.get(item_id, {}), item_id), paid, int(cost.get("quantity", 0)), available])
-	return I18n.core("format.requirement_separator").join(parts)
 
 
 func _research_blocker_guidance(blocker: Dictionary) -> String:
@@ -3380,7 +3377,7 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 	_ship_design_name_input = LineEdit.new()
 	_ship_design_name_input.name = "ShipDesignName"
 	_ship_design_name_input.placeholder_text = I18n.core("ships.shipyard.design_name_placeholder", "Design name")
-	_ship_design_name_input.custom_minimum_size.x = 260.0
+	_ship_design_name_input.custom_minimum_size.x = UiTokens.layout_px(260.0)
 	if not _selected_ship_design_id.is_empty():
 		_ship_design_name_input.text = String(Game.state.ship_designs.get(_selected_ship_design_id, {}).get("name", ""))
 	controls.add_child(_ship_design_name_input)
@@ -3418,7 +3415,7 @@ func _build_ship_design_library() -> Control:
 		row.add_theme_constant_override("h_separation", 6)
 		var load := _button(String(design.get("name", design_id)), _load_ship_design.bind(design_id), design_id == _selected_ship_design_id, COLOR_ACCENT)
 		load.name = "LoadShipDesign_%s" % design_id
-		load.custom_minimum_size.x = 260.0
+		load.custom_minimum_size.x = UiTokens.layout_px(260.0)
 		row.add_child(load)
 		for quantity in [1, 5, 20]:
 			var build := _button(I18n.core("ships.shipyard.build_batch") % quantity, _enqueue_saved_ship_design.bind(design_id, quantity), false, COLOR_GOOD)
@@ -3437,7 +3434,7 @@ func _build_ship_assembly_palette() -> Control:
 	tabs.name = "ShipAssemblyPalette"
 	# One compact shelf is enough; overflowing unlocked hulls/parts already have
 	# their own scroll containers.  The saved height belongs to the canvas.
-	tabs.custom_minimum_size.y = 104.0
+	tabs.custom_minimum_size.y = UiTokens.layout_px(104.0)
 	var hull_scroll := ScrollContainer.new()
 	hull_scroll.name = "Ships"
 	hull_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
@@ -4011,7 +4008,7 @@ func _operation_progress(operation: Dictionary, caption: String) -> Control:
 	bar.max_value = 1.0
 	bar.value = progress
 	bar.show_percentage = false
-	bar.custom_minimum_size.y = 8
+	bar.custom_minimum_size.y = UiTokens.layout_px(8)
 	box.add_child(bar)
 	return box
 
@@ -4296,6 +4293,8 @@ func _on_command_rejected(reason: String) -> void:
 
 
 func _load_ui_preferences() -> void:
+	var has_session_scale := get_tree().root.has_meta(UiTokens.UI_SCALE_SESSION_META)
+	_ui_scale = UiTokens.sanitize_ui_scale(float(get_tree().root.get_meta(UiTokens.UI_SCALE_SESSION_META, UiTokens.DEFAULT_UI_SCALE)))
 	if Game.persistence_enabled and _ui_config.load(_ui_config_path()) == OK:
 		_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
 		_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
@@ -4305,6 +4304,8 @@ func _load_ui_preferences() -> void:
 		_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
 		_developer_details = bool(_ui_config.get_value("display", "developer_details", false))
 		_reduced_motion = bool(_ui_config.get_value("display", "reduced_motion", false))
+		if not has_session_scale:
+			_ui_scale = UiTokens.sanitize_ui_scale(float(_ui_config.get_value("display", "ui_scale", _ui_scale)))
 		_ui_state.left_rail_collapsed = bool(_ui_config.get_value("display", "resource_rail_collapsed", false))
 		_ui_state.right_inspector_collapsed = bool(_ui_config.get_value("display", "context_inspector_collapsed", false))
 		var network_preferences = _ui_config.get_value("industrial_network", "workspace", {})
@@ -4336,6 +4337,7 @@ func _save_ui_preferences() -> void:
 	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
 	_ui_config.set_value("display", "developer_details", _developer_details)
 	_ui_config.set_value("display", "reduced_motion", _reduced_motion)
+	_ui_config.set_value("display", "ui_scale", _ui_scale)
 	_ui_config.set_value("display", "resource_rail_collapsed", _ui_state.left_rail_collapsed)
 	_ui_config.set_value("display", "context_inspector_collapsed", _ui_state.right_inspector_collapsed)
 	_ui_config.set_value("industrial_network", "workspace", _industrial_network_preferences)
@@ -4364,12 +4366,57 @@ func _on_context_location_selected(index: int, location_ids: Array[String]) -> v
 
 func _on_left_rail_toggled(collapsed: bool) -> void:
 	_ui_state.left_rail_collapsed = collapsed
+	if not collapsed and _requires_single_sidebar() and not _ui_state.right_inspector_collapsed:
+		_ui_state.right_inspector_collapsed = true
+		_shell.set_right_collapsed(true)
 	_save_ui_preferences()
 
 
 func _on_right_inspector_toggled(collapsed: bool) -> void:
 	_ui_state.right_inspector_collapsed = collapsed
+	if not collapsed and _requires_single_sidebar() and not _ui_state.left_rail_collapsed:
+		_ui_state.left_rail_collapsed = true
+		_shell.set_left_collapsed(true)
 	_save_ui_preferences()
+
+
+func _requires_single_sidebar() -> bool:
+	# System Map is the widest non-scaled gameplay canvas. Preserve its usable
+	# width and switch the two sidebars to mutually exclusive drawers only when
+	# the physical window cannot contain all three regions.
+	var required_width := (
+		UiTokens.layout_px(UiTokens.RESOURCE_RAIL_WIDTH)
+		+ UiTokens.layout_px(UiTokens.INSPECTOR_WIDTH)
+		+ 760
+		+ UiTokens.layout_px(24)
+	)
+	return size.x < required_width
+
+
+func _on_root_resized() -> void:
+	if not is_instance_valid(_shell) or not _requires_single_sidebar():
+		return
+	if not _ui_state.left_rail_collapsed and not _ui_state.right_inspector_collapsed:
+		_ui_state.right_inspector_collapsed = true
+		_shell.set_right_collapsed(true)
+
+
+func _on_ui_scale_selected(index: int) -> void:
+	if not is_instance_valid(_ui_scale_selector) or index < 0:
+		return
+	var next_scale := UiTokens.sanitize_ui_scale(float(_ui_scale_selector.get_item_id(index)))
+	if is_equal_approx(next_scale, _ui_scale):
+		return
+	_ui_scale = next_scale
+	get_tree().root.set_meta(UiTokens.UI_SCALE_SESSION_META, _ui_scale)
+	_save_ui_preferences()
+	call_deferred("_reload_ui_for_scale")
+
+
+func _reload_ui_for_scale() -> void:
+	# Rebuilding the scene applies every token consistently while the Game
+	# autoload keeps simulation/domain state alive. This is a UI-only reload.
+	get_tree().reload_current_scene()
 
 
 func _toggle_developer_details() -> void:
@@ -4415,6 +4462,9 @@ func _refresh_shell_locale() -> void:
 	var locale_button := find_child("ToggleLocale", true, false) as Button
 	if is_instance_valid(locale_button):
 		locale_button.text = I18n.core("shell.locale_toggle")
+	if is_instance_valid(_ui_scale_selector):
+		_ui_scale_selector.tooltip_text = I18n.core("shell.ui_scale_tooltip", "Scale interface text and controls without changing map or canvas zoom.")
+		_ui_scale_selector.accessibility_name = I18n.core("shell.ui_scale", "UI scale")
 	var dock_title := find_child("CommandDockTitle", true, false) as Label
 	if is_instance_valid(dock_title):
 		dock_title.text = I18n.core("shell.command_dock", "COMMAND DOCK")
@@ -4451,14 +4501,14 @@ func _panel(color: Color = COLOR_PANEL) -> PanelContainer:
 	style.bg_color = color
 	style.border_color = COLOR_BORDER
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(6)
+	style.set_corner_radius_all(UiTokens.layout_px(6))
 	panel.add_theme_stylebox_override("panel", style)
 	return panel
 
 
 func _card() -> VBoxContainer:
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 7)
+	box.add_theme_constant_override("separation", UiTokens.layout_px(7))
 	return box
 
 
@@ -4508,7 +4558,7 @@ func _section_title(text_value: String) -> Label:
 func _label(text_value: String, size: int = 15, color: Color = COLOR_TEXT) -> Label:
 	var value := Label.new()
 	value.text = text_value
-	value.add_theme_font_size_override("font_size", size)
+	value.add_theme_font_size_override("font_size", UiTokens.font_size(size))
 	value.add_theme_color_override("font_color", color)
 	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	return value
@@ -4528,7 +4578,7 @@ func _button(text_value: String, callback: Callable, disabled := false, color: C
 	var value := Button.new()
 	value.text = text_value
 	value.disabled = disabled
-	value.custom_minimum_size.y = 34
+	value.custom_minimum_size.y = UiTokens.layout_px(34)
 	value.add_theme_color_override("font_color", color)
 	value.add_theme_color_override("font_disabled_color", COLOR_MUTED.darkened(0.3))
 	if disabled:
@@ -4543,11 +4593,11 @@ func _button_style(background: Color, border: Color) -> StyleBoxFlat:
 	style.bg_color = background
 	style.border_color = border
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(3)
-	style.content_margin_left = 10.0
-	style.content_margin_right = 10.0
-	style.content_margin_top = 7.0
-	style.content_margin_bottom = 7.0
+	style.set_corner_radius_all(UiTokens.layout_px(3))
+	style.content_margin_left = UiTokens.layout_px(10.0)
+	style.content_margin_right = UiTokens.layout_px(10.0)
+	style.content_margin_top = UiTokens.layout_px(7.0)
+	style.content_margin_bottom = UiTokens.layout_px(7.0)
 	return style
 
 
@@ -4559,15 +4609,15 @@ func _number_input(value: int, minimum: int, maximum: int, step: int) -> SpinBox
 	input.value = value
 	input.allow_greater = false
 	input.allow_lesser = false
-	input.custom_minimum_size.x = 180
+	input.custom_minimum_size.x = UiTokens.layout_px(180)
 	return input
 
 
 func _labeled_control(caption: String, control: Control) -> HBoxContainer:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", UiTokens.layout_px(8))
 	var caption_label := _label(caption, 13, COLOR_MUTED)
-	caption_label.custom_minimum_size.x = 150
+	caption_label.custom_minimum_size.x = UiTokens.layout_px(150)
 	row.add_child(caption_label)
 	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(control)
@@ -4580,8 +4630,8 @@ func _separator() -> HSeparator:
 
 func _margin(left: int, top: int, right: int, bottom: int) -> MarginContainer:
 	var value := MarginContainer.new()
-	value.add_theme_constant_override("margin_left", left)
-	value.add_theme_constant_override("margin_top", top)
-	value.add_theme_constant_override("margin_right", right)
-	value.add_theme_constant_override("margin_bottom", bottom)
+	value.add_theme_constant_override("margin_left", UiTokens.layout_px(left))
+	value.add_theme_constant_override("margin_top", UiTokens.layout_px(top))
+	value.add_theme_constant_override("margin_right", UiTokens.layout_px(right))
+	value.add_theme_constant_override("margin_bottom", UiTokens.layout_px(bottom))
 	return value

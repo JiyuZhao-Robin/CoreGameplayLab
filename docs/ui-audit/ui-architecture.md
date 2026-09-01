@@ -1,6 +1,6 @@
 # Core Gameplay Lab UI 架构
 
-静态快照：2026-08-31。本文描述当前源码与测试契约，不替代正在进行的 Fresh Save 通关、最终严格审计或截图认证。
+静态快照：2026-09-01。本文描述当前源码与测试契约，不替代正在进行的 Fresh Save 通关、最终严格审计或截图认证。
 
 ## 证据口径
 
@@ -81,13 +81,15 @@ Context Inspector 仍是 Location-first，而不是任意实体的统一 selecti
 
 动态重建前会保存当前 ScrollContainer 的 `scroll_vertical` 和焦点节点名；`_restore_rebuilt_page_context()` 在新控件树中恢复滚动位置与逻辑焦点，失效或 disabled 时回退到当前 Navigation 按钮。`ui_focus_next` 在无 focus owner 时进入 Shell。
 
-UI preference 使用 `user://core_gameplay_ui.cfg` 保存 active workspace、selected Location、左右侧栏折叠、Location/Industry/Fleet section 与 Developer Details。Domain Save 由 `Game.save_game()`/`LocalSaveRepository` 负责；二者不是同一份状态文件。
+UI preference 使用 `user://core_gameplay_ui.cfg` 保存 active workspace、selected Location、左右侧栏折叠、Location/Industry/Fleet section、Developer Details、Reduced Motion 与 UI scale。Domain Save 由 `Game.save_game()`/`LocalSaveRepository` 负责；二者不是同一份状态文件。
 
 ## Design System 与尺寸
 
-`UiThemeTokens` 集中定义深黑绿工业控制台的语义色、spacing、panel padding、row height与控件状态。桌面五区尺寸为：Resource Rail 236 px、Inspector 306 px、折叠边 28 px、Top 68 px、Command Dock 108 px；中央 Workspace 吸收剩余空间。
+`UiThemeTokens` 集中定义深黑绿工业控制台的语义色、spacing、panel padding、row height、控件状态与 UI scale。桌面五区的基准尺寸为：Resource Rail 236 px、Inspector 306 px、折叠边 28 px、Top 68 px、Command Dock 108 px；中央 Workspace 吸收剩余空间。字体按 UI scale 完整缩放，结构尺寸使用 `1 + (UI scale - 1) × 0.5` 的温和比例缩放，因此提高可读性时不会等比例吞掉全部中央工作区。
 
-`project.godot` 设计视口仍为 1440×900，但不再用 `canvas_items/expand` 等比缩放整个 UI；控件以原生窗口像素和 anchor/container 响应。System Map 在物理窗口高度不超过 800 px 时使用 430 px 最小高，否则使用 560 px，以避免 1366×768 下被 Command Dock 裁切。1366×768 仍是最紧张目标分辨率，最终结论必须由 en/zh-CN screenshot matrix 给出，不能只从源码推断 PASS。
+`project.godot` 设计视口仍为 1440×900，但不使用根 Control 或 viewport 等比拉伸模拟 UI scale；控件以原生窗口像素和 anchor/container 响应。全局顶栏的 `UIScaleSelector` 提供 100%、125%、150%、175%、200% 五档，新安装默认 125%。中央导航使用 `HFlowContainer`，150% 以上预留多行高度并隐藏重复的 Header 状态摘要以优先保留主要操作。若窗口宽度小于“缩放后双侧栏 + 760 px 中央画布 + 安全间距”，Resource Rail 与 Context Inspector 自动成为互斥抽屉，防止高倍率侧栏被挤出窗口；窗口足够宽时仍可同时展开。System Map 在物理窗口高度不超过 800 px 时使用 430 px 最小高，否则使用 560 px，以避免 1366×768 下被 Command Dock 裁切。1366×768 仍是最紧张目标分辨率，最终结论必须由 en/zh-CN screenshot matrix 给出，不能只从源码推断 PASS。
+
+UI scale 只改变字体、控件、间距和 Shell 结构；System Map、Industrial Network、Research Graph、Ship Assembly 以及未来 Planet Surface 的内容坐标不继承根节点缩放，继续使用各自的 canvas zoom/pan。改变 UI scale 会重建 Main Scene 以统一应用 token，但 `Game` autoload 中的 Domain/Simulation 状态保持存活；这不是重新开局。
 
 普通按钮最小高 34 px、工作区导航高 48 px。左右折叠按钮具有本地化 tooltip 和 accessibility name；折叠后恢复控件继续可见。`_button()` 为所有 disabled 控件提供本地化通用原因，关键游戏动作会用 authoritative availability reason 覆盖。New Game 使用 exclusive `ConfirmationDialog`，初始焦点在 Cancel。其他有损操作是否都需要确认仍是产品层 P2/P3 决策，不属于 Domain 绕过。
 
@@ -98,6 +100,7 @@ UI preference 使用 `user://core_gameplay_ui.cfg` 保存 active workspace、sel
 - `tests/ui_action_coverage_test.gd`：每个 core action 的 Success / Failure / Consequence / Persistence 四象限。
 - `tests/ui_state_coverage_test.gd`：真实 Domain state、可见状态、解释、可用下一步四项门禁。
 - `tests/ui_input_accessibility_test.gd`：五区 Shell、双侧栏折叠/恢复、鼠标、键盘 focus、Back、refresh focus、disabled reason、New Game modal 与 speed controls。
+- `tests/ui_scale_contract_test.gd`：五档缩放、默认 125%、字体与结构尺寸、200% 导航可达性及 canvas 独立缩放边界。
 - `tests/ui_persistence_audit_test.gd`：隔离用户目录下的真实保存/加载与 UI 派生状态。
 - `tests/full_gameplay_ui_test.gd`：单一 Fresh Save、UI-only、10 Journey、巨构完成及 Journey/Action telemetry。
 

@@ -1,8 +1,12 @@
 # DSPONLINE UI 参考审计
 
-审计日期：2026-08-28  
-参考项目：`D:\Projects\DSPONLINE`  
-方式：Coordinator 与三个独立 Agent 只读检查；未修改、未构建、未向参考仓库写入产物。
+- 审计日期：2026-08-28
+- 全量复核：2026-09-01
+- 参考项目：`/Volumes/T9/Developer/projects/DSPONLINE`
+- 固定基线：`63149cc195f6a624d264c9585899513dced5bc31`
+- 方式：只读检查固定 Git 基线；未修改、未构建、未向参考仓库写入产物。
+
+完整的系统、模拟、UI、存档/云端/原生端、复用方案和 1,065 文件逐行区间索引见 [DSPONLINE 全量源码分析](../dsponline-analysis/README.md)。
 
 ## 结论
 
@@ -10,11 +14,11 @@ DSPONLINE 最适合作为信息架构和交互语言的参考，而不是代码�
 
 ## 2026-08-31 用户方向更新
 
-Core Gameplay Lab 的正式 UI 布局以 `D:\Projects\DSPONLINE` 为主要参考。仓库内 `UI-reference/` 的 Upload Labs 图片降为非规范历史材料，不再决定 Shell、导航、页面卡片、弹窗、科技树或检查器布局。科技树采用用户确认的横向拓扑语法：可平移/缩放画布、矩形项目节点、真实前置依赖连线、节点选择驱动 Context Inspector；所有节点和动作仍来自 Helios 的权威研究项目与领域命令。
+Core Gameplay Lab 的正式 UI 布局以 `/Volumes/T9/Developer/projects/DSPONLINE` 的固定基线为主要参考。仓库内 `UI-reference/` 的 Upload Labs 图片降为非规范历史材料，不再决定 Shell、导航、页面卡片、弹窗、科技树或检查器布局。科技树采用用户确认的横向拓扑语法：可平移/缩放画布、矩形项目节点、真实前置依赖连线、节点选择驱动 Context Inspector；所有节点和动作仍来自 Helios 的权威研究项目与领域命令。
 
 该决定不允许直接复制 DSPONLINE 的 React/CSS、品牌或资产；Godot 实现继续使用本项目自己的语义 token、内容、本地化与自动化测试契约。
 
-参考仓库在审计开始前已有未提交删除：`LICENSE`、`NOTICE`、`PRIVACY.md`、`README.en.md`、`README.md`。本次未触碰这些状态。
+参考仓库在审计开始前已有未提交删除：`LICENSE`、`NOTICE`、`README.en.md`、`README.md`。本次未触碰这些状态；许可结论从固定 Git 基线读取。
 
 ## 结构与权威边界
 
@@ -168,14 +172,14 @@ Helios 将这些原则转化为一个 Godot `IndustrialNetworkEdgeLayer` 共享�
 
 ## 许可与资产边界
 
-参考仓库 HEAD 的许可为 PolyForm Noncommercial 1.0.0，并有独立商标和商业使用说明。即使用户拥有两个项目，本次也按最保守边界执行：只提炼设计原则，不复制代码、样式表、Logo、项目名、截图、反馈资产、内容名称或完整英文目录。所有 Godot UI、token、组件和测试在当前项目内独立实现。
+参考仓库固定基线的许可为 PolyForm Noncommercial 1.0.0，并有独立商标和商业使用说明。即使用户拥有两个项目，本次也按最保守边界执行：只提炼设计原则，不复制代码、样式表、Logo、项目名、截图、反馈资产、内容名称或完整英文目录。所有 Godot UI、token、组件和测试在当前项目内独立实现。
 
 ## 明确不采用
 
 - 超大根组件和几十个互斥布尔状态。
 - 把完整 GameState 传给所有视图。
 - UI 内重算领域聚合和生产公式。
-- 21k 行全局样式与后期 `!important` 覆盖。
+- 24,634 行全局样式与后期 `!important` 覆盖。
 - 过小正文字号和只靠颜色表达状态。
 - DOM/MutationObserver 本地化桥。
 - 桌面布局等比压缩成移动布局。

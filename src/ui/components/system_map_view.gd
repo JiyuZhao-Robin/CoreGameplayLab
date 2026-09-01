@@ -1,6 +1,8 @@
 class_name SystemMapView
 extends Control
 
+const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
+
 signal location_selected(location_id: String)
 
 const COLOR_SPACE := Color("070d14")
@@ -53,7 +55,7 @@ func configure(locations: Array[Dictionary], routes: Array[Dictionary], selected
 			button.tooltip_text = I18n.core("map.location_locked_tooltip", "Complete the preceding survey route to inspect this Location")
 		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.custom_minimum_size = NODE_SIZE
-		button.add_theme_font_size_override("font_size", 12)
+		button.add_theme_font_size_override("font_size", UiTokens.font_size(12))
 		button.add_theme_color_override("font_color", COLOR_DISCOVERED if discovered else COLOR_UNKNOWN)
 		button.add_theme_color_override("font_disabled_color", COLOR_UNKNOWN)
 		button.add_theme_stylebox_override("normal", _node_style(Color(0.02, 0.09, 0.12, 0.94) if discovered else Color(0.02, 0.035, 0.05, 0.92), COLOR_SELECTED if location_id == _selected_location_id else (COLOR_DISCOVERED if discovered else COLOR_UNKNOWN)))
@@ -179,9 +181,9 @@ func _draw_star(center: Vector2) -> void:
 func _draw_legend() -> void:
 	var origin := Vector2(18.0, size.y - 64.0)
 	draw_circle(origin, 4.0, COLOR_DISCOVERED)
-	draw_string(ThemeDB.fallback_font, origin + Vector2(12.0, 5.0), I18n.core("map.legend.discovered", "DISCOVERED / OPERABLE"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.70, 0.82, 0.86))
+	draw_string(ThemeDB.fallback_font, origin + Vector2(12.0, 5.0), I18n.core("map.legend.discovered", "DISCOVERED / OPERABLE"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, UiTokens.font_size(11), Color(0.70, 0.82, 0.86))
 	draw_circle(origin + Vector2(0.0, 24.0), 4.0, COLOR_UNKNOWN)
-	draw_string(ThemeDB.fallback_font, origin + Vector2(12.0, 29.0), I18n.core("map.legend.unknown", "UNKNOWN / LOCKED"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.48, 0.56, 0.61))
+	draw_string(ThemeDB.fallback_font, origin + Vector2(12.0, 29.0), I18n.core("map.legend.unknown", "UNKNOWN / LOCKED"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, UiTokens.font_size(11), Color(0.48, 0.56, 0.61))
 
 
 func _node_style(background: Color, border: Color) -> StyleBoxFlat:

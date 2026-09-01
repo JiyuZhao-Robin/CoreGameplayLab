@@ -52,18 +52,24 @@ func _run() -> void:
 	var special_socket := view.get_node(NodePath("ship_design_socket_utility_0")) as GraphNode
 	var socket_glyphs := view.get("_socket_glyphs") as Dictionary
 	_check(not bool(socket_glyphs["socket_weapon_0"].filled) and not bool(socket_glyphs["socket_utility_1"].filled), "all unconnected sockets start gray and hollow")
-	var orthogonal_line := view.call("_get_connection_line", Vector2(0.0, 0.0), Vector2(100.0, 60.0)) as PackedVector2Array
-	_check(orthogonal_line.size() == 6 and is_equal_approx(orthogonal_line[0].y, orthogonal_line[1].y) and is_equal_approx(orthogonal_line[1].x, orthogonal_line[2].x) and is_equal_approx(orthogonal_line[2].y, orthogonal_line[3].y) and is_equal_approx(orthogonal_line[3].x, orthogonal_line[4].x) and is_equal_approx(orthogonal_line[4].y, orthogonal_line[5].y), "connection routing mirrors DSPONLINE's orthogonal lead/rail/lead polyline")
+	var orthogonal_route := view.call("_orthogonal_connection_points", Vector2(0.0, 0.0), Vector2(100.0, 60.0)) as PackedVector2Array
+	_check(orthogonal_route.size() == 6 and is_equal_approx(orthogonal_route[0].y, orthogonal_route[1].y) and is_equal_approx(orthogonal_route[1].x, orthogonal_route[2].x) and is_equal_approx(orthogonal_route[2].y, orthogonal_route[3].y) and is_equal_approx(orthogonal_route[3].x, orthogonal_route[4].x) and is_equal_approx(orthogonal_route[4].y, orthogonal_route[5].y), "connection routing retains DSPONLINE's orthogonal lead/rail/lead geometry")
+	var rounded_line := view.call("_get_connection_line", Vector2(0.0, 0.0), Vector2(100.0, 60.0)) as PackedVector2Array
+	_check(rounded_line.size() > orthogonal_route.size() and rounded_line[0].is_equal_approx(orthogonal_route[0]) and rounded_line[rounded_line.size() - 1].is_equal_approx(orthogonal_route[orthogonal_route.size() - 1]), "connection rendering rounds orthogonal corners without moving its endpoints")
 	_check(drive_socket.position_offset.y < core_socket.position_offset.y, "drive socket is spatially embedded above the central core")
 	_check(weapon_socket.position_offset.x < core_socket.position_offset.x and special_socket.position_offset.x > core_socket.position_offset.x, "special-plugin sockets are embedded on opposite hull flanks")
 	_check(shield_socket.position_offset.y > core_socket.position_offset.y and structural_socket.position_offset.y > core_socket.position_offset.y, "shield and structural cabin sockets are embedded along the bottom of the hull backplane")
 	view.call("_on_connection_drag_started", StringName("ship_design_module_0001"), 0, true)
 	_check((socket_glyphs["socket_weapon_0"].tone as Color).is_equal_approx(UiTokens.COLOR_CRITICAL) and not bool(socket_glyphs["socket_weapon_0"].filled), "connection draft highlights only the compatible hollow socket")
+	_check(String(socket_glyphs["socket_weapon_0"].visual_state) == "compatible" and String(socket_glyphs["socket_shield_0"].visual_state) == "muted", "connection draft exposes compatible and muted port visual states")
 	_check((socket_glyphs["socket_shield_0"].tone as Color).is_equal_approx(UiTokens.COLOR_BORDER_STRONG), "connection draft leaves incompatible sockets muted")
 	view.call("_on_connection_drag_ended")
 	view.request_module_connection("ship_design_module_0001", "socket_weapon_0")
 	_check(view.draft_snapshot().get("connections", []).size() == 1, "matching triangular weapon interfaces connect")
-	_check(bool(socket_glyphs["socket_weapon_0"].filled), "connected socket becomes colored and filled")
+	_check(bool(socket_glyphs["socket_weapon_0"].filled) and String(socket_glyphs["socket_weapon_0"].visual_state) == "connected", "connected socket becomes colored, filled and enters the connected visual state")
+	var weapon_path := view.call("_world_path_for_link", (view.get("_links") as Array)[0]) as PackedVector2Array
+	var selection_point := weapon_path[weapon_path.size() / 2] * view.zoom - view.scroll_offset
+	_check(bool(view.call("_select_connection_at", selection_point)) and not String(view.get("_selected_connection_key")).is_empty(), "custom connection hit testing selects the enhanced visual line")
 	view.request_module_connection("ship_design_module_0002", "socket_weapon_0")
 	_check(view.draft_snapshot().get("connections", []).size() == 1, "square structural shield plug cannot connect to triangle weapon socket")
 	view.request_module_connection("ship_design_module_0002", "socket_shield_0")

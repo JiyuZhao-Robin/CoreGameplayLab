@@ -36,7 +36,7 @@ func build() -> void:
 
 	var header_panel := _surface(UiTokens.COLOR_PANEL)
 	header_panel.name = "TopStatusBar"
-	header_panel.custom_minimum_size.y = UiTokens.TOP_BAR_HEIGHT
+	header_panel.custom_minimum_size.y = UiTokens.layout_px(UiTokens.TOP_BAR_HEIGHT)
 	rows.add_child(header_panel)
 	header_slot = _margin(UiTokens.SPACING_LG, UiTokens.SPACING_SM, UiTokens.SPACING_MD, UiTokens.SPACING_SM)
 	header_panel.add_child(header_slot)
@@ -49,7 +49,7 @@ func build() -> void:
 
 	_left_panel = _surface(UiTokens.COLOR_PANEL)
 	_left_panel.name = "ResourceRailSurface"
-	_left_panel.custom_minimum_size.x = UiTokens.RESOURCE_RAIL_WIDTH
+	_left_panel.custom_minimum_size.x = UiTokens.layout_px(UiTokens.RESOURCE_RAIL_WIDTH)
 	workspace.add_child(_left_panel)
 	var left_column := VBoxContainer.new()
 	left_column.add_theme_constant_override("separation", 0)
@@ -73,7 +73,7 @@ func build() -> void:
 
 	_right_panel = _surface(UiTokens.COLOR_PANEL)
 	_right_panel.name = "ContextInspectorSurface"
-	_right_panel.custom_minimum_size.x = UiTokens.INSPECTOR_WIDTH
+	_right_panel.custom_minimum_size.x = UiTokens.layout_px(UiTokens.INSPECTOR_WIDTH)
 	workspace.add_child(_right_panel)
 	var right_column := VBoxContainer.new()
 	right_column.add_theme_constant_override("separation", 0)
@@ -90,7 +90,7 @@ func build() -> void:
 
 	var bottom_panel := _surface(UiTokens.COLOR_PANEL)
 	bottom_panel.name = "CommandDockSurface"
-	bottom_panel.custom_minimum_size.y = UiTokens.BOTTOM_BAR_HEIGHT
+	bottom_panel.custom_minimum_size.y = UiTokens.layout_px(UiTokens.BOTTOM_BAR_HEIGHT)
 	rows.add_child(bottom_panel)
 	bottom_slot = _margin(UiTokens.SPACING_MD, UiTokens.SPACING_SM, UiTokens.SPACING_MD, UiTokens.SPACING_SM)
 	bottom_panel.add_child(bottom_slot)
@@ -102,7 +102,7 @@ func set_left_collapsed(collapsed: bool, emit_change := false) -> void:
 	if not is_instance_valid(_left_panel):
 		return
 	_left_content.visible = not collapsed
-	_left_panel.custom_minimum_size.x = UiTokens.COLLAPSED_RAIL_WIDTH if collapsed else UiTokens.RESOURCE_RAIL_WIDTH
+	_left_panel.custom_minimum_size.x = UiTokens.layout_px(UiTokens.COLLAPSED_RAIL_WIDTH if collapsed else UiTokens.RESOURCE_RAIL_WIDTH)
 	_left_toggle.text = "›" if collapsed else "‹"
 	_refresh_toggle_copy()
 	if emit_change:
@@ -114,7 +114,7 @@ func set_right_collapsed(collapsed: bool, emit_change := false) -> void:
 	if not is_instance_valid(_right_panel):
 		return
 	_right_content.visible = not collapsed
-	_right_panel.custom_minimum_size.x = UiTokens.COLLAPSED_RAIL_WIDTH if collapsed else UiTokens.INSPECTOR_WIDTH
+	_right_panel.custom_minimum_size.x = UiTokens.layout_px(UiTokens.COLLAPSED_RAIL_WIDTH if collapsed else UiTokens.INSPECTOR_WIDTH)
 	_right_toggle.text = "‹" if collapsed else "›"
 	_refresh_toggle_copy()
 	if emit_change:
@@ -154,16 +154,16 @@ func _edge_toggle(node_name: String, caption: String) -> Button:
 	button.name = node_name
 	button.text = caption
 	button.focus_mode = Control.FOCUS_ALL
-	button.custom_minimum_size = Vector2(UiTokens.COLLAPSED_RAIL_WIDTH, UiTokens.COLLAPSE_BUTTON_HEIGHT)
-	button.add_theme_font_size_override("font_size", 17)
+	button.custom_minimum_size = UiTokens.layout_vector(Vector2(UiTokens.COLLAPSED_RAIL_WIDTH, UiTokens.COLLAPSE_BUTTON_HEIGHT))
+	button.add_theme_font_size_override("font_size", UiTokens.font_size(17))
 	button.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_SECONDARY)
 	return button
 
 
 func _margin(left: int, top: int, right: int, bottom: int) -> MarginContainer:
 	var value := MarginContainer.new()
-	value.add_theme_constant_override("margin_left", left)
-	value.add_theme_constant_override("margin_top", top)
-	value.add_theme_constant_override("margin_right", right)
-	value.add_theme_constant_override("margin_bottom", bottom)
+	value.add_theme_constant_override("margin_left", UiTokens.layout_px(left))
+	value.add_theme_constant_override("margin_top", UiTokens.layout_px(top))
+	value.add_theme_constant_override("margin_right", UiTokens.layout_px(right))
+	value.add_theme_constant_override("margin_bottom", UiTokens.layout_px(bottom))
 	return value

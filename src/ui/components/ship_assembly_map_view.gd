@@ -3,6 +3,8 @@ extends GraphEdit
 
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const ShipPortGlyphScript = preload("res://src/ui/components/ship_port_glyph.gd")
+const ShipHullBackplaneScript = preload("res://src/ui/components/ship_hull_backplane.gd")
+const ShipAssemblyConnectionLayerScript = preload("res://src/ui/components/ship_assembly_connection_layer.gd")
 
 signal draft_changed(snapshot: Dictionary)
 signal entity_selected(kind: String, entity_id: String)
@@ -18,8 +20,12 @@ var _entities := {}
 var _links: Array[Dictionary] = []
 var _socket_nodes := {}
 var _socket_glyphs := {}
+var _module_glyphs := {}
 var _next_node_serial := 1
 var _connection_drag_module_name := ""
+var _hovered_socket_id := ""
+var _selected_connection_key := ""
+var _visual_layer: Control
 
 
 func _ready() -> void:
@@ -35,15 +41,19 @@ func _ready() -> void:
 	snapping_distance = 20
 	minimap_enabled = true
 	connection_lines_curvature = 0.0
-	connection_lines_thickness = 2.0
+	connection_lines_thickness = 0.0
+	connection_lines_antialiased = true
 	zoom_min = DEFAULT_ZOOM_MIN
 	zoom_max = 1.65
 	zoom_step = 1.12
 	mouse_default_cursor_shape = Control.CURSOR_DRAG
-	add_theme_color_override("grid_minor", UiTokens.COLOR_FACTORY_GRID_DOT)
-	add_theme_color_override("grid_major", UiTokens.COLOR_FACTORY_GRID_DOT)
+	add_theme_color_override("grid_minor", UiTokens.COLOR_SHIP_GRID_MINOR)
+	add_theme_color_override("grid_major", UiTokens.COLOR_SHIP_GRID_MAJOR)
 	add_theme_color_override("activity", UiTokens.COLOR_FOCUS)
-	add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_FACTORY_CANVAS, UiTokens.COLOR_BORDER, 0))
+	var canvas_style := UiTokens.panel_style(UiTokens.COLOR_SHIP_CANVAS, UiTokens.COLOR_BORDER, 0)
+	canvas_style.shadow_color = Color(0.0, 0.0, 0.0, 0.44)
+	canvas_style.shadow_size = 10
+	add_theme_stylebox_override("panel", canvas_style)
 	for port_type in [11, 12, 13, 14, 15, 16]:
 		add_valid_connection_type(port_type, port_type)
 	connection_request.connect(_on_connection_request)
@@ -54,12 +64,35 @@ func _ready() -> void:
 	end_node_move.connect(_on_node_move_finished)
 	node_selected.connect(_on_node_selected)
 	resized.connect(_on_canvas_resized)
+	gui_input.connect(_on_canvas_gui_input)
+	scroll_offset_changed.connect(_on_scroll_offset_changed)
+	if has_signal("zoom_changed"):
+		connect("zoom_changed", Callable(self, "_on_zoom_changed"))
+	add_theme_color_override("connection_hover_tint_color", Color.TRANSPARENT)
+	add_theme_color_override("connection_rim_color", Color.TRANSPARENT)
+	add_theme_constant_override("connection_hover_thickness", 0)
+	add_theme_constant_override("port_hotzone_inner_extent", 10)
+	add_theme_constant_override("port_hotzone_outer_extent", 10)
+	_visual_layer = ShipAssemblyConnectionLayerScript.new()
+	_visual_layer.name = "ShipAssemblyConnectionLayer"
+	add_child(_visual_layer)
+	_visual_layer.configure(self)
 	var fit_button := Button.new()
 	fit_button.name = "ShipAssemblyFitAll"
 	fit_button.text = I18n.core("ships.shipyard.fit_all", "Fit all")
 	fit_button.tooltip_text = I18n.core("ships.shipyard.fit_all_tooltip", "Fit the complete ship design inside the canvas")
 	fit_button.pressed.connect(fit_design)
 	get_menu_hbox().add_child(fit_button)
+
+
+func _world_path_for_link(link: Dictionary) -> PackedVector2Array:
+	var source := get_node_or_null(NodePath(String(link.get("module_node_id", "")))) as GraphNode
+	var target := get_node_or_null(NodePath(_socket_node_name(String(link.get("socket_id", ""))))) as GraphNode
+	if source == null or target == null or source.get_output_port_count() <= 0 or target.get_input_port_count() <= 0:
+		return PackedVector2Array()
+	var start := source.position_offset + source.get_output_port_position(0)
+	var finish := target.position_offset + target.get_input_port_position(0)
+	return _get_connection_line(start, finish)
 
 
 func configure(catalog: Dictionary, draft: Dictionary = {}) -> void:
@@ -76,12 +109,16 @@ func clear_draft(emit_change := true) -> void:
 	_entities.clear()
 	_socket_nodes.clear()
 	_socket_glyphs.clear()
+	_module_glyphs.clear()
 	_connection_drag_module_name = ""
+	_hovered_socket_id = ""
+	_selected_connection_key = ""
 	for child in get_children():
 		if child is GraphNode:
 			remove_child(child)
 			child.queue_free()
 	_next_node_serial = 1
+	_refresh_visual_layer()
 	if emit_change:
 		_emit_draft_changed()
 
@@ -152,16 +189,18 @@ func _add_hull(plan_id: String, graph_position: Vector2, requested_name := HULL_
 	node.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	node.set_meta("entity_kind", "hull")
 	node.set_meta("entity_id", hull_id)
+	node.z_index = 3
 	var sockets: Array[Dictionary] = []
 	var summary := Label.new()
 	summary.text = String(_catalog.get("hull_summary_format")) % [String(hull.get("class", "Ship")), socket_count]
 	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	summary.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_SECONDARY)
-	summary.add_theme_font_size_override("font_size", 11)
+	summary.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	node.add_child(summary)
-	var board_surface := Control.new()
+	var board_surface := ShipHullBackplaneScript.new()
 	board_surface.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	board_surface.custom_minimum_size = Vector2(board_size.x - 30.0, board_size.y - 58.0)
+	board_surface.configure(UiTokens.COLOR_INFORMATION)
 	node.add_child(board_surface)
 	var special_definitions: Array[Dictionary] = []
 	var structural_definitions: Array[Dictionary] = []
@@ -196,6 +235,7 @@ func _add_hull(plan_id: String, graph_position: Vector2, requested_name := HULL_
 		core_definition["major"] = true
 		sockets.append(_socket_record(core_definition))
 	_apply_node_style(node, UiTokens.COLOR_INFORMATION)
+	_register_node_hover(node)
 	add_child(node)
 	_entities[String(node.name)] = {"kind":"hull", "definition_id":hull_id, "plan_id":plan_id, "sockets":sockets}
 	for socket in sockets:
@@ -229,12 +269,14 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	var glyph_center := CenterContainer.new()
 	glyph_center.custom_minimum_size = socket_node.custom_minimum_size - Vector2(12.0, 12.0)
 	var glyph := ShipPortGlyphScript.new()
-	glyph.configure(shape, UiTokens.COLOR_BORDER_STRONG, false)
+	glyph.configure(shape, UiTokens.COLOR_BORDER_STRONG, false, "idle")
 	glyph_center.add_child(glyph)
 	glyph.custom_minimum_size = Vector2(58.0, 58.0) if major else Vector2(24.0, 24.0)
 	socket_node.add_child(glyph_center)
 	socket_node.set_slot(0, true, _slot_port_type(slot, String(socket.get("mount_role", ""))), UiTokens.COLOR_BORDER_STRONG, false, 0, Color.WHITE)
-	_apply_socket_style(socket_node, UiTokens.COLOR_BORDER_STRONG, major)
+	_apply_socket_style(socket_node, UiTokens.COLOR_BORDER_STRONG, major, "idle")
+	socket_node.mouse_entered.connect(_on_socket_hover_changed.bind(socket_id, true))
+	socket_node.mouse_exited.connect(_on_socket_hover_changed.bind(socket_id, false))
 	add_child(socket_node)
 	_socket_nodes[socket_id] = String(socket_node.name)
 	_socket_glyphs[socket_id] = glyph
@@ -263,6 +305,7 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 	node.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	node.set_meta("entity_kind", "module")
 	node.set_meta("entity_id", module_id)
+	node.z_index = 3
 	var row := HBoxContainer.new()
 	row.custom_minimum_size.x = 180.0
 	row.add_theme_constant_override("separation", 7)
@@ -270,16 +313,26 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 	label.text = String(_catalog.get("module_label_format")) % [String(module.get("size", "S")), String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), shape]
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.add_theme_color_override("font_color", _slot_tone(slot))
-	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	row.add_child(label)
+	var glyph_frame := PanelContainer.new()
+	glyph_frame.custom_minimum_size = Vector2(34.0, 34.0)
+	var glyph_frame_style := UiTokens.panel_style(UiTokens.COLOR_INSET, _slot_tone(slot).darkened(0.32), 5)
+	glyph_frame_style.shadow_color = Color(_slot_tone(slot), 0.10)
+	glyph_frame_style.shadow_size = 4
+	glyph_frame.add_theme_stylebox_override("panel", glyph_frame_style)
 	var glyph := ShipPortGlyphScript.new()
-	glyph.configure(shape, _slot_tone(slot))
-	row.add_child(glyph)
+	glyph.custom_minimum_size = Vector2(28.0, 28.0)
+	glyph.configure(shape, _slot_tone(slot), true, "idle")
+	glyph_frame.add_child(glyph)
+	row.add_child(glyph_frame)
 	node.add_child(row)
 	node.set_slot(0, false, 0, Color.WHITE, true, _slot_port_type(slot, mount_role), _slot_tone(slot))
 	_apply_node_style(node, _slot_tone(slot))
+	_register_node_hover(node)
 	add_child(node)
 	_entities[String(node.name)] = {"kind":"module", "definition_id":module_id, "slot":slot, "mount_role":mount_role, "shape":shape}
+	_module_glyphs[String(node.name)] = glyph
 
 
 func _restore_draft(draft: Dictionary) -> void:
@@ -299,6 +352,7 @@ func _restore_draft(draft: Dictionary) -> void:
 		if _entities.has(module_node_id) and not socket_node_name.is_empty():
 			connect_node(module_node_id, 0, socket_node_name, 0)
 			_links.append(link.duplicate(true))
+	_refresh_socket_visuals()
 
 
 func _stored_position(data: Dictionary) -> Vector2:
@@ -359,6 +413,7 @@ func _on_delete_nodes_request(nodes: Array[StringName]) -> void:
 		_links = _links.filter(func(link: Dictionary) -> bool:
 			return String(link.get("module_node_id", "")) != node_name and node_name != HULL_NODE_NAME
 		)
+		_module_glyphs.erase(node_name)
 		if node_name == HULL_NODE_NAME:
 			_remove_hull_socket_nodes()
 		_entities.erase(node_name)
@@ -412,11 +467,13 @@ func _on_connection_drag_started(from_node: StringName, from_port: int, is_outpu
 	var node_name := String(from_node)
 	var entity := _entities.get(node_name, {}) as Dictionary
 	_connection_drag_module_name = node_name if is_output and from_port == 0 and String(entity.get("kind", "")) == "module" else ""
+	_hovered_socket_id = ""
 	_refresh_socket_visuals()
 
 
 func _on_connection_drag_ended() -> void:
 	_connection_drag_module_name = ""
+	_hovered_socket_id = ""
 	_refresh_socket_visuals()
 
 
@@ -429,14 +486,30 @@ func _refresh_socket_visuals() -> void:
 		var socket_id := String(socket.get("id", ""))
 		var is_connected := bool(connected.get(socket_id, false))
 		var is_drag_compatible := _socket_matches_dragged_module(socket)
+		var state := "connected" if is_connected else ("compatible" if is_drag_compatible else ("incompatible" if socket_id == _hovered_socket_id and not _connection_drag_module_name.is_empty() else ("muted" if not _connection_drag_module_name.is_empty() else ("hover" if socket_id == _hovered_socket_id else "idle"))))
 		var tone := _slot_tone(String(socket.get("slot", "utility"))) if is_connected or is_drag_compatible else UiTokens.COLOR_BORDER_STRONG
 		var glyph = _socket_glyphs.get(socket_id)
 		if is_instance_valid(glyph):
-			glyph.configure(String(socket.get("shape", "SQUARE")), tone, is_connected)
+			glyph.configure(String(socket.get("shape", "SQUARE")), tone, is_connected, state)
 		var socket_node := get_node_or_null(NodePath(_socket_node_name(socket_id))) as GraphNode
 		if socket_node != null:
 			socket_node.set_slot(0, true, _slot_port_type(String(socket.get("slot", "utility")), String(socket.get("mount_role", ""))), tone, false, 0, Color.WHITE)
-			_apply_socket_style(socket_node, tone, bool(socket.get("major", false)))
+			socket_node.modulate.a = 0.34 if state == "muted" else 1.0
+			_apply_socket_style(socket_node, tone, bool(socket.get("major", false)), state)
+	var connected_modules := {}
+	for link in _links:
+		connected_modules[String(link.get("module_node_id", ""))] = true
+	for node_name_value in _module_glyphs.keys():
+		var node_name := String(node_name_value)
+		var module := _entities.get(node_name, {}) as Dictionary
+		var glyph = _module_glyphs.get(node_name)
+		var state := "origin" if node_name == _connection_drag_module_name else ("connected" if bool(connected_modules.get(node_name, false)) else "idle")
+		if is_instance_valid(glyph):
+			glyph.configure(String(module.get("shape", "SQUARE")), _slot_tone(String(module.get("slot", "utility"))), state == "connected" or state == "origin", state)
+		var module_node := get_node_or_null(NodePath(node_name)) as GraphNode
+		if module_node != null:
+			_apply_node_style(module_node, _slot_tone(String(module.get("slot", "utility"))))
+	_refresh_visual_layer()
 
 
 func _socket_matches_dragged_module(socket: Dictionary) -> bool:
@@ -449,8 +522,10 @@ func _socket_matches_dragged_module(socket: Dictionary) -> bool:
 
 
 func _get_connection_line(from_position: Vector2, to_position: Vector2) -> PackedVector2Array:
-	# Mirror DSPONLINE's orthogonal belt presentation: a short lead from each
-	# handle, two vertical drops, and one shared horizontal route rail.
+	return _rounded_orthogonal_path(_orthogonal_connection_points(from_position, to_position), 8.0)
+
+
+func _orthogonal_connection_points(from_position: Vector2, to_position: Vector2) -> PackedVector2Array:
 	var direction := 1.0 if to_position.x >= from_position.x else -1.0
 	var lead := minf(34.0, maxf(12.0, absf(to_position.x - from_position.x) / 4.0))
 	var route_y := _connection_route_center_y(from_position, to_position)
@@ -462,6 +537,37 @@ func _get_connection_line(from_position: Vector2, to_position: Vector2) -> Packe
 		Vector2(to_position.x - lead * direction, to_position.y),
 		to_position
 	])
+
+
+func _rounded_orthogonal_path(points: PackedVector2Array, radius: float) -> PackedVector2Array:
+	if points.size() < 3:
+		return points
+	var compact := PackedVector2Array()
+	for point in points:
+		if compact.is_empty() or compact[compact.size() - 1].distance_squared_to(point) > 0.01:
+			compact.append(point)
+	if compact.size() < 3:
+		return compact
+	var result := PackedVector2Array([compact[0]])
+	for index in range(1, compact.size() - 1):
+		var previous := compact[index - 1]
+		var corner := compact[index]
+		var next := compact[index + 1]
+		var incoming := corner - previous
+		var outgoing := next - corner
+		var incoming_length := incoming.length()
+		var outgoing_length := outgoing.length()
+		if incoming_length <= 0.01 or outgoing_length <= 0.01:
+			continue
+		var corner_radius := minf(radius, minf(incoming_length * 0.5, outgoing_length * 0.5))
+		var before := corner - incoming / incoming_length * corner_radius
+		var after := corner + outgoing / outgoing_length * corner_radius
+		result.append(before)
+		for sample_index in range(1, 5):
+			var t := float(sample_index) / 4.0
+			result.append(before * (1.0 - t) * (1.0 - t) + corner * 2.0 * (1.0 - t) * t + after * t * t)
+	result.append(compact[compact.size() - 1])
+	return result
 
 
 func _connection_route_center_y(from_position: Vector2, to_position: Vector2) -> float:
@@ -535,30 +641,48 @@ func _slot_tone(slot: String) -> Color:
 
 
 func _apply_node_style(node: GraphNode, tone: Color) -> void:
-	# DSPONLINE factory-node: #131917 body, #41504a one-pixel border,
-	# six-pixel corners and a restrained black lift shadow.
-	var normal := UiTokens.panel_style(UiTokens.COLOR_NODE_SURFACE, UiTokens.COLOR_BORDER_STRONG, 6)
-	normal.shadow_color = Color(0.0, 0.0, 0.0, 0.26)
-	normal.shadow_size = 8
+	var hovered := bool(node.get_meta("visual_hovered", false))
+	var border := UiTokens.COLOR_BORDER_STRONG.lerp(tone, 0.26)
+	if hovered:
+		border = tone.lerp(Color.WHITE, 0.08)
+	var normal := UiTokens.panel_style(UiTokens.COLOR_NODE_SURFACE, border, 6)
+	normal.shadow_color = Color(0.0, 0.0, 0.0, 0.38)
+	normal.shadow_size = 12 if hovered else 9
 	normal.shadow_offset = Vector2(0.0, 8.0)
+	if hovered:
+		normal.set_border_width_all(2)
 	var selected_fill := UiTokens.COLOR_NODE_SURFACE.lerp(UiTokens.COLOR_FOCUS, 0.07)
 	var selected := UiTokens.panel_style(selected_fill, UiTokens.COLOR_FOCUS, 6)
 	selected.set_border_width_all(2)
-	selected.shadow_color = Color(UiTokens.COLOR_FOCUS, 0.32)
-	selected.shadow_size = 4
-	var titlebar := UiTokens.panel_style(UiTokens.COLOR_NODE_HEADER, UiTokens.COLOR_BORDER, 6)
+	selected.set_expand_margin_all(2.0)
+	selected.shadow_color = Color(UiTokens.COLOR_FOCUS, 0.30)
+	selected.shadow_size = 10
+	selected.shadow_offset = Vector2(0.0, 5.0)
+	var titlebar := UiTokens.panel_style(UiTokens.COLOR_NODE_HEADER, border.darkened(0.18), 6)
+	titlebar.border_width_top = 2
+	titlebar.border_color = border
 	titlebar.border_width_bottom = 1
+	var titlebar_selected := UiTokens.panel_style(UiTokens.COLOR_NODE_HEADER.lerp(UiTokens.COLOR_FOCUS, 0.05), UiTokens.COLOR_FOCUS, 6)
+	titlebar_selected.border_width_top = 2
+	titlebar_selected.border_width_bottom = 1
 	node.add_theme_stylebox_override("panel", normal)
 	node.add_theme_stylebox_override("panel_selected", selected)
 	node.add_theme_stylebox_override("titlebar", titlebar)
-	node.add_theme_stylebox_override("titlebar_selected", selected)
+	node.add_theme_stylebox_override("titlebar_selected", titlebar_selected)
 	node.add_theme_color_override("title_color", UiTokens.COLOR_TEXT)
-	node.add_theme_font_size_override("title_font_size", 12)
+	node.add_theme_color_override("title_selected_color", UiTokens.COLOR_TEXT)
+	node.add_theme_font_size_override("title_font_size", UiTokens.font_size(12))
 
 
-func _apply_socket_style(node: GraphNode, tone: Color, major: bool) -> void:
-	var surface := UiTokens.panel_style(Color(UiTokens.COLOR_NODE_SURFACE, 0.92 if major else 0.72), tone.darkened(0.28), 20 if major else 10)
-	surface.set_border_width_all(2 if major else 1)
+func _apply_socket_style(node: GraphNode, tone: Color, major: bool, state: String) -> void:
+	var surface_alpha := 0.96 if major else 0.82
+	var border := tone.darkened(0.28)
+	if state in ["connected", "compatible", "hover"]:
+		border = tone.lightened(0.08)
+	var surface := UiTokens.panel_style(Color(UiTokens.COLOR_NODE_SURFACE, surface_alpha), border, 16 if major else 8)
+	surface.set_border_width_all(2 if major or state in ["connected", "compatible"] else 1)
+	surface.shadow_color = Color(tone, 0.28 if state == "compatible" else (0.18 if state == "connected" else 0.06))
+	surface.shadow_size = 12 if state == "compatible" else (8 if state == "connected" else 3)
 	var transparent_title := StyleBoxFlat.new()
 	transparent_title.bg_color = Color.TRANSPARENT
 	transparent_title.set_content_margin_all(0.0)
@@ -567,6 +691,81 @@ func _apply_socket_style(node: GraphNode, tone: Color, major: bool) -> void:
 	node.add_theme_stylebox_override("titlebar", transparent_title)
 	node.add_theme_stylebox_override("titlebar_selected", transparent_title)
 	node.add_theme_constant_override("port_h_offset", 0)
+
+
+func _register_node_hover(node: GraphNode) -> void:
+	node.mouse_entered.connect(_on_visual_node_hover_changed.bind(node, true))
+	node.mouse_exited.connect(_on_visual_node_hover_changed.bind(node, false))
+
+
+func _on_visual_node_hover_changed(node: GraphNode, hovered: bool) -> void:
+	if not is_instance_valid(node):
+		return
+	node.set_meta("visual_hovered", hovered)
+	var entity := _entities.get(String(node.name), {}) as Dictionary
+	var tone := UiTokens.COLOR_INFORMATION if String(entity.get("kind", "")) == "hull" else _slot_tone(String(entity.get("slot", "utility")))
+	_apply_node_style(node, tone)
+
+
+func _on_socket_hover_changed(socket_id: String, hovered: bool) -> void:
+	if hovered:
+		_hovered_socket_id = socket_id
+	elif _hovered_socket_id == socket_id:
+		_hovered_socket_id = ""
+	_refresh_socket_visuals()
+
+
+func _connection_key(from_node: String, to_node: String) -> String:
+	return "%s>%s" % [from_node, to_node]
+
+
+func _on_canvas_gui_input(event: InputEvent) -> void:
+	if event is not InputEventMouseButton or not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if not _connection_drag_module_name.is_empty():
+		return
+	_select_connection_at(event.position)
+
+
+func _select_connection_at(screen_position: Vector2) -> bool:
+	var closest_key := ""
+	var closest_distance := 9.0
+	for link in _links:
+		var path := _world_path_for_link(link)
+		for index in path.size() - 1:
+			var start := path[index] * zoom - scroll_offset
+			var finish := path[index + 1] * zoom - scroll_offset
+			var distance := _distance_to_segment(screen_position, start, finish)
+			if distance <= closest_distance:
+				closest_distance = distance
+				closest_key = _connection_key(String(link.get("module_node_id", "")), _socket_node_name(String(link.get("socket_id", ""))))
+	var changed := closest_key != _selected_connection_key
+	_selected_connection_key = closest_key
+	if changed and is_instance_valid(_visual_layer):
+		_visual_layer.queue_redraw()
+	return not closest_key.is_empty()
+
+
+func _distance_to_segment(point: Vector2, start: Vector2, finish: Vector2) -> float:
+	var segment := finish - start
+	var length_squared := segment.length_squared()
+	if length_squared <= 0.001:
+		return point.distance_to(start)
+	var t := clampf((point - start).dot(segment) / length_squared, 0.0, 1.0)
+	return point.distance_to(start + segment * t)
+
+
+func _on_zoom_changed(_value: float) -> void:
+	_refresh_visual_layer()
+
+
+func _on_scroll_offset_changed(_offset: Vector2) -> void:
+	_refresh_visual_layer()
+
+
+func _refresh_visual_layer() -> void:
+	if is_instance_valid(_visual_layer):
+		_visual_layer.call("refresh")
 
 
 func _remove_hull_socket_nodes() -> void:
@@ -596,6 +795,7 @@ func _emit_draft_changed() -> void:
 
 func _on_node_move_finished() -> void:
 	_layout_hull_socket_nodes()
+	_refresh_visual_layer()
 	_emit_draft_changed()
 
 
@@ -612,11 +812,12 @@ func fit_design() -> void:
 	var available := size - Vector2(FIT_PADDING * 2.0, FIT_PADDING * 2.0)
 	var required_zoom := minf(available.x / bounds.size.x, available.y / bounds.size.y)
 	# Designs may be deliberately spread across a large workspace.  Lower the
-	# zoom floor when necessary so "Fit all" always means the whole design,
+	# zoom floor when necessary so the command always includes the whole design,
 	# rather than the closest partial crop allowed by a fixed minimum zoom.
 	zoom_min = minf(DEFAULT_ZOOM_MIN, maxf(0.02, required_zoom))
 	zoom = clampf(required_zoom, zoom_min, minf(1.0, zoom_max))
 	scroll_offset = bounds.get_center() - size / (2.0 * zoom)
+	_refresh_visual_layer()
 
 
 func _design_bounds() -> Rect2:

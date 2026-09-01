@@ -18,6 +18,10 @@ func _run() -> void:
 	Engine.time_scale = 0.0
 	Game.reset_game()
 	var main: Control = MainScene.instantiate()
+	# MainScene normally inherits the viewport rectangle. The test root is a
+	# plain Node, so give it the production baseline before validating scrolling.
+	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	main.size = Vector2(1440.0, 900.0)
 	add_child(main)
 	await _settle_ui()
 

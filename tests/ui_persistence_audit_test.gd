@@ -40,6 +40,8 @@ func _run() -> void:
 func _write_phase() -> void:
 	Engine.time_scale = 0.0
 	var main: Control = MainScene.instantiate()
+	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	main.size = Vector2(1440.0, 900.0)
 	add_child(main)
 	await _settle_ui()
 
@@ -63,6 +65,9 @@ func _write_phase() -> void:
 	_press(main.find_child("SaveButton", true, false) as Button)
 	await _settle_ui()
 	_check(FileAccess.file_exists(audit_root.path_join("space_idle_save.json")) and Game.state.revision > revision_before, "visible SaveButton writes the isolated LocalSaveRepository")
+	var ui_preferences := ConfigFile.new()
+	var ui_preferences_loaded := ui_preferences.load(audit_root.path_join("core_gameplay_ui.cfg")) == OK
+	_check(ui_preferences_loaded and is_equal_approx(float(ui_preferences.get_value("display", "ui_scale", 0.0)), 1.25), "the default UI scale persists in the isolated device-local preference file")
 
 	var marker := FileAccess.open(marker_path, FileAccess.WRITE)
 	if marker == null:
@@ -91,6 +96,8 @@ func _read_phase() -> void:
 		if observation_value is Dictionary:
 			observations.append((observation_value as Dictionary).duplicate(true))
 	var main: Control = MainScene.instantiate()
+	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	main.size = Vector2(1440.0, 900.0)
 	add_child(main)
 	await _settle_ui()
 
@@ -99,6 +106,8 @@ func _read_phase() -> void:
 	_check(Game.state.ship_fleet_domain(ship_id) == "mining", "startup auto-load restores the UI-created fleet assignment")
 	var inventory_page := main.find_child("inventory", true, false) as Control
 	_check(inventory_page != null and inventory_page.is_visible_in_tree(), "UI preferences restore the last active core page")
+	var ui_scale_selector := main.find_child("UIScaleSelector", true, false) as OptionButton
+	_check(ui_scale_selector != null and ui_scale_selector.get_item_id(ui_scale_selector.selected) == 125, "UI preferences restore the persisted scale independently of the Domain save")
 	_check(not Game.offline_report.is_empty() and float(Game.offline_report.get("simulated_ms", 0.0)) > 1000.0, "startup processes elapsed offline time through the shared orchestrator")
 	var sidebar_text := _visible_text(main)
 	_check(not Game.offline_report.is_empty() and sidebar_text.contains(I18n.core("sidebar.offline")), "the loaded UI visibly presents the offline-return report")

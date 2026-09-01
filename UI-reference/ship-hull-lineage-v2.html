@@ -1,0 +1,2909 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>舰船框架谱系 · 同尺度船坞</title>
+  <style>
+    html,
+    body {
+      min-width: 320px;
+      min-height: 100%;
+      margin: 0;
+      background: #050a09;
+    }
+  </style>
+</head>
+<body>
+<div id="helios-hull-roster" data-view="framework">
+  <style>
+    #helios-hull-roster {
+      color-scheme: dark;
+      width: 100%;
+      min-height: 720px;
+      overflow: hidden;
+      color: #e9eeeb;
+      background: #08100e;
+      border: 1px solid #26342f;
+      font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    }
+
+    #helios-hull-roster * {
+      box-sizing: border-box;
+    }
+
+    #helios-hull-roster button {
+      font: inherit;
+    }
+
+    #helios-hull-roster .roster-header {
+      min-height: 58px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid #2b3531;
+      background: #0d1311;
+    }
+
+    #helios-hull-roster .roster-title {
+      font-size: 15px;
+      font-weight: 680;
+      line-height: 1.2;
+    }
+
+    #helios-hull-roster .roster-subtitle {
+      margin-top: 4px;
+      color: #83918a;
+      font-size: 10px;
+    }
+
+    #helios-hull-roster .roster-count {
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+    }
+
+    #helios-hull-roster .header-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+    }
+
+    #helios-hull-roster .view-tabs {
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid #2b3531;
+      background: #08100e;
+    }
+
+    #helios-hull-roster .view-tab {
+      min-height: 28px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 0;
+      color: #60716a;
+      background: transparent;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+      letter-spacing: .04em;
+      cursor: pointer;
+    }
+
+    #helios-hull-roster .view-tab:hover {
+      color: #c1cac5;
+    }
+
+    #helios-hull-roster .view-tab:focus-visible,
+    #helios-hull-roster .atlas-control:focus-visible,
+    #helios-hull-roster .atlas-filter:focus-visible,
+    #helios-hull-roster .atlas-card:focus-visible {
+      outline: 2px solid #65d6c1;
+      outline-offset: -2px;
+    }
+
+    #helios-hull-roster .view-tab[aria-selected="true"] {
+      color: #08100e;
+      background: #65d6c1;
+    }
+
+    #helios-hull-roster[data-view="atlas"] > .class-tabs,
+    #helios-hull-roster[data-view="atlas"] > .roster-body,
+    #helios-hull-roster[data-view="atlas"] > .roster-footer {
+      display: none;
+    }
+
+    #helios-hull-roster .atlas-page {
+      display: none;
+      min-height: 720px;
+      background: #08100e;
+    }
+
+    #helios-hull-roster[data-view="atlas"] > .atlas-page {
+      display: block;
+    }
+
+    #helios-hull-roster .atlas-toolbar {
+      min-height: 56px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid #2b3531;
+      background: #0b1210;
+    }
+
+    #helios-hull-roster .atlas-filters,
+    #helios-hull-roster .atlas-controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    #helios-hull-roster .atlas-filter,
+    #helios-hull-roster .atlas-control {
+      min-height: 28px;
+      padding: 0 9px;
+      border: 1px solid #2b3531;
+      border-radius: 0;
+      color: #83918a;
+      background: #0d1512;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+      cursor: pointer;
+    }
+
+    #helios-hull-roster .atlas-control:hover,
+    #helios-hull-roster .atlas-filter:hover {
+      color: #dce5e0;
+      border-color: #41504a;
+      background: #121d19;
+    }
+
+    #helios-hull-roster .atlas-filter[aria-pressed="true"] {
+      color: #08100e;
+      border-color: #65d6c1;
+      background: #65d6c1;
+    }
+
+    #helios-hull-roster .atlas-control.is-primary {
+      color: #bce9df;
+      border-color: #35645b;
+    }
+
+    #helios-hull-roster .atlas-zoom-readout {
+      min-width: 92px;
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+      text-align: center;
+    }
+
+    #helios-hull-roster .atlas-workspace {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      height: 650px;
+      min-height: 0;
+    }
+
+    #helios-hull-roster .atlas-browser {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #2b3531;
+      background: #0b1210;
+    }
+
+    #helios-hull-roster .atlas-browser-head {
+      min-height: 42px;
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #26342f;
+      color: #c1cac5;
+      font-size: 10px;
+    }
+
+    #helios-hull-roster .atlas-browser-head span:last-child {
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .atlas-list {
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow-y: auto;
+      scrollbar-color: #35443e #0b1210;
+    }
+
+    #helios-hull-roster .atlas-card {
+      width: 100%;
+      min-height: 76px;
+      padding: 7px 9px;
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr) auto;
+      grid-template-rows: auto auto auto;
+      align-items: center;
+      column-gap: 8px;
+      border: 0;
+      border-bottom: 1px solid #1d2925;
+      border-radius: 0;
+      color: #c1cac5;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    #helios-hull-roster .atlas-card:hover {
+      background: #101815;
+    }
+
+    #helios-hull-roster .atlas-card[aria-pressed="true"] {
+      box-shadow: inset 2px 0 #65d6c1;
+      background: #151c19;
+    }
+
+    #helios-hull-roster .atlas-card svg {
+      grid-row: 1 / 4;
+      width: 58px;
+      height: 60px;
+    }
+
+    #helios-hull-roster .atlas-card-outline {
+      fill: rgba(24, 36, 31, .72);
+      stroke-width: 1.25;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-card-line {
+      fill: none;
+      stroke: #52645c;
+      stroke-width: .75;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-card-name {
+      align-self: end;
+      color: #e9eeeb;
+      font-size: 10px;
+      font-weight: 650;
+    }
+
+    #helios-hull-roster .atlas-card-code {
+      align-self: end;
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .atlas-card-role {
+      grid-column: 2 / 4;
+      color: #83918a;
+      font-size: 9px;
+      line-height: 1.25;
+    }
+
+    #helios-hull-roster .atlas-card-size {
+      grid-column: 2 / 4;
+      align-self: start;
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .atlas-main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) 122px;
+      background: #060d0b;
+    }
+
+    #helios-hull-roster .atlas-viewport {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #07100d;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    #helios-hull-roster .atlas-viewport.is-dragging {
+      cursor: grabbing;
+    }
+
+    #helios-hull-roster .atlas-viewport:focus-visible {
+      outline: 2px solid #65d6c1;
+      outline-offset: -3px;
+    }
+
+    #helios-hull-roster .atlas-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #helios-hull-roster .atlas-world-frame {
+      fill: none;
+      stroke: #2b3531;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-baseline {
+      fill: none;
+      stroke: #4d675e;
+      stroke-width: 1;
+      stroke-dasharray: 7 5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-baseline-label,
+    #helios-hull-roster .atlas-coordinate-label {
+      fill: #52645c;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      letter-spacing: .06em;
+    }
+
+    #helios-hull-roster .atlas-hull-surface {
+      fill: rgba(16, 26, 22, .96);
+      stroke-width: 1.7;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      filter: drop-shadow(0 0 5px rgba(0, 0, 0, .75));
+    }
+
+    #helios-hull-roster .atlas-inner-line,
+    #helios-hull-roster .atlas-panel-line,
+    #helios-hull-roster .atlas-machinery-line,
+    #helios-hull-roster .atlas-center-line {
+      fill: none;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-inner-line {
+      stroke: #53655d;
+      stroke-width: .9;
+    }
+
+    #helios-hull-roster .atlas-panel-line {
+      stroke: #3a4b44;
+      stroke-width: .7;
+    }
+
+    #helios-hull-roster .atlas-machinery-line {
+      stroke-width: 1.05;
+    }
+
+    #helios-hull-roster .atlas-center-line {
+      stroke: #293a34;
+      stroke-width: .65;
+      stroke-dasharray: 3 3;
+    }
+
+    #helios-hull-roster .atlas-void {
+      fill: #07100d;
+      stroke: #53655d;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-engine {
+      fill: #10241f;
+      stroke: #65d6c1;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-hardpoint {
+      fill: #07100d;
+      stroke: #d8a66a;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-bridge {
+      fill: rgba(101, 169, 216, .17);
+      stroke: #65a9d8;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .atlas-ship-hit {
+      fill: transparent;
+      stroke: transparent;
+      stroke-width: 9;
+      vector-effect: non-scaling-stroke;
+      cursor: pointer;
+    }
+
+    #helios-hull-roster .atlas-ship.is-selected .atlas-hull-surface {
+      filter: drop-shadow(0 0 7px rgba(101, 214, 193, .48));
+    }
+
+    #helios-hull-roster .atlas-ship.is-selected .atlas-selection-bracket {
+      opacity: 1;
+    }
+
+    #helios-hull-roster .atlas-selection-bracket {
+      fill: none;
+      stroke: #65d6c1;
+      stroke-width: 1;
+      stroke-dasharray: 4 3;
+      vector-effect: non-scaling-stroke;
+      opacity: 0;
+    }
+
+    #helios-hull-roster .atlas-label-name,
+    #helios-hull-roster .atlas-label-size {
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      paint-order: stroke;
+      stroke: #07100d;
+      stroke-width: 2px;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+
+    #helios-hull-roster .atlas-label-name {
+      fill: #dce5e0;
+      font-weight: 650;
+    }
+
+    #helios-hull-roster .atlas-label-size {
+      fill: #65d6c1;
+    }
+
+    #helios-hull-roster .atlas-ship[data-lod="far"] .atlas-mid-detail,
+    #helios-hull-roster .atlas-ship[data-lod="far"] .atlas-full-detail,
+    #helios-hull-roster .atlas-ship[data-lod="far"] + .atlas-label,
+    #helios-hull-roster .atlas-ship[data-lod="mid"] .atlas-full-detail {
+      display: none;
+    }
+
+    #helios-hull-roster .atlas-hud {
+      position: absolute;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    #helios-hull-roster .atlas-hud-top {
+      left: 10px;
+      top: 9px;
+      color: #6f8179;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+      line-height: 1.6;
+      text-shadow: 0 1px 2px #000;
+    }
+
+    #helios-hull-roster .atlas-hud-scale {
+      right: 12px;
+      bottom: 12px;
+      min-width: 120px;
+      color: #83918a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+      text-align: right;
+    }
+
+    #helios-hull-roster .atlas-scale-line {
+      height: 7px;
+      margin: 4px 0 0 auto;
+      border-right: 1px solid #65d6c1;
+      border-bottom: 1px solid #65d6c1;
+      border-left: 1px solid #65d6c1;
+    }
+
+    #helios-hull-roster .atlas-inspector {
+      min-width: 0;
+      padding: 10px 13px;
+      display: grid;
+      grid-template-columns: minmax(180px, .7fr) minmax(0, 1.6fr) minmax(185px, .75fr);
+      gap: 18px;
+      border-top: 1px solid #2b3531;
+      background: #0d1311;
+    }
+
+    #helios-hull-roster .atlas-inspector-name {
+      color: #e9eeeb;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    #helios-hull-roster .atlas-inspector-en,
+    #helios-hull-roster .atlas-inspector-label {
+      margin-top: 3px;
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+      letter-spacing: .05em;
+    }
+
+    #helios-hull-roster .atlas-inspector-note {
+      margin-top: 5px;
+      color: #a9b5af;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    #helios-hull-roster .atlas-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px 10px;
+    }
+
+    #helios-hull-roster .atlas-metric {
+      min-width: 0;
+      border-bottom: 1px solid #26342f;
+      color: #60716a;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .atlas-metric strong {
+      float: right;
+      color: #c1cac5;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+      font-weight: 500;
+    }
+
+    #helios-hull-roster .atlas-legend {
+      color: #83918a;
+      font-size: 9px;
+      line-height: 1.55;
+    }
+
+    #helios-hull-roster .atlas-legend i {
+      width: 9px;
+      height: 9px;
+      margin-right: 5px;
+      display: inline-block;
+      vertical-align: -1px;
+      border: 1px solid currentColor;
+    }
+
+    #helios-hull-roster .class-tabs {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      border-bottom: 1px solid #2b3531;
+      background: #0b1210;
+    }
+
+    #helios-hull-roster .class-tab {
+      position: relative;
+      min-height: 54px;
+      padding: 8px 6px;
+      border: 0;
+      border-right: 1px solid #26342f;
+      border-radius: 0;
+      color: #83918a;
+      background: transparent;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    #helios-hull-roster .class-tab:last-child {
+      border-right: 0;
+    }
+
+    #helios-hull-roster .class-tab:hover {
+      color: #c1cac5;
+      background: #101815;
+    }
+
+    #helios-hull-roster .class-tab:focus-visible {
+      outline: 2px solid #62b5ae;
+      outline-offset: -3px;
+    }
+
+    #helios-hull-roster .class-tab[aria-selected="true"] {
+      color: #e9eeeb;
+      background: #151c19;
+    }
+
+    #helios-hull-roster .class-tab[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 0;
+      height: 2px;
+      background: #65d6c1;
+    }
+
+    #helios-hull-roster .class-cn {
+      display: block;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    #helios-hull-roster .class-en {
+      display: block;
+      margin-top: 3px;
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .roster-body {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr);
+      min-height: 610px;
+    }
+
+    #helios-hull-roster .ship-browser {
+      border-right: 1px solid #2b3531;
+      background: #0b1210;
+    }
+
+    #helios-hull-roster .browser-heading {
+      min-height: 39px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #26342f;
+      color: #c1cac5;
+      font-size: 10px;
+    }
+
+    #helios-hull-roster .browser-code {
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .ship-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      background: #26342f;
+    }
+
+    #helios-hull-roster .ship-card {
+      position: relative;
+      min-width: 0;
+      min-height: 157px;
+      padding: 8px;
+      border: 0;
+      border-radius: 0;
+      color: #c1cac5;
+      background:
+        linear-gradient(rgba(101, 214, 193, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(101, 214, 193, 0.02) 1px, transparent 1px),
+        #0b1210;
+      background-size: 16px 16px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    #helios-hull-roster .ship-card:hover {
+      background-color: #101815;
+    }
+
+    #helios-hull-roster .ship-card:focus-visible {
+      outline: 2px solid #62b5ae;
+      outline-offset: -3px;
+    }
+
+    #helios-hull-roster .ship-card[aria-pressed="true"] {
+      background-color: #151c19;
+    }
+
+    #helios-hull-roster .ship-card[aria-pressed="true"]::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: #65d6c1;
+    }
+
+    #helios-hull-roster .ship-card svg {
+      display: block;
+      width: 100%;
+      height: 90px;
+    }
+
+    #helios-hull-roster .thumb-shell {
+      fill: rgba(16, 24, 21, 0.9);
+      stroke-width: 1.4;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .thumb-inner {
+      fill: none;
+      stroke: #35443e;
+      stroke-width: 0.8;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .thumb-spine {
+      fill: none;
+      stroke: #26342f;
+      stroke-width: 0.8;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .card-name {
+      color: #e9eeeb;
+      font-size: 11px;
+      font-weight: 650;
+      line-height: 1.2;
+    }
+
+    #helios-hull-roster .card-role {
+      margin-top: 3px;
+      min-height: 24px;
+      color: #83918a;
+      font-size: 9px;
+      line-height: 1.3;
+    }
+
+    #helios-hull-roster .card-meta {
+      margin-top: 5px;
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+    }
+
+    #helios-hull-roster .blueprint {
+      min-width: 0;
+      background:
+        linear-gradient(rgba(101, 214, 193, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(101, 214, 193, 0.025) 1px, transparent 1px),
+        #08100e;
+      background-size: 24px 24px;
+    }
+
+    #helios-hull-roster .blueprint-heading {
+      min-height: 70px;
+      padding: 11px 16px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid #26342f;
+      background: rgba(13, 19, 17, 0.9);
+    }
+
+    #helios-hull-roster .blueprint-name {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.15;
+    }
+
+    #helios-hull-roster .blueprint-en {
+      margin-top: 4px;
+      color: #83918a;
+      font-size: 10px;
+    }
+
+    #helios-hull-roster .blueprint-class {
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+      text-align: right;
+    }
+
+    #helios-hull-roster .blueprint-role {
+      margin-top: 4px;
+      color: #c1cac5;
+      font-size: 10px;
+    }
+
+    #helios-hull-roster .blueprint-sheet {
+      height: 376px;
+      padding: 8px 12px 0;
+    }
+
+    #helios-hull-roster .blueprint-sheet svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #helios-hull-roster .blueprint-shell {
+      fill: rgba(16, 24, 21, 0.96);
+      stroke-width: 1.8;
+      vector-effect: non-scaling-stroke;
+      filter: drop-shadow(0 0 7px rgba(0, 0, 0, 0.75));
+    }
+
+    #helios-hull-roster .blueprint-inner {
+      fill: none;
+      stroke: #41504a;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .blueprint-spine {
+      fill: none;
+      stroke: #35443e;
+      stroke-width: 0.8;
+      stroke-dasharray: 2 2;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .mount-shape {
+      fill: #08100e;
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+      filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.75));
+    }
+
+    #helios-hull-roster .mount-lug {
+      fill: none;
+      stroke: #53655d;
+      stroke-width: 0.7;
+      stroke-linecap: square;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .mount-seat {
+      fill: none;
+      stroke: #35443e;
+      stroke-width: 0.6;
+      stroke-dasharray: 1.2 1.6;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .mount-inner {
+      fill: none;
+      stroke-width: 0.72;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .mount-inner-fill {
+      stroke: none;
+      opacity: 0.82;
+    }
+
+    #helios-hull-roster .installation-trunk,
+    #helios-hull-roster .installation-branch {
+      fill: none;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+
+    #helios-hull-roster .installation-trunk {
+      stroke: #53655d;
+      stroke-width: 0.7;
+      stroke-dasharray: 2.2 2.2;
+      opacity: 0.46;
+    }
+
+    #helios-hull-roster .installation-branch {
+      stroke-width: 0.62;
+      opacity: 0.34;
+    }
+
+    #helios-hull-roster .installation-junction {
+      fill: #08100e;
+      stroke: #60716a;
+      stroke-width: 0.55;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
+    }
+
+    #helios-hull-roster .rank-glyph-back {
+      fill: none;
+      stroke: #08100e;
+      stroke-width: 2.4;
+      stroke-linecap: square;
+      stroke-linejoin: miter;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .rank-glyph {
+      fill: none;
+      stroke: #e3b35b;
+      stroke-width: 1;
+      stroke-linecap: square;
+      stroke-linejoin: miter;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .rank-star-back {
+      fill: #08100e;
+      stroke: #08100e;
+      stroke-width: 1.8;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .rank-star {
+      fill: #e3b35b;
+      stroke: #ffd77a;
+      stroke-width: 0.5;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .hull-void {
+      fill: #08100e;
+      stroke: #41504a;
+      stroke-width: 0.8;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .datum-mark {
+      fill: #08100e;
+      stroke: #60716a;
+      stroke-width: 0.75;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .blueprint-axis {
+      fill: none;
+      stroke: #26342f;
+      stroke-width: 0.6;
+      stroke-dasharray: 2 2;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #helios-hull-roster .blueprint-caption {
+      min-height: 112px;
+      padding: 11px 16px 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(190px, 0.65fr);
+      gap: 18px;
+      border-top: 1px solid #26342f;
+      background: rgba(13, 19, 17, 0.94);
+    }
+
+    #helios-hull-roster .design-note-label,
+    #helios-hull-roster .budget-label {
+      color: #60716a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+    }
+
+    #helios-hull-roster .design-note {
+      margin-top: 6px;
+      color: #c1cac5;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    #helios-hull-roster .installation-doctrine {
+      margin-top: 5px;
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 8px;
+      letter-spacing: .035em;
+    }
+
+    #helios-hull-roster .mount-manifest {
+      margin-top: 9px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 10px;
+      color: #83918a;
+      font-size: 9px;
+      line-height: 1.3;
+    }
+
+    #helios-hull-roster .manifest-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    #helios-hull-roster .manifest-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      transform: rotate(45deg);
+      background: currentColor;
+    }
+
+    #helios-hull-roster .budget-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 7px;
+    }
+
+    #helios-hull-roster .budget-row {
+      display: grid;
+      grid-template-columns: 34px 1fr 42px;
+      align-items: center;
+      gap: 6px;
+      color: #83918a;
+      font-size: 9px;
+    }
+
+    #helios-hull-roster .budget-track {
+      height: 4px;
+      background: #26342f;
+    }
+
+    #helios-hull-roster .budget-fill {
+      height: 100%;
+    }
+
+    #helios-hull-roster .budget-value {
+      color: #c1cac5;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      text-align: right;
+    }
+
+    #helios-hull-roster .roster-footer {
+      min-height: 47px;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 14px;
+      border-top: 1px solid #2b3531;
+      background: #0b1210;
+      color: #83918a;
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    #helios-hull-roster .roster-formula {
+      flex: 0 0 auto;
+      color: #65d6c1;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    }
+
+    #helios-hull-roster .rank-legend {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 5px 9px;
+      color: #83918a;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    }
+
+    #helios-hull-roster .rank-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      white-space: nowrap;
+    }
+
+    #helios-hull-roster .rank-legend svg {
+      width: 12px;
+      height: 12px;
+      overflow: visible;
+    }
+
+    @media (max-width: 820px) {
+      #helios-hull-roster .header-actions {
+        gap: 8px;
+      }
+
+      #helios-hull-roster .atlas-workspace {
+        grid-template-columns: 220px minmax(0, 1fr);
+      }
+
+      #helios-hull-roster .atlas-inspector {
+        grid-template-columns: minmax(150px, .8fr) minmax(0, 1.5fr);
+      }
+
+      #helios-hull-roster .atlas-legend {
+        display: none;
+      }
+
+      #helios-hull-roster .roster-body {
+        grid-template-columns: 260px minmax(0, 1fr);
+      }
+
+      #helios-hull-roster .ship-list {
+        grid-template-columns: 1fr;
+      }
+
+      #helios-hull-roster .ship-card {
+        min-height: 122px;
+        display: grid;
+        grid-template-columns: 92px 1fr;
+        grid-template-rows: auto auto 1fr;
+        column-gap: 8px;
+      }
+
+      #helios-hull-roster .ship-card svg {
+        grid-row: 1 / 4;
+        height: 100px;
+      }
+
+      #helios-hull-roster .blueprint-caption {
+        grid-template-columns: 1fr;
+      }
+
+      #helios-hull-roster .roster-footer {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 7px;
+      }
+    }
+
+    @media (max-width: 620px) {
+      #helios-hull-roster .roster-header {
+        align-items: flex-start;
+      }
+
+      #helios-hull-roster .header-actions {
+        flex-direction: column;
+        align-items: flex-end;
+      }
+
+      #helios-hull-roster .atlas-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      #helios-hull-roster .atlas-workspace {
+        height: auto;
+        display: block;
+      }
+
+      #helios-hull-roster .atlas-browser {
+        height: 214px;
+        border-right: 0;
+        border-bottom: 1px solid #2b3531;
+      }
+
+      #helios-hull-roster .atlas-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      #helios-hull-roster .atlas-card {
+        border-right: 1px solid #1d2925;
+      }
+
+      #helios-hull-roster .atlas-main {
+        height: 560px;
+        grid-template-rows: minmax(0, 1fr) 142px;
+      }
+
+      #helios-hull-roster .atlas-inspector {
+        grid-template-columns: minmax(145px, .75fr) minmax(0, 1.25fr);
+        gap: 12px;
+      }
+
+      #helios-hull-roster .class-tabs {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      #helios-hull-roster .class-tab:nth-child(-n+3) {
+        border-bottom: 1px solid #26342f;
+      }
+
+      #helios-hull-roster .roster-body {
+        grid-template-columns: 1fr;
+      }
+
+      #helios-hull-roster .ship-browser {
+        border-right: 0;
+        border-bottom: 1px solid #2b3531;
+      }
+
+      #helios-hull-roster .ship-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      #helios-hull-roster .ship-card {
+        min-height: 146px;
+        display: block;
+      }
+
+      #helios-hull-roster .ship-card svg {
+        height: 80px;
+      }
+
+      #helios-hull-roster .blueprint-sheet {
+        height: 330px;
+      }
+    }
+
+    @media (max-width: 390px) {
+      #helios-hull-roster .roster-header {
+        display: block;
+      }
+
+      #helios-hull-roster .header-actions {
+        margin-top: 9px;
+        align-items: stretch;
+      }
+
+      #helios-hull-roster .view-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      #helios-hull-roster .atlas-list {
+        grid-template-columns: 1fr;
+      }
+
+      #helios-hull-roster .atlas-main {
+        height: 500px;
+        grid-template-rows: minmax(0, 1fr) 184px;
+      }
+
+      #helios-hull-roster .atlas-inspector {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      #helios-hull-roster .atlas-inspector-note {
+        display: none;
+      }
+
+      #helios-hull-roster .roster-count,
+      #helios-hull-roster .roster-formula {
+        display: none;
+      }
+
+      #helios-hull-roster .blueprint-heading {
+        align-items: flex-start;
+      }
+
+      #helios-hull-roster .ship-list {
+        grid-template-columns: 1fr;
+      }
+
+      #helios-hull-roster .ship-card {
+        display: grid;
+        grid-template-columns: 100px 1fr;
+        grid-template-rows: auto auto 1fr;
+        min-height: 120px;
+      }
+
+      #helios-hull-roster .ship-card svg {
+        grid-row: 1 / 4;
+        height: 100px;
+      }
+
+      #helios-hull-roster .blueprint-class {
+        max-width: 110px;
+      }
+    }
+  </style>
+
+  <div class="roster-header">
+    <div>
+      <div class="roster-title" data-header-title>舰船框架谱系 · 第二版</div>
+      <div class="roster-subtitle" data-header-subtitle>六级舰体、三十种定位；形状表示接口，颜色表示系统，内标表示实装配件，军衔角标表示 T1–T5</div>
+    </div>
+    <div class="header-actions">
+      <div class="roster-count" data-header-count>30 HULL FRAMEWORKS</div>
+      <div class="view-tabs" role="tablist" aria-label="展示页面">
+        <button class="view-tab" type="button" role="tab" aria-selected="true" data-view-target="framework">槽位谱系</button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-target="atlas">同尺度船坞</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="class-tabs" role="tablist" aria-label="舰船级别"></div>
+
+  <div class="roster-body">
+    <section class="ship-browser">
+      <div class="browser-heading">
+        <span class="browser-title">战列舰方案</span>
+        <span class="browser-code">SELECT HULL</span>
+      </div>
+      <div class="ship-list"></div>
+    </section>
+
+    <section class="blueprint" aria-live="polite">
+      <div class="blueprint-heading">
+        <div>
+          <div class="blueprint-name"></div>
+          <div class="blueprint-en"></div>
+        </div>
+        <div>
+          <div class="blueprint-class"></div>
+          <div class="blueprint-role"></div>
+        </div>
+      </div>
+      <div class="blueprint-sheet"></div>
+      <div class="blueprint-caption">
+        <div>
+          <div class="design-note-label">DESIGN DISTINCTION</div>
+          <div class="design-note"></div>
+          <div class="installation-doctrine"></div>
+          <div class="mount-manifest"></div>
+        </div>
+        <div>
+          <div class="budget-label">ENGINEERING BUDGET</div>
+          <div class="budget-list"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="roster-footer">
+    <span>十字线交点是舰体装配中心；槽位可不对称，但整体重心必须受控。内标区分实装型号，悬停可查看接口键、型号与等级。</span>
+    <span class="rank-legend" aria-label="插件等级角标"></span>
+  </div>
+
+  <section class="atlas-page" aria-label="同尺度舰体图谱">
+    <div class="atlas-toolbar">
+      <div class="atlas-filters" role="group" aria-label="按舰体尺寸筛选">
+        <button class="atlas-filter" type="button" aria-pressed="true" data-atlas-filter="all">全部 · 12</button>
+        <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="small">小型 &lt;100m</button>
+        <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="medium">中型 100–400m</button>
+        <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="large">大型 400–900m</button>
+        <button class="atlas-filter" type="button" aria-pressed="false" data-atlas-filter="capital">旗舰 900m+</button>
+      </div>
+      <div class="atlas-controls" aria-label="画布控制">
+        <span class="atlas-zoom-readout">VIEW —</span>
+        <button class="atlas-control" type="button" data-atlas-action="out" aria-label="缩小">−</button>
+        <button class="atlas-control" type="button" data-atlas-action="in" aria-label="放大">＋</button>
+        <button class="atlas-control" type="button" data-atlas-action="fit">全图</button>
+        <button class="atlas-control is-primary" type="button" data-atlas-action="focus">聚焦选中</button>
+      </div>
+    </div>
+
+    <div class="atlas-workspace">
+      <aside class="atlas-browser">
+        <div class="atlas-browser-head">
+          <span>原创舰体索引</span>
+          <span>SELECT / FOCUS</span>
+        </div>
+        <div class="atlas-list"></div>
+      </aside>
+
+      <div class="atlas-main">
+        <div class="atlas-viewport" tabindex="0" aria-label="可缩放平移的同尺度舰船画布。滚轮缩放，拖动画布。">
+          <svg class="atlas-canvas" role="img" aria-label="十二艘原创舰船的统一比例俯视线稿"></svg>
+          <div class="atlas-hud atlas-hud-top">
+            ORTHOGRAPHIC TOP / TRUE SCALE<br>
+            细格 2m · 中格 10m · 粗格 50m<br>
+            滚轮缩放 · 拖动平移 · 双击舰体聚焦
+          </div>
+          <div class="atlas-hud atlas-hud-scale">
+            <span class="atlas-scale-label">100 METERS</span>
+            <div class="atlas-scale-line"></div>
+          </div>
+        </div>
+
+        <div class="atlas-inspector" aria-live="polite">
+          <div>
+            <div class="atlas-inspector-name"></div>
+            <div class="atlas-inspector-en"></div>
+            <div class="atlas-inspector-note"></div>
+          </div>
+          <div class="atlas-metrics"></div>
+          <div class="atlas-legend">
+            <div class="atlas-inspector-label">DRAWING LEGEND</div>
+            <div><i style="color:#65a9d8"></i>舰桥 / 观测节点</div>
+            <div><i style="color:#d8a66a"></i>武器 / 作业硬点</div>
+            <div><i style="color:#65d6c1"></i>推进器 / 机动喷口</div>
+            <div>统一基线：所有舰尾对齐，网格即真实尺寸差。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const root = document.getElementById("helios-hull-roster");
+
+      const classes = [
+        { id: "frigate", cn: "护卫舰", en: "FRIGATE", count: 5 },
+        { id: "destroyer", cn: "驱逐舰", en: "DESTROYER", count: 4 },
+        { id: "cruiser", cn: "巡洋舰", en: "CRUISER", count: 5 },
+        { id: "battlecruiser", cn: "战列巡洋舰", en: "BATTLECRUISER", count: 4 },
+        { id: "battleship", cn: "战列舰", en: "BATTLESHIP", count: 5 },
+        { id: "capital", cn: "主力舰", en: "CAPITAL", count: 7 }
+      ];
+
+      const profiles = {
+        p01:{outer:"M60 2L67 12L67 24L80 35L71 46L70 68L64 83L60 88L56 83L50 68L49 46L40 35L53 24L53 12Z"},
+        p02:{outer:"M60 3L78 23L92 36L80 45L72 53L72 70L82 84L69 88L60 78L51 88L38 84L48 70L48 53L40 45L28 36L42 23Z"},
+        p03:{outer:"M60 7L78 16L88 29L100 37L94 57L78 65L72 82L60 88L48 82L42 65L26 57L20 37L32 29L42 16Z"},
+        p04:{outer:"M56 8L72 14L75 28L91 31L103 45L94 56L84 57L89 72L74 83L59 78L50 88L38 82L42 66L28 62L18 48L29 36L45 30L44 15Z"},
+        p05:{outer:"M60 4L72 16L77 34L90 43L79 52L76 64L90 79L76 87L60 76L44 87L30 79L44 64L41 52L30 43L43 34L48 16Z"},
+
+        p06:{outer:"M60 1L67 9L70 28L86 35L98 42L89 50L74 55L71 76L60 89L49 76L46 55L31 50L22 42L34 35L50 28L53 9Z"},
+        p07:{outer:"M60 6L76 14L82 25L104 31L99 46L87 53L94 75L76 86L60 82L44 86L26 75L33 53L21 46L16 31L38 25L44 14Z",voids:["M55 16L65 16L68 35L65 59L60 71L55 59L52 35Z"]},
+        p08:{outer:"M60 6L80 13L91 26L108 38L103 55L88 66L75 83L60 88L45 83L32 66L17 55L12 38L29 26L40 13Z"},
+        p09:{outer:"M50 5L66 10L78 23L94 30L104 43L95 54L80 57L88 74L73 84L57 80L48 68L34 66L19 53L26 39L43 29L42 15Z"},
+
+        p10:{outer:"M60 3L82 12L91 26L108 39L97 55L82 63L77 81L60 89L43 81L38 63L23 55L12 39L29 26L38 12Z"},
+        p11:{outer:"M60 2L72 14L80 29L98 45L82 60L74 78L60 89L46 78L38 60L22 45L40 29L48 14Z",voids:["M60 29L70 45L60 61L50 45Z"]},
+        p12:{outer:"M60 8L75 12L85 23L82 34L101 41L110 52L99 66L80 66L74 82L60 88L46 82L40 66L21 66L10 52L19 41L38 34L35 23L45 12Z"},
+        p13:{outer:"M60 5L75 12L83 25L101 34L101 51L89 62L84 78L68 87L52 87L36 78L31 62L19 51L19 34L37 25L45 12Z",voids:["M60 27L73 34L76 45L72 56L60 63L48 56L44 45L47 34Z"]},
+        p14:{outer:"M60 1L68 12L69 27L88 38L79 50L72 58L76 71L91 81L75 88L60 74L45 88L29 81L44 71L48 58L41 50L32 38L51 27L52 12Z"},
+
+        p15:{outer:"M35 9L85 9L91 20L108 34L102 49L87 56L79 72L60 88L41 72L33 56L18 49L12 34L29 20Z"},
+        p16:{outer:"M48 5L65 10L77 22L104 28L110 42L100 53L86 58L100 75L82 85L60 80L43 88L29 78L34 61L19 53L10 38L22 25L42 24Z"},
+        p17:{outer:"M60 2L68 10L73 21L86 14L91 29L106 36L100 52L86 59L79 76L60 89L41 76L34 59L20 52L14 36L29 29L34 14L47 21L52 10Z"},
+        p18:{outer:"M51 5L70 10L78 24L96 28L109 43L103 57L88 62L92 79L75 88L58 81L49 69L31 66L14 53L20 38L39 29L40 14Z",voids:["M67 29L92 36L87 53L65 48Z"]},
+
+        p19:{outer:"M60 1L69 11L75 26L87 18L95 31L112 39L103 55L87 61L80 80L60 90L40 80L33 61L17 55L8 39L25 31L33 18L45 26L51 11Z"},
+        p20:{outer:"M32 8L88 8L103 20L112 36L107 54L96 60L105 75L84 85L60 89L36 85L15 75L24 60L13 54L8 36L17 20Z"},
+        p21:{outer:"M60 1L69 12L72 26L91 38L85 49L76 59L83 73L72 84L60 90L48 84L37 73L44 59L35 49L29 38L48 26L51 12Z"},
+        p22:{outer:"M35 7L85 7L94 16L108 21L108 48L99 55L105 75L85 84L60 88L35 84L15 75L21 55L12 48L12 21L26 16Z"},
+        p23:{outer:"M60 5L77 11L87 24L104 35L102 52L90 64L82 81L60 89L38 81L30 64L18 52L16 35L33 24L43 11Z",voids:["M60 27L73 35L73 51L60 60L47 51L47 35Z"]},
+
+        p24:{outer:"M60 1L69 8L73 19L83 22L88 34L101 40L96 50L84 55L83 70L72 77L69 88L51 88L48 77L37 70L36 55L24 50L19 40L32 34L37 22L47 19L51 8Z"},
+        p25:{outer:"M57 5L77 9L91 18L111 28L108 46L97 55L106 72L87 84L59 90L32 84L13 72L22 54L11 45L9 28L31 18L42 9Z",voids:["M49 17L69 17L78 30L76 61L67 77L53 77L44 61L42 30Z"]},
+        p26:{outer:"M60 4L78 9L94 20L107 36L106 55L95 70L78 83L60 89L42 83L25 70L14 55L13 36L26 20L42 9Z",voids:["M60 25L75 31L82 44L76 59L60 67L44 59L38 44L45 31Z"]},
+        p27:{outer:"M58 3L78 8L94 18L114 27L110 43L98 49L108 70L88 84L60 90L32 84L13 73L22 53L10 45L7 27L27 19L41 8Z",voids:["M28 27L50 21L48 61L34 69L23 50Z","M70 19L95 28L99 48L85 64L72 59Z"]},
+        p28:{outer:"M60 1L68 12L70 27L96 24L106 34L115 45L105 56L82 56L80 76L70 86L60 90L50 86L40 76L38 56L15 56L5 45L14 34L50 27L52 12Z"},
+        p29:{outer:"M40 4L80 4L91 12L99 23L105 36L105 69L92 83L75 88L45 88L28 83L15 69L15 36L21 23L29 12Z"},
+        p30:{outer:"M60 2L70 10L75 23L96 29L108 42L101 53L88 58L102 74L82 85L68 80L60 90L52 80L38 85L18 74L32 58L19 53L12 42L24 29L45 23L50 10Z",voids:["M39 35L53 29L50 64L35 68L29 54Z","M67 29L81 35L91 54L85 68L70 64Z"]}
+      };
+
+      const ships = [
+        {id:"f01",class:"frigate",name:"远针",en:"Needle Scout",role:"长程侦察护卫舰",profile:"p01",accent:"#65a9d8",span:12,budget:[46,62,41],mounts:[["core","S",1],["engine","S",1],["shield","S",1],["sensor","S",2],["ewar","S",1]],note:"以细长中轴和双传感器位换取远程情报能力，几乎没有持续交战余量。"},
+        {id:"f02",class:"frigate",name:"迅矛",en:"Swift Lance",role:"高速截击护卫舰",profile:"p02",accent:"#62b5ae",span:18,budget:[58,88,55],mounts:[["core","S",1],["engine","S",2],["shield","S",1],["kinetic","S",2],["fire","S",1]],note:"双推进槽和窄正面使其适合高速截击，但电力预算只允许短时火力输出。"},
+        {id:"f03",class:"frigate",name:"壁卫",en:"Bulwark Escort",role:"近程护航护卫舰",profile:"p03",accent:"#65a9d8",span:22,budget:[72,74,69],mounts:[["core","S",1],["engine","S",1],["shield","S",1],["kinetic","S",3],["fire","S",1]],note:"宽肩布置三门小型实弹炮，覆盖近距离点防御和运输船护航。"},
+        {id:"f04",class:"frigate",name:"矿蜂",en:"Ore Wisp",role:"轻型采掘护卫舰",profile:"p04",accent:"#70bb85",span:19,budget:[64,70,76],mounts:[["core","S",1],["engine","S",1],["shield","S",1],["mining","S",2],["cargo","S",1]],note:"两组工业束流围绕小型货舱工作，适合前期近地资源点。"},
+        {id:"f05",class:"frigate",name:"信使",en:"Way Courier",role:"高速快运护卫舰",profile:"p05",accent:"#65d6c1",span:17,budget:[52,91,48],mounts:[["core","S",1],["engine","S",2],["shield","S",1],["cargo","S",2],["sensor","S",1]],note:"双尾推进和分离货舱强调速度与航程，不设置专用武器位。"},
+
+        {id:"d01",class:"destroyer",name:"长矛",en:"Long Spear",role:"炮击驱逐舰",profile:"p06",accent:"#d87562",span:23,budget:[128,156,124],mounts:[["core","M",1],["engine","M",1],["shield","S",1],["kinetic","M",2],["kinetic","S",2],["fire","S",1]],note:"两门中型主炮负责击穿，两个小型炮位负责压制；舰首轮廓围绕后坐轴线设计。"},
+        {id:"d02",class:"destroyer",name:"雹暴",en:"Hail Battery",role:"导弹驱逐舰",profile:"p07",accent:"#e58f55",span:27,budget:[134,170,118],mounts:[["core","M",1],["engine","M",1],["shield","S",1],["missile","M",2],["missile","S",2],["fire","S",1]],note:"侧舷发射舱形成宽轮廓，可投射混合射程弹药但转向惯量较高。"},
+        {id:"d03",class:"destroyer",name:"守望",en:"Ward Screen",role:"点防御驱逐舰",profile:"p08",accent:"#65a9d8",span:31,budget:[146,178,151],mounts:[["core","M",1],["engine","M",1],["shield","M",1],["kinetic","S",6],["fire","M",1],["sensor","S",1]],note:"六个小型炮位形成连续拦截弧，是典型的高槽位密度、低单发威力方案。"},
+        {id:"d04",class:"destroyer",name:"暗幕",en:"Veil Hunter",role:"电子战驱逐舰",profile:"p09",accent:"#9181d8",span:24,budget:[118,184,132],mounts:[["core","M",1],["engine","M",1],["shield","S",1],["ewar","M",2],["sensor","M",1],["fire","S",1],["beam","S",1]],note:"偏置电子舱与低火力形成鲜明取舍，依靠干扰和目标信息参与舰队作战。"},
+
+        {id:"c01",class:"cruiser",name:"先锋",en:"Vanguard Line",role:"线列巡洋舰",profile:"p10",accent:"#d87562",span:29,budget:[272,310,286],mounts:[["core","M",1],["engine","M",1],["shield","M",2],["kinetic","M",4],["fire","M",1],["hull","M",1]],note:"四门中型实弹炮分居两舷，结构、护盾和火控保持均衡。"},
+        {id:"c02",class:"cruiser",name:"棱镜",en:"Prism Lance",role:"光束巡洋舰",profile:"p11",accent:"#c889d8",span:24,budget:[248,356,342],mounts:[["core","M",1],["engine","M",1],["shield","M",2],["beam","M",3],["thermal","M",2],["fire","M",1]],note:"三束流发射器沿纵轴布置，额外散热槽让它擅长持续射击而不是爆发齐射。"},
+        {id:"c03",class:"cruiser",name:"地脉",en:"Deep Vein",role:"重型采掘巡洋舰",profile:"p12",accent:"#70bb85",span:31,budget:[326,334,398],mounts:[["core","M",1],["engine","M",1],["shield","M",1],["mining","M",4],["engineering","M",1],["cargo","M",2],["thermal","M",1]],note:"四组采掘接口与双货舱占据大部分舰体，战斗能力完全依赖护航。"},
+        {id:"c04",class:"cruiser",name:"仁慈",en:"Mercy Tender",role:"维修支援巡洋舰",profile:"p13",accent:"#70bb85",span:27,budget:[304,372,326],mounts:[["core","M",1],["engine","M",1],["shield","M",2],["support","M",3],["cargo","M",1],["sensor","M",1],["drone","S",2]],note:"中央维护核心连接三组维修接口，两侧短坞用于无人维修机与补给转运。"},
+        {id:"c05",class:"cruiser",name:"远镜",en:"Farwatch Recon",role:"远程侦察巡洋舰",profile:"p14",accent:"#65a9d8",span:22,budget:[236,388,294],mounts:[["core","M",1],["engine","M",1],["shield","M",1],["sensor","M",3],["ewar","M",2],["beam","S",2],["fire","M",1]],note:"传感器和电子战槽沿细长舰脊排列，以火力和装甲换取远程探测能力。"},
+
+        {id:"bc01",class:"battlecruiser",name:"破阵",en:"Linebreaker",role:"重装突击战列巡洋舰",profile:"p15",accent:"#d87562",span:36,budget:[548,612,566],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["kinetic","L",3],["fire","L",1],["hull","L",2],["kinetic","S",4]],note:"三门大型主炮负责突破，四门小炮维持近防；舰首装甲明显厚于舰尾。"},
+        {id:"bc02",class:"battlecruiser",name:"风暴",en:"Tempest Rack",role:"远程导弹战列巡洋舰",profile:"p16",accent:"#e58f55",span:37,budget:[506,658,498],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["missile","L",4],["fire","L",1],["sensor","M",1],["kinetic","S",2],["thermal","M",1]],note:"四座大型发射系统沿侧舷排列，用较薄结构换取超视距齐射能力。"},
+        {id:"bc03",class:"battlecruiser",name:"元帅",en:"Marshal Array",role:"舰队指挥战列巡洋舰",profile:"p17",accent:"#76aee8",span:34,budget:[522,704,582],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["fire","L",2],["sensor","L",2],["ewar","M",2],["support","M",2],["kinetic","M",2]],note:"高耸指挥冠和成对传感器阵列表明它是舰队节点，而非单纯火力平台。"},
+        {id:"bc04",class:"battlecruiser",name:"代达罗斯",en:"Daedalus Works",role:"移动建设战列巡洋舰",profile:"p18",accent:"#e1b452",span:35,budget:[624,646,678],mounts:[["core","L",1],["engine","L",1],["shield","L",1],["engineering","L",3],["cargo","L",2],["support","M",2],["drone","M",2],["thermal","L",1]],note:"非对称作业坞只承载工程插件，外置桁架没有槽位；它是一座会移动的施工平台。"},
+
+        {id:"bs01",class:"battleship",name:"利维坦",en:"Leviathan Siege",role:"三联超级巨炮战列舰",profile:"p19",accent:"#d87562",span:38,budget:[1080,1420,1260],pattern:"trident",mounts:[["core","XL",1],["engine","L",1],["shield","L",2],["kinetic","XL",3],["fire","XL",1],["hull","L",3],["thermal","L",2]],note:"三座 T4 后坐炮沿舰首三角承力架布置。槽位少而昂贵，一次齐射会占用绝大部分电力与散热预算。"},
+        {id:"bs02",class:"battleship",name:"铁幕",en:"Ironwall Arsenal",role:"多炮位防空战列舰",profile:"p20",accent:"#d87562",span:43,budget:[1240,1180,1460],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["kinetic","M",6],["kinetic","S",8],["fire","L",2],["sensor","M",1],["thermal","L",2],["hull","L",2]],note:"十四个 T1/T2 实弹炮位形成密集火网，适合点防御和多目标压制，但没有 T4 主炮的单次破坏力。"},
+        {id:"bs03",class:"battleship",name:"日矛",en:"Sunlance",role:"持续光束战列舰",profile:"p21",accent:"#c889d8",span:35,budget:[1120,1580,1710],mounts:[["core","XL",1],["engine","L",1],["shield","L",3],["beam","XL",1],["beam","L",4],["fire","L",2],["thermal","XL",2],["sensor","M",1]],note:"中央 T4 光束与四门 T3 副束流共用纵向能量脊柱，舰体后半几乎全部用于散热。"},
+        {id:"bs04",class:"battleship",name:"天火",en:"Skyfire Arsenal",role:"饱和导弹战列舰",profile:"p22",accent:"#e58f55",span:42,budget:[1170,1320,1390],mounts:[["core","L",1],["engine","L",1],["shield","L",2],["missile","L",6],["missile","M",4],["fire","L",2],["cargo","M",2],["sensor","M",1]],note:"十组发射接口和专用弹药舱支撑饱和攻击，宽侧舷是最醒目的识别特征。"},
+        {id:"bs05",class:"battleship",name:"城塞",en:"Citadel Command",role:"指挥防御战列舰",profile:"p23",accent:"#65a9d8",span:38,budget:[1360,1490,1510],mounts:[["core","XL",1],["engine","L",1],["shield","XL",1],["shield","L",2],["fire","XL",1],["fire","L",2],["sensor","L",2],["drone","L",2],["support","L",2],["hull","L",2],["kinetic","M",4]],note:"牺牲主炮数量，换取 T4 指挥节点、舰队护盾和无人机支援，是大型编队的稳定中心。"},
+
+        {id:"cap01",class:"capital",name:"碎界者",en:"Worldbreaker",role:"无畏舰 Dreadnought",profile:"p24",accent:"#d87562",span:44,budget:[2480,3180,2920],mounts:[["core","XXL",1],["engine","XL",2],["shield","XL",2],["kinetic","XXL",4],["fire","XXL",2],["hull","XXL",3],["thermal","XL",2]],note:"四座 T5 攻城炮围绕脊柱核心布置，狭长舰体将后坐力传向舰尾，进入攻城状态后成为固定火力节点。"},
+        {id:"cap02",class:"capital",name:"星群",en:"Constellation",role:"航空母舰 Carrier",profile:"p25",accent:"#b6c96a",span:46,budget:[2720,3360,3040],mounts:[["core","XL",1],["engine","XL",2],["shield","XL",2],["drone","XXL",2],["drone","XL",2],["fire","XL",2],["sensor","L",2],["support","L",2],["cargo","L",2],["kinetic","S",8]],note:"中央开放式飞行甲板把舰体分成两条承力臂，两座 T5 主机库承担重型舰载机，小型实弹槽负责近防。"},
+        {id:"cap03",class:"capital",name:"圣所",en:"Sanctuary",role:"力量辅助舰 Force Auxiliary",profile:"p26",accent:"#70bb85",span:40,budget:[2960,3820,3540],mounts:[["core","XXL",2],["engine","XL",1],["shield","XXL",1],["shield","XL",2],["support","XXL",4],["fire","L",2],["sensor","L",2],["cargo","L",2],["thermal","XL",2],["kinetic","S",6]],note:"环形船体围绕空心维护井展开，四个 T5 支援接口与双核心共同服务舰队维修、护盾传输和补给。"},
+        {id:"cap04",class:"capital",name:"统御",en:"Dominion",role:"超级航母 Supercarrier",profile:"p27",accent:"#b6c96a",span:48,budget:[3680,4460,4180],mounts:[["core","XXL",2],["engine","XL",2],["shield","XXL",1],["shield","XL",2],["drone","XXL",6],["fire","XXL",2],["sensor","XL",1],["support","L",2],["kinetic","S",10],["missile","M",4]],note:"两座不等长开放机库与偏置舰桥构成明显的不对称轮廓；六个 T5 机库和十个近防炮位让它成为移动航空基地。"},
+        {id:"cap05",class:"capital",name:"赫利俄斯",en:"Helios Titan",role:"泰坦 Titan",profile:"p28",accent:"#e3b35b",span:45,budget:[4860,6120,5740],mounts:[["core","XXL",3],["engine","XXL",3],["shield","XXL",4],["beam","XXL",2],["kinetic","XXL",2],["fire","XXL",3],["hull","XXL",4],["thermal","XXL",3],["sensor","XXL",2]],note:"十字要塞轮廓拥有清晰的纵向主脊和横向火力翼；它不靠堆叠低级槽位，而是让二十六个槽位全部达到 T5。"},
+        {id:"cap06",class:"capital",name:"阿特拉斯方舟",en:"Atlas Ark",role:"货舰 Freighter",profile:"p29",accent:"#65d6c1",span:47,budget:[4240,2860,3380],mounts:[["core","XL",1],["engine","XL",2],["shield","L",2],["cargo","XXL",12],["hull","XXL",4],["thermal","L",2],["support","L",1]],note:"钝首箱式船体把十二个 T5 货舱组织成规则货运矩阵，轮廓像移动仓库，几乎不具备自主作战能力。"},
+        {id:"cap07",class:"capital",name:"跃迁行者",en:"Wayfarer",role:"跳跃货舰 Jump Freighter",profile:"p30",accent:"#62b5ae",span:43,budget:[3960,4280,3920],mounts:[["core","XXL",2],["engine","XXL",3],["shield","XL",2],["cargo","XXL",8],["sensor","L",2],["fire","L",1],["thermal","XL",2],["hull","XXL",3]],note:"双跃迁舱把货运脊柱夹在中央，牺牲四个货舱换取双核心、三组 T5 跃迁驱动和更强导航系统。"}
+      ];
+
+      const shipDimensions = {
+        f01:[42,9], f02:[58,24], f03:[74,38], f04:[68,34], f05:[52,22],
+        d01:[118,32], d02:[142,58], d03:[176,82], d04:[132,54],
+        c01:[250,90], c02:[238,62], c03:[320,138], c04:[286,126], c05:[222,54],
+        bc01:[470,180], bc02:[510,206], bc03:[560,218], bc04:[620,260],
+        bs01:[780,240], bs02:[860,360], bs03:[740,190], bs04:[920,390], bs05:[980,420],
+        cap01:[1450,420], cap02:[1820,720], cap03:[1360,610], cap04:[2200,900],
+        cap05:[2600,840], cap06:[1900,760], cap07:[1680,620]
+      };
+
+      ships.forEach(ship => {
+        const [length,beam] = shipDimensions[ship.id];
+        ship.length = length;
+        ship.beam = beam;
+      });
+
+      function mirroredOutline(half) {
+        const right = half.map(([x,y]) => [60+x,45+y]);
+        const left = half.slice(1,-1).reverse().map(([x,y]) => [60-x,45+y]);
+        return `M${[...right,...left].map(point => point.join(" ")).join("L")}Z`;
+      }
+
+      function halfWidthAt(half, y) {
+        for (let index = 0; index < half.length-1; index++) {
+          const start = half[index];
+          const end = half[index+1];
+          if (y < start[1] || y > end[1]) continue;
+          const t = (y-start[1])/Math.max(.0001,end[1]-start[1]);
+          return start[0]+(end[0]-start[0])*t;
+        }
+        return 0;
+      }
+
+      function bayPath(centerX, top, bottom, width) {
+        const points = [
+          [centerX-width*.36,top],
+          [centerX+width*.36,top],
+          [centerX+width*.5,top+4],
+          [centerX+width*.44,bottom-4],
+          [centerX+width*.26,bottom],
+          [centerX-width*.26,bottom],
+          [centerX-width*.44,bottom-4],
+          [centerX-width*.5,top+4]
+        ];
+        return `M${points.map(([x,y]) => `${60+x} ${45+y}`).join("L")}Z`;
+      }
+
+      function profileDetails(half, ribs) {
+        const center = "M60 3V87";
+        const ribPaths = ribs.map(y => {
+          const width = halfWidthAt(half,y)*.78;
+          return `M${60-width} ${45+y}H${60+width}`;
+        }).join("");
+        const stations = half.filter((point,index) => index > 0 && index < half.length-1 && index%2 === 1);
+        const innerRight = stations.map(([x,y]) => `${60+x*.42} ${45+y}`).join("L");
+        const innerLeft = stations.map(([x,y]) => `${60-x*.42} ${45+y}`).join("L");
+        const outerRight = stations.map(([x,y]) => `${60+x*.76} ${45+y}`).join("L");
+        const outerLeft = stations.map(([x,y]) => `${60-x*.76} ${45+y}`).join("L");
+        return `${center}${innerRight ? `M${innerRight}M${innerLeft}M${outerRight}M${outerLeft}` : ""}${ribPaths}`;
+      }
+
+      function makeSymmetricProfile(spec) {
+        const voids = [];
+        (spec.bays || []).forEach(bay => {
+          if (bay.x === 0) {
+            voids.push(bayPath(0,bay.top,bay.bottom,bay.width));
+          } else {
+            voids.push(bayPath(bay.x,bay.top,bay.bottom,bay.width));
+            voids.push(bayPath(-bay.x,bay.top,bay.bottom,bay.width));
+          }
+        });
+        return {
+          outer:mirroredOutline(spec.half),
+          voids,
+          details:profileDetails(spec.half,spec.ribs || [-24,-8,8,24])
+        };
+      }
+
+      const symmetricProfileSpecs = {
+        p01:{half:[[0,-44],[3,-40],[5,-31],[5,-21],[9,-13],[7,-4],[8,8],[6,22],[5,34],[0,44]],ribs:[-31,-17,-2,16,31]},
+        p02:{half:[[0,-44],[5,-39],[7,-29],[13,-21],[18,-12],[15,-3],[9,1],[11,15],[15,31],[8,29],[5,40],[0,44]],ribs:[-31,-19,-6,9,25,36]},
+        p03:{half:[[0,-44],[6,-38],[10,-29],[17,-21],[23,-12],[20,-1],[15,4],[18,17],[13,30],[8,39],[0,44]],ribs:[-32,-21,-10,3,17,30]},
+        p04:{half:[[0,-44],[6,-39],[9,-30],[18,-25],[21,-14],[18,-6],[24,2],[22,13],[16,18],[19,31],[10,38],[0,44]],ribs:[-33,-24,-13,1,16,30]},
+        p05:{half:[[0,-44],[5,-39],[8,-27],[13,-18],[16,-9],[12,-2],[10,11],[15,27],[8,35],[5,41],[0,44]],ribs:[-31,-19,-7,9,25,36]},
+
+        p06:{half:[[0,-44],[4,-40],[6,-31],[9,-23],[14,-16],[18,-9],[15,-1],[11,4],[13,18],[10,31],[6,39],[0,44]],ribs:[-33,-23,-13,-2,12,27,37]},
+        p07:{half:[[0,-44],[6,-39],[9,-30],[16,-24],[23,-15],[25,-5],[19,1],[17,12],[22,27],[13,35],[7,41],[0,44]],ribs:[-32,-22,-12,0,14,27,36],bays:[{x:11,top:-17,bottom:18,width:7}]},
+        p08:{half:[[0,-44],[7,-38],[12,-30],[20,-23],[27,-12],[25,-2],[20,5],[24,17],[19,28],[12,37],[0,44]],ribs:[-32,-23,-12,0,14,27,36]},
+        p09:{half:[[0,-44],[5,-39],[10,-33],[15,-23],[22,-17],[20,-7],[25,1],[19,10],[21,24],[13,34],[7,40],[0,44]],ribs:[-34,-24,-14,-2,11,25,35],bays:[{x:10,top:-13,bottom:15,width:6}]},
+
+        p10:{half:[[0,-44],[7,-39],[12,-31],[19,-23],[25,-13],[22,-3],[17,3],[20,15],[17,28],[10,38],[0,44]],ribs:[-33,-24,-14,-3,10,23,34]},
+        p11:{half:[[0,-44],[5,-39],[8,-30],[11,-21],[16,-12],[14,-2],[10,7],[13,19],[10,31],[6,39],[0,44]],ribs:[-33,-22,-11,2,15,29,37],bays:[{x:0,top:-12,bottom:11,width:8}]},
+        p12:{half:[[0,-44],[8,-40],[13,-32],[20,-27],[25,-17],[22,-8],[28,0],[26,12],[20,17],[22,28],[14,37],[0,44]],ribs:[-34,-26,-16,-5,8,19,31]},
+        p13:{half:[[0,-44],[7,-39],[12,-31],[18,-22],[22,-12],[21,-1],[26,8],[22,18],[18,29],[10,39],[0,44]],ribs:[-33,-23,-13,-2,10,22,34],bays:[{x:0,top:-9,bottom:13,width:10}]},
+        p14:{half:[[0,-44],[4,-39],[7,-31],[9,-21],[16,-13],[14,-4],[10,4],[12,16],[15,28],[8,37],[0,44]],ribs:[-33,-23,-12,0,14,27,36]},
+
+        p15:{half:[[0,-44],[9,-40],[15,-32],[23,-24],[29,-14],[27,-4],[22,3],[25,15],[20,27],[13,37],[0,44]],ribs:[-34,-25,-15,-4,9,22,34]},
+        p16:{half:[[0,-44],[7,-40],[13,-33],[22,-28],[30,-18],[32,-8],[25,-1],[22,11],[29,24],[19,34],[9,40],[0,44]],ribs:[-35,-27,-18,-7,5,18,30,38],bays:[{x:14,top:-19,bottom:18,width:8}]},
+        p17:{half:[[0,-44],[7,-39],[12,-32],[18,-25],[25,-17],[23,-7],[28,1],[24,12],[22,23],[15,34],[7,41],[0,44]],ribs:[-34,-25,-16,-5,7,19,31,39]},
+        p18:{half:[[0,-44],[8,-40],[14,-33],[24,-27],[31,-17],[29,-6],[24,2],[30,11],[28,23],[20,32],[11,39],[0,44]],ribs:[-35,-27,-17,-6,6,18,30,38],bays:[{x:15,top:-15,bottom:21,width:9}]},
+
+        p19:{half:[[0,-44],[6,-40],[10,-33],[16,-26],[21,-17],[20,-7],[17,0],[21,10],[18,21],[14,31],[8,39],[0,44]],ribs:[-35,-27,-18,-8,3,14,26,36]},
+        p20:{half:[[0,-44],[10,-40],[17,-34],[25,-27],[30,-18],[29,-6],[25,1],[28,12],[25,23],[18,32],[10,39],[0,44]],ribs:[-35,-27,-18,-8,3,14,25,35]},
+        p21:{half:[[0,-44],[5,-40],[8,-32],[11,-23],[15,-14],[13,-4],[10,5],[14,16],[12,27],[8,37],[0,44]],ribs:[-35,-25,-15,-5,6,17,29,38]},
+        p22:{half:[[0,-44],[9,-40],[16,-34],[25,-28],[31,-18],[30,-7],[26,2],[29,13],[25,24],[17,33],[9,40],[0,44]],ribs:[-35,-27,-18,-8,3,14,25,36],bays:[{x:17,top:-15,bottom:20,width:8}]},
+        p23:{half:[[0,-44],[8,-40],[14,-33],[21,-26],[27,-16],[26,-5],[22,4],[26,15],[22,26],[15,35],[7,41],[0,44]],ribs:[-35,-26,-17,-7,4,15,26,36],bays:[{x:0,top:-10,bottom:13,width:11}]},
+
+        /* p24 follows the reference chart's long Odia-like dreadnought: deep axial keel, layered shoulders, needle stern. */
+        p24:{half:[[0,-44],[5,-42],[8,-37],[12,-31],[15,-24],[21,-17],[25,-9],[23,-1],[28,7],[26,15],[21,21],[23,28],[17,34],[14,39],[7,42],[0,44]],ribs:[-36,-29,-21,-12,-3,7,17,27,36],bays:[{x:14,top:-18,bottom:9,width:7}]},
+        p25:{half:[[0,-44],[9,-40],[16,-34],[25,-27],[34,-17],[36,-6],[31,2],[34,13],[30,23],[23,31],[14,38],[0,44]],ribs:[-35,-27,-18,-8,3,14,25,35],bays:[{x:18,top:-22,bottom:22,width:12}]},
+        p26:{half:[[0,-44],[8,-39],[15,-32],[23,-24],[30,-14],[29,-3],[25,7],[29,18],[23,28],[14,37],[0,44]],ribs:[-34,-25,-15,-5,6,17,28,37],bays:[{x:0,top:-17,bottom:19,width:14}]},
+        p27:{half:[[0,-44],[10,-40],[18,-34],[28,-27],[37,-17],[39,-6],[34,3],[38,14],[34,24],[26,32],[16,38],[0,44]],ribs:[-35,-27,-18,-8,3,14,25,35],bays:[{x:20,top:-23,bottom:24,width:13}]},
+        /* p28 follows the reference chart's Javelin-like flagship: block armour citadel, broad hangar shoulders, split stern. */
+        p28:{half:[[0,-44],[8,-41],[13,-36],[16,-29],[22,-22],[23,-13],[29,-7],[30,2],[27,10],[24,16],[26,24],[21,31],[16,37],[9,38],[6,43],[0,44]],ribs:[-36,-29,-21,-13,-4,5,14,23,32,39],bays:[{x:15,top:-24,bottom:8,width:9}]},
+        p29:{half:[[0,-44],[10,-41],[18,-35],[25,-27],[29,-17],[29,-5],[27,7],[29,19],[24,30],[15,38],[0,44]],ribs:[-35,-27,-18,-8,3,14,25,35],bays:[{x:14,top:-20,bottom:27,width:10}]},
+        p30:{half:[[0,-44],[8,-40],[15,-34],[24,-27],[31,-17],[32,-7],[27,2],[30,13],[26,24],[18,34],[9,40],[0,44]],ribs:[-35,-27,-18,-8,3,14,25,35],bays:[{x:15,top:-18,bottom:23,width:9}]}
+      };
+
+      Object.entries(symmetricProfileSpecs).forEach(([id,spec]) => {
+        profiles[id] = makeSymmetricProfile(spec);
+      });
+
+      const typeMeta = {
+        core:{label:"核心",key:"PWR-CIRCLE",color:"#e3b35b",shape:"circle",zone:"core"},
+        hull:{label:"船体",key:"STR-RECT",color:"#95a29c",shape:"rect",zone:"structure"},
+        shield:{label:"护盾",key:"DEF-PENTA",color:"#65a9d8",shape:"pentagon",zone:"defense"},
+        kinetic:{label:"实弹",key:"KIN-TRI",color:"#d87562",shape:"triangle",zone:"weapon"},
+        beam:{label:"光束",key:"BEAM-DIAMOND",color:"#c889d8",shape:"diamond",zone:"weapon"},
+        mining:{label:"采掘",key:"IND-DIAMOND",color:"#70bb85",shape:"diamond",zone:"weapon"},
+        missile:{label:"导弹",key:"ORD-CHEVRON",color:"#e58f55",shape:"chevron",zone:"weapon"},
+        fire:{label:"火控",key:"CMD-HEX",color:"#76aee8",shape:"hex",zone:"command"},
+        engine:{label:"引擎",key:"DRV-TRAPEZOID",color:"#62b5ae",shape:"trapezoid",zone:"drive"},
+        cargo:{label:"货舱",key:"LOG-CAPSULE",color:"#65d6c1",shape:"capsule",zone:"cargo"},
+        support:{label:"维修",key:"SUP-CROSS",color:"#70bb85",shape:"cross",zone:"support"},
+        engineering:{label:"工程",key:"IND-BRACKET",color:"#70bb85",shape:"bracket",zone:"support"},
+        drone:{label:"机库",key:"DRN-OCTAGON",color:"#b6c96a",shape:"octagon",zone:"hangar"},
+        ewar:{label:"电子战",key:"EW-SPLITHEX",color:"#9181d8",shape:"splithex",zone:"command"},
+        thermal:{label:"散热",key:"THM-DOUBLEBOX",color:"#79c8d1",shape:"doublebox",zone:"thermal"},
+        sensor:{label:"传感器",key:"SNS-HEX",color:"#65a9d8",shape:"hex",zone:"command"}
+      };
+
+      const pluginModels = {
+        core:["氦闪反应堆","奇点约束核","脉冲储能环"],
+        hull:["蜂窝装甲盒","惯性承力梁","隔舱强化架"],
+        shield:["相位盾列","辐射偏转场","点防御力场"],
+        kinetic:["线圈炮座","质量加速器","近防转轮炮"],
+        beam:["棱镜光矛","粒子束列","等离子聚焦器"],
+        mining:["切割束臂","牵引束环","矿脉解析器"],
+        missile:["蜂巢发射管","鱼雷冷舱","拦截弹巢"],
+        fire:["预测火控核","目标编织阵","编队指挥台"],
+        engine:["矢量主喷口","跃迁驱动器","姿态推进簇"],
+        cargo:["通用货舱链","低温储罐","推进剂舱组"],
+        support:["纳米维修臂","装甲补给架","损管无人机巢"],
+        engineering:["建造机械臂","钻探作业架","移动加工坞"],
+        drone:["无人机蜂巢","舰载机机库","登陆艇船坞"],
+        ewar:["相位干扰器","诱饵信标阵","信号入侵核"],
+        thermal:["液态散热脊","热泵阵列","低温循环舱"],
+        sensor:["深空扫描阵","引力测绘仪","超视距预警盘"]
+      };
+
+      const sizeRank = {S:1,M:2,L:3,XL:4,XXL:5};
+      const classLabels = Object.fromEntries(classes.map(item => [item.id, item]));
+      let currentClass = "battleship";
+      let selectedShipId = "bs01";
+
+      const classTabs = root.querySelector(".class-tabs");
+      const shipList = root.querySelector(".ship-list");
+      const browserTitle = root.querySelector(".browser-title");
+
+      function innerTransform() {
+        return "translate(60 45) scale(.82) translate(-60 -45)";
+      }
+
+      function profilePath(profile) {
+        return [profile.outer,...(profile.voids || [])].join("");
+      }
+
+      function thumbSvg(ship) {
+        const profile = profiles[ship.profile];
+        const path = profilePath(profile);
+        return `
+          <svg viewBox="0 0 120 90" role="img" aria-label="${ship.name}舰体轮廓">
+            <path d="M60 4V87M12 45H108" stroke="#18231f" stroke-width=".6" stroke-dasharray="2 3"/>
+            <path d="${path}" class="thumb-shell" stroke="${ship.accent}" fill-rule="evenodd"/>
+            <path d="${path}" class="thumb-inner" transform="${innerTransform()}" fill-rule="evenodd"/>
+            <path d="M60 16V78M39 45H81" class="thumb-spine"/>
+          </svg>
+        `;
+      }
+
+      const canvasByClass = {
+        frigate:{w:120,h:90,marker:2.5,grid:4},
+        destroyer:{w:145,h:104,marker:2.75,grid:5},
+        cruiser:{w:175,h:124,marker:3.0,grid:6},
+        battlecruiser:{w:205,h:145,marker:3.15,grid:7},
+        battleship:{w:260,h:180,marker:3.25,grid:8},
+        capital:{w:360,h:240,marker:3.45,grid:10}
+      };
+
+      function rankGlyph(rank, x, y, radius) {
+        const cx = x + radius * .72;
+        const cy = y - radius * .72;
+        const scale = Math.max(.92,radius * .38);
+        if (rank === 5) {
+          const points = [];
+          for (let index = 0; index < 10; index++) {
+            const angle = -Math.PI / 2 + index * Math.PI / 5;
+            const distance = index % 2 === 0 ? 1.12 : .46;
+            points.push(`${cx+Math.cos(angle)*distance*scale},${cy+Math.sin(angle)*distance*scale}`);
+          }
+          const polygon = points.join(" ");
+          return `<polygon points="${polygon}" class="rank-star-back"/><polygon points="${polygon}" class="rank-star"/>`;
+        }
+
+        const chevronCount = Math.min(rank,3);
+        const positions = chevronCount === 1 ? [0] : chevronCount === 2 ? [-.45,.45] : [-.72,0,.72];
+        let path = "";
+        positions.forEach(offset => {
+          const yy = cy + offset * scale;
+          path += `M${cx-scale*.78} ${yy+scale*.28}L${cx} ${yy-scale*.38}L${cx+scale*.78} ${yy+scale*.28}`;
+        });
+        if (rank === 4) {
+          path += `M${cx-scale*.78} ${cy+scale*1.18}H${cx+scale*.78}`;
+        }
+        return `<path d="${path}" class="rank-glyph-back"/><path d="${path}" class="rank-glyph"/>`;
+      }
+
+      function mountSeat(x, y, radius) {
+        const e = radius+.55;
+        const notch = radius*.34;
+        return `
+          <circle cx="${x}" cy="${y}" r="${radius+.32}" class="mount-seat"/>
+          <path d="M${x-e} ${y-notch}V${y+notch}M${x+e} ${y-notch}V${y+notch}M${x-notch} ${y-e}H${x+notch}M${x-notch} ${y+e}H${x+notch}" class="mount-lug"/>
+        `;
+      }
+
+      function mountInnerMark(type, x, y, radius, color, variant) {
+        const r = radius;
+        let mark = "";
+        if (type === "core") {
+          mark = `<circle cx="${x}" cy="${y}" r="${r*.34}"/><path d="M${x-r*.56} ${y}H${x+r*.56}M${x} ${y-r*.56}V${y+r*.56}"/>`;
+        } else if (type === "hull") {
+          mark = `<path d="M${x-r*.52} ${y-r*.32}L${x-r*.14} ${y+r*.32}M${x-r*.08} ${y-r*.32}L${x+r*.3} ${y+r*.32}M${x+r*.34} ${y-r*.32}L${x+r*.54} ${y}"/>`;
+        } else if (type === "shield") {
+          mark = `<path d="M${x-r*.48} ${y+r*.24}Q${x} ${y-r*.5} ${x+r*.48} ${y+r*.24}M${x-r*.28} ${y+r*.35}Q${x} ${y-r*.12} ${x+r*.28} ${y+r*.35}"/>`;
+        } else if (type === "kinetic") {
+          mark = `<path d="M${x} ${y-r*.48}V${y+r*.36}M${x-r*.3} ${y-r*.08}L${x} ${y-r*.38}L${x+r*.3} ${y-r*.08}M${x-r*.22} ${y+r*.34}H${x+r*.22}"/>`;
+        } else if (type === "beam") {
+          mark = `<circle cx="${x}" cy="${y}" r="${r*.18}"/><path d="M${x-r*.48} ${y}H${x-r*.22}M${x+r*.22} ${y}H${x+r*.48}M${x} ${y-r*.48}V${y-r*.22}M${x} ${y+r*.22}V${y+r*.48}"/>`;
+        } else if (type === "mining") {
+          mark = `<path d="M${x} ${y+r*.45}V${y-r*.02}M${x} ${y-r*.02}L${x-r*.38} ${y-r*.4}M${x} ${y-r*.02}L${x+r*.38} ${y-r*.4}M${x-r*.25} ${y+r*.28}H${x+r*.25}"/>`;
+        } else if (type === "missile") {
+          mark = `<path d="M${x-r*.36} ${y+r*.34}V${y-r*.34}M${x} ${y+r*.42}V${y-r*.42}M${x+r*.36} ${y+r*.34}V${y-r*.34}"/>`;
+        } else if (type === "fire") {
+          mark = `<circle cx="${x}" cy="${y}" r="${r*.28}"/><path d="M${x-r*.52} ${y}H${x-r*.3}M${x+r*.3} ${y}H${x+r*.52}M${x} ${y-r*.52}V${y-r*.3}M${x} ${y+r*.3}V${y+r*.52}"/>`;
+        } else if (type === "engine") {
+          mark = `<path d="M${x-r*.42} ${y-r*.34}L${x-r*.3} ${y+r*.42}M${x} ${y-r*.46}V${y+r*.48}M${x+r*.42} ${y-r*.34}L${x+r*.3} ${y+r*.42}"/>`;
+        } else if (type === "cargo") {
+          mark = `<path d="M${x-r*.46} ${y-r*.3}H${x-r*.04}V${y+r*.3}H${x-r*.46}ZM${x+r*.04} ${y-r*.3}H${x+r*.46}V${y+r*.3}H${x+r*.04}Z"/>`;
+        } else if (type === "support") {
+          mark = `<path d="M${x-r*.52} ${y}H${x-r*.24}L${x-r*.08} ${y-r*.34}L${x+r*.12} ${y+r*.34}L${x+r*.27} ${y}H${x+r*.52}"/>`;
+        } else if (type === "engineering") {
+          mark = `<path d="M${x-r*.44} ${y+r*.42}L${x+r*.38} ${y-r*.4}M${x-r*.38} ${y-r*.4}L${x-r*.05} ${y-r*.08}M${x+r*.06} ${y+r*.1}L${x+r*.4} ${y+r*.42}"/>`;
+        } else if (type === "drone") {
+          const q = r*.28;
+          mark = `<circle cx="${x-q}" cy="${y-q}" r="${r*.11}"/><circle cx="${x+q}" cy="${y-q}" r="${r*.11}"/><circle cx="${x-q}" cy="${y+q}" r="${r*.11}"/><circle cx="${x+q}" cy="${y+q}" r="${r*.11}"/><path d="M${x-q} ${y-q}L${x+q} ${y+q}M${x+q} ${y-q}L${x-q} ${y+q}"/>`;
+        } else if (type === "ewar") {
+          mark = `<path d="M${x-r*.5} ${y-r*.24}Q${x-r*.25} ${y-r*.52} ${x} ${y-r*.24}T${x+r*.5} ${y-r*.24}M${x-r*.5} ${y+r*.24}Q${x-r*.25} ${y-r*.04} ${x} ${y+r*.24}T${x+r*.5} ${y+r*.24}"/>`;
+        } else if (type === "thermal") {
+          mark = `<path d="M${x-r*.4} ${y-r*.44}V${y+r*.44}M${x-r*.13} ${y-r*.34}V${y+r*.34}M${x+r*.14} ${y-r*.34}V${y+r*.34}M${x+r*.4} ${y-r*.44}V${y+r*.44}"/>`;
+        } else if (type === "sensor") {
+          mark = `<path d="M${x-r*.46} ${y+r*.34}Q${x} ${y-r*.42} ${x+r*.46} ${y+r*.34}M${x-r*.25} ${y+r*.34}Q${x} ${y-r*.08} ${x+r*.25} ${y+r*.34}"/><circle cx="${x}" cy="${y+r*.34}" r="${r*.08}"/>`;
+        }
+        const variantX = x+(variant%3-1)*r*.22;
+        return `
+          <g class="mount-inner" stroke="${color}">${mark}</g>
+          <circle cx="${variantX}" cy="${y+r*.57}" r="${r*.075}" class="mount-inner-fill" fill="${color}"/>
+        `;
+      }
+
+      function mountShape(type, x, y, size, color, radius, variant = 0) {
+        const r = radius;
+        const meta = typeMeta[type];
+        let shape = "";
+        if (meta.shape === "circle") {
+          shape = `<circle cx="${x}" cy="${y}" r="${r}" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "rect") {
+          shape = `<rect x="${x-r}" y="${y-r*.72}" width="${r*2}" height="${r*1.44}" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "pentagon") {
+          shape = `<path d="M${x} ${y-r}L${x+r*.95} ${y-r*.3}L${x+r*.58} ${y+r}H${x-r*.58}L${x-r*.95} ${y-r*.3}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "triangle") {
+          shape = `<path d="M${x} ${y-r}L${x+r} ${y+r}H${x-r}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "diamond") {
+          shape = `<path d="M${x} ${y-r}L${x+r} ${y}L${x} ${y+r}L${x-r} ${y}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "chevron") {
+          shape = `<path d="M${x-r} ${y-r}L${x} ${y-r*.35}L${x+r} ${y-r}L${x+r*.72} ${y+r}L${x} ${y+r*.45}L${x-r*.72} ${y+r}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "hex") {
+          shape = `<path d="M${x-r*.7} ${y-r}H${x+r*.7}L${x+r} ${y}L${x+r*.7} ${y+r}H${x-r*.7}L${x-r} ${y}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "trapezoid") {
+          shape = `<path d="M${x-r*.65} ${y-r}H${x+r*.65}L${x+r} ${y+r}H${x-r}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "capsule") {
+          shape = `<rect x="${x-r}" y="${y-r*.72}" width="${r*2}" height="${r*1.44}" rx="${r*.7}" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "cross") {
+          const q = r*.42;
+          shape = `<path d="M${x-q} ${y-r}H${x+q}V${y-q}H${x+r}V${y+q}H${x+q}V${y+r}H${x-q}V${y+q}H${x-r}V${y-q}H${x-q}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "bracket") {
+          shape = `<path d="M${x-r} ${y-r}H${x-r*.25}V${y-r*.45}H${x-r*.55}V${y+r*.45}H${x-r*.25}V${y+r}H${x-r}ZM${x+r*.25} ${y-r}H${x+r}V${y+r}H${x+r*.25}V${y+r*.45}H${x+r*.55}V${y-r*.45}H${x+r*.25}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "octagon") {
+          shape = `<path d="M${x-r*.45} ${y-r}H${x+r*.45}L${x+r} ${y-r*.45}V${y+r*.45}L${x+r*.45} ${y+r}H${x-r*.45}L${x-r} ${y+r*.45}V${y-r*.45}Z" class="mount-shape" stroke="${color}"/>`;
+        } else if (meta.shape === "splithex") {
+          shape = `<path d="M${x-r*.65} ${y-r}H${x+r*.65}L${x+r} ${y-r*.25}L${x+r*.35} ${y}L${x+r} ${y+r*.25}L${x+r*.65} ${y+r}H${x-r*.65}L${x-r} ${y+r*.25}L${x-r*.35} ${y}L${x-r} ${y-r*.25}Z" class="mount-shape" stroke="${color}"/>`;
+        } else {
+          shape = `<rect x="${x-r}" y="${y-r}" width="${r*2}" height="${r*2}" class="mount-shape" stroke="${color}"/>`;
+        }
+
+        const rank = sizeRank[size];
+        const model = pluginModels[type][variant%pluginModels[type].length];
+        return `<g class="mount-symbol" data-mount-type="${type}" data-interface-key="${meta.key}" data-plugin-model="${model}" data-tier="${rank}" data-mount-x="${x.toFixed(2)}" data-mount-y="${y.toFixed(2)}"><title>${model} · ${meta.key} · T${rank}</title>${mountSeat(x,y,r)}${shape}${mountInnerMark(type,x,y,r,color,variant)}${rankGlyph(rank,x,y,r)}</g>`;
+      }
+
+      function expandMounts(ship) {
+        const result = [];
+        const variants = {};
+        ship.mounts.forEach(([type, size, count]) => {
+          if (variants[type] == null) variants[type] = 0;
+          for (let i = 0; i < count; i++) {
+            result.push({type,size,variant:variants[type]});
+            variants[type] += 1;
+          }
+        });
+        return result;
+      }
+
+      function pathPoints(path) {
+        const values = path.match(/-?\d+(?:\.\d+)?/g).map(Number);
+        const result = [];
+        for (let index = 0; index < values.length; index += 2) {
+          result.push({x:values[index],y:values[index+1]});
+        }
+        return result;
+      }
+
+      function polygonMetrics(polygon) {
+        let areaTwice = 0;
+        let cx = 0;
+        let cy = 0;
+        for (let index = 0; index < polygon.length; index++) {
+          const current = polygon[index];
+          const next = polygon[(index+1)%polygon.length];
+          const cross = current.x*next.y-next.x*current.y;
+          areaTwice += cross;
+          cx += (current.x+next.x)*cross;
+          cy += (current.y+next.y)*cross;
+        }
+        if (Math.abs(areaTwice) < .0001) {
+          return {
+            area:1,
+            x:polygon.reduce((sum,point) => sum+point.x,0)/polygon.length,
+            y:polygon.reduce((sum,point) => sum+point.y,0)/polygon.length
+          };
+        }
+        return {
+          area:Math.abs(areaTwice/2),
+          x:cx/(3*areaTwice),
+          y:cy/(3*areaTwice)
+        };
+      }
+
+      function scaledGeometry(ship) {
+        const canvas = canvasByClass[ship.class];
+        const pad = 6;
+        const sx = (canvas.w - pad * 2) / 120;
+        const sy = (canvas.h - pad * 2) / 90;
+        const profile = profiles[ship.profile];
+        const scalePolygon = path => pathPoints(path).map(point => ({
+          x:pad + point.x * sx,
+          y:pad + point.y * sy
+        }));
+        const polygon = scalePolygon(profile.outer);
+        const holes = (profile.voids || []).map(scalePolygon);
+        const outerMetrics = polygonMetrics(polygon);
+        let weightedX = outerMetrics.x*outerMetrics.area;
+        let weightedY = outerMetrics.y*outerMetrics.area;
+        let totalArea = outerMetrics.area;
+        holes.forEach(hole => {
+          const metrics = polygonMetrics(hole);
+          weightedX -= metrics.x*metrics.area;
+          weightedY -= metrics.y*metrics.area;
+          totalArea -= metrics.area;
+        });
+        const datum = {
+          x:weightedX/Math.max(totalArea,.0001),
+          y:weightedY/Math.max(totalArea,.0001)
+        };
+        const xs = polygon.map(point => point.x);
+        const ys = polygon.map(point => point.y);
+        const bounds = {
+          left:Math.min(...xs),
+          right:Math.max(...xs),
+          top:Math.min(...ys),
+          bottom:Math.max(...ys)
+        };
+        return {canvas,pad,sx,sy,profile,polygon,holes,datum,bounds};
+      }
+
+      function pointInside(point, polygon) {
+        let inside = false;
+        for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+          const a = polygon[index];
+          const b = polygon[previous];
+          const crossing = (a.y > point.y) !== (b.y > point.y)
+            && point.x < (b.x-a.x) * (point.y-a.y) / ((b.y-a.y) || 0.0001) + a.x;
+          if (crossing) inside = !inside;
+        }
+        return inside;
+      }
+
+      function segmentDistance(point, start, end) {
+        const dx = end.x-start.x;
+        const dy = end.y-start.y;
+        const lengthSquared = dx*dx + dy*dy;
+        if (lengthSquared <= 0.0001) return Math.hypot(point.x-start.x,point.y-start.y);
+        const t = Math.max(0,Math.min(1,((point.x-start.x)*dx+(point.y-start.y)*dy)/lengthSquared));
+        return Math.hypot(point.x-(start.x+t*dx),point.y-(start.y+t*dy));
+      }
+
+      function edgeDistance(point, polygon) {
+        let result = Infinity;
+        for (let index = 0; index < polygon.length; index++) {
+          result = Math.min(result,segmentDistance(point,polygon[index],polygon[(index+1)%polygon.length]));
+        }
+        return result;
+      }
+
+      function insideHull(point, geometry) {
+        return pointInside(point,geometry.polygon)
+          && !geometry.holes.some(hole => pointInside(point,hole));
+      }
+
+      function hullEdgeDistance(point, geometry) {
+        return Math.min(
+          edgeDistance(point,geometry.polygon),
+          ...geometry.holes.map(hole => edgeDistance(point,hole))
+        );
+      }
+
+      function balancedTargets(count, datum, width, height, center, pairs) {
+        const result = [];
+        if (count % 2 === 1) {
+          result.push([datum.x+center[0]*width,datum.y+center[1]*height]);
+        }
+        let pairIndex = 0;
+        while (result.length < count) {
+          const pair = pairs[pairIndex%pairs.length];
+          const ring = Math.floor(pairIndex/pairs.length);
+          const spread = 1+ring*.13;
+          result.push([datum.x-pair[0]*width*spread,datum.y+pair[1]*height]);
+          if (result.length < count) {
+            result.push([datum.x+pair[0]*width*spread,datum.y+pair[1]*height]);
+          }
+          pairIndex += 1;
+        }
+        return result;
+      }
+
+      function zoneTargets(zone, geometry, count, trident) {
+        const {canvas,datum,bounds} = geometry;
+        const w = bounds.right-bounds.left;
+        const h = bounds.bottom-bounds.top;
+        if (zone === "core") {
+          return count === 1
+            ? [[datum.x,datum.y]]
+            : count === 2
+              ? [[datum.x-w*.07,datum.y],[datum.x+w*.07,datum.y]]
+              : [[datum.x,datum.y-h*.07],[datum.x-w*.075,datum.y+h*.045],[datum.x+w*.075,datum.y+h*.045]];
+        }
+        if (zone === "drive") {
+          return balancedTargets(
+            count,datum,w,h,[0,.30],
+            [[.075,.30],[.15,.27],[.23,.22],[.30,.16],[.34,.08]]
+          );
+        }
+        if (zone === "command") {
+          return balancedTargets(
+            count,datum,w,h,[0,-.28],
+            [[.08,-.26],[.16,-.22],[.24,-.16],[.31,-.09],[.11,-.12],[.20,-.04]]
+          );
+        }
+        if (zone === "weapon" && trident) {
+          return balancedTargets(
+            count,datum,w,h,[0,-.23],
+            [[.13,-.13],[.23,-.02],[.31,.10],[.17,.11],[.08,.20],[.35,-.11]]
+          );
+        }
+        if (zone === "weapon") {
+          return balancedTargets(
+            count,datum,w,h,[0,-.14],
+            [[.10,-.19],[.19,-.14],[.28,-.07],[.34,.02],[.27,.11],[.18,.17],[.09,.22],[.35,.20],[.13,-.03],[.23,.03]]
+          );
+        }
+        if (zone === "defense") {
+          return balancedTargets(
+            count,datum,w,h,[0,-.02],
+            [[.17,-.03],[.27,.02],[.10,.09],[.32,.10],[.22,-.13]]
+          );
+        }
+        if (zone === "hangar") {
+          return balancedTargets(
+            count,datum,w,h,[0,-.02],
+            [[.23,-.13],[.30,-.03],[.26,.09],[.19,.18],[.34,.18]]
+          );
+        }
+        if (zone === "cargo") {
+          return balancedTargets(
+            count,datum,w,h,[0,.01],
+            [[.08,-.14],[.17,-.09],[.25,-.03],[.08,.07],[.17,.13],[.25,.19],[.33,.04]]
+          );
+        }
+        if (zone === "support") {
+          return balancedTargets(
+            count,datum,w,h,[0,0],
+            [[.09,-.09],[.18,-.04],[.10,.08],[.20,.14],[.29,.04]]
+          );
+        }
+        if (zone === "thermal") {
+          return balancedTargets(
+            count,datum,w,h,[0,.23],
+            [[.10,.23],[.20,.19],[.28,.14],[.33,.08]]
+          );
+        }
+        return balancedTargets(
+          count,datum,w,h,[0,.08],
+          [[.11,.07],[.20,.11],[.29,.15],[.15,-.03],[.25,-.07],[.34,.03]]
+        );
+      }
+
+      function safeCandidates(ship, geometry) {
+        const margin = geometry.canvas.marker + 3.35;
+        const step = geometry.canvas.marker * 2.75;
+        const bounds = {
+          left:geometry.bounds.left+margin,
+          right:geometry.bounds.right-margin,
+          top:geometry.bounds.top+margin,
+          bottom:geometry.bounds.bottom-margin
+        };
+        const result = [];
+        const xCount = Math.ceil(Math.max(geometry.datum.x-bounds.left,bounds.right-geometry.datum.x)/step);
+        const yCount = Math.ceil(Math.max(geometry.datum.y-bounds.top,bounds.bottom-geometry.datum.y)/step);
+        for (let yi = -yCount; yi <= yCount; yi++) {
+          for (let xi = -xCount; xi <= xCount; xi++) {
+            const x = geometry.datum.x+xi*step;
+            const y = geometry.datum.y+yi*step;
+            if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) continue;
+            const point = {x,y};
+            if (insideHull(point,geometry) && hullEdgeDistance(point,geometry) >= margin) {
+              result.push(point);
+            }
+          }
+        }
+        return result.sort((a,b) =>
+          Math.hypot(a.x-geometry.datum.x,a.y-geometry.datum.y)
+          - Math.hypot(b.x-geometry.datum.x,b.y-geometry.datum.y)
+        );
+      }
+
+      function layoutMounts(ship) {
+        const geometry = scaledGeometry(ship);
+        const candidates = safeCandidates(ship,geometry);
+        const groups = {
+          core:[],
+          drive:[],
+          command:[],
+          weapon:[],
+          defense:[],
+          hangar:[],
+          cargo:[],
+          support:[],
+          thermal:[],
+          structure:[]
+        };
+        expandMounts(ship).forEach(item => groups[typeMeta[item.type].zone].push(item));
+        Object.values(groups).forEach(group => group.sort((a,b) => sizeRank[b.size]-sizeRank[a.size]));
+        const placed = [];
+        const occupied = [];
+        let violations = 0;
+        let overlapViolations = 0;
+        let overflowViolations = 0;
+        let unplacedCount = 0;
+        const minimumSeparation = Math.max(
+          geometry.canvas.marker*2.68,
+          geometry.canvas.marker*2+1.1
+        );
+        const zoneOrder = ["core","drive","command","weapon","defense","hangar","cargo","support","thermal","structure"];
+        const assignments = [];
+        zoneOrder.forEach(zone => {
+          const items = groups[zone];
+          const targets = zoneTargets(zone,geometry,items.length,ship.pattern === "trident");
+          items.forEach((item,index) => {
+            assignments.push({item,target:targets[index] || [geometry.datum.x,geometry.datum.y]});
+          });
+        });
+        const targetCenter = assignments.length
+          ? {
+              x:assignments.reduce((sum,entry) => sum+entry.target[0],0)/assignments.length,
+              y:assignments.reduce((sum,entry) => sum+entry.target[1],0)/assignments.length
+            }
+          : geometry.datum;
+        const width = geometry.bounds.right-geometry.bounds.left;
+        const height = geometry.bounds.bottom-geometry.bounds.top;
+        const targetShift = {
+          x:Math.max(-width*.12,Math.min(width*.12,geometry.datum.x-targetCenter.x)),
+          y:Math.max(-height*.18,Math.min(height*.18,geometry.datum.y-targetCenter.y))
+        };
+
+        assignments.forEach(({item,target}) => {
+            const centeredTarget = [target[0]+targetShift.x,target[1]+targetShift.y];
+            let best = null;
+            let bestScore = Infinity;
+            candidates.forEach(candidate => {
+              if (occupied.some(point => Math.hypot(point.x-candidate.x,point.y-candidate.y) < minimumSeparation)) return;
+              const distance = Math.hypot(candidate.x-centeredTarget[0],candidate.y-centeredTarget[1]);
+              const projectedCenter = (occupied.reduce((sum,point) => sum+point.x,0)+candidate.x)/(occupied.length+1);
+              const projectedCenterY = (occupied.reduce((sum,point) => sum+point.y,0)+candidate.y)/(occupied.length+1);
+              const centerPenalty = Math.abs(projectedCenter-geometry.datum.x)*.18
+                + Math.abs(projectedCenterY-geometry.datum.y)*.14;
+              const targetSide = Math.sign(centeredTarget[0]-geometry.datum.x);
+              const candidateSide = Math.sign(candidate.x-geometry.datum.x);
+              const sidePenalty = targetSide !== 0 && candidateSide !== 0 && targetSide !== candidateSide
+                ? geometry.canvas.marker*5
+                : 0;
+              const score = distance+centerPenalty+sidePenalty;
+              if (score < bestScore) {
+                best = candidate;
+                bestScore = score;
+              }
+            });
+            if (best == null) {
+              violations += 1;
+              unplacedCount += 1;
+              return;
+            }
+            occupied.push(best);
+            placed.push({...item,x:best.x,y:best.y});
+        });
+
+        placed.forEach(item => {
+          if (!insideHull(item,geometry) || hullEdgeDistance(item,geometry) < geometry.canvas.marker+3.25) {
+            violations += 1;
+            overflowViolations += 1;
+          }
+        });
+        for (let left = 0; left < placed.length; left++) {
+          for (let right = left+1; right < placed.length; right++) {
+            if (Math.hypot(placed[left].x-placed[right].x,placed[left].y-placed[right].y) < minimumSeparation) {
+              violations += 1;
+              overlapViolations += 1;
+            }
+          }
+        }
+        const mountCenterX = placed.length
+          ? placed.reduce((sum,item) => sum+item.x,0)/placed.length
+          : geometry.datum.x;
+        const mountCenterY = placed.length
+          ? placed.reduce((sum,item) => sum+item.y,0)/placed.length
+          : geometry.datum.y;
+        const centerDriftX = Math.abs(mountCenterX-geometry.datum.x);
+        const centerDriftY = Math.abs(mountCenterY-geometry.datum.y);
+        const centerLimitX = Math.max(geometry.canvas.marker*1.35,(geometry.bounds.right-geometry.bounds.left)*.025);
+        const centerLimitY = Math.max(geometry.canvas.marker*2.4,(geometry.bounds.bottom-geometry.bounds.top)*.075);
+        if (centerDriftX > centerLimitX || centerDriftY > centerLimitY) violations += 1;
+        return {
+          placed,
+          violations,
+          overlapViolations,
+          overflowViolations,
+          unplacedCount,
+          minimumSeparation,
+          geometry,
+          centerDriftX,
+          centerDriftY,
+          centerLimitX,
+          centerLimitY
+        };
+      }
+
+      function installationBus(layout) {
+        const placed = layout.placed;
+        if (!placed.length) return "";
+        const datum = layout.geometry.datum;
+        const cores = placed.filter(item => item.type === "core");
+        const anchors = cores.length ? cores : [{x:datum.x,y:datum.y}];
+        const endpoints = placed.filter(item => item.type !== "core");
+        const top = Math.min(...placed.map(item => item.y));
+        const bottom = Math.max(...placed.map(item => item.y));
+        const branches = endpoints.map(item => {
+          const anchor = anchors.reduce((best,current) =>
+            Math.hypot(current.x-item.x,current.y-item.y) < Math.hypot(best.x-item.x,best.y-item.y)
+              ? current
+              : best
+          );
+          const laneX = datum.x+(item.x-datum.x)*.28;
+          return `<path d="M${anchor.x.toFixed(2)} ${anchor.y.toFixed(2)}H${laneX.toFixed(2)}V${item.y.toFixed(2)}H${item.x.toFixed(2)}" class="installation-branch" stroke="${typeMeta[item.type].color}" data-bus-type="${item.type}"/>`;
+        }).join("");
+        const junctions = endpoints
+          .filter(item => Math.abs(item.x-datum.x) > layout.geometry.canvas.marker*1.5)
+          .map(item => `<circle cx="${(datum.x+(item.x-datum.x)*.28).toFixed(2)}" cy="${item.y.toFixed(2)}" r="${(layout.geometry.canvas.marker*.18).toFixed(2)}" class="installation-junction"/>`)
+          .join("");
+        return `
+          <g class="installation-bus" aria-hidden="true">
+            <path d="M${datum.x.toFixed(2)} ${top.toFixed(2)}V${bottom.toFixed(2)}" class="installation-trunk"/>
+            ${branches}
+            ${junctions}
+          </g>
+        `;
+      }
+
+      function blueprintSvg(ship) {
+        const profile = profiles[ship.profile];
+        const path = profilePath(profile);
+        const layout = layoutMounts(ship);
+        const geometry = layout.geometry;
+        const canvas = geometry.canvas;
+        const mounts = layout.placed.map(item => mountShape(item.type,item.x,item.y,item.size,typeMeta[item.type].color,canvas.marker,item.variant)).join("");
+        const buses = installationBus(layout);
+        const accent = ship.accent;
+        const hullTransform = `translate(${geometry.pad} ${geometry.pad}) scale(${geometry.sx} ${geometry.sy})`;
+        return `
+          <svg viewBox="0 0 ${canvas.w} ${canvas.h}" role="img" aria-label="${ship.name}舰体槽位结构图" data-layout-status="${layout.violations === 0 ? "pass" : "fail"}" data-mount-violations="${layout.violations}" data-overlap-violations="${layout.overlapViolations}" data-overflow-violations="${layout.overflowViolations}" data-unplaced-count="${layout.unplacedCount}" data-mount-count="${layout.placed.length}" data-center-drift-x="${layout.centerDriftX.toFixed(2)}" data-center-drift-y="${layout.centerDriftY.toFixed(2)}" data-center-limit-x="${layout.centerLimitX.toFixed(2)}" data-center-limit-y="${layout.centerLimitY.toFixed(2)}">
+            <defs>
+              <pattern id="grid-${ship.id}" width="${canvas.grid}" height="${canvas.grid}" patternUnits="userSpaceOnUse">
+                <path d="M${canvas.grid} 0H0V${canvas.grid}" fill="none" stroke="#18231f" stroke-width=".35"/>
+              </pattern>
+              <clipPath id="clip-${ship.id}"><path d="${path}" transform="${hullTransform}" fill-rule="evenodd" clip-rule="evenodd"/></clipPath>
+            </defs>
+            <rect x="1" y="1" width="${canvas.w-2}" height="${canvas.h-2}" fill="url(#grid-${ship.id})"/>
+            <rect x="1" y="1" width="${canvas.w-2}" height="${canvas.h-2}" fill="none" stroke="#26342f" stroke-width=".5"/>
+            <path d="M${geometry.datum.x} 2V${canvas.h-2}M4 ${geometry.datum.y}H${canvas.w-4}" class="blueprint-axis"/>
+            <g transform="${hullTransform}">
+              <path d="${path}" class="blueprint-shell" stroke="${accent}" fill-rule="evenodd"/>
+              <path d="${path}" class="blueprint-inner" transform="${innerTransform()}" fill-rule="evenodd"/>
+            </g>
+            <g clip-path="url(#clip-${ship.id})">
+              <path d="M${geometry.datum.x} ${geometry.bounds.top}V${geometry.bounds.bottom}M${geometry.bounds.left} ${geometry.datum.y}H${geometry.bounds.right}" class="blueprint-spine"/>
+              ${buses}
+            </g>
+            <path d="M${geometry.datum.x} ${geometry.datum.y-canvas.marker*.7}L${geometry.datum.x+canvas.marker*.7} ${geometry.datum.y}L${geometry.datum.x} ${geometry.datum.y+canvas.marker*.7}L${geometry.datum.x-canvas.marker*.7} ${geometry.datum.y}Z" class="datum-mark"/>
+            <g class="blueprint-mounts">${mounts}</g>
+          </svg>
+        `;
+      }
+
+      function maxMount(ship) {
+        let max = "S";
+        ship.mounts.forEach(([,size]) => {
+          if (sizeRank[size] > sizeRank[max]) max = size;
+        });
+        return max;
+      }
+
+      function slotCount(ship) {
+        return ship.mounts.reduce((sum,item) => sum + item[2],0);
+      }
+
+      function mountCountByType(ship, type) {
+        return ship.mounts
+          .filter(item => item[0] === type)
+          .reduce((sum,item) => sum+item[2],0);
+      }
+
+      function installationDoctrine(ship) {
+        let topology = "分区系统总线 × 冗余机械锁定座";
+        if (ship.pattern === "trident") {
+          topology = "三角炮列 × 纵轴后坐承力梁";
+        } else if (mountCountByType(ship,"drone") >= 4) {
+          topology = "双舷蜂巢机库 × 分布式升降甲板";
+        } else if (mountCountByType(ship,"cargo") >= 6) {
+          topology = "中央货运脊 × 横向标准舱链";
+        } else if (mountCountByType(ship,"missile") >= 4) {
+          topology = "双舷冷发射井 × 隔离弹药总线";
+        } else if (mountCountByType(ship,"support") >= 3) {
+          topology = "环形维修网 × 多点损管机械臂";
+        } else if (mountCountByType(ship,"mining") >= 2) {
+          topology = "前向作业冠 × 矿流回收链";
+        } else if (mountCountByType(ship,"ewar") >= 2) {
+          topology = "偏置电子冠 × 冗余信号脊";
+        } else if (mountCountByType(ship,"beam") >= 3) {
+          topology = "纵向能量脊 × 尾段液态热沉";
+        } else if (mountCountByType(ship,"kinetic") >= 8) {
+          topology = "多层近防环 × 交错弹药提升井";
+        } else if (mountCountByType(ship,"engineering") >= 2) {
+          topology = "非对称施工坞 × 重载工程母线";
+        }
+        return `INSTALLATION TOPOLOGY / ${topology}`;
+      }
+
+      function manifest(ship) {
+        return ship.mounts.map(([type,size,count]) => {
+          const meta = typeMeta[type];
+          return `<span class="manifest-item" style="color:${meta.color}" title="${meta.key}"><span class="manifest-dot"></span><span>${count}×T${sizeRank[size]} ${meta.label}</span></span>`;
+        }).join("");
+      }
+
+      function budgetMarkup(ship) {
+        const labels = ["质量","电力","散热"];
+        const colors = ["#95a29c","#e3b35b","#79c8d1"];
+        const max = Math.max(...ship.budget);
+        return ship.budget.map((value,index) => `
+          <div class="budget-row">
+            <span>${labels[index]}</span>
+            <div class="budget-track"><div class="budget-fill" style="width:${Math.round(value/max*100)}%;background:${colors[index]}"></div></div>
+            <span class="budget-value">${value}</span>
+          </div>
+        `).join("");
+      }
+
+      function renderRankLegend() {
+        root.querySelector(".rank-legend").innerHTML = [1,2,3,4,5].map(rank => `
+          <span class="rank-legend-item">
+            <svg viewBox="0 0 12 12" aria-hidden="true">${rankGlyph(rank,5.2,7,2.4)}</svg>
+            <span>T${rank}</span>
+          </span>
+        `).join("");
+      }
+
+      function renderClassTabs() {
+        classTabs.innerHTML = classes.map(item => `
+          <button class="class-tab" type="button" role="tab" aria-selected="${item.id === currentClass}" data-class="${item.id}">
+            <span class="class-cn">${item.cn} · ${item.count}</span>
+            <span class="class-en">${item.en}</span>
+          </button>
+        `).join("");
+        classTabs.querySelectorAll(".class-tab").forEach(tab => {
+          tab.addEventListener("click", () => {
+            currentClass = tab.dataset.class;
+            const first = ships.find(ship => ship.class === currentClass);
+            selectedShipId = first.id;
+            renderAll();
+          });
+        });
+      }
+
+      function renderShipList() {
+        const classInfo = classLabels[currentClass];
+        browserTitle.textContent = `${classInfo.cn}方案`;
+        const visibleShips = ships.filter(ship => ship.class === currentClass);
+        shipList.innerHTML = visibleShips.map(ship => `
+          <button class="ship-card" type="button" aria-pressed="${ship.id === selectedShipId}" data-ship="${ship.id}">
+            ${thumbSvg(ship)}
+            <div class="card-name">${ship.name}</div>
+            <div class="card-role">${ship.role}</div>
+            <div class="card-meta"><span>${slotCount(ship)} 槽</span><span>MAX T${sizeRank[maxMount(ship)]}</span></div>
+          </button>
+        `).join("");
+        shipList.querySelectorAll(".ship-card").forEach(card => {
+          card.addEventListener("click", () => {
+            selectedShipId = card.dataset.ship;
+            renderShipList();
+            renderBlueprint();
+          });
+        });
+      }
+
+      function renderBlueprint() {
+        const ship = ships.find(item => item.id === selectedShipId);
+        const classInfo = classLabels[ship.class];
+        root.querySelector(".blueprint-name").textContent = ship.name;
+        root.querySelector(".blueprint-en").textContent = ship.en;
+        root.querySelector(".blueprint-class").textContent = `${classInfo.cn.toUpperCase()} / ${classInfo.en}`;
+        const canvas = canvasByClass[ship.class];
+        root.querySelector(".blueprint-sheet").innerHTML = blueprintSvg(ship);
+        const layoutStatus = root.querySelector(".blueprint-sheet svg").dataset.layoutStatus.toUpperCase();
+        root.querySelector(".blueprint-role").textContent = `${ship.role} · ${slotCount(ship)} 槽 · 最大 T${sizeRank[maxMount(ship)]} · 工程画布 ${canvas.w}×${canvas.h} · 安装校验 ${layoutStatus}`;
+        root.querySelector(".design-note").textContent = ship.note;
+        root.querySelector(".installation-doctrine").textContent = installationDoctrine(ship);
+        root.querySelector(".mount-manifest").innerHTML = manifest(ship);
+        root.querySelector(".budget-list").innerHTML = budgetMarkup(ship);
+      }
+
+      function renderAll() {
+        renderRankLegend();
+        renderClassTabs();
+        renderShipList();
+        renderBlueprint();
+      }
+
+      renderAll();
+    })();
+  </script>
+
+  <script>
+    (() => {
+      const root = document.getElementById("helios-hull-roster");
+      const atlasPage = root.querySelector(".atlas-page");
+      const viewport = root.querySelector(".atlas-viewport");
+      const canvas = root.querySelector(".atlas-canvas");
+      const list = root.querySelector(".atlas-list");
+      const baseline = 1660;
+      const world = {x:0,y:0,w:3260,h:1780};
+
+      const atlasShips = [
+        {
+          id:"firefly", group:"small", x:120, length:24, span:8, decks:1, crew:"1–2", mass:"34 t",
+          name:"萤火", en:"FIREFLY / YL-24", role:"港区勤务艇", family:"轻型工程船",
+          color:"#65d6c1", note:"单脊、双侧工具臂与外露尾喷口构成最小可用船体；近看才会显出舱盖和姿态喷口。",
+          outer:"M0 -50L6 -44L8 -31L13 -19L11 -5L15 7L11 18L12 31L7 44L0 50L-7 44L-12 31L-11 18L-15 7L-11 -5L-13 -19L-8 -31L-6 -44Z",
+          panels:"M0 -43V43M-7 -28H7M-10 -9L-4 -4H4L10 -9M-10 18H10M-6 33L0 39L6 33",
+          machinery:"M-12 5L-7 9M12 5L7 9M-9 23L-4 26M9 23L4 26",
+          engines:[[-7,39,5,7],[2,39,5,7]], hardpoints:[[-10,-16,1.7],[10,-16,1.7]],
+          bridge:"M-4 -33L0 -39L4 -33L3 -25H-3Z"
+        },
+        {
+          id:"kestrel", group:"small", x:180, length:38, span:20, decks:1, crew:"2", mass:"86 t",
+          name:"燕隼", en:"KESTREL / IN-38", role:"高速截击艇", family:"轻型战斗船",
+          color:"#65a9d8", note:"箭头主翼与深收腰把正面截面压到最低，四组独立喷口负责短时高过载转向。",
+          outer:"M0 -50L8 -41L10 -28L20 -18L27 -8L24 1L15 4L13 20L20 35L10 31L6 44L0 50L-6 44L-10 31L-20 35L-13 20L-15 4L-24 1L-27 -8L-20 -18L-10 -28L-8 -41Z",
+          panels:"M0 -44V43M-8 -32L0 -26L8 -32M-19 -14L-8 -9H8L19 -14M-13 5L-5 11H5L13 5M-10 27H10",
+          machinery:"M-21 -5L-13 -1M21 -5L13 -1M-15 31L-9 24M15 31L9 24",
+          engines:[[-11,34,6,8],[5,34,6,8]], hardpoints:[[-16,-12,2],[16,-12,2],[-8,14,1.5],[8,14,1.5]],
+          bridge:"M-4 -31L0 -37L4 -31L3 -22H-3Z"
+        },
+        {
+          id:"manta", group:"small", x:260, length:62, span:38, decks:2, crew:"4–6", mass:"310 t",
+          name:"蝠鲼", en:"MANTA / SV-62", role:"深空测绘艇", family:"远程调查船",
+          color:"#76aee8", note:"宽展传感翼、中央压力舱和双尾稳定翼形成清晰的蝠鲼轮廓，武装仅用于自卫。",
+          outer:"M0 -50L9 -42L14 -31L25 -23L33 -10L31 0L21 3L18 14L27 29L18 34L10 30L7 44L0 50L-7 44L-10 30L-18 34L-27 29L-18 14L-21 3L-31 0L-33 -10L-25 -23L-14 -31L-9 -42Z",
+          panels:"M0 -44V43M-9 -36L0 -30L9 -36M-25 -19L-11 -12H11L25 -19M-28 -6L-16 -2L-12 11M28 -6L16 -2L12 11M-14 18L0 24L14 18M-9 33H9",
+          machinery:"M-31 -7L-23 -3L-19 4M31 -7L23 -3L19 4M-22 27L-14 24M22 27L14 24",
+          engines:[[-11,37,7,8],[4,37,7,8]], hardpoints:[[-23,-16,1.7],[23,-16,1.7]],
+          bridge:"M-6 -28L0 -35L6 -28L5 -17L0 -13L-5 -17Z"
+        },
+        {
+          id:"pike", group:"small", x:360, length:96, span:38, decks:3, crew:"12", mass:"1.4 kt",
+          name:"长钉", en:"PIKE / ES-96", role:"护航轻型护卫舰", family:"线列战斗船",
+          color:"#d87562", note:"极长舰首承力梁贯穿全舰，两侧装甲肩收纳导弹与近防炮，外形为火力轴线服务。",
+          outer:"M0 -50L6 -45L8 -34L13 -24L12 -12L19 -4L17 7L13 14L14 30L9 43L0 50L-9 43L-14 30L-13 14L-17 7L-19 -4L-12 -12L-13 -24L-8 -34L-6 -45Z",
+          panels:"M0 -46V44M-6 -38H6M-10 -27L-4 -21H4L10 -27M-12 -12H12M-14 3L-8 10H8L14 3M-11 18H11M-9 31L0 38L9 31",
+          machinery:"M-16 -1L-10 4M16 -1L10 4M-11 25L-6 28M11 25L6 28",
+          engines:[[-10,38,7,8],[3,38,7,8]], hardpoints:[[0,-36,2.2],[-12,-8,1.8],[12,-8,1.8],[-10,16,1.5],[10,16,1.5]],
+          bridge:"M-5 -18L0 -24L5 -18L4 -8H-4Z"
+        },
+        {
+          id:"vesper", group:"medium", x:470, length:148, span:62, decks:5, crew:"28", mass:"6.8 kt",
+          name:"暮鸦", en:"VESPER / RX-148", role:"隐身侦察护卫舰", family:"电子战船",
+          color:"#9181d8", note:"偏置传感器翼打破完全对称，锯齿尾缘和内埋式喷口降低轮廓连续性。",
+          outer:"M-2 -50L7 -44L10 -34L18 -27L17 -16L29 -8L25 2L17 6L21 21L14 30L9 28L8 43L-1 50L-8 43L-10 31L-21 34L-18 20L-24 13L-22 1L-29 -7L-24 -19L-14 -24L-13 -38Z",
+          panels:"M-1 -44L1 43M-8 -37L5 -31L9 -21M-15 -23L-5 -14L14 -12M-23 -5L-12 1L15 2L24 -3M-16 14L-7 20L16 17M-10 30L0 36L9 29",
+          machinery:"M-25 -6L-18 -1M26 -6L18 0M-18 25L-10 21M18 20L10 24",
+          engines:[[-11,37,7,8],[3,37,7,8]], hardpoints:[[-16,-16,1.7],[18,-9,1.7],[-14,11,1.4],[15,12,1.4]],
+          bridge:"M-5 -28L2 -34L8 -27L6 -17L0 -14L-5 -18Z"
+        },
+        {
+          id:"orchid", group:"medium", x:610, length:230, span:104, decks:8, crew:"64", mass:"22 kt",
+          name:"兰花", en:"ORCHID / RS-230", role:"科研驱逐舰", family:"远征调查船",
+          color:"#70bb85", note:"四片可展开实验翼围绕中央洁净舱布置，舰首观测冠与尾部反应堆舱彼此隔离。",
+          outer:"M0 -50L8 -43L12 -32L22 -26L25 -17L20 -10L31 -2L29 8L20 12L25 26L17 35L9 33L7 45L0 50L-7 45L-9 33L-17 35L-25 26L-20 12L-29 8L-31 -2L-20 -10L-25 -17L-22 -26L-12 -32L-8 -43Z",
+          panels:"M0 -45V44M-8 -38L0 -32L8 -38M-18 -27L-10 -19H10L18 -27M-22 -12L-12 -6H12L22 -12M-26 1L-15 7L-11 18M26 1L15 7L11 18M-18 28L0 35L18 28",
+          machinery:"M-28 -1L-19 3M28 -1L19 3M-22 23L-15 19M22 23L15 19",
+          engines:[[-11,39,7,7],[4,39,7,7],[-20,27,5,6],[15,27,5,6]], hardpoints:[[-20,-20,1.7],[20,-20,1.7],[-25,3,1.5],[25,3,1.5]],
+          bridge:"M-7 -31L0 -39L7 -31L6 -19L0 -15L-6 -19Z"
+        },
+        {
+          id:"bastion", group:"medium", x:800, length:360, span:144, decks:13, crew:"180", mass:"96 kt",
+          name:"堡垒", en:"BASTION / LC-360", role:"线列巡洋舰", family:"重型战斗船",
+          color:"#d87562", note:"楔形装甲肩、分层火炮甲板和三段式舰尾共同构成传统线列舰布局，近防节点覆盖完整。",
+          outer:"M0 -50L7 -45L10 -36L17 -31L16 -23L20 -17L18 -7L14 -1L20 8L18 18L14 23L17 34L10 43L5 41L0 50L-5 41L-10 43L-17 34L-14 23L-18 18L-20 8L-14 -1L-18 -7L-20 -17L-16 -23L-17 -31L-10 -36L-7 -45Z",
+          panels:"M0 -46V45M-7 -41H7M-11 -34L-5 -28H5L11 -34M-15 -24H15M-17 -15L-10 -8H10L17 -15M-14 -2L-8 5H8L14 -2M-16 12H16M-13 23L0 29L13 23M-10 36H10",
+          machinery:"M-17 -18L-11 -13M17 -18L11 -13M-17 9L-10 14M17 9L10 14M-13 31L-7 34M13 31L7 34",
+          engines:[[-12,37,7,8],[-3,39,6,8],[6,37,7,8]], hardpoints:[[0,-38,2],[-13,-25,1.8],[13,-25,1.8],[-15,-6,1.7],[15,-6,1.7],[-13,17,1.5],[13,17,1.5]],
+          bridge:"M-6 -17L0 -23L6 -17L5 -7L0 -3L-5 -7Z"
+        },
+        {
+          id:"paladin", group:"large", x:1030, length:520, span:208, decks:19, crew:"420", mass:"270 kt",
+          name:"圣骑", en:"PALADIN / BC-520", role:"航空战列巡洋舰", family:"混合主力舰",
+          color:"#b6c96a", note:"两条侧向飞行甲板夹持中央火炮脊柱，机库和主炮互不争抢纵向出入口。",
+          outer:"M0 -50L8 -44L10 -35L16 -30L15 -20L20 -14L19 2L16 8L20 17L18 29L12 35L10 45L0 50L-10 45L-12 35L-18 29L-20 17L-16 8L-19 2L-20 -14L-15 -20L-16 -30L-10 -35L-8 -44Z",
+          panels:"M0 -46V44M-8 -40L0 -34L8 -40M-12 -31H12M-15 -22L-7 -15H7L15 -22M-17 -10H17M-16 3L-9 10H9L16 3M-17 18H17M-13 30L0 36L13 30",
+          machinery:"M-18 -13L-12 -8M18 -13L12 -8M-18 12L-12 17M18 12L12 17M-13 37L-7 40M13 37L7 40",
+          voids:["M-16 -5L-10 -9L-8 20L-14 25L-17 16Z","M16 -5L10 -9L8 20L14 25L17 16Z"],
+          engines:[[-13,38,7,8],[-3.5,40,7,8],[6,38,7,8]], hardpoints:[[0,-38,2.1],[-13,-27,1.8],[13,-27,1.8],[0,-13,1.8],[-15,29,1.4],[15,29,1.4]],
+          bridge:"M-6 -22L0 -29L6 -22L5 -12L0 -8L-5 -12Z"
+        },
+        {
+          id:"pilgrim", group:"large", x:1320, length:760, span:258, decks:27, crew:"1,100", mass:"680 kt",
+          name:"朝圣者", en:"PILGRIM / CA-760", role:"殖民方舟", family:"深空民用旗舰",
+          color:"#65d6c1", note:"箱式居住脊柱连接四个轮换生态舱，舰尾双反应堆能在失去一侧后独立维持生命支持。",
+          outer:"M0 -50L7 -46L9 -39L13 -34L14 -22L12 -15L16 -8L16 8L13 14L15 27L11 38L7 40L5 47L0 50L-5 47L-7 40L-11 38L-15 27L-13 14L-16 8L-16 -8L-12 -15L-14 -22L-13 -34L-9 -39L-7 -46Z",
+          panels:"M0 -46V46M-8 -41H8M-10 -34L-5 -28H5L10 -34M-12 -22H12M-13 -12L-7 -6H7L13 -12M-13 1H13M-12 12L-7 18H7L12 12M-13 26H13M-9 38H9",
+          machinery:"M-14 -17L-9 -12M14 -17L9 -12M-14 7L-9 12M14 7L9 12M-11 31L-6 35M11 31L6 35",
+          voids:["M-11 -19L-7 -23L-5 -8L-7 -3L-11 -7Z","M11 -19L7 -23L5 -8L7 -3L11 -7Z","M-11 5L-7 1L-5 18L-7 23L-11 19Z","M11 5L7 1L5 18L7 23L11 19Z"],
+          engines:[[-11,39,6,8],[-3,41,6,8],[5,39,6,8]], hardpoints:[[-11,-29,1.4],[11,-29,1.4],[-13,30,1.3],[13,30,1.3]],
+          bridge:"M-5 -31L0 -37L5 -31L4 -23H-4Z"
+        },
+        {
+          id:"aegis", group:"capital", x:1690, length:980, span:333, decks:36, crew:"2,800", mass:"1.9 Mt",
+          name:"天盾", en:"AEGIS / FB-980", role:"要塞战列舰", family:"重型主力舰",
+          color:"#65a9d8", note:"双层装甲堡垒、十字火力肩与深埋式动力井强调生存能力；所有主要舱段都有第二通路。",
+          outer:"M0 -50L7 -45L9 -37L14 -32L13 -24L17 -18L15 -9L17 -2L14 6L17 15L15 25L11 31L12 39L7 45L0 50L-7 45L-12 39L-11 31L-15 25L-17 15L-14 6L-17 -2L-15 -9L-17 -18L-13 -24L-14 -32L-9 -37L-7 -45Z",
+          panels:"M0 -46V45M-7 -41H7M-10 -35L-5 -29H5L10 -35M-13 -25H13M-14 -17L-8 -11H8L14 -17M-14 -5H14M-13 5L-8 11H8L13 5M-14 17H14M-12 27L0 33L12 27M-9 39H9",
+          machinery:"M-15 -20L-10 -15M15 -20L10 -15M-15 0L-10 5M15 0L10 5M-13 22L-8 26M13 22L8 26M-10 35L-6 39M10 35L6 39",
+          voids:["M-9 -8L-5 -12H5L9 -8L7 8L0 13L-7 8Z"],
+          engines:[[-12,38,7,8],[-3.5,40,7,8],[6,38,7,8]], hardpoints:[[0,-40,2.1],[-11,-30,1.8],[11,-30,1.8],[-14,-13,1.6],[14,-13,1.6],[-14,13,1.6],[14,13,1.6],[-10,31,1.4],[10,31,1.4]],
+          bridge:"M-6 -25L0 -31L6 -25L5 -16L0 -12L-5 -16Z"
+        },
+        {
+          id:"sovereign", group:"capital", x:2260, length:1280, span:563, decks:44, crew:"6,400", mass:"5.7 Mt",
+          name:"统御者", en:"SOVEREIGN / CV-1280", role:"舰队航空母舰", family:"远征主力舰",
+          color:"#b6c96a", note:"贯通式双机库占据两舷，中央岛式舰桥和装甲脊柱维持指挥、动力与结构连续性。",
+          outer:"M0 -50L8 -46L11 -38L17 -33L16 -25L22 -19L20 -8L22 2L19 10L21 22L17 31L12 35L10 44L0 50L-10 44L-12 35L-17 31L-21 22L-19 10L-22 2L-20 -8L-22 -19L-16 -25L-17 -33L-11 -38L-8 -46Z",
+          panels:"M0 -46V45M-8 -41L0 -36L8 -41M-12 -33H12M-16 -25L-9 -19H9L16 -25M-18 -13H18M-17 -2L-10 4H10L17 -2M-18 12H18M-16 24L-8 30H8L16 24M-10 38H10",
+          machinery:"M-20 -17L-14 -12M20 -17L14 -12M-20 6L-14 11M20 6L14 11M-16 29L-10 33M16 29L10 33",
+          voids:["M-18 -14L-12 -18L-9 -10L-9 20L-14 27L-19 20Z","M18 -14L12 -18L9 -10L9 20L14 27L19 20Z"],
+          engines:[[-15,37,7,8],[-5,40,7,8],[5,40,7,8],[8,37,7,8]], hardpoints:[[0,-39,2],[-15,-29,1.6],[15,-29,1.6],[-19,-4,1.5],[19,-4,1.5],[-17,31,1.4],[17,31,1.4]],
+          bridge:"M-5 -28L2 -35L8 -28L7 -16L1 -11L-5 -17Z"
+        },
+        {
+          id:"corona", group:"capital", x:2920, length:1640, span:459, decks:58, crew:"12,000", mass:"14.2 Mt",
+          name:"日冕", en:"CORONA / TT-1640", role:"泰坦级远征要塞", family:"战略旗舰",
+          color:"#e3b35b", note:"超长中央城塞串联三座反应堆与四片火力冠，尺度最大却保持窄长，以避免横向承力失控。",
+          outer:"M0 -50L6 -47L8 -40L12 -36L11 -29L14 -24L12 -17L14 -11L12 -4L14 3L12 10L14 18L12 26L9 31L10 39L6 45L0 50L-6 45L-10 39L-9 31L-12 26L-14 18L-12 10L-14 3L-12 -4L-14 -11L-12 -17L-14 -24L-11 -29L-12 -36L-8 -40L-6 -47Z",
+          panels:"M0 -47V46M-6 -43H6M-8 -38L-4 -33H4L8 -38M-10 -30H10M-11 -24L-6 -19H6L11 -24M-11 -14H11M-10 -7L-6 -2H6L10 -7M-11 4H11M-10 11L-6 16H6L10 11M-11 22H11M-9 29L0 35L9 29M-7 40H7",
+          machinery:"M-12 -27L-8 -23M12 -27L8 -23M-12 -9L-8 -5M12 -9L8 -5M-12 9L-8 13M12 9L8 13M-11 27L-7 31M11 27L7 31",
+          voids:["M-8 -20L-4 -24H4L8 -20L6 -10L0 -6L-6 -10Z","M-8 1L-4 -3H4L8 1L6 12L0 16L-6 12Z"],
+          engines:[[-10,39,6,8],[-3,41,6,8],[4,39,6,8]], hardpoints:[[0,-41,2],[-9,-33,1.7],[9,-33,1.7],[-11,-16,1.6],[11,-16,1.6],[-11,5,1.6],[11,5,1.6],[-10,24,1.5],[10,24,1.5]],
+          bridge:"M-5 -30L0 -36L5 -30L4 -21L0 -17L-4 -21Z"
+        }
+      ];
+
+      const camera = {x:0,y:0,w:world.w,h:world.h};
+      let activeFilter = "all";
+      let selectedId = "bastion";
+      let fitWidth = world.w;
+      let initialized = false;
+      let drag = null;
+
+      function shipLocalMarkup(ship, thumbnail = false) {
+        const voids = (ship.voids || []).map(path => `<path d="${path}" class="atlas-void atlas-mid-detail"/>`).join("");
+        const engines = ship.engines.map(([x,y,w,h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1" class="atlas-engine atlas-full-detail"/>`).join("");
+        const hardpoints = ship.hardpoints.map(([x,y,r]) => `
+          <g class="atlas-full-detail">
+            <circle cx="${x}" cy="${y}" r="${r}" class="atlas-hardpoint"/>
+            <path d="M${x-r*.55} ${y}H${x+r*.55}M${x} ${y-r*.55}V${y+r*.55}" class="atlas-machinery-line" stroke="#d8a66a"/>
+          </g>
+        `).join("");
+        const commonClass = thumbnail ? "atlas-card" : "atlas";
+        return `
+          <path d="${ship.outer}" class="${commonClass}-outline atlas-hull-surface" stroke="${ship.color}"/>
+          <path d="${ship.outer}" transform="scale(.86 .9)" class="${commonClass}-line atlas-inner-line atlas-mid-detail"/>
+          ${thumbnail ? "" : `
+            <path d="M0 -46V46" class="atlas-center-line atlas-mid-detail"/>
+            <path d="${ship.panels}" class="atlas-panel-line atlas-mid-detail"/>
+            <path d="${ship.machinery}" class="atlas-machinery-line atlas-full-detail" stroke="${ship.color}"/>
+            ${voids}
+            ${engines}
+            ${hardpoints}
+            <path d="${ship.bridge}" class="atlas-bridge atlas-full-detail"/>
+            <path d="${ship.outer}" class="atlas-ship-hit"/>
+          `}
+        `;
+      }
+
+      function thumbSvg(ship) {
+        return `
+          <svg viewBox="-38 -54 76 108" aria-hidden="true">
+            <path d="M0 -51V51" stroke="#1d2925" stroke-width=".7" stroke-dasharray="2 3"/>
+            ${shipLocalMarkup(ship,true)}
+          </svg>
+        `;
+      }
+
+      function renderList() {
+        const visible = atlasShips.filter(ship => activeFilter === "all" || ship.group === activeFilter);
+        list.innerHTML = visible.map(ship => `
+          <button class="atlas-card" type="button" aria-pressed="${ship.id === selectedId}" data-atlas-ship="${ship.id}">
+            ${thumbSvg(ship)}
+            <span class="atlas-card-name">${ship.name}</span>
+            <span class="atlas-card-code">${ship.en.split(" / ")[1]}</span>
+            <span class="atlas-card-role">${ship.role}</span>
+            <span class="atlas-card-size">L ${ship.length}m · W ${ship.span}m</span>
+          </button>
+        `).join("");
+      }
+
+      function sceneMarkup() {
+        const coordinateLabels = Array.from({length:7},(_,index) => {
+          const x = index * 500;
+          return `
+            <path d="M${x} 0V17" stroke="#52645c" stroke-width="1" vector-effect="non-scaling-stroke"/>
+            <text x="${x+8}" y="27" class="atlas-coordinate-label">${x}m</text>
+          `;
+        }).join("");
+        const ships = getVisibleShips().map(ship => {
+          const scale = ship.length / 100;
+          const y = baseline - ship.length / 2;
+          const selected = ship.id === selectedId ? " is-selected" : "";
+          return `
+            <g class="atlas-ship${selected}" data-atlas-scene-ship="${ship.id}" data-lod="near" transform="translate(${ship.x} ${y})">
+              <g transform="scale(${scale})">
+                <rect x="${-ship.span/ship.length*50-2}" y="-52" width="${ship.span/ship.length*100+4}" height="104" class="atlas-selection-bracket"/>
+                ${shipLocalMarkup(ship)}
+              </g>
+            </g>
+            <g class="atlas-label" data-atlas-label="${ship.id}">
+              <text class="atlas-label-name" text-anchor="middle">${ship.name} · ${ship.en.split(" / ")[0]}</text>
+              <text class="atlas-label-size" text-anchor="middle">${ship.length}m</text>
+            </g>
+          `;
+        }).join("");
+        return `
+          <defs>
+            <pattern id="atlas-grid-micro" width="10" height="10" patternUnits="userSpaceOnUse">
+              <path d="M2 0V10M4 0V10M6 0V10M8 0V10M0 2H10M0 4H10M0 6H10M0 8H10" fill="none" stroke="#10211c" stroke-width=".45" vector-effect="non-scaling-stroke"/>
+            </pattern>
+            <pattern id="atlas-grid-10" width="10" height="10" patternUnits="userSpaceOnUse">
+              <path d="M10 0H0V10" fill="none" stroke="#1d342c" stroke-width=".65" vector-effect="non-scaling-stroke"/>
+            </pattern>
+            <pattern id="atlas-grid-50" width="50" height="50" patternUnits="userSpaceOnUse">
+              <path d="M50 0H0V50" fill="none" stroke="#315047" stroke-width=".8" vector-effect="non-scaling-stroke"/>
+            </pattern>
+          </defs>
+          <rect width="${world.w}" height="${world.h}" fill="#07100d"/>
+          <rect class="atlas-grid-micro" width="${world.w}" height="${world.h}" fill="url(#atlas-grid-micro)"/>
+          <rect class="atlas-grid-minor" width="${world.w}" height="${world.h}" fill="url(#atlas-grid-10)"/>
+          <rect class="atlas-grid-major" width="${world.w}" height="${world.h}" fill="url(#atlas-grid-50)"/>
+          <rect x=".5" y=".5" width="${world.w-1}" height="${world.h-1}" class="atlas-world-frame"/>
+          <path d="M36 ${baseline}H${world.w-36}" class="atlas-baseline"/>
+          ${coordinateLabels}
+          <g aria-label="两米人体比例标记">
+            <circle cx="66" cy="${baseline-1.55}" r=".25" fill="#e3b35b"/>
+            <path d="M66 ${baseline-1.3}V${baseline}M65.4 ${baseline-.9}H66.6" stroke="#e3b35b" stroke-width=".3"/>
+          </g>
+          ${ships}
+        `;
+      }
+
+      function renderScene() {
+        canvas.setAttribute("viewBox", `${camera.x} ${camera.y} ${camera.w} ${camera.h}`);
+        canvas.innerHTML = sceneMarkup();
+        updateCameraPresentation();
+      }
+
+      function getVisibleShips() {
+        return atlasShips.filter(ship => activeFilter === "all" || ship.group === activeFilter);
+      }
+
+      function visibleBounds() {
+        const visible = getVisibleShips();
+        const left = Math.min(...visible.map(ship => ship.x - ship.span/2));
+        const right = Math.max(...visible.map(ship => ship.x + ship.span/2));
+        const top = Math.min(...visible.map(ship => baseline - ship.length));
+        return {left:left-60,right:right+60,top:Math.max(0,top-60),bottom:baseline+70};
+      }
+
+      function setCameraBounds(bounds, recordFit = false) {
+        const rect = viewport.getBoundingClientRect();
+        const aspect = rect.width > 0 && rect.height > 0 ? rect.width/rect.height : 1.6;
+        let width = Math.max(24,bounds.right-bounds.left);
+        let height = Math.max(24,bounds.bottom-bounds.top);
+        if (width/height < aspect) width = height*aspect;
+        else height = width/aspect;
+        camera.x = (bounds.left+bounds.right-width)/2;
+        camera.y = (bounds.top+bounds.bottom-height)/2;
+        camera.w = width;
+        camera.h = height;
+        if (recordFit) fitWidth = width;
+        updateCameraPresentation();
+      }
+
+      function fitVisible() {
+        setCameraBounds(visibleBounds(),true);
+      }
+
+      function focusShip(ship) {
+        const padding = Math.max(10,ship.length*.16);
+        const top = baseline-ship.length-padding;
+        const bottom = baseline+padding;
+        const horizontal = ship.span/2+padding;
+        setCameraBounds({left:ship.x-horizontal,right:ship.x+horizontal,top,bottom});
+      }
+
+      function clampCamera() {
+        const marginX = camera.w*.32;
+        const marginY = camera.h*.32;
+        camera.x = Math.min(world.w+marginX-camera.w,Math.max(-marginX,camera.x));
+        camera.y = Math.min(world.h+marginY-camera.h,Math.max(-marginY,camera.y));
+      }
+
+      function zoomAt(factor,px,py) {
+        const rect = viewport.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const nextWidth = Math.max(22,Math.min(world.w*1.45,camera.w*factor));
+        const actualFactor = nextWidth/camera.w;
+        const wx = camera.x+(px/rect.width)*camera.w;
+        const wy = camera.y+(py/rect.height)*camera.h;
+        camera.w = nextWidth;
+        camera.h *= actualFactor;
+        camera.x = wx-(px/rect.width)*camera.w;
+        camera.y = wy-(py/rect.height)*camera.h;
+        clampCamera();
+        updateCameraPresentation();
+      }
+
+      function niceScale(value) {
+        const exponent = Math.floor(Math.log10(value));
+        const base = value/Math.pow(10,exponent);
+        const nice = base < 2 ? 1 : base < 5 ? 2 : 5;
+        return nice*Math.pow(10,exponent);
+      }
+
+      function updateCameraPresentation() {
+        if (!canvas.innerHTML) return;
+        canvas.setAttribute("viewBox", `${camera.x} ${camera.y} ${camera.w} ${camera.h}`);
+        const rect = viewport.getBoundingClientRect();
+        if (!rect.width) return;
+        const worldPerPixel = camera.w/rect.width;
+        const targetScale = niceScale(worldPerPixel*110);
+        const scaleWidth = Math.max(38,targetScale/worldPerPixel);
+        root.querySelector(".atlas-scale-label").textContent = `${targetScale >= 1000 ? (targetScale/1000)+" km" : targetScale+" m"}`;
+        root.querySelector(".atlas-scale-line").style.width = `${scaleWidth}px`;
+        root.querySelector(".atlas-zoom-readout").textContent = `VIEW ${Math.round(fitWidth/camera.w*100)}%`;
+        const micro = canvas.querySelector(".atlas-grid-micro");
+        const minor = canvas.querySelector(".atlas-grid-minor");
+        if (micro) micro.style.opacity = worldPerPixel < .65 ? ".75" : worldPerPixel < 1.4 ? ".28" : "0";
+        if (minor) minor.style.opacity = worldPerPixel < 5 ? ".9" : ".25";
+        canvas.querySelectorAll(".atlas-baseline-label,.atlas-coordinate-label").forEach(label => {
+          label.style.fontSize = `${worldPerPixel*8}px`;
+        });
+
+        atlasShips.forEach(ship => {
+          const pixelLength = ship.length/worldPerPixel;
+          const group = canvas.querySelector(`[data-atlas-scene-ship="${ship.id}"]`);
+          const label = canvas.querySelector(`[data-atlas-label="${ship.id}"]`);
+          if (!group || !label) return;
+          const lod = pixelLength < 24 ? "far" : pixelLength < 105 ? "mid" : "near";
+          group.dataset.lod = lod;
+          const isSelected = ship.id === selectedId;
+          label.style.display = pixelLength < 110 && !isSelected ? "none" : "block";
+          const fontSize = worldPerPixel*8.5;
+          const labelGap = worldPerPixel*(16+(atlasShips.indexOf(ship)%2)*14);
+          label.setAttribute("transform",`translate(${ship.x} ${baseline+labelGap})`);
+          const name = label.querySelector(".atlas-label-name");
+          const size = label.querySelector(".atlas-label-size");
+          name.setAttribute("font-size",fontSize);
+          size.setAttribute("font-size",fontSize*.8);
+          size.setAttribute("y",fontSize*1.25);
+        });
+      }
+
+      function selectShip(id, focus = false) {
+        const ship = atlasShips.find(item => item.id === id);
+        if (!ship) return;
+        selectedId = id;
+        renderList();
+        canvas.querySelectorAll(".atlas-ship").forEach(group => {
+          group.classList.toggle("is-selected",group.dataset.atlasSceneShip === id);
+        });
+        renderInspector();
+        updateCameraPresentation();
+        if (focus) focusShip(ship);
+      }
+
+      function renderInspector() {
+        const ship = atlasShips.find(item => item.id === selectedId);
+        root.querySelector(".atlas-inspector-name").textContent = `${ship.name} · ${ship.role}`;
+        root.querySelector(".atlas-inspector-en").textContent = `${ship.en} / ${ship.family.toUpperCase()}`;
+        root.querySelector(".atlas-inspector-note").textContent = ship.note;
+        root.querySelector(".atlas-metrics").innerHTML = [
+          ["全长",`${ship.length} m`],
+          ["最大舰宽",`${ship.span} m`],
+          ["甲板",`${ship.decks} 层`],
+          ["标准乘员",ship.crew],
+          ["干质量",ship.mass],
+          ["占用粗格",`${(ship.length/50).toFixed(1)} × ${(ship.span/50).toFixed(1)}`]
+        ].map(([label,value]) => `<div class="atlas-metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
+      }
+
+      function initializeAtlas() {
+        if (!initialized) {
+          camera.x = world.x;
+          camera.y = world.y;
+          renderScene();
+          renderList();
+          renderInspector();
+          initialized = true;
+        }
+        fitVisible();
+      }
+
+      root.querySelectorAll(".view-tab").forEach(tab => {
+        tab.addEventListener("click",() => {
+          const view = tab.dataset.viewTarget;
+          root.dataset.view = view;
+          root.querySelectorAll(".view-tab").forEach(item => item.setAttribute("aria-selected",String(item === tab)));
+          const atlas = view === "atlas";
+          root.querySelector("[data-header-title]").textContent = atlas ? "舰体尺度图谱 · 船坞正投影" : "舰船框架谱系 · 第二版";
+          root.querySelector("[data-header-subtitle]").textContent = atlas
+            ? "十二艘原创船体按真实米制统一绘制；小艇需拉近读图，旗舰需拉远观看全貌"
+            : "六级舰体、三十种定位；形状表示接口，颜色表示系统，内标表示实装配件，军衔角标表示 T1–T5";
+          root.querySelector("[data-header-count]").textContent = atlas ? "12 TRUE-SCALE HULLS" : "30 HULL FRAMEWORKS";
+          if (atlas) requestAnimationFrame(initializeAtlas);
+        });
+      });
+
+      root.querySelectorAll(".atlas-filter").forEach(button => {
+        button.addEventListener("click",() => {
+          activeFilter = button.dataset.atlasFilter;
+          root.querySelectorAll(".atlas-filter").forEach(item => item.setAttribute("aria-pressed",String(item === button)));
+          const visible = getVisibleShips();
+          if (!visible.some(ship => ship.id === selectedId)) selectedId = visible[0].id;
+          renderScene();
+          renderList();
+          renderInspector();
+          fitVisible();
+        });
+      });
+
+      list.addEventListener("click",event => {
+        const card = event.target.closest("[data-atlas-ship]");
+        if (card) selectShip(card.dataset.atlasShip,true);
+      });
+
+      root.querySelector(".atlas-controls").addEventListener("click",event => {
+        const control = event.target.closest("[data-atlas-action]");
+        if (!control) return;
+        const action = control.dataset.atlasAction;
+        if (action === "in") zoomAt(.78,viewport.clientWidth/2,viewport.clientHeight/2);
+        if (action === "out") zoomAt(1.28,viewport.clientWidth/2,viewport.clientHeight/2);
+        if (action === "fit") fitVisible();
+        if (action === "focus") focusShip(atlasShips.find(ship => ship.id === selectedId));
+      });
+
+      viewport.addEventListener("wheel",event => {
+        event.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        zoomAt(event.deltaY > 0 ? 1.14 : .875,event.clientX-rect.left,event.clientY-rect.top);
+      },{passive:false});
+
+      viewport.addEventListener("pointerdown",event => {
+        const sceneShip = event.target.closest && event.target.closest("[data-atlas-scene-ship]");
+        drag = {
+          id:event.pointerId,
+          x:event.clientX,
+          y:event.clientY,
+          cameraX:camera.x,
+          cameraY:camera.y,
+          moved:false,
+          shipId:sceneShip ? sceneShip.dataset.atlasSceneShip : null
+        };
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add("is-dragging");
+      });
+
+      viewport.addEventListener("pointermove",event => {
+        if (!drag || drag.id !== event.pointerId) return;
+        const dx = event.clientX-drag.x;
+        const dy = event.clientY-drag.y;
+        if (Math.abs(dx)+Math.abs(dy) > 3) drag.moved = true;
+        camera.x = drag.cameraX-dx/viewport.clientWidth*camera.w;
+        camera.y = drag.cameraY-dy/viewport.clientHeight*camera.h;
+        clampCamera();
+        updateCameraPresentation();
+      });
+
+      function releasePointer(event) {
+        if (!drag || drag.id !== event.pointerId) return;
+        const moved = drag.moved;
+        const shipId = drag.shipId;
+        drag = null;
+        viewport.classList.remove("is-dragging");
+        if (!moved && shipId) selectShip(shipId,false);
+      }
+
+      viewport.addEventListener("pointerup",releasePointer);
+      viewport.addEventListener("pointercancel",releasePointer);
+      viewport.addEventListener("dblclick",event => {
+        const sceneShip = event.target.closest && event.target.closest("[data-atlas-scene-ship]");
+        if (sceneShip) selectShip(sceneShip.dataset.atlasSceneShip,true);
+      });
+
+      viewport.addEventListener("keydown",event => {
+        const step = camera.w*.08;
+        if (event.key === "+" || event.key === "=") zoomAt(.8,viewport.clientWidth/2,viewport.clientHeight/2);
+        else if (event.key === "-" || event.key === "_") zoomAt(1.25,viewport.clientWidth/2,viewport.clientHeight/2);
+        else if (event.key === "0") fitVisible();
+        else if (event.key.toLowerCase() === "f") focusShip(atlasShips.find(ship => ship.id === selectedId));
+        else if (event.key === "ArrowLeft") camera.x -= step;
+        else if (event.key === "ArrowRight") camera.x += step;
+        else if (event.key === "ArrowUp") camera.y -= step;
+        else if (event.key === "ArrowDown") camera.y += step;
+        else return;
+        clampCamera();
+        updateCameraPresentation();
+        event.preventDefault();
+      });
+
+      const atlasHash = window.location.hash.match(/^#scale-atlas(?:\/([a-z0-9-]+))?$/);
+      if (atlasHash) {
+        root.querySelector('[data-view-target="atlas"]').click();
+        if (atlasHash[1] && atlasShips.some(ship => ship.id === atlasHash[1])) {
+          requestAnimationFrame(() => selectShip(atlasHash[1],true));
+        }
+      }
+
+      if (typeof ResizeObserver !== "undefined") {
+        new ResizeObserver(() => {
+          if (root.dataset.view !== "atlas" || !initialized) return;
+          const rect = viewport.getBoundingClientRect();
+          if (!rect.width || !rect.height) return;
+          const centerY = camera.y+camera.h/2;
+          camera.h = camera.w/(rect.width/rect.height);
+          camera.y = centerY-camera.h/2;
+          clampCamera();
+          updateCameraPresentation();
+        }).observe(viewport);
+      }
+    })();
+  </script>
+</div>
+</body>
+</html>

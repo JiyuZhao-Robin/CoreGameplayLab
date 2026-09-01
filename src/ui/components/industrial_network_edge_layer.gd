@@ -265,7 +265,7 @@ func _should_show_label(edge: Dictionary) -> bool:
 func _draw_edge_label(edge: Dictionary, center: Vector2, color: Color) -> void:
 	var text := I18n.core("industrial_network.edge.label", "Actual %.1f/h · Requested %.1f/h · Capacity %.1f/h") % [float(edge.get("actual_flow", 0.0)), float(edge.get("requested_flow", 0.0)), float(edge.get("capacity", 0.0))]
 	var font := ThemeDB.fallback_font
-	var font_size := 10
+	var font_size := UiTokens.font_size(10)
 	var text_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 	var rect := Rect2(center - Vector2(text_size.x * 0.5 + 6.0, 12.0), Vector2(text_size.x + 12.0, 24.0))
 	draw_style_box(UiTokens.panel_style(Color(UiTokens.COLOR_INSET, 0.94), color.darkened(0.18), 3), rect)

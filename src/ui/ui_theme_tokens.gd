@@ -36,6 +36,11 @@ const COLOR_FACTORY_CANVAS := Color("0b100e")
 const COLOR_FACTORY_GRID_DOT := Color("3c4743")
 const COLOR_NODE_SURFACE := Color("131917")
 const COLOR_NODE_HEADER := Color("171e1b")
+const COLOR_SHIP_CANVAS := Color("08100e")
+const COLOR_SHIP_GRID_MINOR := Color("18231f")
+const COLOR_SHIP_GRID_MAJOR := Color("35443e")
+const COLOR_SHIP_FRAME_INNER := Color("26342f")
+const COLOR_SHIP_LINK_SHADOW := Color(0.0, 0.0, 0.0, 0.56)
 
 const SPACING_XS := 4
 const SPACING_SM := 8
@@ -59,26 +64,84 @@ const NETWORK_NODE_GAP_Y := 28
 const NETWORK_GRID_MINOR_SIZE := 24
 const NETWORK_GRID_MAJOR_EVERY := 5
 
+# UI scale is deliberately separate from the project viewport and from every
+# interactive graph/canvas zoom. Fonts follow the selected scale directly;
+# shell geometry uses a moderated scale so the 1440x900 minimum layout remains
+# operable while larger windows gain a more readable desktop UI.
+const SUPPORTED_UI_SCALES := [1.0, 1.25, 1.5, 1.75, 2.0]
+const DEFAULT_UI_SCALE := 1.25
+const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"
+
+static var _ui_scale := DEFAULT_UI_SCALE
+
+
+static func sanitize_ui_scale(value: float) -> float:
+	var normalized := value / 100.0 if value > 10.0 else value
+	var closest := DEFAULT_UI_SCALE
+	var closest_distance := INF
+	for candidate_value in SUPPORTED_UI_SCALES:
+		var candidate := float(candidate_value)
+		var distance := absf(candidate - normalized)
+		if distance < closest_distance:
+			closest = candidate
+			closest_distance = distance
+	return closest
+
+
+static func set_ui_scale(value: float) -> void:
+	_ui_scale = sanitize_ui_scale(value)
+
+
+static func ui_scale() -> float:
+	return _ui_scale
+
+
+static func ui_scale_percent() -> int:
+	return int(round(_ui_scale * 100.0))
+
+
+static func layout_scale() -> float:
+	return lerpf(1.0, _ui_scale, 0.5)
+
+
+static func font_size(base_size: int) -> int:
+	return maxi(1, int(round(float(base_size) * _ui_scale)))
+
+
+static func layout_px(base_size: float) -> int:
+	return 0 if is_zero_approx(base_size) else int(round(base_size * layout_scale()))
+
+
+static func layout_vector(base_size: Vector2) -> Vector2:
+	return base_size * layout_scale()
+
+
+static func workspace_navigation_height() -> int:
+	# 100% and 125% fit one compact line once the decorative section label is
+	# hidden; larger accessibility scales reserve two lines.
+	return layout_px(84.0 if _ui_scale > 1.25 else float(WORKSPACE_NAV_HEIGHT))
+
 
 static func panel_style(background: Color, border: Color = COLOR_BORDER, radius: int = 4) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = background
 	style.border_color = border
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(radius)
+	style.set_corner_radius_all(layout_px(radius) if radius > 0 else 0)
 	return style
 
 
 static func control_style(background: Color, border: Color, radius := 4) -> StyleBoxFlat:
 	var style := panel_style(background, border, radius)
-	style.content_margin_left = 9.0
-	style.content_margin_right = 9.0
-	style.content_margin_top = 6.0
-	style.content_margin_bottom = 6.0
+	style.content_margin_left = layout_px(9.0)
+	style.content_margin_right = layout_px(9.0)
+	style.content_margin_top = layout_px(6.0)
+	style.content_margin_bottom = layout_px(6.0)
 	return style
 
 
-static func build_theme() -> Theme:
+static func build_theme(scale_value: float = DEFAULT_UI_SCALE) -> Theme:
+	set_ui_scale(scale_value)
 	var system_font := SystemFont.new()
 	system_font.font_names = PackedStringArray([
 		"Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei",
@@ -86,7 +149,7 @@ static func build_theme() -> Theme:
 	])
 	var result := Theme.new()
 	result.default_font = system_font
-	result.default_font_size = 15
+	result.default_font_size = font_size(15)
 	result.set_color("font_color", "Label", COLOR_TEXT)
 	result.set_color("font_color", "Button", COLOR_TEXT_SECONDARY)
 	result.set_color("font_disabled_color", "Button", COLOR_TEXT_MUTED)

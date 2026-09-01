@@ -107,12 +107,12 @@ func _build_core_node() -> GraphNode:
 	var label := Label.new()
 	label.text = String(_model.get("core_subtitle", ""))
 	label.add_theme_color_override("font_color", UiTokens.COLOR_FOCUS)
-	label.add_theme_font_size_override("font_size", 12)
+	label.add_theme_font_size_override("font_size", UiTokens.font_size(12))
 	body.add_child(label)
 	var summary := Label.new()
 	summary.text = String(_model.get("core_summary", ""))
 	summary.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_MUTED)
-	summary.add_theme_font_size_override("font_size", 11)
+	summary.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	body.add_child(summary)
 	node.add_child(body)
 	node.set_slot(0, false, 0, UiTokens.COLOR_INACTIVE, true, 0, UiTokens.COLOR_RESEARCH)
@@ -139,7 +139,7 @@ func _build_project_node(data: Dictionary) -> GraphNode:
 	status.name = "ResearchNodeStatus"
 	status.text = String(_model.get("status_format")) % String(data.get("status", status_id))
 	status.add_theme_color_override("font_color", tone)
-	status.add_theme_font_size_override("font_size", 11)
+	status.add_theme_font_size_override("font_size", UiTokens.font_size(11))
 	body.add_child(status)
 	node.tooltip_text = String(data.get("summary", ""))
 	_add_project_actions(body, data, tone)
@@ -200,7 +200,7 @@ func _node_button(caption: String, tone: Color, disabled: bool) -> Button:
 	button.text = caption
 	button.disabled = disabled
 	button.custom_minimum_size.y = 27.0
-	button.add_theme_font_size_override("font_size", 10)
+	button.add_theme_font_size_override("font_size", UiTokens.font_size(10))
 	button.add_theme_color_override("font_color", tone)
 	button.add_theme_color_override("font_disabled_color", UiTokens.COLOR_TEXT_MUTED.darkened(0.25))
 	return button
@@ -221,7 +221,7 @@ func _apply_node_style(node: GraphNode, tone: Color, status_id: String) -> void:
 	node.add_theme_stylebox_override("titlebar", titlebar)
 	node.add_theme_stylebox_override("titlebar_selected", selected)
 	node.add_theme_color_override("title_color", UiTokens.COLOR_TEXT)
-	node.add_theme_font_size_override("title_font_size", 12)
+	node.add_theme_font_size_override("title_font_size", UiTokens.font_size(12))
 
 
 func _status_tone(status_id: String, lane: String) -> Color:

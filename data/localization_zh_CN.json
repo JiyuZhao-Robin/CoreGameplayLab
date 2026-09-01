@@ -12,6 +12,8 @@
     "shell.pause": "暂停",
     "shell.speed_100_tooltip": "以 100× 快进正常的确定性模拟；所有物资消耗与阻塞条件仍然生效。",
     "shell.locale_toggle": "EN / 中文",
+    "shell.ui_scale": "界面缩放",
+    "shell.ui_scale_tooltip": "放大界面文字与控件，不改变地图和生产画布的缩放倍率。",
     "shell.command_dock": "命令坞",
     "shell.back": "返回",
     "shell.next_action": "下一步",

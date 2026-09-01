@@ -12,6 +12,8 @@
     "shell.pause": "Pause",
     "shell.speed_100_tooltip": "Fast-forward 100× through the normal deterministic simulation; all costs and blockers still apply.",
     "shell.locale_toggle": "EN / ZH",
+    "shell.ui_scale": "UI scale",
+    "shell.ui_scale_tooltip": "Scale interface text and controls without changing map or canvas zoom.",
     "shell.command_dock": "COMMAND DOCK",
     "shell.back": "Back",
     "shell.next_action": "Next action",

@@ -1,6 +1,8 @@
 class_name MegastructureProgressView
 extends Control
 
+const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
+
 const COLOR_SPACE := Color("07111b")
 const COLOR_GRID := Color(0.20, 0.47, 0.55, 0.24)
 const COLOR_FRAME := Color("3f8394")
@@ -141,5 +143,5 @@ func _draw_phase_caption() -> void:
 	var font := ThemeDB.fallback_font
 	var stage := _stage_name if not _stage_name.is_empty() else I18n.core("megastructure.progress_default_stage")
 	var counter := I18n.core("common.ratio") % [_phase_count if _complete else _phase_index, _phase_count]
-	draw_string(font, Vector2(18.0, size.y - 15.0), stage, HORIZONTAL_ALIGNMENT_LEFT, size.x - 105.0, 13, COLOR_MUTED)
-	draw_string(font, Vector2(size.x - 86.0, size.y - 15.0), counter, HORIZONTAL_ALIGNMENT_RIGHT, 68.0, 13, COLOR_COMPLETE if _complete else COLOR_ACTIVE)
+	draw_string(font, Vector2(18.0, size.y - 15.0), stage, HORIZONTAL_ALIGNMENT_LEFT, size.x - 105.0, UiTokens.font_size(13), COLOR_MUTED)
+	draw_string(font, Vector2(size.x - 86.0, size.y - 15.0), counter, HORIZONTAL_ALIGNMENT_RIGHT, 68.0, UiTokens.font_size(13), COLOR_COMPLETE if _complete else COLOR_ACTIVE)
