@@ -130,6 +130,8 @@ Reduced Motion 是跨存档 UI preference。开启后关闭粒子和呼吸、相
 
 DSPONLINE 仅用于动态节奏与性能思路：真实流量驱动、拥堵降速、共享画布时钟、暂停域动画、低频警告、一次性恢复反馈、viewport culling、topology/runtime 分离和 Reduced Motion。没有复制 React、CSS、组件、资产、数据或品牌。
 
+后续公开源码检索发现第三方 MIT 项目 `zebadrabbit/Gridworks` 明确自述采用 Upload Labs 风格，但它是 HTML Canvas/JavaScript 的 Satisfactory 主题再创作。本实现没有引入、移植或复制该项目源码；它只作为“同类开源实现存在”的外部交叉参考，Godot Control/GraphEdit/CanvasItem 架构及 Helios 领域投影均保持原创。
+
 ## 首阶段限制
 
 - 当前连接不可编辑；网络是只读运行结构和命令入口。

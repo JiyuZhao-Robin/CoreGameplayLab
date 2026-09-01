@@ -12,6 +12,8 @@ const CONSTRUCTION_TIMEOUT_SECONDS := 10.0
 const LARGE_BATCH_TIMEOUT_SECONDS := 40.0
 const RESEARCH_TIMEOUT_SECONDS := 12.0
 const JOURNEY_STAGE_TIMEOUT_SECONDS := 24.0
+const FAST_AUDIT_SETTLE_SECONDS := 0.035
+const NORMAL_SETTLE_SECONDS := 0.21
 
 const UI_INDUSTRY_RECIPE_BY_ITEM := {
 	"iron_ore":"separate_iron_ore",
@@ -1702,7 +1704,12 @@ func _freight_remote_item_ui(main: Control, location_id: String, item_id: String
 	var source_before := Game.state.item_quantity(item_id, location_id)
 	var cargo_path: Dictionary = Game.simulation.logistics._shortest_path(Game.state, location_id, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id)
 	var cargo_per_dispatch := _path_cargo_batch_read_only(cargo_path)
-	var planned_dispatches := clampi(ceili(float(source_before) / float(maxi(1, cargo_per_dispatch))), 1, 16) if require_source_release else 1
+	# Remote depots intentionally stage one return-dispatch worth of fuel and
+	# repair stock at a time. Keep this release contract to one physical cargo
+	# tranche; the caller's bounded streaming loop stages the next tranche before
+	# asking Logistics to move it. Treating all source stock as one release while
+	# funding only one dispatch leaves a valid route waiting without operating stock.
+	var planned_dispatches := 1
 	if not await _stage_remote_operating_stock_ui(main, location_id, planned_dispatches): return false
 	if Game.simulation.logistics._destination_free_capacity(Game.state, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id) <= 0:
 		if not await _upgrade_item_storage_ui(main, SpaceGameState.MAIN_BASE_LOCATION_ID, item_id): return false
@@ -1722,8 +1729,9 @@ func _freight_remote_item_ui(main: Control, location_id: String, item_id: String
 			# In that case the conserved delivery ledger is the physical-movement
 			# evidence; requiring a lower net source stock creates a false deadlock.
 			var release_target := mini(source_before, planned_dispatches * cargo_per_dispatch)
+			var delivered_quantity := int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) - delivered_before
 			return Game.state.item_quantity(item_id, location_id) <= source_before - release_target \
-				or int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) > delivered_before
+				or delivered_quantity >= release_target
 		return int(Game.state.logistics_network.get("item_statistics", {}).get(item_id, {}).get("delivered", 0)) > delivered_before,
 		LARGE_BATCH_TIMEOUT_SECONDS)
 	var import_satisfied_by_normal_economy := Game.state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID) >= import_target
@@ -2708,6 +2716,7 @@ func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Calla
 			"costs":costs,
 			"entries":planning.get("entries", [])
 		}))
+		var retry_reason := ""
 		for entry_value in planning.get("entries", []):
 			if completion.is_valid() and bool(completion.call()):
 				return true
@@ -2747,10 +2756,20 @@ func _ensure_ui_costs_stable(main: Control, costs: Dictionary, completion: Calla
 					item_sink_target = int(committed_sink_targets.get(item_id, 0))
 				await _open_industry_production(main)
 				if not await _produce_until(main, activity_id, item_id, target, LARGE_BATCH_TIMEOUT_SECONDS, true, 0, 0, item_sink_progress, item_sink_target, completion):
-					_print_cost_convergence_diagnostic(costs, pass_index, "PRODUCTION_FAILED:%s" % activity_id)
-					return false
+					# A large legitimate batch can finish just short of its target when
+					# O&M settles on the same simulation boundary. Rebuild the remaining
+					# authoritative plan on the next bounded pass instead of discarding
+					# all progress. Hard dependency/raw failures still return above, and
+					# max_passes keeps a truly non-converging recipe finite.
+					retry_reason = "PRODUCTION_FAILED:%s" % activity_id
+					break
 			if completion.is_valid() and bool(completion.call()):
 				return true
+		if not retry_reason.is_empty():
+			_print_cost_convergence_diagnostic(costs, pass_index, retry_reason)
+			if completion.is_valid() and bool(completion.call()):
+				return true
+			continue
 		var complete := true
 		for item_id_value in costs.keys():
 			var item_id := String(item_id_value)
@@ -3535,9 +3554,12 @@ func _wait_until(predicate: Callable, wall_timeout_seconds: float, settle_on_suc
 
 func _settle_ui() -> void:
 	await get_tree().process_frame
-	# Main intentionally coalesces dirty page rebuilds for 180 ms. Wait past that
-	# public UI refresh boundary so the next lookup observes the replacement tree.
-	await get_tree().create_timer(0.21, true, false, true).timeout
+	# Production uses a deliberately low redraw cadence. Release audits can request
+	# the explicit UI-only fast cadence so their thousands of visible actions do
+	# not spend hours waiting on coalescing. Domain simulation, action routing,
+	# assertions, and the public Control tree are identical in both modes.
+	var settle_seconds := FAST_AUDIT_SETTLE_SECONDS if OS.get_cmdline_user_args().has("--ui-audit-fast-refresh") else NORMAL_SETTLE_SECONDS
+	await get_tree().create_timer(settle_seconds, true, false, true).timeout
 	await get_tree().process_frame
 
 

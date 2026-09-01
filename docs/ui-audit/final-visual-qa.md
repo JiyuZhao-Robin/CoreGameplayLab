@@ -175,3 +175,39 @@ Fresh-save Survey and early Logistics screens leave large undifferentiated areas
 - Final Visual QA: **PASS**
 
 On the supplied final screenshot evidence, the visual surface no longer blocks `CORE UI VERIFIED`. This conclusion is limited to independent visual, localization-layout, discoverability, and screenshot-state verification; Domain correctness and full UI journey certification remain governed by their respective automated and playthrough results.
+
+## 2026-08-31 Industrial network vertical slice
+
+Evidence: `artifacts/ui-industrial-network`
+
+The final native Godot industrial-network pass adds a second, independently reviewed matrix for `Industry & Construction > Production > Network view`:
+
+| Resolution | en states | zh-CN states | Expected dimensions | Result |
+| --- | ---: | ---: | --- | --- |
+| 1366x768 | 9 | 9 | 1366x768 | PASS |
+| 1920x1080 | 9 | 9 | 1920x1080 | PASS |
+| 2560x1440 | 9 | 9 | 2560x1440 | PASS |
+| Animation phases | 3 | - | 1920x1080 | PASS |
+| Total | 30 | 27 | 57 PNG files | PASS |
+
+Each locale/resolution combination contains `fresh`, `running`, `input_shortage`, `output_full`, `power_limited`, `logistics_congested`, `bottleneck_focus`, `late_network`, and `reduced_motion`. Representative final-build evidence:
+
+- `artifacts/ui-industrial-network/1366x768_zh_CN_bottleneck_focus.png`
+- `artifacts/ui-industrial-network/1366x768_en_running.png`
+- `artifacts/ui-industrial-network/1920x1080_zh_CN_output_full.png`
+- `artifacts/ui-industrial-network/2560x1440_en_input_shortage.png`
+- `artifacts/ui-industrial-network/2560x1440_zh_CN_reduced_motion.png`
+
+The original-resolution review found no CJK title clipping, unreachable control, port/edge misalignment, line crossing through selected node body text, weak selected state, or Inspector obstruction of the focused entity. Intentional viewport-edge clipping remains possible after focusing a subgraph; the selected entity and its immediate causal chain remain fully visible. At 1366x768 the workbench retains readable node text and collapsible shell regions rather than scaling the whole UI down.
+
+Status semantics are redundant rather than color-only: node status text, blocker text, port glyph/fill, border state and edge pattern distinguish running, paused, input-blocked, output-full and congested states. Reduced Motion removes continuous particles and breathing while preserving the same topology, text, shapes and static colors.
+
+The three deterministic flow captures have different SHA-1 values and visibly place the shared-clock packet at different points on the same real-flow edge:
+
+| Phase | SHA-1 |
+| ---: | --- |
+| 0.00 | `b1b12101b0e6777939b9d67929f939fd83676551` |
+| 0.42 | `9ce769e65f11211b772bb4adaed841fa3b19283f` |
+| 0.84 | `25b03e2c9256c700f5ebb7034be6cfe0de645065` |
+
+This proves phase-dependent movement rather than a static glow. The packet is absent when authoritative actual flow is zero, and Reduced Motion disables it. Industrial Network Visual QA: **PASS**.

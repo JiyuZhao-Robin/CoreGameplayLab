@@ -25,6 +25,7 @@ const COLOR_BAD := UiTokens.COLOR_CRITICAL
 const UI_CONFIG_PATH := "user://core_gameplay_ui.cfg"
 const INTERACTIVE_REFRESH_INTERVAL_MS := 250
 const SIMULATION_REFRESH_INTERVAL_MS := 1000
+const AUDIT_REFRESH_INTERVAL_MS := 20
 const NAV_TRANSLATION_KEYS := {
 	"system_map":"nav.system_map", "location":"nav.location", "industry":"nav.industry",
 	"inventory":"nav.inventory", "logistics":"nav.logistics", "construction":"nav.construction",
@@ -82,6 +83,7 @@ var _ship_assembly_view: ShipAssemblyMapView
 var _ship_design_name_input: LineEdit
 var _reduced_motion := false
 var _network_preferences_save_due_ms := 0
+var _audit_fast_refresh := false
 
 
 func _ready() -> void:
@@ -97,6 +99,11 @@ func _ready() -> void:
 			_selected_location_id = String(argument).trim_prefix("--network-location=")
 		elif String(argument) == "--reduced-motion":
 			_reduced_motion = true
+		elif String(argument) == "--ui-audit-fast-refresh":
+			# Test-only scheduling override. It changes neither simulation time nor
+			# command behavior; it only removes the production UI's normal redraw
+			# coalescing delay from long visible-control audits.
+			_audit_fast_refresh = true
 	_build_theme()
 	_build_shell()
 	_connect_game_signals()
@@ -121,7 +128,7 @@ func _process(_delta: float) -> void:
 		_last_header_ms = now
 	var focused := get_viewport().gui_get_focus_owner()
 	var editing_text := focused is LineEdit or focused is TextEdit
-	var refresh_interval := SIMULATION_REFRESH_INTERVAL_MS if Engine.time_scale >= 5.0 else INTERACTIVE_REFRESH_INTERVAL_MS
+	var refresh_interval := AUDIT_REFRESH_INTERVAL_MS if _audit_fast_refresh else (SIMULATION_REFRESH_INTERVAL_MS if Engine.time_scale >= 5.0 else INTERACTIVE_REFRESH_INTERVAL_MS)
 	var refresh_due := _immediate_refresh_requested or now - _last_refresh_ms >= refresh_interval
 	if not editing_text and _dirty and refresh_due and not _rebuild_in_progress:
 		_immediate_refresh_requested = false
