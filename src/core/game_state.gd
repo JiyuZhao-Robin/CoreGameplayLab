@@ -22,7 +22,17 @@ const MANUFACTURING_FACILITY_IDS := [
 	"field_engineering_complex",
 	"frontier_matterworks"
 ]
-const RETIRED_AGGREGATE_FACILITY_IDS := MANUFACTURING_FACILITY_IDS + [
+
+# Godot 4.6 does not treat concatenating one Array constant into another as a
+# constant expression. Keep this compatibility list explicit so the project
+# can compile before any saved-state migration reads it.
+const RETIRED_AGGREGATE_FACILITY_IDS := [
+	"makeshift_workshop",
+	"orbital_foundry",
+	"electronics_facility",
+	"assembly_yard",
+	"field_engineering_complex",
+	"frontier_matterworks",
 	"fission_reactor", "energy_array", "orbital_construction_yard",
 	"earth_extraction_network", "lunar_extraction_network"
 ]

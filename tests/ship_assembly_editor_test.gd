@@ -65,9 +65,19 @@ func _run() -> void:
 	_check(_control_tree_ignores_mouse(hull_visual), "hull visual and all shader pass controls ignore mouse input")
 	view.call("_drop_data", Vector2(80.0, 120.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":"light_autocannon"})
 	view.call("_drop_data", Vector2(80.0, 280.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":"civilian_shield"})
+	await get_tree().process_frame
 	var draft := view.draft_snapshot()
 	_check(draft.get("nodes", []).size() == 3, "hull and parts are created only by palette drops")
 	_check(draft.get("connections", []).is_empty(), "dropping hull and parts never creates pre-wired links")
+	var weapon_module := view.get_node(NodePath("ship_design_module_0001")) as GraphNode
+	_check(weapon_module.title.is_empty() and weapon_module.custom_minimum_size.y >= 138.0, "module identity is integrated into one taller visual card instead of a detached title bar")
+	var module_card_surface := weapon_module.find_child("ModuleCardSurface", true, false) as Control
+	var module_connection_surface := weapon_module.find_child("ModuleConnectionSurface", true, false) as Control
+	_check(weapon_module.find_child("ModuleThumbnail", true, false) is Control and module_connection_surface != null, "the taller module card provides a thumbnail bay and a broad connector-symbol surface")
+	_check(module_card_surface.mouse_filter == Control.MOUSE_FILTER_IGNORE and module_connection_surface.mouse_filter == Control.MOUSE_FILTER_STOP, "only the connector symbol captures line gestures while the rest of the card remains a movement surface")
+	_check(not weapon_module.draggable, "module movement uses the full card body instead of GraphNode's narrow title-only drag strip")
+	_check(weapon_module.get_theme_icon("port").get_size() == Vector2(56.0, 56.0) and weapon_module.get_theme_constant("port_h_offset") == 32, "the real GraphEdit port overlays the complete visible module symbol instead of a separate pinhead edge dot")
+	_check(view.get_theme_constant("port_hotzone_inner_extent") >= 38 and view.get_theme_constant("port_hotzone_outer_extent") >= 52, "native GraphEdit ports retain a forgiving pickup band as a secondary connection gesture")
 	var core_socket := view.get_node(NodePath("ship_design_socket_core_0")) as GraphNode
 	var drive_socket := view.get_node(NodePath("ship_design_socket_drive_0")) as GraphNode
 	var weapon_socket := view.get_node(NodePath("ship_design_socket_weapon_0")) as GraphNode
@@ -75,6 +85,19 @@ func _run() -> void:
 	var structural_socket := view.get_node(NodePath("ship_design_socket_utility_1")) as GraphNode
 	var special_socket := view.get_node(NodePath("ship_design_socket_utility_0")) as GraphNode
 	var socket_glyphs := view.get("_socket_glyphs") as Dictionary
+	var module_surface_center := weapon_module.get_global_transform_with_canvas().affine_inverse() * module_connection_surface.get_global_rect().get_center()
+	var module_port_position := weapon_module.get_output_port_position(0)
+	var socket_port_position := weapon_socket.get_input_port_position(0)
+	var weapon_socket_glyph := weapon_socket.find_child("SocketGlyph_socket_weapon_0", true, false) as Control
+	var socket_visual_center := weapon_socket.get_global_transform_with_canvas().affine_inverse() * weapon_socket_glyph.get_global_rect().get_center()
+	_check(module_port_position.distance_to(module_surface_center) <= 6.0, "native module port is centered on the complete visible connector (port=%s, symbol=%s)" % [module_port_position, module_surface_center])
+	_check(socket_port_position.distance_to(socket_visual_center) <= 6.0, "native socket port is centered on the complete socket symbol (port=%s, symbol=%s)" % [socket_port_position, socket_visual_center])
+	var position_before_body_drag := weapon_module.position_offset
+	view.call("_begin_module_move", "ship_design_module_0001", weapon_module, Vector2(100.0, 100.0))
+	view.call("_update_module_move", Vector2(148.0, 124.0))
+	view.call("_finish_module_move")
+	var expected_body_drag_delta := Vector2(48.0, 24.0) / view.zoom
+	_check(weapon_module.position_offset.is_equal_approx(position_before_body_drag + expected_body_drag_delta), "dragging the card body moves the module instead of starting a connection")
 	_check(weapon_socket.visible and weapon_socket.z_index > (view.get_node(NodePath("ship_design_hull")) as GraphNode).z_index, "visual artwork never hides or intercepts the socket hit target")
 	_check(not bool(socket_glyphs["socket_weapon_0"].filled) and not bool(socket_glyphs["socket_utility_1"].filled), "all unconnected sockets start gray and hollow")
 	var orthogonal_route := view.call("_orthogonal_connection_points", Vector2(0.0, 0.0), Vector2(100.0, 60.0)) as PackedVector2Array
@@ -88,11 +111,40 @@ func _run() -> void:
 	_check((socket_glyphs["socket_weapon_0"].tone as Color).is_equal_approx(UiTokens.COLOR_CRITICAL) and not bool(socket_glyphs["socket_weapon_0"].filled), "connection draft highlights only the compatible hollow socket")
 	_check(String(socket_glyphs["socket_weapon_0"].visual_state) == "compatible" and String(socket_glyphs["socket_shield_0"].visual_state) == "muted", "connection draft exposes compatible and muted port visual states")
 	_check((socket_glyphs["socket_shield_0"].tone as Color).is_equal_approx(UiTokens.COLOR_BORDER_STRONG), "connection draft leaves incompatible sockets muted")
+	view.call("_on_socket_hover_changed", "socket_weapon_0", true)
 	view.call("_on_connection_drag_ended")
-	view.request_module_connection("ship_design_module_0001", "socket_weapon_0")
-	_check(view.draft_snapshot().get("connections", []).size() == 1, "matching triangular weapon interfaces connect")
+	await get_tree().process_frame
+	_check(view.draft_snapshot().get("connections", []).size() == 1, "releasing a native drag after its preview snaps green always commits that accepted socket")
+	view.call("_on_disconnection_request", StringName("ship_design_module_0001"), 0, StringName(weapon_socket.name), 0)
+	view.call("_begin_module_card_connection", "ship_design_module_0001")
+	var broad_socket_hit := (weapon_socket.position_offset + Vector2(weapon_socket.custom_minimum_size.x * 0.75, weapon_socket.custom_minimum_size.y * 0.25)) * view.zoom - view.scroll_offset
+	view.call("_update_manual_connection_target", broad_socket_hit)
+	view.call("_complete_module_card_connection", Vector2(-1000.0, -1000.0))
+	_check(view.draft_snapshot().get("connections", []).size() == 1, "a green connector-symbol target stays locked through release jitter and connects without acquiring a tiny edge point")
 	_check(bool(socket_glyphs["socket_weapon_0"].filled) and String(socket_glyphs["socket_weapon_0"].visual_state) == "connected", "connected socket becomes colored, filled and enters the connected visual state")
-	var weapon_path := view.call("_world_path_for_link", (view.get("_links") as Array)[0]) as PackedVector2Array
+	view.call("_on_connection_drag_started", StringName("ship_design_module_0001"), 0, true)
+	_check(not bool(view.call("_socket_matches_dragged_module", view.call("_hull_socket", "socket_weapon_0"))), "an occupied module or socket can never advertise a green accepted preview")
+	view.call("_on_connection_drag_ended")
+	await get_tree().process_frame
+	_check(view.draft_snapshot().get("connections", []).size() == 1, "ending a non-green occupied drag does not duplicate or replace its existing connection")
+	var installed_link := (view.get("_links") as Array)[0] as Dictionary
+	var live_hull := view.get_node(NodePath("ship_design_hull")) as GraphNode
+	var socket_position_before_hull_drag := weapon_socket.position_offset
+	var path_before_hull_drag := view.call("_world_path_for_link", installed_link) as PackedVector2Array
+	var connection_layer := view.get("_visual_layer") as Control
+	connection_layer.call("_cached_route", installed_link)
+	_check(not (connection_layer.get("_route_cache") as Dictionary).is_empty(), "established connection route is cached before live hull movement")
+	var live_hull_delta := Vector2(84.0, -46.0)
+	live_hull.position_offset += live_hull_delta
+	var weapon_path := view.call("_world_path_for_link", installed_link) as PackedVector2Array
+	_check(weapon_socket.position_offset.is_equal_approx(socket_position_before_hull_drag + live_hull_delta), "hull position changes move every socket immediately without waiting for drag release")
+	_check(weapon_path[weapon_path.size() - 1].is_equal_approx(path_before_hull_drag[path_before_hull_drag.size() - 1] + live_hull_delta), "connected line endpoint follows its socket during the same hull movement frame")
+	_check((connection_layer.get("_route_cache") as Dictionary).is_empty(), "live hull movement invalidates cached connection geometry immediately")
+	var expected_module_center := view.call("_graph_node_center", weapon_module) as Vector2
+	var expected_socket_center := view.call("_graph_node_center", weapon_socket) as Vector2
+	_check(weapon_path[0].is_equal_approx(expected_module_center) and weapon_path[weapon_path.size() - 1].is_equal_approx(expected_socket_center), "connection geometry anchors at the centers of the complete module card and hull socket")
+	var reverse_path := view.call("_get_entity_connection_line", weapon_module, expected_module_center - Vector2(500.0, 80.0), null) as PackedVector2Array
+	_check(reverse_path.size() > 2 and reverse_path[1].x < reverse_path[0].x, "a target on the left makes the center-anchored route emerge from the left instead of always using the right edge")
 	var selection_point := weapon_path[weapon_path.size() / 2] * view.zoom - view.scroll_offset
 	_check(bool(view.call("_select_connection_at", selection_point)) and not String(view.get("_selected_connection_key")).is_empty(), "custom connection hit testing selects the enhanced visual line")
 	var interaction_snapshot := JSON.stringify(view.draft_snapshot())

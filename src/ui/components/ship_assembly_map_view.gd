@@ -15,6 +15,9 @@ const HULL_NODE_NAME := "ship_design_hull"
 const MODULE_NODE_PREFIX := "ship_design_module_"
 const DEFAULT_ZOOM_MIN := 0.20
 const FIT_PADDING := 72.0
+const MODULE_CARD_SIZE := Vector2(278.0, 138.0)
+const MODULE_MOVE_STRIP_HEIGHT := 28.0
+const SOCKET_DROP_PADDING_PX := 30.0
 
 var _catalog: Dictionary = {}
 var _entities := {}
@@ -24,6 +27,10 @@ var _socket_glyphs := {}
 var _module_glyphs := {}
 var _next_node_serial := 1
 var _connection_drag_module_name := ""
+var _manual_connection_drag := false
+var _manual_move_module_name := ""
+var _manual_move_last_screen_position := Vector2.ZERO
+var _manual_move_start_position := Vector2.ZERO
 var _hovered_socket_id := ""
 var _selected_connection_key := ""
 var _visual_layer: Control
@@ -31,6 +38,7 @@ var _hull_backplane: ShipHullBackplane
 var _hull_visual: ShipHullVisual
 var _hull_hovered := false
 var _hull_selected := false
+var _invisible_port_icons := {}
 
 
 func _ready() -> void:
@@ -78,8 +86,11 @@ func _ready() -> void:
 	add_theme_color_override("connection_hover_tint_color", Color.TRANSPARENT)
 	add_theme_color_override("connection_rim_color", Color.TRANSPARENT)
 	add_theme_constant_override("connection_hover_thickness", 0)
-	add_theme_constant_override("port_hotzone_inner_extent", 10)
-	add_theme_constant_override("port_hotzone_outer_extent", 10)
+	# Keep native GraphEdit port dragging available and make its horizontal
+	# pickup band forgiving. The visible connector symbol owns the same full-size
+	# manual gesture; the rest of the module card is reserved for movement.
+	add_theme_constant_override("port_hotzone_inner_extent", 38)
+	add_theme_constant_override("port_hotzone_outer_extent", 52)
 	_visual_layer = ShipAssemblyConnectionLayerScript.new()
 	_visual_layer.name = "ShipAssemblyConnectionLayer"
 	add_child(_visual_layer)
@@ -97,9 +108,40 @@ func _world_path_for_link(link: Dictionary) -> PackedVector2Array:
 	var target := get_node_or_null(NodePath(_socket_node_name(String(link.get("socket_id", ""))))) as GraphNode
 	if source == null or target == null or source.get_output_port_count() <= 0 or target.get_input_port_count() <= 0:
 		return PackedVector2Array()
-	var start := source.position_offset + source.get_output_port_position(0)
-	var finish := target.position_offset + target.get_input_port_position(0)
-	return _get_connection_line(start, finish)
+	# Route from entity centers. The connection layer sits behind both cards and
+	# sockets, so the covered segment disappears naturally and the line appears
+	# to leave the nearest edge without being hard-wired to the right-hand port.
+	var start := _graph_node_center(source)
+	var finish := _graph_node_center(target)
+	return _get_entity_connection_line(source, finish, target)
+
+
+func _graph_node_center(node: GraphNode) -> Vector2:
+	return node.position_offset + _graph_node_size(node) * 0.5
+
+
+func _graph_node_size(node: GraphNode) -> Vector2:
+	var node_size := node.size
+	if node_size.x <= 0.0 or node_size.y <= 0.0:
+		node_size = node.custom_minimum_size
+	return node_size
+
+
+func _get_entity_connection_line(source: GraphNode, target_position: Vector2, target: GraphNode = null) -> PackedVector2Array:
+	var source_position := _graph_node_center(source)
+	var direction := 1.0 if target_position.x >= source_position.x else -1.0
+	var source_rail_x := source_position.x + direction * (_graph_node_size(source).x * 0.5 + 24.0)
+	var target_clearance := _graph_node_size(target).x * 0.5 + 18.0 if target != null else 18.0
+	var target_rail_x := target_position.x - direction * target_clearance
+	var route_y := _connection_route_center_y(source_position, target_position)
+	return _rounded_orthogonal_path(PackedVector2Array([
+		source_position,
+		Vector2(source_rail_x, source_position.y),
+		Vector2(source_rail_x, route_y),
+		Vector2(target_rail_x, route_y),
+		Vector2(target_rail_x, target_position.y),
+		target_position
+	]), 8.0)
 
 
 func configure(catalog: Dictionary, draft: Dictionary = {}) -> void:
@@ -118,6 +160,10 @@ func clear_draft(emit_change := true) -> void:
 	_socket_glyphs.clear()
 	_module_glyphs.clear()
 	_connection_drag_module_name = ""
+	_manual_connection_drag = false
+	_manual_move_module_name = ""
+	_manual_move_last_screen_position = Vector2.ZERO
+	_manual_move_start_position = Vector2.ZERO
 	_hovered_socket_id = ""
 	_selected_connection_key = ""
 	_hull_backplane = null
@@ -260,6 +306,10 @@ func _add_hull(plan_id: String, graph_position: Vector2, requested_name := HULL_
 	_entities[String(node.name)] = {"kind":"hull", "definition_id":hull_id, "plan_id":plan_id, "sockets":sockets, "visual_spec":visual_spec, "art_mode":has_art}
 	for socket in sockets:
 		_add_hull_socket_node(node, socket)
+	# GraphEdit's end_node_move signal arrives only after the pointer is released.
+	# Follow the hull's position_offset signal instead so dependent sockets and
+	# connection geometry remain rigidly attached throughout every drag frame.
+	node.position_offset_changed.connect(_on_hull_position_offset_changed)
 	_refresh_socket_visuals()
 	_sync_hull_presentation()
 
@@ -292,9 +342,11 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	socket_node.set_meta("entity_kind", "socket")
 	socket_node.set_meta("socket_id", socket_id)
 	socket_node.visible = true
+	socket_node.add_theme_icon_override("port", _invisible_port_icon_for_size(clampi(roundi(socket_node.custom_minimum_size.x), 52, 96)))
 	var glyph_center := CenterContainer.new()
 	glyph_center.custom_minimum_size = socket_node.custom_minimum_size - Vector2(12.0, 12.0)
 	var glyph := ShipPortGlyphScript.new()
+	glyph.name = "SocketGlyph_%s" % socket_id
 	glyph.configure(shape, UiTokens.COLOR_BORDER_STRONG, false, "idle", tier, diameter_m)
 	glyph_center.add_child(glyph)
 	glyph.custom_minimum_size = Vector2.ONE * diameter_m * ShipHullProfiles.WORLD_SCALE
@@ -306,7 +358,7 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	add_child(socket_node)
 	_socket_nodes[socket_id] = String(socket_node.name)
 	_socket_glyphs[socket_id] = glyph
-	var base_tooltip := String(_catalog.get("core_socket_format")) % (int(socket_id.get_slice("_", 2)) + 1) if slot == "core" else String(_catalog.get("socket_label_format")) % [String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), int(socket_id.get_slice("_", 2)) + 1, _slot_shape(slot)]
+	var base_tooltip := String(_catalog.get("core_socket_format")) % (int(socket_id.get_slice("_", 2)) + 1) if slot == "core" else String(_catalog.get("socket_label_format")) % [String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), int(socket_id.get_slice("_", 2)) + 1, shape]
 	socket_node.tooltip_text = I18n.core("ships.shipyard.socket_physical_scale", "%s · T%d / Ø%.0fm") % [base_tooltip, tier, diameter_m]
 
 
@@ -326,43 +378,130 @@ func _add_module(module_id: String, graph_position: Vector2, requested_name := "
 		_next_node_serial += 1
 	var node := GraphNode.new()
 	node.name = node_name
-	node.title = String(module.get("title", module_id))
+	node.title = ""
 	node.position_offset = graph_position
-	node.custom_minimum_size = Vector2(210.0, maxf(70.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE + 18.0))
-	node.draggable = true
+	node.custom_minimum_size = Vector2(MODULE_CARD_SIZE.x, maxf(MODULE_CARD_SIZE.y, module_diameter_m * ShipHullProfiles.WORLD_SCALE + 72.0))
+	# Movement is handled across the whole card except the connector symbol, so
+	# disable GraphNode's title-bar-only drag gesture to avoid double movement.
+	node.draggable = false
 	node.selectable = true
 	node.resizable = false
-	node.mouse_default_cursor_shape = Control.CURSOR_MOVE
+	node.mouse_default_cursor_shape = Control.CURSOR_CROSS
 	node.set_meta("entity_kind", "module")
 	node.set_meta("entity_id", module_id)
 	node.z_index = 3
-	var row := HBoxContainer.new()
-	row.custom_minimum_size.x = 180.0
-	row.add_theme_constant_override("separation", 7)
+	node.add_theme_icon_override("port", _invisible_port_icon_for_size(56))
+	var card := HBoxContainer.new()
+	card.name = "ModuleCardSurface"
+	card.custom_minimum_size = Vector2(244.0, maxf(108.0, node.custom_minimum_size.y - MODULE_MOVE_STRIP_HEIGHT))
+	card.add_theme_constant_override("separation", 9)
+	card.add_child(_build_module_thumbnail(module, slot, shape, module_tier, module_diameter_m))
+	var identity := VBoxContainer.new()
+	identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	identity.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	identity.alignment = BoxContainer.ALIGNMENT_CENTER
+	identity.add_theme_constant_override("separation", 3)
+	var name_label := Label.new()
+	name_label.name = "ModuleName"
+	name_label.text = String(module.get("title", module_id))
+	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	name_label.add_theme_color_override("font_color", UiTokens.COLOR_TEXT)
+	name_label.add_theme_font_size_override("font_size", UiTokens.font_size(14))
+	identity.add_child(name_label)
+	var slot_label := Label.new()
+	slot_label.text = String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper()))
+	slot_label.add_theme_color_override("font_color", _slot_tone(slot))
+	slot_label.add_theme_font_size_override("font_size", UiTokens.font_size(10))
+	identity.add_child(slot_label)
+	var id_label := Label.new()
+	id_label.text = module_id.replace("_", " ").to_upper()
+	id_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	id_label.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_MUTED)
+	id_label.add_theme_font_size_override("font_size", UiTokens.font_size(8))
+	identity.add_child(id_label)
 	var label := Label.new()
 	label.text = I18n.core("ships.shipyard.module_physical_scale", "%s · T%d / Ø%.0fm") % [String(_catalog.get("module_label_format")) % [module_size, String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), shape], module_tier, module_diameter_m]
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	label.add_theme_color_override("font_color", _slot_tone(slot))
-	label.add_theme_font_size_override("font_size", UiTokens.font_size(11))
-	row.add_child(label)
+	label.add_theme_font_size_override("font_size", UiTokens.font_size(10))
+	identity.add_child(label)
+	card.add_child(identity)
 	var glyph_frame := PanelContainer.new()
-	glyph_frame.custom_minimum_size = Vector2.ONE * maxf(34.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE + 6.0)
+	glyph_frame.name = "ModuleConnectionSurface"
+	glyph_frame.custom_minimum_size = Vector2.ONE * maxf(56.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE + 12.0)
 	var glyph_frame_style := UiTokens.panel_style(UiTokens.COLOR_INSET, _slot_tone(slot).darkened(0.32), 5)
 	glyph_frame_style.shadow_color = Color(_slot_tone(slot), 0.10)
 	glyph_frame_style.shadow_size = 4
 	glyph_frame.add_theme_stylebox_override("panel", glyph_frame_style)
 	var glyph := ShipPortGlyphScript.new()
-	glyph.custom_minimum_size = Vector2.ONE * maxf(28.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE)
+	glyph.name = "ModuleConnectorGlyph"
+	glyph.custom_minimum_size = Vector2.ONE * maxf(46.0, module_diameter_m * ShipHullProfiles.WORLD_SCALE)
 	glyph.configure(shape, _slot_tone(slot), true, "idle", module_tier, module_diameter_m)
 	glyph_frame.add_child(glyph)
-	row.add_child(glyph_frame)
-	node.add_child(row)
+	card.add_child(glyph_frame)
+	_ignore_mouse_tree(card)
+	# Only this complete symbol is a connection origin. Everything else passes
+	# through to the module card's movement handler.
+	glyph_frame.mouse_filter = Control.MOUSE_FILTER_STOP
+	glyph_frame.mouse_default_cursor_shape = Control.CURSOR_CROSS
+	node.add_child(card)
 	node.set_slot(0, false, 0, Color.WHITE, true, _slot_port_type(slot, mount_role), _slot_tone(slot))
-	_apply_node_style(node, _slot_tone(slot))
+	_apply_module_node_style(node, _slot_tone(slot))
 	_register_node_hover(node)
 	add_child(node)
 	_entities[String(node.name)] = {"kind":"module", "definition_id":module_id, "slot":slot, "mount_role":mount_role, "shape":shape, "size":module_size, "tier":module_tier, "diameter_m":module_diameter_m}
 	_module_glyphs[String(node.name)] = glyph
+	node.tooltip_text = "拖动卡片主体可移动；只有右侧大接口符号用于拉线连接"
+	node.gui_input.connect(_on_module_move_gui_input.bind(String(node.name), node))
+	glyph_frame.gui_input.connect(_on_module_connector_gui_input.bind(String(node.name), glyph_frame))
+
+
+func _build_module_thumbnail(module: Dictionary, slot: String, shape: String, tier: int, diameter_m: float) -> Control:
+	var frame := PanelContainer.new()
+	frame.name = "ModuleThumbnail"
+	frame.custom_minimum_size = Vector2(78.0, 70.0)
+	var tone := _slot_tone(slot)
+	var style := UiTokens.panel_style(Color(UiTokens.COLOR_INSET, 0.96), Color(tone, 0.46), 6)
+	style.shadow_color = Color(tone, 0.12)
+	style.shadow_size = 7
+	frame.add_theme_stylebox_override("panel", style)
+	var ui_visual := module.get("ui_visual", {}) as Dictionary
+	var icon_path := String(ui_visual.get("icon_texture", module.get("icon_texture", "")))
+	if not icon_path.is_empty() and ResourceLoader.exists(icon_path):
+		var texture := TextureRect.new()
+		texture.name = "ModuleTexture"
+		texture.texture = load(icon_path) as Texture2D
+		texture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		texture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		frame.add_child(texture)
+		return frame
+	var center := CenterContainer.new()
+	var fallback_glyph := ShipPortGlyphScript.new()
+	fallback_glyph.name = "ModuleThumbnailFallback"
+	fallback_glyph.custom_minimum_size = Vector2(66.0, 66.0)
+	fallback_glyph.configure(shape, tone, true, "idle", tier, diameter_m)
+	center.add_child(fallback_glyph)
+	frame.add_child(center)
+	return frame
+
+
+func _ignore_mouse_tree(root: Control) -> void:
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for child in root.get_children():
+		if child is Control:
+			_ignore_mouse_tree(child as Control)
+
+
+func _invisible_port_icon_for_size(side: int) -> Texture2D:
+	if _invisible_port_icons.has(side):
+		return _invisible_port_icons[side] as Texture2D
+	# The native GraphEdit hit target is transparent and centered directly over
+	# the visible connector glyph. Its dimensions match the complete symbol.
+	var image := Image.create(side, side, false, Image.FORMAT_RGBA8)
+	image.fill(Color.TRANSPARENT)
+	var texture := ImageTexture.create_from_image(image)
+	_invisible_port_icons[side] = texture
+	return texture
 
 
 func _restore_draft(draft: Dictionary) -> void:
@@ -499,9 +638,156 @@ func request_module_connection(module_node_id: String, socket_id: String) -> voi
 		_on_connection_request(StringName(module_node_id), 0, StringName(socket_node_name), 0)
 
 
+func _on_module_connector_gui_input(event: InputEvent, module_node_id: String, connection_surface: Control) -> void:
+	if event is not InputEventMouseButton or event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if event.pressed:
+		_begin_module_card_connection(module_node_id)
+		connection_surface.accept_event()
+	elif _manual_connection_drag and _connection_drag_module_name == module_node_id:
+		_complete_module_card_connection(get_local_mouse_position())
+		connection_surface.accept_event()
+
+
+func _on_module_move_gui_input(event: InputEvent, module_node_id: String, module_node: GraphNode) -> void:
+	if event is not InputEventMouseButton or event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if event.pressed:
+		_begin_module_move(module_node_id, module_node, get_local_mouse_position())
+		module_node.accept_event()
+	elif _manual_move_module_name == module_node_id:
+		_finish_module_move()
+		module_node.accept_event()
+
+
+func _input(event: InputEvent) -> void:
+	if _manual_connection_drag:
+		if event is InputEventMouseMotion:
+			_update_manual_connection_target(get_local_mouse_position())
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			_complete_module_card_connection(get_local_mouse_position())
+			get_viewport().set_input_as_handled()
+		return
+	if _manual_move_module_name.is_empty():
+		return
+	if event is InputEventMouseMotion:
+		_update_module_move(get_local_mouse_position())
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+		_finish_module_move()
+		get_viewport().set_input_as_handled()
+
+
+func _begin_module_move(module_node_id: String, module_node: GraphNode, screen_position: Vector2) -> void:
+	var entity := _entities.get(module_node_id, {}) as Dictionary
+	if String(entity.get("kind", "")) != "module" or not is_instance_valid(module_node):
+		return
+	_manual_connection_drag = false
+	_connection_drag_module_name = ""
+	_hovered_socket_id = ""
+	_manual_move_module_name = module_node_id
+	_manual_move_last_screen_position = screen_position
+	_manual_move_start_position = module_node.position_offset
+	module_node.selected = true
+	_refresh_socket_visuals()
+
+
+func _update_module_move(screen_position: Vector2) -> void:
+	if _manual_move_module_name.is_empty():
+		return
+	var module_node := get_node_or_null(NodePath(_manual_move_module_name)) as GraphNode
+	if module_node == null:
+		_manual_move_module_name = ""
+		return
+	var screen_delta := screen_position - _manual_move_last_screen_position
+	module_node.position_offset += screen_delta / maxf(zoom, 0.01)
+	_manual_move_last_screen_position = screen_position
+	_refresh_visual_layer()
+
+
+func _finish_module_move() -> void:
+	if _manual_move_module_name.is_empty():
+		return
+	var module_node := get_node_or_null(NodePath(_manual_move_module_name)) as GraphNode
+	var moved := module_node != null and module_node.position_offset.distance_squared_to(_manual_move_start_position) > 0.01
+	_manual_move_module_name = ""
+	_manual_move_last_screen_position = Vector2.ZERO
+	_manual_move_start_position = Vector2.ZERO
+	_refresh_visual_layer()
+	if moved:
+		_emit_draft_changed()
+
+
+func _begin_module_card_connection(module_node_id: String) -> void:
+	var entity := _entities.get(module_node_id, {}) as Dictionary
+	if String(entity.get("kind", "")) != "module":
+		return
+	_manual_move_module_name = ""
+	_manual_move_last_screen_position = Vector2.ZERO
+	_manual_move_start_position = Vector2.ZERO
+	_manual_connection_drag = true
+	_connection_drag_module_name = module_node_id
+	_update_manual_connection_target(get_local_mouse_position())
+	_refresh_socket_visuals()
+	_sync_hull_presentation()
+
+
+func _complete_module_card_connection(screen_position: Vector2) -> void:
+	if not _manual_connection_drag:
+		return
+	var module_node_id := _connection_drag_module_name
+	# Once the preview has snapped to a compatible socket (green), retain that
+	# target through mouse release. Release events can land a few pixels away
+	# from the last motion event, especially while GraphEdit is zoomed/panned.
+	var socket_id := _hovered_socket_id
+	if socket_id.is_empty() or not _socket_matches_dragged_module(_hull_socket(socket_id)):
+		socket_id = _socket_at_screen_position(screen_position)
+	_manual_connection_drag = false
+	if not module_node_id.is_empty() and not socket_id.is_empty():
+		var socket_node_name := _socket_node_name(socket_id)
+		if not socket_node_name.is_empty():
+			_on_connection_request(StringName(module_node_id), 0, StringName(socket_node_name), 0)
+	_connection_drag_module_name = ""
+	_hovered_socket_id = ""
+	_refresh_socket_visuals()
+	_sync_hull_presentation()
+
+
+func _update_manual_connection_target(screen_position: Vector2) -> void:
+	var socket_id := _socket_at_screen_position(screen_position)
+	if socket_id == _hovered_socket_id:
+		_refresh_visual_layer()
+		return
+	_hovered_socket_id = socket_id
+	_refresh_socket_visuals()
+
+
+func _socket_at_screen_position(screen_position: Vector2) -> String:
+	var closest_id := ""
+	var closest_distance := INF
+	for socket_id_value in _socket_nodes.keys():
+		var socket_id := String(socket_id_value)
+		var socket_node := get_node_or_null(NodePath(_socket_node_name(socket_id))) as GraphNode
+		if socket_node == null or not socket_node.visible:
+			continue
+		var screen_rect := Rect2(socket_node.position_offset * zoom - scroll_offset, _graph_node_size(socket_node) * zoom)
+		if not screen_rect.grow(SOCKET_DROP_PADDING_PX).has_point(screen_position):
+			continue
+		var distance := screen_position.distance_squared_to(screen_rect.get_center())
+		if distance < closest_distance:
+			closest_distance = distance
+			closest_id = socket_id
+	return closest_id
+
+
 func _on_connection_drag_started(from_node: StringName, from_port: int, is_output: bool) -> void:
 	var node_name := String(from_node)
 	var entity := _entities.get(node_name, {}) as Dictionary
+	_manual_connection_drag = false
+	_manual_move_module_name = ""
+	_manual_move_last_screen_position = Vector2.ZERO
+	_manual_move_start_position = Vector2.ZERO
 	_connection_drag_module_name = node_name if is_output and from_port == 0 and String(entity.get("kind", "")) == "module" else ""
 	_hovered_socket_id = ""
 	_refresh_socket_visuals()
@@ -509,10 +795,30 @@ func _on_connection_drag_started(from_node: StringName, from_port: int, is_outpu
 
 
 func _on_connection_drag_ended() -> void:
+	# GraphEdit only emits connection_request when release lands in its internal
+	# port rectangle. Our green snapped preview deliberately has a larger target,
+	# so preserve that accepted target and commit it after native signal dispatch.
+	var module_node_id := _connection_drag_module_name
+	var socket_id := _hovered_socket_id
+	var should_commit_green_target := not module_node_id.is_empty() \
+		and not socket_id.is_empty() \
+		and _socket_matches_dragged_module(_hull_socket(socket_id))
+	_manual_connection_drag = false
 	_connection_drag_module_name = ""
 	_hovered_socket_id = ""
 	_refresh_socket_visuals()
 	_sync_hull_presentation()
+	if should_commit_green_target:
+		_commit_green_drag_target.call_deferred(module_node_id, socket_id)
+
+
+func _commit_green_drag_target(module_node_id: String, socket_id: String) -> void:
+	# A native connection_request may already have succeeded earlier in the same
+	# input dispatch. In that case the fallback is intentionally a no-op.
+	for link in _links:
+		if String(link.get("module_node_id", "")) == module_node_id or String(link.get("socket_id", "")) == socket_id:
+			return
+	request_module_connection(module_node_id, socket_id)
 
 
 func _refresh_socket_visuals() -> void:
@@ -546,7 +852,7 @@ func _refresh_socket_visuals() -> void:
 			glyph.configure(String(module.get("shape", "SQUARE")), _slot_tone(String(module.get("slot", "utility"))), state == "connected" or state == "origin", state, int(module.get("tier", 1)), float(module.get("diameter_m", 5.0)))
 		var module_node := get_node_or_null(NodePath(node_name)) as GraphNode
 		if module_node != null:
-			_apply_node_style(module_node, _slot_tone(String(module.get("slot", "utility"))))
+			_apply_module_node_style(module_node, _slot_tone(String(module.get("slot", "utility"))))
 	_refresh_visual_layer()
 
 
@@ -554,7 +860,12 @@ func _socket_matches_dragged_module(socket: Dictionary) -> bool:
 	if _connection_drag_module_name.is_empty():
 		return false
 	var module := _entities.get(_connection_drag_module_name, {}) as Dictionary
-	return String(module.get("slot", "")) == String(socket.get("slot", "")) \
+	var socket_id := String(socket.get("id", ""))
+	for link in _links:
+		if String(link.get("module_node_id", "")) == _connection_drag_module_name or String(link.get("socket_id", "")) == socket_id:
+			return false
+	return not socket_id.is_empty() \
+		and String(module.get("slot", "")) == String(socket.get("slot", "")) \
 		and String(module.get("mount_role", "")) == String(socket.get("mount_role", "")) \
 		and String(module.get("shape", "")) == String(socket.get("shape", "")) \
 		and int(module.get("tier", 1)) <= int(socket.get("tier", 1))
@@ -713,6 +1024,25 @@ func _apply_node_style(node: GraphNode, tone: Color) -> void:
 	node.add_theme_font_size_override("title_font_size", UiTokens.font_size(12))
 
 
+func _apply_module_node_style(node: GraphNode, tone: Color) -> void:
+	_apply_node_style(node, tone)
+	# The name and metadata live inside one coherent card. Keep a transparent
+	# title strip only as a familiar place to move the module around the canvas.
+	var move_strip := StyleBoxFlat.new()
+	move_strip.bg_color = Color.TRANSPARENT
+	move_strip.set_content_margin(SIDE_LEFT, 0.0)
+	move_strip.set_content_margin(SIDE_RIGHT, 0.0)
+	move_strip.set_content_margin(SIDE_TOP, 9.0)
+	move_strip.set_content_margin(SIDE_BOTTOM, 9.0)
+	node.add_theme_stylebox_override("titlebar", move_strip)
+	node.add_theme_stylebox_override("titlebar_selected", move_strip)
+	node.add_theme_color_override("title_color", Color.TRANSPARENT)
+	node.add_theme_color_override("title_selected_color", Color.TRANSPARENT)
+	node.add_theme_font_size_override("title_font_size", 1)
+	# Align the native output port with the large visible symbol inside the card.
+	node.add_theme_constant_override("port_h_offset", 32)
+
+
 func _apply_art_node_style(node: GraphNode) -> void:
 	var empty := StyleBoxEmpty.new()
 	empty.set_content_margin_all(0.0)
@@ -741,7 +1071,9 @@ func _apply_socket_style(node: GraphNode, tone: Color, major: bool, state: Strin
 	node.add_theme_stylebox_override("panel_selected", surface)
 	node.add_theme_stylebox_override("titlebar", transparent_title)
 	node.add_theme_stylebox_override("titlebar_selected", transparent_title)
-	node.add_theme_constant_override("port_h_offset", 0)
+	# Move the native input port from the left edge to the center of the complete
+	# socket glyph, so its whole visible area accepts the connection drop.
+	node.add_theme_constant_override("port_h_offset", roundi(_graph_node_size(node).x * 0.5))
 
 
 func _register_node_hover(node: GraphNode) -> void:
@@ -760,7 +1092,10 @@ func _on_visual_node_hover_changed(node: GraphNode, hovered: bool) -> void:
 		_sync_hull_presentation()
 		return
 	var tone := UiTokens.COLOR_INFORMATION if String(entity.get("kind", "")) == "hull" else _slot_tone(String(entity.get("slot", "utility")))
-	_apply_node_style(node, tone)
+	if String(entity.get("kind", "")) == "module":
+		_apply_module_node_style(node, tone)
+	else:
+		_apply_node_style(node, tone)
 
 
 func _on_socket_hover_changed(socket_id: String, hovered: bool) -> void:
@@ -848,6 +1183,13 @@ func _layout_hull_socket_nodes() -> void:
 		var socket_node := get_node_or_null(NodePath(_socket_node_name(String(socket.get("id", ""))))) as GraphNode
 		if socket_node != null:
 			socket_node.position_offset = hull_node.position_offset + (socket.get("relative_position", Vector2.ZERO) as Vector2)
+
+
+func _on_hull_position_offset_changed() -> void:
+	_layout_hull_socket_nodes()
+	# refresh() also invalidates the route cache, so established connection paths
+	# are rebuilt from the newly moved socket positions in this same frame.
+	_refresh_visual_layer()
 
 
 func _emit_draft_changed() -> void:

@@ -125,15 +125,21 @@ func _draw_connection_preview() -> void:
 	var source := _graph.get_node_or_null(NodePath(source_name)) as GraphNode
 	if source == null or source.get_output_port_count() <= 0:
 		return
-	var source_world := source.position_offset + source.get_output_port_position(0)
 	var target_screen := _graph.get_local_mouse_position()
 	var target_world := (target_screen + _graph.scroll_offset) / maxf(_graph.zoom, 0.01)
-	var path := _world_to_screen(_graph.call("_get_connection_line", source_world, target_world) as PackedVector2Array)
+	var target_node: GraphNode = null
 	var tone := UiTokens.COLOR_FOCUS
 	var hovered_socket_id := String(_graph.get("_hovered_socket_id"))
 	if not hovered_socket_id.is_empty():
 		var socket := _graph.call("_hull_socket", hovered_socket_id) as Dictionary
 		tone = UiTokens.COLOR_RUNNING if bool(_graph.call("_socket_matches_dragged_module", socket)) else UiTokens.COLOR_CRITICAL
+		var socket_node_name := String(_graph.call("_socket_node_name", hovered_socket_id))
+		var socket_node := _graph.get_node_or_null(NodePath(socket_node_name)) as GraphNode
+		if socket_node != null:
+			target_node = socket_node
+			target_world = _graph.call("_graph_node_center", socket_node) as Vector2
+			target_screen = target_world * _graph.zoom - _graph.scroll_offset
+	var path := _world_to_screen(_graph.call("_get_entity_connection_line", source, target_world, target_node) as PackedVector2Array)
 	draw_polyline(path, Color(tone, 0.16), 13.0, true)
 	_draw_dashed_path(path, tone.lightened(0.16), 3.0, 11.0, 7.0, _visual_phase * 34.0)
 	draw_circle(target_screen, 9.0, Color(tone, 0.14))

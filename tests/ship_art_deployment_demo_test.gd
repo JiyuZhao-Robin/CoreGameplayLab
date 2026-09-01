@@ -1,6 +1,7 @@
 extends Node
 
 const DemoScene = preload("res://src/ui/demos/ship_art_deployment_demo.tscn")
+const ShipPortGlyphScript = preload("res://src/ui/components/ship_port_glyph.gd")
 
 var failures: Array[String] = []
 
@@ -17,6 +18,10 @@ func _run() -> void:
 		await get_tree().process_frame
 	var canvas := demo.find_child("ShipAssemblyMap", true, false) as GraphEdit
 	_check(canvas != null, "demo exposes the real ship assembly deployment canvas")
+	_check(demo.find_child("DemoAssemblyPalette", true, false) is TabContainer, "demo exposes separate Ship and Parts drag palettes")
+	_check(demo.find_child("DemoPortLegend", true, false) is Control, "demo explains the meaning of each shaped socket")
+	for module_id in ["light_autocannon", "civilian_shield", "advanced_drive", "sensor_array", "cargo_expansion", "civilian_reactor_core"]:
+		_check(demo.find_child("DemoPartCard_%s" % module_id, true, false) is Button, "%s is exposed as a draggable demo part" % module_id)
 	if canvas == null:
 		_finish()
 		return
@@ -26,8 +31,8 @@ func _run() -> void:
 		canvas.call("_drop_data", Vector2(620.0, 260.0), {
 			"ship_assembly_palette":true,
 			"kind":"hull",
-			"plan_id":"demo_construct_%s" % ship_id,
-			"definition_id":"demo_%s" % ship_id
+			"plan_id":"construct_%s" % ship_id,
+			"definition_id":ship_id
 		})
 		for _frame in 3:
 			await get_tree().process_frame
@@ -41,8 +46,48 @@ func _run() -> void:
 		_check(art != null and bool(art.call("asset_loaded")), "%s renders the registered transparent hull texture and mask" % ship_id)
 		_check(_tree_ignores_mouse(art), "%s visual layer and all of its children ignore mouse input" % ship_id)
 		_check(hull.title.is_empty() and hull.get_theme_stylebox("panel") is StyleBoxEmpty, "%s drops without a card frame or title" % ship_id)
+		var expected_shapes := {
+			"socket_weapon_0":"TRIANGLE",
+			"socket_shield_0":"SQUARE",
+			"socket_drive_0":"DIAMOND",
+			"socket_utility_0":"PENTAGON",
+			"socket_utility_1":"SQUARE",
+			"socket_core_0":"CIRCLE"
+		}
+		for socket_id_value in expected_shapes.keys():
+			var socket_id := String(socket_id_value)
+			var socket := canvas.get_node_or_null(NodePath("ship_design_%s" % socket_id)) as GraphNode
+			_check(socket != null, "%s exposes %s on its physical hull layout" % [ship_id, socket_id])
+			if socket != null:
+				var glyph := _find_ship_port_glyph(socket)
+				_check(glyph != null and String(glyph.get("shape")) == String(expected_shapes[socket_id]), "%s uses its documented connector shape" % socket_id)
 		var hull_center_screen := (hull.position_offset + hull.size * 0.5) * canvas.zoom - canvas.scroll_offset
 		_check(hull_center_screen.distance_to(canvas.size * 0.5) <= 2.0, "%s automatically focuses after a real drop" % ship_id)
+		var fittings := [
+			["light_autocannon", "socket_weapon_0"],
+			["civilian_shield", "socket_shield_0"],
+			["advanced_drive", "socket_drive_0"],
+			["sensor_array", "socket_utility_0"],
+			["cargo_expansion", "socket_utility_1"],
+			["civilian_reactor_core", "socket_core_0"]
+		]
+		for fitting_index in fittings.size():
+			var fitting: Array = fittings[fitting_index]
+			var drop_x := 70.0 if fitting_index % 2 == 0 else maxf(430.0, canvas.size.x - 330.0)
+			canvas.call("_drop_data", Vector2(drop_x, 60.0 + float(fitting_index / 2) * 165.0), {
+				"ship_assembly_palette":true,
+				"kind":"module",
+				"definition_id":String(fitting[0])
+			})
+			canvas.call("request_module_connection", "ship_design_module_%04d" % (fitting_index + 1), String(fitting[1]))
+		var snapshot := canvas.call("draft_snapshot") as Dictionary
+		_check((snapshot.get("nodes", []) as Array).size() == 7, "%s demo supports dragging six parts beside the hull" % ship_id)
+		_check((snapshot.get("connections", []) as Array).size() == 6, "%s demo connects every part to its matching shaped socket" % ship_id)
+		var representative_module := canvas.get_node_or_null(NodePath("ship_design_module_0001")) as GraphNode
+		_check(representative_module != null and representative_module.custom_minimum_size.y >= 138.0 and representative_module.find_child("ModuleThumbnail", true, false) != null, "%s demo uses the taller integrated module card with a thumbnail bay" % ship_id)
+		canvas.call("fit_design")
+		for _frame in 3:
+			await get_tree().process_frame
 		var texture := load("res://assets/ships/lunar_pathfinder/base.png") as Texture2D
 		var mask := load("res://assets/ships/lunar_pathfinder/fx_mask.png") as Texture2D
 		if texture != null and mask != null:
@@ -76,6 +121,16 @@ func _tree_ignores_mouse(root: Control) -> bool:
 		if child is Control and not _tree_ignores_mouse(child as Control):
 			return false
 	return true
+
+
+func _find_ship_port_glyph(root: Node) -> Node:
+	for child in root.get_children():
+		if child.get_script() == ShipPortGlyphScript:
+			return child
+		var nested := _find_ship_port_glyph(child)
+		if nested != null:
+			return nested
+	return null
 
 
 func _finish() -> void:
