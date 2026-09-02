@@ -62,6 +62,12 @@ func _run() -> void:
 	for toolbar_control in view.get_menu_hbox().find_children("*", "Control", true, false):
 		toolbar_was_scaled = toolbar_was_scaled or bool(toolbar_control.get_meta("ship_toolbar_scaled", false))
 	_check(not toolbar_was_scaled, "the canvas upper-left toolbar keeps its native text, icon, spacing and hit-target scale")
+	var toolbar_children := view.get_menu_hbox().get_children()
+	var readable_zoom_symbols := toolbar_children.size() >= 4
+	for toolbar_index in range(1, mini(4, toolbar_children.size())):
+		var zoom_button := toolbar_children[toolbar_index] as Button
+		readable_zoom_symbols = readable_zoom_symbols and zoom_button != null and zoom_button.text == ["−", "1", "+"][toolbar_index - 1] and zoom_button.get_theme_font_size("font_size") >= UiTokens.ship_assembly_font_size(13)
+	_check(readable_zoom_symbols, "native zoom actions use crisp font-scaled symbols instead of fixed-size bitmap icons")
 	_check(not view.minimap_enabled and not view.show_minimap_button, "the redundant bottom-right overview and its toolbar toggle are removed from the assembly canvas")
 	_check(view.draft_snapshot().get("nodes", []).is_empty(), "ship assembly canvas starts blank")
 	view.call("_drop_data", Vector2(520.0, 220.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id})
@@ -83,9 +89,11 @@ func _run() -> void:
 	var module_connection_surface := weapon_module.find_child("VisualSocketBay", true, false) as Control
 	var module_texture := weapon_module.find_child("ModuleArtwork", true, false) as TextureRect
 	var module_name_label := weapon_module.find_child("ModuleName", true, false) as Label
+	var module_metadata_label := weapon_module.find_child("ModuleMetadata", true, false) as Label
 	_check(module_card_surface != null and module_texture != null and module_texture.texture != null and module_texture.size.x / module_card_surface.size.x >= 0.30 and module_connection_surface != null, "every module card gives its generated equipment artwork the same readable visual bay as Reactor Core")
 	_check(shield_module.find_child("ModuleNodeVisual", true, false) is Control and shield_module.find_child("ModuleArtwork", true, false) is TextureRect, "non-reactor categories use the same reusable module visual component")
 	_check(module_name_label.get_theme_font_size("font_size") == UiTokens.ship_assembly_font_size(11), "unified module-card typography keeps the approved 1.5x ship-assembly scale")
+	_check(module_metadata_label != null and module_metadata_label.get_theme_font_size("font_size") == UiTokens.ship_assembly_font_size(9) and module_metadata_label.get_theme_color("font_color").a >= 0.70, "module technical metadata remains at a human-readable size and idle contrast")
 	_check(module_card_surface.mouse_filter == Control.MOUSE_FILTER_IGNORE and module_connection_surface.mouse_filter == Control.MOUSE_FILTER_STOP, "only the connector symbol captures line gestures while the rest of the card remains a movement surface")
 	_check(not weapon_module.draggable, "module movement uses the full card body instead of GraphNode's narrow title-only drag strip")
 	_check(weapon_module.get_theme_icon("port").get_size() == Vector2.ONE, "the native GraphEdit port is visually inert while the inset socket owns the connection gesture")
@@ -288,6 +296,8 @@ func _run() -> void:
 	var inspector_properties := module_inspector.property_descriptors()
 	_check(inspector_properties.any(func(property: Dictionary) -> bool: return String(property.get("id", "")) == "future_flux"), "module inspector accepts arbitrary future property descriptors without a module-specific layout")
 	_check(module_inspector.find_child("ModuleInspectorSection_PERFORMANCE", true, false) != null and module_inspector.find_child("ModuleInspectorSection_COMPATIBILITY", true, false) != null, "module inspector separates progressive information into reusable collapsible sections")
+	var inspector_toggle := module_inspector.find_child("ModuleInspectorSectionToggle_PERFORMANCE", true, false) as Button
+	_check(inspector_toggle != null and (inspector_toggle.text.begins_with("▸") or inspector_toggle.text.begins_with("▾")) and inspector_toggle.custom_minimum_size.y >= float(UiTokens.layout_px(36.0)), "module inspector sections expose a weighted readable disclosure glyph and row target")
 	module_inspector.queue_free()
 	view.call("_drop_data", Vector2(300.0, 440.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":"sensor_array"})
 	view.request_module_connection("ship_design_module_0004", "socket_utility_1")

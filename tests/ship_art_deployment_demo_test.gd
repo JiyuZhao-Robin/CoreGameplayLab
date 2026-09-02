@@ -210,6 +210,8 @@ func _run() -> void:
 	await _capture("16_save_disabled_invalid")
 
 	var previous_font_size := 0
+	var preserved_accessibility_zoom := canvas.zoom
+	var preserved_accessibility_center := (canvas.scroll_offset + canvas.size * 0.5) / maxf(canvas.zoom, 0.01)
 	for percent in [75, 100, 125, 150, 175, 200]:
 		font_scale_picker = demo.find_child("ShipAssemblyFontScale", true, false) as OptionButton
 		var percent_index := font_scale_picker.get_item_index(percent) if font_scale_picker != null else -1
@@ -223,8 +225,20 @@ func _run() -> void:
 		previous_font_size = rendered_font_size
 		var scaled_command_bar := demo.find_child("BlueprintCommandBar", true, false) as Control
 		var scaled_data_panel := demo.find_child("ShipAssemblyDataPanel", true, false) as Control
+		canvas = demo.find_child("ShipAssemblyMap", true, false) as GraphEdit
+		var scaled_ship_card := demo.find_child("AssemblyShipCard_lunar_pathfinder", true, false) as Button
+		var scaled_ship_detail := scaled_ship_card.find_child("PaletteDetail", true, false) as Label if scaled_ship_card != null else null
+		var scaled_module_node := canvas.get_node_or_null(NodePath("ship_design_module_0001")) as GraphNode if canvas != null else null
+		var scaled_module_name := scaled_module_node.find_child("ModuleName", true, false) as Label if scaled_module_node != null else null
+		var scaled_module_family := scaled_module_node.find_child("ModuleFamily", true, false) as Label if scaled_module_node != null else null
 		_check(demo.scale.is_equal_approx(Vector2.ONE), "%d percent never falls back to blurry root-node scaling" % percent)
 		_check(scaled_command_bar != null and scaled_data_panel != null and demo.get_global_rect().grow(1.0).encloses(scaled_command_bar.get_global_rect()) and demo.get_global_rect().grow(1.0).encloses(scaled_data_panel.get_global_rect()), "%d percent keeps primary UI regions inside the native window" % percent)
+		_check(canvas != null and is_equal_approx(canvas.zoom, preserved_accessibility_zoom), "%d percent preserves the independent canvas zoom instead of silently shrinking sockets through Fit All" % percent)
+		var current_canvas_center := (canvas.scroll_offset + canvas.size * 0.5) / maxf(canvas.zoom, 0.01) if canvas != null else Vector2.INF
+		_check(current_canvas_center.distance_to(preserved_accessibility_center) < 1.0, "%d percent preserves the world point centered on the canvas after layout reflow" % percent)
+		_check(scaled_ship_card != null and scaled_ship_detail != null and scaled_ship_card.get_global_rect().grow(1.0).encloses(scaled_ship_detail.get_global_rect()) and scaled_ship_detail.get_line_count() >= 2, "%d percent grows resource cards so every ship metadata line remains visible" % percent)
+		if percent >= 150:
+			_check(scaled_module_name != null and scaled_module_name.max_lines_visible == 2 and scaled_module_family != null and not scaled_module_family.visible, "%d percent switches canvas nodes to a readable name-first accessibility LOD instead of overlapping tiny metadata" % percent)
 		await _capture("font_scale_%d" % percent)
 	font_scale_picker = demo.find_child("ShipAssemblyFontScale", true, false) as OptionButton
 	if font_scale_picker != null:

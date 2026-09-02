@@ -131,6 +131,11 @@ func _rebuild_interface_for_native_scale() -> void:
 	_interface_rebuilding = true
 	var selected_tab: int = _library.current_tab() if is_instance_valid(_library) else 0
 	var preserved_status: String = _status_label.text if is_instance_valid(_status_label) else ""
+	var preserved_canvas_zoom := 0.82
+	var preserved_canvas_center := Vector2.ZERO
+	if is_instance_valid(_assembly_view):
+		preserved_canvas_zoom = _assembly_view.zoom
+		preserved_canvas_center = (_assembly_view.scroll_offset + _assembly_view.size * 0.5) / maxf(_assembly_view.zoom, 0.01)
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -139,11 +144,22 @@ func _rebuild_interface_for_native_scale() -> void:
 	_refresh_saved_designs()
 	if not _draft.is_empty():
 		_assembly_view.configure(_catalog, _draft)
+	call_deferred("_restore_canvas_view_after_native_rebuild", preserved_canvas_center, preserved_canvas_zoom)
 	_library.select_tab(selected_tab)
 	_refresh_engineering()
 	if not preserved_status.is_empty():
 		_status_label.text = preserved_status
 	_interface_rebuilding = false
+
+
+func _restore_canvas_view_after_native_rebuild(world_center: Vector2, zoom_value: float) -> void:
+	# Nested containers report provisional sizes during their first layout pass,
+	# especially when accessibility-sized resource cards are introduced. Wait for
+	# the final canvas rectangle before restoring the same world-space center.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if is_instance_valid(_assembly_view):
+		_assembly_view.restore_view_center(world_center, zoom_value)
 
 
 func assembly_view() -> ShipAssemblyMapView:

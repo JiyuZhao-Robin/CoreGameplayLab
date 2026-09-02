@@ -133,7 +133,8 @@ func _build_section(category: String, descriptors: Array) -> Control:
 	button.name = "ModuleInspectorSectionToggle_%s" % category
 	button.flat = true
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(8))
+	button.custom_minimum_size.y = float(UiTokens.layout_px(36.0))
+	button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(9))
 	button.add_theme_color_override("font_color", UiTokens.COLOR_TEXT_MUTED)
 	button.pressed.connect(_toggle_section.bind(category))
 	section.add_child(button)
@@ -164,7 +165,7 @@ func _build_section(category: String, descriptors: Array) -> Control:
 			body.add_child(value_label)
 	section.add_child(body)
 	var collapsed := bool(_collapsed.get(category, true))
-	button.text = "%s  %s" % ["+" if collapsed else "−", category.replace("_", " ")]
+	button.text = "%s  %s" % ["▸" if collapsed else "▾", category.replace("_", " ")]
 	body.visible = not collapsed
 	return section
 

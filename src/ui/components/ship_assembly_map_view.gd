@@ -162,15 +162,24 @@ func _hide_nonproduction_graph_toolbar_controls() -> void:
 
 func _enlarge_canvas_toolbar_controls() -> void:
 	# GraphEdit creates its zoom controls internally. Give those native controls
-	# the same human-readable hit area and icon budget as the custom tools.
-	for child_value in get_menu_hbox().get_children():
+	# the same human-readable hit area and symbol weight as the custom tools. The
+	# built-in bitmap icons do not grow with the native font scale, so keep their
+	# existing actions but present them as rerasterized text symbols.
+	var toolbar_children := get_menu_hbox().get_children()
+	for child_index in toolbar_children.size():
+		var child_value = toolbar_children[child_index]
 		var control := child_value as Control
 		if control == null:
 			continue
-		control.custom_minimum_size.y = maxf(control.custom_minimum_size.y, 51.0)
+		control.custom_minimum_size = control.custom_minimum_size.max(Vector2(51.0, 51.0))
 		if control is Button:
 			var button := control as Button
-			button.add_theme_constant_override("icon_max_width", 28)
+			if child_index >= 1 and child_index <= 3:
+				button.icon = null
+				button.text = ["−", "1", "+"][child_index - 1]
+				button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(13))
+			else:
+				button.add_theme_constant_override("icon_max_width", 28)
 
 
 func set_canvas_tool(tool_name: String) -> void:
@@ -1541,6 +1550,16 @@ func _reset_view() -> void:
 	scroll_offset = Vector2.ZERO
 
 
+func restore_view_center(world_center: Vector2, zoom_value: float) -> void:
+	# UI font changes rebuild the Control tree, but they must not silently invoke
+	# Fit All and make physical sockets smaller. Preserve the user's independent
+	# canvas zoom and keep the same world point centered in the resized canvas.
+	zoom_min = minf(DEFAULT_ZOOM_MIN, maxf(0.02, zoom_value))
+	zoom = clampf(zoom_value, zoom_min, zoom_max)
+	scroll_offset = world_center * zoom - size * 0.5
+	_refresh_visual_layer()
+
+
 func fit_design() -> void:
 	var bounds := _design_bounds()
 	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0 or size.x <= FIT_PADDING * 2.0 or size.y <= FIT_PADDING * 2.0:
@@ -1576,8 +1595,10 @@ func _design_bounds() -> Rect2:
 
 
 func _on_canvas_resized() -> void:
-	if not _entities.is_empty():
-		call_deferred("fit_design")
+	# A window/sidebar/font change must not silently alter the user's canvas
+	# magnification. Initial draft restore and hull placement request Fit All
+	# explicitly; later resizes only redraw at the preserved zoom/center.
+	_refresh_visual_layer()
 
 
 func _on_node_selected(node: Node) -> void:

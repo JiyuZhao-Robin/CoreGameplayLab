@@ -156,7 +156,7 @@ func _ensure_children() -> void:
 	add_child(_family_label)
 	_subtitle_label = _new_label("ModuleEnglishSubtitle", UiTokens.ship_assembly_font_size(7), UiTokens.COLOR_TEXT_MUTED)
 	add_child(_subtitle_label)
-	_metadata_label = _new_label("ModuleMetadata", UiTokens.ship_assembly_font_size(8), Color(tone, 0.78))
+	_metadata_label = _new_label("ModuleMetadata", UiTokens.ship_assembly_font_size(9), Color(tone, 0.82))
 	add_child(_metadata_label)
 
 	_socket_hit = Control.new()
@@ -203,10 +203,20 @@ func _layout_content() -> void:
 	_socket_hit.size = SOCKET_HIT_SIZE
 
 	var lod := lod_level()
+	var accessibility_compact := UiTokens.ui_scale() >= 1.5
 	_name_label.visible = lod != "very_far"
-	_subtitle_label.visible = lod == "close" and not english_subtitle.is_empty()
-	_metadata_label.visible = lod in ["close", "normal"]
-	_family_label.visible = lod != "very_far"
+	_name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if accessibility_compact else TextServer.AUTOWRAP_OFF
+	_name_label.max_lines_visible = 2 if accessibility_compact else 1
+	if accessibility_compact:
+		_name_label.position = info_rect.position
+		_name_label.size = info_rect.size
+	_subtitle_label.visible = not accessibility_compact and lod == "close" and not english_subtitle.is_empty()
+	# Technical metadata is useful only while it has enough actual screen pixels
+	# to be read. At smaller graph zooms, hide it instead of leaving a faint row
+	# that technically renders but is illegible to a person.
+	var metadata_screen_size := float(_metadata_label.get_theme_font_size("font_size")) * _zoom_level
+	_metadata_label.visible = not accessibility_compact and lod in ["close", "normal"] and metadata_screen_size >= 12.0
+	_family_label.visible = not accessibility_compact and lod != "very_far"
 	_artwork.modulate = Color(1.0, 1.0, 1.0, 1.0 if _selected or _hovered else 0.82)
 
 
@@ -218,7 +228,7 @@ func _sync_visual_state() -> void:
 	_name_label.add_theme_color_override("font_color", Color(UiTokens.COLOR_TEXT, 1.0 if focused else 0.78))
 	_family_label.add_theme_color_override("font_color", Color(tone, 0.94 if focused else 0.68))
 	_subtitle_label.add_theme_color_override("font_color", Color(UiTokens.COLOR_TEXT_MUTED, 0.90 if focused else 0.62))
-	_metadata_label.add_theme_color_override("font_color", Color(tone, 0.82 if focused else 0.58))
+	_metadata_label.add_theme_color_override("font_color", Color(tone, 0.86 if focused else 0.72))
 	var state := "incompatible" if _invalid else ("origin" if _connection_active else ("connected" if _connected else ("hover" if _hovered else "idle")))
 	_socket_glyph.configure(shape, tone, _connected or _connection_active, state, tier, diameter_m, functional_shape)
 	_socket_glyph.set_focus_state(_hovered, _selected)

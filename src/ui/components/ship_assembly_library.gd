@@ -151,7 +151,7 @@ func _rebuild_ship_cards() -> void:
 			"拖动舰体到装配画布",
 			str(ui_visual.get("topdown_texture", ""))
 		)
-		card.custom_minimum_size = Vector2(266.0, 140.0)
+		card.custom_minimum_size = Vector2(266.0, card.recommended_height(140.0))
 		card.pressed.connect(_on_card_pressed.bind("hull", ship_id))
 		cards.add_child(card)
 
@@ -188,7 +188,7 @@ func _rebuild_module_cards() -> void:
 			"拖入画布，并连接到同一功能族的舰体插槽",
 			ShipAssemblyMapViewScript.module_icon_path(module)
 		)
-		card.custom_minimum_size = Vector2(266.0, 132.0)
+		card.custom_minimum_size = Vector2(266.0, card.recommended_height(132.0))
 		card.pressed.connect(_on_card_pressed.bind("module", module_id))
 		_module_cards.add_child(card)
 		visible_count += 1

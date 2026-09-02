@@ -59,6 +59,17 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	return drag_payload.duplicate(true)
 
 
+func recommended_height(base_height: float) -> float:
+	# Two title lines plus two engineering-detail lines must survive every native
+	# accessibility scale. Font height is taller than its nominal point size on
+	# CJK system fonts, so reserve a conservative 1.5x line box.
+	var title_line_height := ceilf(float(_scaled_font_size(13)) * 1.5)
+	var detail_line_height := ceilf(float(_scaled_font_size(10)) * 1.5)
+	var text_height := title_line_height * 2.0 + detail_line_height * 2.0 + float(UiTokens.layout_px(20.0))
+	var artwork_height := float(UiTokens.layout_px(116.0) + UiTokens.layout_px(14.0))
+	return maxf(float(UiTokens.layout_px(base_height)), maxf(text_height, artwork_height))
+
+
 func _clear_visual_children() -> void:
 	for child in get_children():
 		remove_child(child)
@@ -84,10 +95,11 @@ func _apply_art_card_style() -> void:
 func _art_card_content(compact: bool) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_theme_constant_override("separation", 8)
+	row.add_theme_constant_override("separation", UiTokens.layout_px(8.0))
 	var thumbnail_frame := PanelContainer.new()
 	thumbnail_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	thumbnail_frame.custom_minimum_size = Vector2(80.0, 112.0) if compact else Vector2(88.0, 116.0)
+	var thumbnail_base := Vector2(80.0, 112.0) if compact else Vector2(88.0, 116.0)
+	thumbnail_frame.custom_minimum_size = UiTokens.layout_vector(thumbnail_base)
 	thumbnail_frame.add_theme_stylebox_override("panel", UiTokens.panel_style(Color("07100f"), Color(_accent_tone, 0.42), 3))
 	var thumbnail := TextureRect.new()
 	thumbnail.name = "PaletteArtwork"
@@ -101,18 +113,19 @@ func _art_card_content(compact: bool) -> HBoxContainer:
 	copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	copy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	copy.alignment = BoxContainer.ALIGNMENT_CENTER
-	copy.add_theme_constant_override("separation", 3)
+	copy.add_theme_constant_override("separation", UiTokens.layout_px(3.0))
 	var lines := _caption.split("\n", false)
 	var title := Label.new()
 	title.name = "PaletteTitle"
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title.text = lines[0] if not lines.is_empty() else _caption
-	title.custom_minimum_size.y = 48.0
+	var title_font_size := _scaled_font_size(13)
+	title.custom_minimum_size.y = ceilf(float(title_font_size) * 1.5) * 2.0
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.max_lines_visible = 2
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title.add_theme_color_override("font_color", UiTokens.COLOR_TEXT)
-	title.add_theme_font_size_override("font_size", _scaled_font_size(13))
+	title.add_theme_font_size_override("font_size", title_font_size)
 	copy.add_child(title)
 	var detail := Label.new()
 	detail.name = "PaletteDetail"
@@ -121,11 +134,13 @@ func _art_card_content(compact: bool) -> HBoxContainer:
 	for index in range(1, lines.size()):
 		detail_lines.append(lines[index])
 	detail.text = "\n".join(detail_lines)
-	detail.custom_minimum_size.y = 58.0 if compact else 54.0
+	var detail_font_size := _scaled_font_size(9 if compact else 10)
+	detail.custom_minimum_size.y = ceilf(float(detail_font_size) * 1.5) * float(maxi(1, detail_lines.size()))
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	detail.max_lines_visible = maxi(1, detail_lines.size())
 	detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	detail.add_theme_color_override("font_color", Color(_accent_tone, 0.78))
-	detail.add_theme_font_size_override("font_size", _scaled_font_size(9 if compact else 10))
+	detail.add_theme_font_size_override("font_size", detail_font_size)
 	copy.add_child(detail)
 	row.add_child(copy)
 	return row
