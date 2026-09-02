@@ -72,11 +72,9 @@ func _draw() -> void:
 	var outline := _scaled_outline(visual_spec, hull_rectangle)
 	if _art_active:
 		# The authored alpha silhouette is authoritative in high-detail mode.
-		# Keep only a nearly invisible logical registration trace plus the
-		# physical reference/dimensions; procedural ribs must not fight art.
+		# Keep only a nearly invisible logical registration trace; procedural
+		# ribs and dimension labels must not fight the authored art.
 		_draw_polygon_outline(outline, Color(tone, _overlay_alpha(0.13)), 1.0)
-		_draw_scale_reference(hull_rectangle)
-		_draw_dimensions(hull_rectangle)
 		return
 	if not _art_active:
 		draw_colored_polygon(outline, Color("101815"))
@@ -88,8 +86,6 @@ func _draw() -> void:
 	_draw_polygon_outline(inner, Color(UiTokens.COLOR_SHIP_FRAME_INNER, _overlay_alpha(0.94)), 1.0)
 	_draw_hull_structure(hull_rectangle)
 	_draw_bays(hull_rectangle)
-	_draw_scale_reference(hull_rectangle)
-	_draw_dimensions(hull_rectangle)
 
 
 func _draw_metric_grid(rectangle: Rect2) -> void:
@@ -110,7 +106,7 @@ func _draw_metric_grid(rectangle: Rect2) -> void:
 		y += minor_px
 		index += 1
 	var grid_text := I18n.core("ships.shipyard.projection_grid", "GRID %.0fm / %.0fm") % [major_m / 5.0, major_m]
-	draw_string(ThemeDB.fallback_font, rectangle.position + Vector2(8.0, 15.0), grid_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, UiTokens.COLOR_TEXT_MUTED)
+	draw_string(ThemeDB.fallback_font, rectangle.position + Vector2(8.0, 20.0), grid_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, UiTokens.ship_assembly_font_size(10), UiTokens.COLOR_TEXT_MUTED)
 
 
 func _draw_hull_structure(rectangle: Rect2) -> void:
@@ -160,34 +156,6 @@ func _draw_single_bay(rectangle: Rect2, center_x: float, bay: Dictionary) -> voi
 	if not _art_active:
 		draw_colored_polygon(points, Color("08100e"))
 	_draw_polygon_outline(points, Color(UiTokens.COLOR_SHIP_FRAME_INNER, _overlay_alpha(0.92)), 1.0)
-
-
-func _draw_scale_reference(hull_rectangle: Rect2) -> void:
-	var reference_spec := {
-		"profile":"p01", "half":ShipHullProfiles.PROFILE_HALVES["p01"], "bays":[],
-		"length_m":ShipHullProfiles.REFERENCE_LENGTH_M, "beam_m":9.0
-	}
-	var reference_size := Vector2(9.0, ShipHullProfiles.REFERENCE_LENGTH_M) * ShipHullProfiles.WORLD_SCALE
-	var reference_center_x := maxf(24.0, hull_rectangle.position.x - 52.0)
-	var reference_rect := Rect2(Vector2(reference_center_x-reference_size.x*0.5, hull_rectangle.end.y-reference_size.y), reference_size)
-	var reference_outline := _scaled_outline(reference_spec, reference_rect)
-	draw_colored_polygon(reference_outline, Color(tone, 0.035))
-	_draw_polygon_outline(reference_outline, Color(UiTokens.COLOR_RUNNING, 0.86), 1.0)
-	var human_x := reference_rect.end.x + 9.0
-	draw_circle(Vector2(human_x, hull_rectangle.end.y - 7.0), 1.0, UiTokens.COLOR_WARNING)
-	draw_line(Vector2(human_x, hull_rectangle.end.y - 6.0), Vector2(human_x, hull_rectangle.end.y), UiTokens.COLOR_WARNING, 1.0, true)
-	draw_string(ThemeDB.fallback_font, Vector2(reference_rect.position.x - 5.0, hull_rectangle.end.y + 14.0), I18n.core("ships.shipyard.projection_reference", "42m REF · 2m"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, UiTokens.COLOR_TEXT_MUTED)
-
-
-func _draw_dimensions(rectangle: Rect2) -> void:
-	var text_color := Color(UiTokens.COLOR_TEXT_MUTED, 0.92)
-	var top_y := maxf(24.0, rectangle.position.y - 16.0)
-	draw_line(Vector2(rectangle.position.x, top_y), Vector2(rectangle.end.x, top_y), text_color, 1.0, true)
-	draw_line(Vector2(rectangle.position.x, top_y - 4.0), Vector2(rectangle.position.x, top_y + 4.0), text_color, 1.0, true)
-	draw_line(Vector2(rectangle.end.x, top_y - 4.0), Vector2(rectangle.end.x, top_y + 4.0), text_color, 1.0, true)
-	draw_string(ThemeDB.fallback_font, Vector2(rectangle.get_center().x - 30.0, top_y - 5.0), I18n.core("ships.shipyard.projection_beam", "W %.0fm") % float(visual_spec.get("beam_m", 0.0)), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, text_color)
-	draw_string(ThemeDB.fallback_font, Vector2(rectangle.end.x + 8.0, rectangle.get_center().y), I18n.core("ships.shipyard.projection_length", "L %.0fm") % float(visual_spec.get("length_m", 0.0)), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, text_color)
-	draw_string(ThemeDB.fallback_font, Vector2(rectangle.end.x + 8.0, rectangle.get_center().y + 14.0), I18n.core("ships.shipyard.projection_socket_limit", "MAX T%d · Ø%.0fm") % [int(visual_spec.get("tier", 1)), ShipHullProfiles.socket_diameter_m(String(visual_spec.get("socket_size", "S")))], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(tone, 0.92))
 
 
 func _local_hull_rect() -> Rect2:

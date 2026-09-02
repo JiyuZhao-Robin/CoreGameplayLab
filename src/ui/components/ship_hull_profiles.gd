@@ -3,6 +3,7 @@ extends RefCounted
 
 const WORLD_SCALE := 4.0
 const REFERENCE_LENGTH_M := 42.0
+const HULL_BOARD_PADDING := 12.0
 const SLOT_DIAMETERS_M := {"S":5.0, "M":11.0, "L":22.0, "XL":44.0, "XXL":88.0}
 const SIZE_TIERS := {"S":1, "M":2, "L":3, "XL":4, "XXL":5}
 
@@ -55,12 +56,12 @@ static func visual_spec(hull: Dictionary) -> Dictionary:
 static func board_size(spec: Dictionary) -> Vector2:
 	var hull_width := float(spec.get("beam_m", 36.0)) * WORLD_SCALE
 	var hull_height := float(spec.get("length_m", 120.0)) * WORLD_SCALE
-	return Vector2(maxf(360.0, hull_width + 260.0), maxf(320.0, hull_height + 120.0))
+	return Vector2(hull_width, hull_height) + Vector2.ONE * HULL_BOARD_PADDING * 2.0
 
 
 static func hull_rect(board: Vector2, spec: Dictionary) -> Rect2:
 	var dimensions := Vector2(float(spec.get("beam_m", 36.0)), float(spec.get("length_m", 120.0))) * WORLD_SCALE
-	return Rect2(Vector2((board.x - dimensions.x) * 0.5, 60.0), dimensions)
+	return Rect2((board - dimensions) * 0.5, dimensions)
 
 
 static func size_tier(size_id: String) -> int:

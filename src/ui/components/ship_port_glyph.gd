@@ -1,137 +1,195 @@
 class_name ShipPortGlyph
 extends Control
 
+const ShipPortFxShader = preload("res://src/ui/shaders/ship_port_fx.gdshader")
+const INSTALL_FLASH_DURATION := 0.20
+const PACKET_FLASH_DURATION := 0.18
+
 var shape := "SQUARE"
 var tone := Color.WHITE
 var filled := true
 var visual_state := "idle"
 var tier := 1
 var diameter_m := 5.0
-var _phase := 0.0
+var functional_shape := false
 var _install_flash_remaining := 0.0
-const INSTALL_FLASH_DURATION := 0.34
+var _hovered := false
+var _selected := false
+var _stable_id := ""
+var _fx_surface: ColorRect
+var _fx_material: ShaderMaterial
+var _arrival_tween: Tween
+var _display_size := Vector2(18.0, 18.0)
 
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(18.0, 18.0)
+	custom_minimum_size = _display_size
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ensure_fx_surface()
+	resized.connect(_layout_fx_surface)
+	_layout_fx_surface()
+	_sync_fx_parameters()
 	set_process(false)
 
 
-func configure(value: String, color: Color, is_filled := true, state := "idle", socket_tier := 1, physical_diameter_m := 5.0) -> void:
-	shape = value
+func set_display_size(display_size: Vector2) -> void:
+	_display_size = Vector2(maxf(1.0, display_size.x), maxf(1.0, display_size.y))
+	custom_minimum_size = _display_size
+
+
+func configure(value: String, color: Color, is_filled := true, state := "idle", socket_tier := 1, physical_diameter_m := 5.0, use_functional_shape := false) -> void:
+	functional_shape = use_functional_shape
+	shape = value.to_upper() if functional_shape else "CIRCLE"
 	tone = color
 	filled = is_filled
 	visual_state = state
 	tier = clampi(socket_tier, 1, 5)
 	diameter_m = maxf(1.0, physical_diameter_m)
-	set_process(visual_state in ["compatible", "origin"] or _install_flash_remaining > 0.0)
+	_ensure_fx_surface()
+	_sync_fx_parameters()
 	queue_redraw()
 
 
-func _process(delta: float) -> void:
-	_phase = fposmod(_phase + delta, 4.0)
-	_install_flash_remaining = maxf(0.0, _install_flash_remaining - delta)
-	set_process(visual_state in ["compatible", "origin"] or _install_flash_remaining > 0.0)
-	queue_redraw()
+func set_activity_seed(stable_id: String) -> void:
+	_stable_id = stable_id
+	_sync_fx_parameters()
+
+
+func set_focus_state(hovered: bool, selected: bool) -> void:
+	_hovered = hovered
+	_selected = selected
+	_sync_fx_parameters()
 
 
 func flash_install() -> void:
-	_install_flash_remaining = INSTALL_FLASH_DURATION
-	set_process(true)
-	queue_redraw()
+	_play_arrival(INSTALL_FLASH_DURATION, 1.0)
+
+
+func flash_packet_arrival() -> void:
+	_play_arrival(PACKET_FLASH_DURATION, 0.62)
+
+
+func fx_material() -> ShaderMaterial:
+	return _fx_material
+
+
+func _ensure_fx_surface() -> void:
+	if is_instance_valid(_fx_surface):
+		return
+	_fx_surface = ColorRect.new()
+	_fx_surface.name = "ShipPortFx"
+	_fx_surface.color = Color.WHITE
+	_fx_surface.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fx_material = ShaderMaterial.new()
+	_fx_material.shader = ShipPortFxShader
+	_fx_surface.material = _fx_material
+	add_child(_fx_surface)
+	_fx_surface.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	call_deferred("_layout_fx_surface")
+
+
+func _layout_fx_surface() -> void:
+	if not is_instance_valid(_fx_surface):
+		return
+	var side := minf(size.x, size.y)
+	if side <= 0.0:
+		side = minf(custom_minimum_size.x, custom_minimum_size.y)
+	var square_size := Vector2.ONE * maxf(1.0, side)
+	_fx_surface.position = (size - square_size) * 0.5
+	_fx_surface.size = square_size
+
+
+func _sync_fx_parameters() -> void:
+	if not is_instance_valid(_fx_material):
+		return
+	var disabled := visual_state in ["muted", "incompatible", "disabled"]
+	var active := 0.0
+	if not disabled:
+		active = 1.0 if visual_state == "connected" else (0.72 if visual_state == "origin" else (0.48 if visual_state == "compatible" else 0.0))
+	var stable_value := _stable_id if not _stable_id.is_empty() else String(name)
+	var seed := float(abs(stable_value.hash()) % 4093) / 4093.0
+	_fx_material.set_shader_parameter("interface_color", Color("8d5148") if visual_state == "incompatible" else tone)
+	_fx_material.set_shader_parameter("active_amount", active)
+	_fx_material.set_shader_parameter("filled_amount", 1.0 if filled else 0.0)
+	_fx_material.set_shader_parameter("hover_amount", 1.0 if _hovered or visual_state == "hover" else 0.0)
+	_fx_material.set_shader_parameter("selection_amount", 1.0 if _selected else 0.0)
+	_fx_material.set_shader_parameter("phase_offset", seed)
+	_fx_material.set_shader_parameter("sweep_period", 6.0 + seed * 6.0)
+
+
+func _play_arrival(duration: float, strength: float) -> void:
+	_ensure_fx_surface()
+	if is_instance_valid(_arrival_tween):
+		_arrival_tween.kill()
+	_install_flash_remaining = duration
+	_fx_material.set_shader_parameter("arrival_amount", 1.0)
+	_fx_material.set_shader_parameter("arrival_strength", strength)
+	_arrival_tween = create_tween()
+	_arrival_tween.set_trans(Tween.TRANS_QUAD)
+	_arrival_tween.set_ease(Tween.EASE_OUT)
+	_arrival_tween.tween_method(_set_arrival_progress.bind(duration), 0.0, 1.0, duration)
+	_arrival_tween.tween_callback(_finish_arrival)
+
+
+func _set_arrival_progress(progress: float, duration: float) -> void:
+	_install_flash_remaining = duration * (1.0 - progress)
+	if is_instance_valid(_fx_material):
+		_fx_material.set_shader_parameter("arrival_amount", 1.0 - progress)
+
+
+func _finish_arrival() -> void:
+	_install_flash_remaining = 0.0
+	if is_instance_valid(_fx_material):
+		_fx_material.set_shader_parameter("arrival_amount", 0.0)
+		_fx_material.set_shader_parameter("arrival_strength", 0.0)
 
 
 func _draw() -> void:
 	var center := size * 0.5
-	var radius := minf(size.x, size.y) * 0.27
+	# Functional geometry is engineering information, not decoration. Use nearly
+	# the complete socket bay so triangles, diamonds and pentagons stay legible to
+	# a human at normal zoom instead of reading as tiny colored dots.
+	var radius := minf(size.x, size.y) * 0.40
 	var state_alpha := 0.30 if visual_state in ["muted", "incompatible"] else 1.0
 	var display_tone := tone
 	if visual_state == "incompatible":
 		display_tone = Color("8d5148")
 	display_tone.a *= state_alpha
 
-	var pulse := 0.5 + sin(_phase * TAU * 0.85) * 0.5
-	var halo_alpha := 0.0
-	if visual_state == "compatible":
-		halo_alpha = 0.12 + pulse * 0.16
-	elif visual_state == "origin":
-		halo_alpha = 0.18 + pulse * 0.18
-	elif visual_state == "connected":
-		halo_alpha = 0.14
-	elif visual_state == "hover":
-		halo_alpha = 0.12
-	if halo_alpha > 0.0:
-		draw_circle(center, radius + 8.0, Color(display_tone, halo_alpha))
-	if _install_flash_remaining > 0.0:
-		var flash_progress := 1.0 - _install_flash_remaining / INSTALL_FLASH_DURATION
-		var flash_alpha := sin(flash_progress * PI) * 0.22
-		draw_circle(center, radius + 10.0 + flash_progress * 5.0, Color(display_tone, flash_alpha * 0.32))
-		draw_arc(center, radius + 7.0 + flash_progress * 4.0, 0.0, TAU, 36, Color(display_tone.lightened(0.18), flash_alpha), 1.5, true)
-	draw_circle(center, radius + 5.0, Color("0b1210"))
-	draw_arc(center, radius + 5.0, 0.0, TAU, 32, Color(display_tone, 0.30 * state_alpha), 1.0, true)
-	draw_arc(center, radius + 2.0, -2.55, 0.55, 20, Color(display_tone.lightened(0.20), 0.68 * state_alpha), 1.5, true)
-
-	match shape:
-		"CIRCLE":
-			if filled:
-				draw_circle(center, radius, display_tone)
-			else:
-				draw_arc(center, radius, 0.0, TAU, 32, display_tone, 2.0, true)
-		"TRIANGLE":
-			_draw_polygon(PackedVector2Array([center + Vector2(0.0, -radius), center + Vector2(radius, radius), center + Vector2(-radius, radius)]), display_tone)
-		"DIAMOND":
-			_draw_polygon(PackedVector2Array([center + Vector2(0.0, -radius), center + Vector2(radius, 0.0), center + Vector2(0.0, radius), center + Vector2(-radius, 0.0)]), display_tone)
-		"PENTAGON":
-			var points := PackedVector2Array()
-			for index in 5:
-				var angle := -PI * 0.5 + TAU * float(index) / 5.0
-				points.append(center + Vector2(cos(angle), sin(angle)) * radius)
-			_draw_polygon(points, display_tone)
-		"HEXAGON":
-			var points := PackedVector2Array()
-			for index in 6:
-				var angle := -PI * 0.5 + TAU * float(index) / 6.0
-				points.append(center + Vector2(cos(angle), sin(angle)) * radius)
-			_draw_polygon(points, display_tone)
-		_:
-			if filled:
-				draw_rect(Rect2(center - Vector2.ONE * radius, Vector2.ONE * radius * 2.0), display_tone, true)
-			else:
-				draw_rect(Rect2(center - Vector2.ONE * radius, Vector2.ONE * radius * 2.0), display_tone, false, 2.0)
+	var mounting_radius := minf(minf(size.x, size.y) * 0.48, radius + 3.0)
+	draw_circle(center, mounting_radius, Color("0b1210"))
+	draw_arc(center, mounting_radius, 0.0, TAU, 32, Color(display_tone, 0.30 * state_alpha), 1.0, true)
+	if shape == "CIRCLE":
+		if filled:
+			draw_circle(center, radius, display_tone)
+		else:
+			draw_arc(center, radius, 0.0, TAU, 32, display_tone, 2.0, true)
+	else:
+		var points := _shape_points(center, radius, shape)
+		if filled:
+			draw_colored_polygon(points, display_tone)
+		_draw_polygon_outline(points, display_tone, 3.0)
 	if filled:
 		draw_circle(center - Vector2(radius * 0.24, radius * 0.28), maxf(1.0, radius * 0.14), Color(1.0, 1.0, 1.0, 0.48 * state_alpha))
-	_draw_rank(center, radius, display_tone, state_alpha)
 
 
-func _draw_rank(center: Vector2, radius: float, color: Color, alpha: float) -> void:
-	var marker_center := center + Vector2(radius * 0.78, -radius * 0.78)
-	var scale := maxf(2.2, radius * 0.30)
-	if tier == 5:
-		var star := PackedVector2Array()
-		for index in 10:
-			var angle := -PI * 0.5 + float(index) * PI / 5.0
-			var distance := scale * (1.0 if index % 2 == 0 else 0.42)
-			star.append(marker_center + Vector2(cos(angle), sin(angle)) * distance)
-		draw_colored_polygon(star, Color(color, alpha))
+func _shape_points(center: Vector2, radius: float, shape_name: String) -> PackedVector2Array:
+	var sides := int({"TRIANGLE":3, "SQUARE":4, "DIAMOND":4, "PENTAGON":5}.get(shape_name, 4))
+	var rotation := -PI * 0.5
+	if shape_name == "SQUARE":
+		rotation = PI * 0.25
+	elif shape_name == "DIAMOND":
+		rotation = 0.0
+	var points := PackedVector2Array()
+	for index in sides:
+		var angle := rotation + TAU * float(index) / float(sides)
+		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+	return points
+
+
+func _draw_polygon_outline(points: PackedVector2Array, color: Color, width: float) -> void:
+	if points.size() < 2:
 		return
-	var chevrons := mini(tier, 3)
-	for index in chevrons:
-		var offset := (float(index) - float(chevrons - 1) * 0.5) * scale * 0.72
-		var points := PackedVector2Array([
-			marker_center + Vector2(-scale * 0.72, offset + scale * 0.22),
-			marker_center + Vector2(0.0, offset - scale * 0.32),
-			marker_center + Vector2(scale * 0.72, offset + scale * 0.22)
-		])
-		draw_polyline(points, Color(color, alpha), 1.4, true)
-	if tier == 4:
-		draw_line(marker_center + Vector2(-scale * 0.72, scale * 1.04), marker_center + Vector2(scale * 0.72, scale * 1.04), Color(color, alpha), 1.4, true)
-
-
-func _draw_polygon(points: PackedVector2Array, color: Color) -> void:
-	if filled:
-		draw_colored_polygon(points, color)
-	else:
-		var outline := points.duplicate()
-		outline.append(points[0])
-		draw_polyline(outline, color, 2.0, true)
+	var closed := points.duplicate()
+	closed.append(points[0])
+	draw_polyline(closed, color, width, true)

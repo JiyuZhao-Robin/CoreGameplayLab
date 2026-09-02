@@ -9,6 +9,7 @@ const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_
 const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
 const ShipAssemblyMapViewScript = preload("res://src/ui/components/ship_assembly_map_view.gd")
 const ShipAssemblyPaletteItemScript = preload("res://src/ui/components/ship_assembly_palette_item.gd")
+const ShipModuleInspectorScript = preload("res://src/ui/components/ship_module_inspector.gd")
 const ShipHullProfiles = preload("res://src/ui/components/ship_hull_profiles.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
@@ -708,9 +709,9 @@ func _build_shipyard_inspector(box: VBoxContainer, draft: Dictionary, entity: Di
 	var plan := Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary
 	if plan.is_empty():
 		box.add_child(_label(I18n.core("ships.shipyard.blank_title", "Blank assembly canvas"), 18, COLOR_TEXT))
-		box.add_child(_label(I18n.core("ships.shipyard.blank_help", "Drag an unlocked hull from the Ship tab onto the canvas. Then drag parts and connect each shaped plug yourself."), 12, COLOR_TEXT_SECONDARY))
+		box.add_child(_label(I18n.core("ships.shipyard.blank_help", "Drag an unlocked hull from the Ship tab onto the canvas. Then drag parts and connect each color-coded interface yourself."), 12, COLOR_TEXT_SECONDARY))
 		box.add_child(_separator())
-		box.add_child(_label(I18n.core("ships.shipyard.port_legend", "▲ Weapon  ⬟ Special  ◆ Drive  ■ Hull Structure  ● Energy Core"), 12, COLOR_ACCENT))
+		box.add_child(_ship_port_color_legend())
 		return
 	var hull_id := String(plan.get("ship_id", ""))
 	var hull := Game.content.ships.get(hull_id, {}) as Dictionary
@@ -724,11 +725,35 @@ func _build_shipyard_inspector(box: VBoxContainer, draft: Dictionary, entity: Di
 	var entity_id := String(entity.get("id", hull_id))
 	if kind == "module":
 		var module := Game.content.modules.get(entity_id, {}) as Dictionary
-		box.add_child(_label(I18n.core("ships.shipyard.inspector_part"), 10, COLOR_MUTED))
-		box.add_child(_label(_content_name(module, entity_id), 16, COLOR_TEXT))
-		box.add_child(_label(I18n.core("ships.shipyard.canvas_slot") % [I18n.core("ships.shipyard.slot.%s" % String(module.get("slot", "utility"))), String(module.get("size", "S"))], 12, COLOR_ACCENT))
-		box.add_child(_label(I18n.core("ships.shipyard.canvas_module_metrics") % [float(module.get("mass", 0.0)), float(module.get("power", module.get("power_grid", 0.0))), float(module.get("thermal", module.get("cooling", 0.0)))], 12, COLOR_TEXT_SECONDARY))
-		box.add_child(_label(_project_summary(module), 12, COLOR_MUTED))
+		var slot := String(module.get("slot", "utility"))
+		var tier := ShipHullProfiles.size_tier(String(module.get("size", "S")))
+		var diameter_m := ShipHullProfiles.socket_diameter_m(String(module.get("size", "S")))
+		var installed := false
+		for node_value in draft.get("nodes", []):
+			var module_node := node_value as Dictionary
+			if String(module_node.get("kind", "")) != "module" or String(module_node.get("definition_id", "")) != entity_id:
+				continue
+			var module_node_id := String(module_node.get("node_id", ""))
+			for connection_value in draft.get("connections", []):
+				if String((connection_value as Dictionary).get("module_node_id", "")) == module_node_id:
+					installed = true
+					break
+			if installed:
+				break
+		var inspector := ShipModuleInspectorScript.new()
+		inspector.name = "ShipModuleInspector"
+		inspector.configure(module, {
+			"display_name":_content_name(module, entity_id),
+			"family_label":I18n.core("ships.shipyard.slot.%s" % slot),
+			"tier_label":"T%d" % tier,
+			"diameter_label":"Ø%.0fm" % diameter_m,
+			"mount_role":Game.ship_module_mount_role(entity_id),
+			"installation_state":"INSTALLED" if installed else "AVAILABLE",
+			"art_path":ShipAssemblyMapViewScript.module_icon_path(module),
+			"tone":_ship_module_slot_tone(slot, Game.ship_module_mount_role(entity_id)),
+			"description":_project_summary(module)
+		})
+		box.add_child(inspector)
 	else:
 		box.add_child(_label(I18n.core("ships.shipyard.inspector_hull"), 10, COLOR_MUTED))
 		box.add_child(_label(_project_summary(plan), 12, COLOR_TEXT_SECONDARY))
@@ -3399,7 +3424,7 @@ func _build_ship_assembly_palette() -> Control:
 	tabs.name = "ShipAssemblyPalette"
 	# One compact shelf is enough; overflowing unlocked hulls/parts already have
 	# their own scroll containers.  The saved height belongs to the canvas.
-	tabs.custom_minimum_size.y = UiTokens.layout_px(104.0)
+	tabs.custom_minimum_size.y = UiTokens.layout_px(158.0)
 	var hull_scroll := ScrollContainer.new()
 	hull_scroll.name = "Ships"
 	hull_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
@@ -3421,10 +3446,8 @@ func _build_ship_assembly_palette() -> Control:
 			continue
 		var item := ShipAssemblyPaletteItemScript.new()
 		item.name = "ShipPaletteHull_%s" % plan_id
-		var visual_spec := ShipHullProfiles.visual_spec(hull)
 		var ui_visual := hull.get("ui_visual", {}) as Dictionary
-		var scale_label := I18n.core("ships.shipyard.hull_scale", "L %.0fm × W %.0fm · MAX T%d / Ø%.0fm") % [float(visual_spec.get("length_m", 0.0)), float(visual_spec.get("beam_m", 0.0)), int(visual_spec.get("tier", 1)), ShipHullProfiles.socket_diameter_m(String(visual_spec.get("socket_size", "S")))]
-		item.configure({"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id}, "%s\n%s · %d slots\n%s" % [_content_name(hull, hull_id), String(hull.get("class", "Ship")), int(hull.get("module_slots", 0)), scale_label], true, I18n.core("ships.shipyard.drag_hull", "Drag this hull onto the empty canvas"), String(ui_visual.get("topdown_texture", "")))
+		item.configure({"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id}, "%s\n%s · %d slots" % [_content_name(hull, hull_id), String(hull.get("class", "Ship")), int(hull.get("module_slots", 0))], true, I18n.core("ships.shipyard.drag_hull", "Drag this hull onto the empty canvas"), String(ui_visual.get("topdown_texture", "")))
 		hull_row.add_child(item)
 	hull_scroll.add_child(hull_row)
 	tabs.add_child(hull_scroll)
@@ -3445,7 +3468,7 @@ func _build_ship_assembly_palette() -> Control:
 		var slot := String(module.get("slot", "utility"))
 		var item := ShipAssemblyPaletteItemScript.new()
 		item.name = "ShipPalettePart_%s" % module_id
-		item.configure({"ship_assembly_palette":true, "kind":"module", "definition_id":module_id}, "%s\n%s · %s · %s" % [_content_name(module, module_id), String(module.get("size", "S")), I18n.core("ships.shipyard.slot.%s" % slot), _ship_port_shape_label(slot, Game.ship_module_mount_role(module_id))], true, I18n.core("ships.shipyard.drag_part", "Drag this part onto the canvas, then connect its shaped plug"))
+		item.configure({"ship_assembly_palette":true, "kind":"module", "definition_id":module_id, "slot":slot, "mount_role":Game.ship_module_mount_role(module_id)}, "%s\n%s · %s" % [_content_name(module, module_id), String(module.get("size", "S")), I18n.core("ships.shipyard.slot.%s" % slot)], true, I18n.core("ships.shipyard.drag_part", "Drag this part onto the canvas, then connect its color-coded interface"), ShipAssemblyMapViewScript.module_icon_path(module))
 		parts_flow.add_child(item)
 	parts_scroll.add_child(parts_flow)
 	tabs.add_child(parts_scroll)
@@ -3480,12 +3503,20 @@ func _ship_assembly_catalog() -> Dictionary:
 	}}
 
 
-func _ship_port_shape_label(slot: String, mount_role := "") -> String:
-	if mount_role == "STRUCTURAL":
-		return "■"
-	if mount_role == "SPECIAL" and slot == "utility":
-		return "⬟"
-	return {"weapon":"▲", "shield":"■", "drive":"◆", "utility":"⬟", "core":"●"}.get(slot, "■")
+func _ship_port_color_legend() -> Control:
+	var legend := HFlowContainer.new()
+	legend.add_theme_constant_override("h_separation", 12)
+	legend.add_theme_constant_override("v_separation", 4)
+	for definition in [
+		{"slot":"weapon", "label":I18n.core("ships.shipyard.slot.weapon")},
+		{"slot":"drive", "label":I18n.core("ships.shipyard.slot.drive")},
+		{"slot":"utility", "label":I18n.core("ships.shipyard.slot.utility")},
+		{"slot":"shield", "label":I18n.core("ships.shipyard.slot.shield")},
+		{"slot":"core", "label":I18n.core("ships.shipyard.slot.core")}
+	]:
+		var label := _label("● %s" % String(definition.get("label", "")), 12, _ship_module_slot_tone(String(definition.get("slot", "")), String(definition.get("mount_role", ""))))
+		legend.add_child(label)
+	return legend
 
 
 func _on_ship_assembly_draft_changed(snapshot: Dictionary) -> void:
@@ -3571,7 +3602,22 @@ func _enqueue_saved_ship_design(design_id: String, quantity: int) -> void:
 func _select_shipyard_entity(kind: String, entity_id: String) -> void:
 	_selected_shipyard_entity = {"kind":kind, "id":entity_id}
 	_ui_state.select_context("ship_assembly", entity_id)
+	if _ui_state.right_inspector_collapsed:
+		_ui_state.right_inspector_collapsed = false
+		if is_instance_valid(_shell):
+			_shell.set_right_collapsed(false)
 	_rebuild_sidebar()
+
+
+func _ship_module_slot_tone(slot: String, mount_role: String = "") -> Color:
+	if mount_role == "STRUCTURAL":
+		return COLOR_ACCENT.lerp(Color("78a8d8"), 0.55)
+	match slot:
+		"core": return COLOR_WARN
+		"drive": return COLOR_ACCENT
+		"weapon": return COLOR_BAD
+		"shield": return COLOR_ACCENT.lerp(Color("78a8d8"), 0.55)
+		_: return COLOR_GOOD
 
 
 func _rebuild_expedition() -> void:

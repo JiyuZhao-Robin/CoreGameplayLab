@@ -1449,12 +1449,46 @@ func ship_loadout_valid(ship_id: String, module_ids: Array) -> bool:
 	return ship_loadout_error(ship_id, module_ids).is_empty()
 
 
+func ship_loadout_engineering_summary(ship_id: String, module_ids: Array) -> Dictionary:
+	var blueprint: Dictionary = ships.get(ship_id, {})
+	if blueprint.is_empty():
+		return {}
+	var slot_usage := {}
+	var totals := {"mass":0.0, "power":0.0, "thermal":0.0}
+	var base_stats: Dictionary = blueprint.get("base_stats", {})
+	var capacities := {
+		"mass":float(base_stats.get("mass_capacity", base_stats.get("cpu", 0.0))),
+		"power":float(base_stats.get("power_capacity", base_stats.get("power_grid", 0.0))),
+		"thermal":float(base_stats.get("thermal_capacity", base_stats.get("cooling", 0.0)))
+	}
+	for module_value in module_ids:
+		var module: Dictionary = modules.get(str(module_value), {})
+		if module.is_empty():
+			continue
+		var slot := str(module.get("slot", "utility"))
+		slot_usage[slot] = int(slot_usage.get(slot, 0)) + 1
+		totals["mass"] = float(totals["mass"]) + float(module.get("mass", module.get("cpu", 0.0)))
+		totals["power"] = float(totals["power"]) + float(module.get("power", module.get("power_grid", 0.0)))
+		totals["thermal"] = float(totals["thermal"]) + float(module.get("thermal", module.get("cooling", 0.0)))
+		var bonus: Dictionary = module.get("fitting_capacity_bonus", {})
+		capacities["mass"] = float(capacities["mass"]) + float(bonus.get("mass", bonus.get("cpu", 0.0)))
+		capacities["power"] = float(capacities["power"]) + float(bonus.get("power", bonus.get("power_grid", 0.0)))
+		capacities["thermal"] = float(capacities["thermal"]) + float(bonus.get("thermal", bonus.get("cooling", 0.0)))
+	return {
+		"ship_id":ship_id,
+		"module_count":module_ids.size(),
+		"slot_usage":slot_usage,
+		"slot_capacity":blueprint.get("slot_layout", {}).duplicate(true),
+		"totals":totals,
+		"capacities":capacities
+	}
+
+
 func ship_loadout_error(ship_id: String, module_ids: Array) -> String:
 	var blueprint: Dictionary = ships.get(ship_id, {})
 	if blueprint.is_empty():
 		return "missing hull definition"
 	var slot_usage := {}
-	var totals := {"mass":0.0, "power":0.0, "thermal":0.0}
 	var allowed_sizes: Array = blueprint.get("allowed_sizes", ["S"])
 	for module_value in module_ids:
 		var module_id := str(module_value)
@@ -1470,20 +1504,9 @@ func ship_loadout_error(ship_id: String, module_ids: Array) -> String:
 		slot_usage[slot] = int(slot_usage.get(slot, 0)) + 1
 		if int(slot_usage[slot]) > int(blueprint.get("slot_layout", {}).get(slot, 0)):
 			return "module '%s' exceeds the %s slot limit" % [module_id, slot]
-		totals["mass"] = float(totals["mass"]) + float(module.get("mass", module.get("cpu", 0.0)))
-		totals["power"] = float(totals["power"]) + float(module.get("power", module.get("power_grid", 0.0)))
-		totals["thermal"] = float(totals["thermal"]) + float(module.get("thermal", module.get("cooling", 0.0)))
-	var base_stats: Dictionary = blueprint.get("base_stats", {})
-	var capacities := {
-		"mass":float(base_stats.get("mass_capacity", base_stats.get("cpu", 0.0))),
-		"power":float(base_stats.get("power_capacity", base_stats.get("power_grid", 0.0))),
-		"thermal":float(base_stats.get("thermal_capacity", base_stats.get("cooling", 0.0)))
-	}
-	for module_value in module_ids:
-		var bonus: Dictionary = modules.get(str(module_value), {}).get("fitting_capacity_bonus", {})
-		capacities["mass"] = float(capacities["mass"]) + float(bonus.get("mass", bonus.get("cpu", 0.0)))
-		capacities["power"] = float(capacities["power"]) + float(bonus.get("power", bonus.get("power_grid", 0.0)))
-		capacities["thermal"] = float(capacities["thermal"]) + float(bonus.get("thermal", bonus.get("cooling", 0.0)))
+	var engineering := ship_loadout_engineering_summary(ship_id, module_ids)
+	var totals: Dictionary = engineering.get("totals", {})
+	var capacities: Dictionary = engineering.get("capacities", {})
 	for stat in totals:
 		if float(totals[stat]) > float(capacities.get(stat, 0.0)) + 0.001:
 			return "%s demand %.1f exceeds capacity %.1f" % [stat, float(totals[stat]), float(capacities.get(stat, 0.0))]

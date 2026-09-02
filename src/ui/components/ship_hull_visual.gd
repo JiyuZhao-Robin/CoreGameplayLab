@@ -2,6 +2,7 @@ class_name ShipHullVisual
 extends Control
 
 const ShipHullProfiles = preload("res://src/ui/components/ship_hull_profiles.gd")
+const ShipHullMicroLightsScript = preload("res://src/ui/components/ship_hull_micro_lights.gd")
 const HullFxShader = preload("res://src/ui/shaders/ship_hull_fx.gdshader")
 const HullGhostShader = preload("res://src/ui/shaders/ship_hull_ghost.gdshader")
 const NOISE_TEXTURE_PATH := "res://assets/ui/ship_hull_noise.png"
@@ -15,7 +16,9 @@ var _main_rect: ColorRect
 var _ghost_rect: ColorRect
 var _main_material: ShaderMaterial
 var _ghost_material: ShaderMaterial
+var _micro_lights: Control
 var _asset_loaded := false
+var _has_fx_mask := false
 var _hovered := false
 var _selected := false
 var _zoom_level := 1.0
@@ -34,17 +37,18 @@ func configure(presentation: Dictionary, spec: Dictionary) -> bool:
 	visual_spec = spec.duplicate(true)
 	var base_path := String(ui_visual.get("topdown_texture", ""))
 	var mask_path := String(ui_visual.get("fx_mask", ""))
-	if base_path.is_empty() or mask_path.is_empty() or not ResourceLoader.exists(base_path) or not ResourceLoader.exists(mask_path) or not ResourceLoader.exists(NOISE_TEXTURE_PATH):
+	if base_path.is_empty() or not ResourceLoader.exists(base_path) or not ResourceLoader.exists(NOISE_TEXTURE_PATH):
 		_asset_loaded = false
 		visible = false
 		return false
 	_base_texture = load(base_path) as Texture2D
-	_fx_mask = load(mask_path) as Texture2D
+	_fx_mask = load(mask_path) as Texture2D if not mask_path.is_empty() and ResourceLoader.exists(mask_path) else null
 	_noise_texture = load(NOISE_TEXTURE_PATH) as Texture2D
-	if _base_texture == null or _fx_mask == null or _noise_texture == null:
+	if _base_texture == null or _noise_texture == null:
 		_asset_loaded = false
 		visible = false
 		return false
+	_has_fx_mask = _fx_mask != null
 	_asset_loaded = true
 	visible = true
 	_ensure_layers()
@@ -84,7 +88,7 @@ func set_presentation_state(hovered: bool, selected: bool, zoom_level: float, co
 
 
 func _ensure_layers() -> void:
-	if is_instance_valid(_main_rect) and is_instance_valid(_ghost_rect):
+	if is_instance_valid(_main_rect) and is_instance_valid(_ghost_rect) and is_instance_valid(_micro_lights):
 		return
 	_ghost_rect = ColorRect.new()
 	_ghost_rect.name = "ShipHullGhost"
@@ -96,6 +100,10 @@ func _ensure_layers() -> void:
 	_main_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_main_rect.color = Color.WHITE
 	add_child(_main_rect)
+	_micro_lights = ShipHullMicroLightsScript.new()
+	_micro_lights.name = "ShipHullMicroLights"
+	_micro_lights.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_micro_lights)
 	_ghost_material = ShaderMaterial.new()
 	_ghost_material.shader = HullGhostShader
 	_ghost_rect.material = _ghost_material
@@ -113,17 +121,26 @@ func _configure_materials() -> void:
 		shader_material.set_shader_parameter("base_texture", _base_texture)
 		shader_material.set_shader_parameter("noise_texture", _noise_texture)
 		shader_material.set_shader_parameter("base_texel_size", texel_size)
-	_main_material.set_shader_parameter("fx_mask", _fx_mask)
+	# Samplers must always be bound. In base-only fallback mode the shader ignores
+	# this binding and derives a much weaker generic effect from the silhouette.
+	_main_material.set_shader_parameter("fx_mask", _fx_mask if _has_fx_mask else _base_texture)
+	_main_material.set_shader_parameter("has_fx_mask", 1.0 if _has_fx_mask else 0.0)
 	_main_material.set_shader_parameter("glow_color", glow_color)
 	_main_material.set_shader_parameter("flow_strength", float(ui_visual.get("flow_strength", 0.075)))
 	_main_material.set_shader_parameter("flow_speed", float(ui_visual.get("flow_speed", 0.055)))
+	_main_material.set_shader_parameter("flow_scale", float(ui_visual.get("flow_scale", 1.0)))
 	_main_material.set_shader_parameter("edge_strength", float(ui_visual.get("edge_strength", 0.10)))
 	_main_material.set_shader_parameter("emission_strength", float(ui_visual.get("emission_strength", 0.13)))
+	_main_material.set_shader_parameter("emission_variation", float(ui_visual.get("emission_variation", 0.10)))
 	_main_material.set_shader_parameter("scan_strength", float(ui_visual.get("scan_strength", 0.028)))
 	_main_material.set_shader_parameter("scan_speed", float(ui_visual.get("scan_speed", 0.067)))
 	_main_material.set_shader_parameter("halo_strength", float(ui_visual.get("halo_strength", 0.12)))
+	var stable_key := String(ui_visual.get("fx_profile", "ship_hull")) + ":" + String(visual_spec.get("profile", "default"))
+	var phase_seed := float(absi(stable_key.hash()) % 10000) / 10000.0
+	_main_material.set_shader_parameter("phase_seed", phase_seed)
 	_ghost_material.set_shader_parameter("ghost_color", glow_color)
 	_ghost_material.set_shader_parameter("ghost_strength", float(ui_visual.get("ghost_strength", 0.032)))
+	_micro_lights.configure(ui_visual.get("micro_light_paths", []), glow_color, stable_key)
 	_sync_state_parameters()
 
 
@@ -132,7 +149,11 @@ func _layout_layers() -> void:
 		return
 	var registered := hull_draw_rect()
 	_layout_shader_rect(_ghost_rect, _ghost_material, registered, 11.0, Vector2(1.4, -0.7))
-	_layout_shader_rect(_main_rect, _main_material, registered, 22.0, Vector2.ZERO)
+	# The expanded quad belongs only to rendering; logical hull/Fit All bounds
+	# remain registration-driven while the soft aura gets room to dissipate.
+	_layout_shader_rect(_main_rect, _main_material, registered, 40.0, Vector2.ZERO)
+	_micro_lights.position = registered.position
+	_micro_lights.size = registered.size
 
 
 func _layout_shader_rect(target: ColorRect, shader_material: ShaderMaterial, registered: Rect2, padding: float, offset: Vector2) -> void:
@@ -154,6 +175,8 @@ func _sync_state_parameters() -> void:
 		shader_material.set_shader_parameter("selection_amount", 1.0 if _selected else 0.0)
 		shader_material.set_shader_parameter("lod_amount", lod)
 	_main_material.set_shader_parameter("connection_activity", _connection_activity)
+	if is_instance_valid(_micro_lights):
+		_micro_lights.set_presentation_state(_zoom_level, lod)
 
 
 func _array_vector2(value: Variant) -> Vector2:

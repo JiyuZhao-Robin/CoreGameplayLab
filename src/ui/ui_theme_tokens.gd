@@ -71,6 +71,7 @@ const NETWORK_GRID_MAJOR_EVERY := 5
 const SUPPORTED_UI_SCALES := [1.0, 1.25, 1.5, 1.75, 2.0]
 const DEFAULT_UI_SCALE := 1.25
 const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"
+const SHIP_ASSEMBLY_FONT_MULTIPLIER := 1.5
 
 static var _ui_scale := DEFAULT_UI_SCALE
 
@@ -108,6 +109,10 @@ static func font_size(base_size: int) -> int:
 	return maxi(1, int(round(float(base_size) * _ui_scale)))
 
 
+static func ship_assembly_font_size(base_size: int) -> int:
+	return font_size(maxi(1, int(round(float(base_size) * SHIP_ASSEMBLY_FONT_MULTIPLIER))))
+
+
 static func layout_px(base_size: float) -> int:
 	return 0 if is_zero_approx(base_size) else int(round(base_size * layout_scale()))
 
@@ -140,8 +145,15 @@ static func control_style(background: Color, border: Color, radius := 4) -> Styl
 	return style
 
 
-static func build_theme(scale_value: float = DEFAULT_UI_SCALE) -> Theme:
-	set_ui_scale(scale_value)
+static func build_theme(scale_value: float = DEFAULT_UI_SCALE, exact_scale := false) -> Theme:
+	# Production shell preferences snap to the supported global steps. Focused
+	# presentation surfaces such as the Ship Assembly Demo may request an exact
+	# native scale that also includes the current output-resolution ratio. This
+	# changes font rasterization size; it never stretches an already rendered UI.
+	if exact_scale:
+		_ui_scale = clampf(scale_value, 0.5, 4.0)
+	else:
+		set_ui_scale(scale_value)
 	var system_font := SystemFont.new()
 	system_font.font_names = PackedStringArray([
 		"Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei",

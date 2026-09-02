@@ -882,6 +882,79 @@ func ship_design_validation(plan_id: String, nodes: Array, connections: Array) -
 	return {"allowed":true, "reason_code":"READY", "reason":I18n.t("notice.ship_design_ready", "All connectors and fitting limits are valid"), "plan_id":plan_id, "hull_id":hull_id, "modules":modules, "nodes":sanitized_nodes, "connections":sanitized_connections}
 
 
+func ship_design_engineering_summary(plan_id: String, nodes: Array, connections: Array) -> Dictionary:
+	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
+	if plan.is_empty():
+		return {}
+	var hull_id := str(plan.get("ship_id", ""))
+	var module_ids: Array = []
+	for node_value in nodes:
+		if node_value is Dictionary and str((node_value as Dictionary).get("kind", "")) == "module":
+			var module_id := str((node_value as Dictionary).get("definition_id", ""))
+			if content.modules.has(module_id):
+				module_ids.append(module_id)
+	var effective_plan := plan.duplicate(true)
+	effective_plan["starting_modules"] = module_ids.duplicate()
+	var construction_costs := simulation.ship_construction_material_totals(effective_plan)
+	for cost_value in effective_plan.get("fixed_costs", []):
+		var cost := cost_value as Dictionary
+		var item_id := str(cost.get("item", ""))
+		construction_costs[item_id] = int(construction_costs.get(item_id, 0)) + int(cost.get("quantity", 0))
+	var fabrication_time_ms := simulation.loadout_fabrication_time_ms(module_ids)
+	var installation_time_ms := simulation.loadout_installation_time_ms(module_ids)
+	var refit_runtime := {"cycle_time_ms":(fabrication_time_ms + installation_time_ms) / 100.0}
+	var connection_capacity := {}
+	for socket_value in ship_design_socket_schema(plan_id):
+		var socket := socket_value as Dictionary
+		var family_key := _ship_design_connection_family(str(socket.get("slot", "utility")), str(socket.get("mount_role", "")))
+		connection_capacity[family_key] = int(connection_capacity.get(family_key, 0)) + 1
+	var nodes_by_id := {}
+	for node_value in nodes:
+		if node_value is Dictionary:
+			nodes_by_id[str((node_value as Dictionary).get("node_id", ""))] = node_value
+	var connection_usage := {}
+	for connection_value in connections:
+		if connection_value is not Dictionary:
+			continue
+		var connection := connection_value as Dictionary
+		var module_node := nodes_by_id.get(str(connection.get("module_node_id", "")), {}) as Dictionary
+		var module := content.modules.get(str(module_node.get("definition_id", "")), {}) as Dictionary
+		if module.is_empty():
+			continue
+		var family_key := _ship_design_connection_family(str(module.get("slot", "utility")), ship_module_mount_role(str(module.get("id", module_node.get("definition_id", "")))))
+		connection_usage[family_key] = int(connection_usage.get(family_key, 0)) + 1
+	var matching_hulls: Array[String] = []
+	for ship_value in state.ships:
+		var ship := ship_value as Dictionary
+		var instance_id := str(ship.get("instance_id", ""))
+		if str(ship.get("blueprint_id", "")) == hull_id and state.ship_can_refit(instance_id):
+			matching_hulls.append(instance_id)
+	return {
+		"plan_id":plan_id,
+		"hull_id":hull_id,
+		"module_ids":module_ids,
+		"module_count":module_ids.size(),
+		"connected_count":connections.size(),
+		"validation":ship_design_validation(plan_id, nodes, connections),
+		"engineering":content.ship_loadout_engineering_summary(hull_id, module_ids),
+		"connection_overview":{"usage":connection_usage, "capacity":connection_capacity},
+		"construction_costs":construction_costs,
+		"refit_costs":simulation.loadout_fabrication_costs(module_ids),
+		"estimated_build_time_ms":simulation.shipyard_cycle_duration_ms(state, effective_plan) * 100.0,
+		"estimated_fabrication_time_ms":fabrication_time_ms,
+		"estimated_installation_time_ms":installation_time_ms,
+		"estimated_refit_time_ms":simulation.refit_cycle_duration_ms(state, refit_runtime) * 100.0,
+		"matching_refit_ship_ids":matching_hulls,
+		"handoff_mode":"REFIT" if not matching_hulls.is_empty() else "BUILD_HULL"
+	}
+
+
+func _ship_design_connection_family(slot: String, mount_role: String) -> String:
+	if slot == "utility":
+		return "logistics" if mount_role == "STRUCTURAL" else "utility"
+	return slot
+
+
 func save_ship_design(design_id: String, requested_name: String, plan_id: String, nodes: Array, connections: Array) -> bool:
 	var validation := ship_design_validation(plan_id, nodes, connections)
 	if not bool(validation.get("allowed", false)):

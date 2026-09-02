@@ -3,11 +3,19 @@ extends Control
 
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const ANIMATION_STEP := 1.0 / 25.0
+const INSTALL_DRAW_DURATION := 0.12
+const INSTALL_PACKET_END := 0.36
+const INSTALL_END := 0.56
+
+signal install_arrived(socket_id: String)
+signal packet_arrived(socket_id: String)
 
 var _graph: GraphEdit
 var _visual_phase := 0.0
 var _animation_accumulator := 0.0
 var _route_cache := {}
+var _install_animations := {}
+var _packet_arrival_cycles := {}
 
 
 func configure(graph: GraphEdit) -> void:
@@ -23,8 +31,25 @@ func _process(delta: float) -> void:
 	_animation_accumulator += delta
 	if _animation_accumulator < ANIMATION_STEP:
 		return
-	_visual_phase = fposmod(_visual_phase + _animation_accumulator, 240.0)
+	var step := _animation_accumulator
+	_visual_phase = fposmod(_visual_phase + step, 240.0)
 	_animation_accumulator = 0.0
+	if is_instance_valid(_graph) and not String(_graph.get("_connection_drag_module_name")).is_empty():
+		# Preview routing and the card's visible connector must consume the same
+		# live target even when GraphEdit, rather than the manual gesture, owns input.
+		_graph.call("_sync_module_presentations")
+	for key_value in _install_animations.keys():
+		var key := String(key_value)
+		var animation := _install_animations[key] as Dictionary
+		animation["elapsed"] = float(animation.get("elapsed", 0.0)) + step
+		if not bool(animation.get("arrived", false)) and float(animation["elapsed"]) >= INSTALL_PACKET_END:
+			animation["arrived"] = true
+			install_arrived.emit(String(animation.get("socket_id", "")))
+		if float(animation["elapsed"]) >= INSTALL_END:
+			_install_animations.erase(key)
+		else:
+			_install_animations[key] = animation
+	_update_packet_arrivals()
 	queue_redraw()
 
 
@@ -32,8 +57,21 @@ func refresh() -> void:
 	if not is_instance_valid(_graph):
 		return
 	var links := _graph.get("_links") as Array
+	var active_keys := {}
+	for link_value in links:
+		active_keys[_link_key(link_value as Dictionary)] = true
+	for key_value in _packet_arrival_cycles.keys():
+		if not active_keys.has(String(key_value)):
+			_packet_arrival_cycles.erase(key_value)
 	_route_cache.clear()
-	set_process(not links.is_empty() or not String(_graph.get("_connection_drag_module_name")).is_empty())
+	set_process(not links.is_empty() or not String(_graph.get("_connection_drag_module_name")).is_empty() or not _install_animations.is_empty())
+	queue_redraw()
+
+
+func notify_connection_installed(link: Dictionary) -> void:
+	var key := _link_key(link)
+	_install_animations[key] = {"elapsed":0.0, "arrived":false, "socket_id":String(link.get("socket_id", ""))}
+	set_process(true)
 	queue_redraw()
 
 
@@ -68,6 +106,7 @@ func _draw_canvas_material() -> void:
 func _draw_established_connections() -> void:
 	var links := _graph.get("_links") as Array
 	var selected_key := String(_graph.get("_selected_connection_key"))
+	var hovered_module := String(_graph.get("_hovered_module_name"))
 	for link_value in links:
 		var link := link_value as Dictionary
 		var route := _cached_route(link)
@@ -75,27 +114,37 @@ func _draw_established_connections() -> void:
 		var path := _world_to_screen(world_path)
 		if path.size() < 2:
 			continue
-		var tone := _graph.call("_slot_tone", String(link.get("slot", "utility"))) as Color
+		var module_entity := (_graph.get("_entities") as Dictionary).get(String(link.get("module_node_id", "")), {}) as Dictionary
+		var tone := _graph.call("_slot_tone", String(link.get("slot", "utility")), String(module_entity.get("mount_role", ""))) as Color
 		var socket_node_name := String(_graph.call("_socket_node_name", String(link.get("socket_id", ""))))
 		var key := String(_graph.call("_connection_key", String(link.get("module_node_id", "")), socket_node_name))
 		var selected := key == selected_key
-		var width := 3.2 if selected else 2.15
-		draw_polyline(path, UiTokens.COLOR_SHIP_LINK_SHADOW, width + 6.0, true)
-		draw_polyline(path, Color(tone, 0.18 if not selected else 0.32), width + 3.0, true)
-		draw_polyline(path, tone.lightened(0.14) if selected else tone, width, true)
-		_draw_connection_arrow(path, tone.lightened(0.18), width)
-		_draw_connection_packet(route, link, tone, selected)
+		var related_hover := hovered_module == String(link.get("module_node_id", ""))
+		var intensity := 1.0 if selected else (0.22 if not selected_key.is_empty() else (0.84 if related_hover else 0.44))
+		var width := 3.0 if selected else (2.45 if related_hover else 2.0)
+		var install := _install_animations.get(_link_key(link), {}) as Dictionary
+		var elapsed := float(install.get("elapsed", INSTALL_END))
+		var visible_path := _path_prefix(path, clampf(elapsed / INSTALL_DRAW_DURATION, 0.0, 1.0)) if elapsed < INSTALL_DRAW_DURATION else path
+		draw_polyline(visible_path, Color(UiTokens.COLOR_SHIP_LINK_SHADOW, 0.72 * intensity), width + 7.0, true)
+		draw_polyline(visible_path, Color(tone, 0.20 * intensity), width + 3.5, true)
+		draw_polyline(visible_path, Color(tone.lightened(0.14 if selected else 0.04), 0.78 * intensity), width, true)
+		if elapsed >= INSTALL_DRAW_DURATION:
+			_draw_connection_arrow(path, tone.lightened(0.18), width, intensity)
+		if elapsed >= INSTALL_DRAW_DURATION and elapsed < INSTALL_PACKET_END:
+			_draw_install_packet(route, tone, inverse_lerp(INSTALL_DRAW_DURATION, INSTALL_PACKET_END, elapsed))
+		elif elapsed >= INSTALL_END:
+			_draw_connection_packet(route, link, tone, selected or related_hover)
 
 
 func _draw_connection_packet(route: Dictionary, link: Dictionary, tone: Color, selected: bool) -> void:
-	var stable_id := "%s>%s" % [String(link.get("module_node_id", "")), String(link.get("socket_id", ""))]
-	var seed := float(abs(stable_id.hash()) % 4093) / 4093.0
-	var cycle_seconds := 5.8 if selected else 7.4
-	var active_fraction := 0.68 if selected else 0.48
-	var cycle := fposmod(_visual_phase / cycle_seconds + seed, 1.0)
-	if cycle > active_fraction:
+	var timing := _packet_timing(link, selected)
+	var cycle_seconds := float(timing.get("cycle_seconds", 6.0))
+	var travel_seconds := float(timing.get("travel_seconds", 0.9))
+	var phase_seconds := float(timing.get("phase_seconds", 0.0))
+	var elapsed := fposmod(_visual_phase + phase_seconds, cycle_seconds)
+	if elapsed > travel_seconds:
 		return
-	var progress := cycle / active_fraction
+	var progress := elapsed / maxf(travel_seconds, 0.001)
 	var envelope := smoothstep(0.0, 0.12, progress) * (1.0 - smoothstep(0.82, 1.0, progress))
 	var world_position := _sample_cached_route(route, progress)
 	var position := world_position * _graph.zoom - _graph.scroll_offset
@@ -103,7 +152,53 @@ func _draw_connection_packet(route: Dictionary, link: Dictionary, tone: Color, s
 	draw_circle(position, 2.2 if selected else 1.7, Color(tone.lightened(0.22), 0.72 * envelope))
 
 
-func _draw_connection_arrow(path: PackedVector2Array, tone: Color, width: float) -> void:
+func _packet_timing(link: Dictionary, focused: bool) -> Dictionary:
+	var stable_id := _link_key(link)
+	var seed := float(abs(stable_id.hash()) % 4093) / 4093.0
+	var detail_seed := float(abs((stable_id + ":travel").hash()) % 4093) / 4093.0
+	var cycle_seconds := 4.2 + seed * 3.6 if focused else 4.8 + seed * 3.2
+	var travel_seconds := 0.62 + detail_seed * 0.54
+	return {
+		"cycle_seconds":cycle_seconds,
+		"travel_seconds":travel_seconds,
+		"phase_seconds":seed * cycle_seconds
+	}
+
+
+func _update_packet_arrivals() -> void:
+	if not is_instance_valid(_graph):
+		return
+	var active_keys := {}
+	var selected_key := String(_graph.get("_selected_connection_key"))
+	var hovered_module := String(_graph.get("_hovered_module_name"))
+	for link_value in (_graph.get("_links") as Array):
+		var link := link_value as Dictionary
+		var key := _link_key(link)
+		active_keys[key] = true
+		if _install_animations.has(key):
+			continue
+		var socket_node_name := String(_graph.call("_socket_node_name", String(link.get("socket_id", ""))))
+		var connection_key := String(_graph.call("_connection_key", String(link.get("module_node_id", "")), socket_node_name))
+		var focused := connection_key == selected_key or hovered_module == String(link.get("module_node_id", ""))
+		var timing := _packet_timing(link, focused)
+		var cycle_seconds := float(timing.get("cycle_seconds", 6.0))
+		var travel_seconds := float(timing.get("travel_seconds", 0.9))
+		var absolute_phase := _visual_phase + float(timing.get("phase_seconds", 0.0))
+		var cycle_index := int(floor(absolute_phase / cycle_seconds))
+		var elapsed := fposmod(absolute_phase, cycle_seconds)
+		if not _packet_arrival_cycles.has(key):
+			_packet_arrival_cycles[key] = cycle_index
+			continue
+		if elapsed < travel_seconds or int(_packet_arrival_cycles.get(key, -1)) == cycle_index:
+			continue
+		_packet_arrival_cycles[key] = cycle_index
+		packet_arrived.emit(String(link.get("socket_id", "")))
+	for key_value in _packet_arrival_cycles.keys():
+		if not active_keys.has(String(key_value)):
+			_packet_arrival_cycles.erase(key_value)
+
+
+func _draw_connection_arrow(path: PackedVector2Array, tone: Color, width: float, intensity: float) -> void:
 	var position := _sample_path(path, 0.84)
 	var previous := _sample_path(path, 0.80)
 	var direction := (position - previous).normalized()
@@ -115,7 +210,15 @@ func _draw_connection_arrow(path: PackedVector2Array, tone: Color, width: float)
 		position + direction * length * 0.55,
 		position - direction * length * 0.45 + perpendicular * length * 0.46,
 		position - direction * length * 0.45 - perpendicular * length * 0.46
-	]), Color(tone, 0.88))
+	]), Color(tone, 0.72 * intensity))
+
+
+func _draw_install_packet(route: Dictionary, tone: Color, progress: float) -> void:
+	var world_position := _sample_cached_route(route, progress)
+	var position := world_position * _graph.zoom - _graph.scroll_offset
+	var envelope := sin(clampf(progress, 0.0, 1.0) * PI)
+	draw_circle(position, 7.0, Color(tone, 0.10 * envelope))
+	draw_circle(position, 2.4, Color(tone.lightened(0.22), 0.82 * envelope))
 
 
 func _draw_connection_preview() -> void:
@@ -125,20 +228,15 @@ func _draw_connection_preview() -> void:
 	var source := _graph.get_node_or_null(NodePath(source_name)) as GraphNode
 	if source == null or source.get_output_port_count() <= 0:
 		return
-	var target_screen := _graph.get_local_mouse_position()
-	var target_world := (target_screen + _graph.scroll_offset) / maxf(_graph.zoom, 0.01)
-	var target_node: GraphNode = null
+	var preview_target := _graph.call("_connection_preview_target") as Dictionary
+	var target_screen := preview_target.get("screen", _graph.get_local_mouse_position()) as Vector2
+	var target_world := preview_target.get("world", Vector2.ZERO) as Vector2
+	var target_node := preview_target.get("node") as GraphNode
 	var tone := UiTokens.COLOR_FOCUS
 	var hovered_socket_id := String(_graph.get("_hovered_socket_id"))
 	if not hovered_socket_id.is_empty():
 		var socket := _graph.call("_hull_socket", hovered_socket_id) as Dictionary
 		tone = UiTokens.COLOR_RUNNING if bool(_graph.call("_socket_matches_dragged_module", socket)) else UiTokens.COLOR_CRITICAL
-		var socket_node_name := String(_graph.call("_socket_node_name", hovered_socket_id))
-		var socket_node := _graph.get_node_or_null(NodePath(socket_node_name)) as GraphNode
-		if socket_node != null:
-			target_node = socket_node
-			target_world = _graph.call("_graph_node_center", socket_node) as Vector2
-			target_screen = target_world * _graph.zoom - _graph.scroll_offset
 	var path := _world_to_screen(_graph.call("_get_entity_connection_line", source, target_world, target_node) as PackedVector2Array)
 	draw_polyline(path, Color(tone, 0.16), 13.0, true)
 	_draw_dashed_path(path, tone.lightened(0.16), 3.0, 11.0, 7.0, _visual_phase * 34.0)
@@ -185,8 +283,28 @@ func _sample_path(path: PackedVector2Array, progress: float) -> Vector2:
 	return path[path.size() - 1]
 
 
+func _path_prefix(path: PackedVector2Array, progress: float) -> PackedVector2Array:
+	if path.size() < 2 or progress >= 1.0:
+		return path
+	var total := 0.0
+	for index in path.size() - 1:
+		total += path[index].distance_to(path[index + 1])
+	var remaining := clampf(progress, 0.0, 1.0) * total
+	var result := PackedVector2Array([path[0]])
+	for index in path.size() - 1:
+		var segment_length := path[index].distance_to(path[index + 1])
+		if remaining >= segment_length:
+			result.append(path[index + 1])
+			remaining -= segment_length
+			continue
+		if segment_length > 0.001:
+			result.append(path[index].lerp(path[index + 1], remaining / segment_length))
+		break
+	return result
+
+
 func _cached_route(link: Dictionary) -> Dictionary:
-	var key := "%s>%s" % [String(link.get("module_node_id", "")), String(link.get("socket_id", ""))]
+	var key := _link_key(link)
 	if _route_cache.has(key):
 		return _route_cache[key] as Dictionary
 	var path := _graph.call("_world_path_for_link", link) as PackedVector2Array
@@ -199,6 +317,10 @@ func _cached_route(link: Dictionary) -> Dictionary:
 	var route := {"path":path, "cumulative":cumulative, "total":total}
 	_route_cache[key] = route
 	return route
+
+
+func _link_key(link: Dictionary) -> String:
+	return "%s>%s" % [String(link.get("module_node_id", "")), String(link.get("socket_id", ""))]
 
 
 func _sample_cached_route(route: Dictionary, progress: float) -> Vector2:
