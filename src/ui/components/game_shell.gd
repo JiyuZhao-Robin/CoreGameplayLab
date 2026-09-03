@@ -39,7 +39,9 @@ func build() -> void:
 	header_panel.name = "TopStatusBar"
 	header_panel.custom_minimum_size.y = UiTokens.layout_px(UiTokens.TOP_BAR_HEIGHT)
 	rows.add_child(header_panel)
-	header_slot = _margin(UiTokens.SPACING_LG, UiTokens.SPACING_SM, UiTokens.SPACING_MD, UiTokens.SPACING_SM)
+	# The header controls need 42 px at 100% scale; 5 px vertical insets keep the
+	# complete development toolbar on the Golden Reference's 52 px band.
+	header_slot = _margin(UiTokens.SPACING_LG, 5, UiTokens.SPACING_MD, 5)
 	header_panel.add_child(header_slot)
 
 	var workspace := HBoxContainer.new()

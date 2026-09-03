@@ -31,6 +31,23 @@ const NAV_TRANSLATION_KEYS := {
 	"research":"nav.research", "fleet":"nav.ships", "frontier":"nav.survey",
 	"megastructure":"nav.megastructure", "diagnostics":"nav.diagnostics"
 }
+const FLEET_ROSTER_OPERATIONAL_ICONS := {
+	"status":preload("res://assets/ui/ship_registry/icons/status.png"),
+	"location":preload("res://assets/ui/ship_registry/icons/location.png"),
+	"formation":preload("res://assets/ui/ship_registry/icons/fleet.png"),
+	"role":preload("res://assets/ui/ship_registry/icons/current_role.png"),
+	"combat_position":preload("res://assets/ui/ship_registry/icons/tactical_position.png")
+}
+const FLEET_ROSTER_OPERATIONAL_ICON_REGIONS := {
+	# Approved source files intentionally include different transparent canvases.
+	# These regions remove only empty outer padding so each source glyph receives
+	# the same 16 px display box; no source pixels are edited or recolored.
+	"status":Rect2(208, 178, 838, 867),
+	"location":Rect2(353, 230, 542, 769),
+	"formation":Rect2(193, 146, 867, 936),
+	"role":Rect2(159, 208, 937, 853),
+	"combat_position":Rect2(100, 80, 1053, 1060)
+}
 
 var _tabs: TabContainer
 var _shell
@@ -54,6 +71,10 @@ var _location_section := "overview"
 var _industry_section := "production"
 var _industry_view_mode := "network"
 var _fleet_section := "roster"
+var _fleet_roster_filter := "ALL"
+# A set-shaped selection state keeps STEP 04 single-selection behavior while
+# leaving the model ready for the roster's later bulk-selection work.
+var _selected_roster_ship_ids: Dictionary = {}
 var _selected_formation_id := SpaceGameState.DEFAULT_FORMATION_ID
 var _logistics_item_selection := {}
 var _logistics_advanced := false
@@ -2902,6 +2923,7 @@ func _research_blocker_guidance(blocker: Dictionary) -> String:
 func _rebuild_fleet() -> void:
 	var box: VBoxContainer = _pages["fleet"]
 	_clear(box)
+	box.add_theme_constant_override("separation", UiTokens.layout_px(10))
 	if _fleet_section == "shipyard":
 		box.add_child(_build_fleet_section_tabs())
 		_build_fleet_shipyard(box)
@@ -2909,9 +2931,18 @@ func _rebuild_fleet() -> void:
 		return
 	_ship_blueprint_editor = null
 	_shipyard_handoff_content = null
+	_ensure_selected_formation()
+	if _fleet_section == "roster":
+		# Golden Reference shell calibration: with the compact 52/53 px shell
+		# bands, 13 px page rhythm places the subsystem tabs, title, filters and
+		# Master–Detail workspace on their approved physical Y landmarks.
+		box.add_theme_constant_override("separation", UiTokens.layout_px(13))
+		box.add_child(_build_fleet_section_tabs())
+		_build_fleet_roster(box)
+		_sync_blueprint_workspace_chrome()
+		return
 	box.add_child(_page_title(I18n.core("ships.title"), I18n.core("ships.subtitle")))
 	_add_unlock_banner(box, "fleet")
-	_ensure_selected_formation()
 	var formation_selector := HFlowContainer.new()
 	formation_selector.add_theme_constant_override("h_separation", 6)
 	for formation_id_value in Game.state.formation_ids():
@@ -2979,7 +3010,10 @@ func _select_fleet_section(section: String) -> void:
 
 func _sync_blueprint_workspace_chrome() -> void:
 	if is_instance_valid(_shell):
-		_shell.set_blueprint_workspace(_active_page_key == "fleet" and _fleet_section == "shipyard")
+		# Both production Ship workspaces own their complete left/right content.
+		# Reusing the existing full-width shell mode preserves the global command
+		# and navigation bars while giving the Golden Reference body its width.
+		_shell.set_blueprint_workspace(_active_page_key == "fleet" and _fleet_section in ["roster", "shipyard"])
 
 
 func _ensure_selected_formation() -> void:
@@ -3078,77 +3112,802 @@ func _save_fleet_supply_plan(item_id: String, input: SpinBox) -> void:
 
 
 func _build_fleet_roster(box: VBoxContainer) -> void:
-	box.add_child(_section_title(I18n.core("ships.roster.title")))
-	var formation_id := _selected_formation_id
-	var formation: Dictionary = Game.state.fleet_logistics_runtime(formation_id).get("formation", {})
-	for ship_value in Game.state.ships:
+	box.add_child(_build_fleet_roster_header())
+	box.add_child(_build_fleet_roster_filters())
+	var visible_ships: Array = Game.state.ships.filter(_fleet_roster_ship_matches_filter)
+	_reconcile_fleet_roster_selection(visible_ships)
+	var selected_ship_id := _fleet_roster_selected_ship_id()
+
+	# The page already owns a 14 px margin. This second body-only inset produces
+	# the Golden Reference's 28 px body edge at 100% UI scale without moving the
+	# previously approved tabs, header, or lifecycle filter.
+	var body_margin := _margin(14, 0, 16, 8)
+	body_margin.name = "FleetRosterBodyMargin"
+	body_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var master_detail := HBoxContainer.new()
+	master_detail.name = "FleetRosterMasterDetail"
+	master_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	master_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	master_detail.add_theme_constant_override("separation", UiTokens.layout_px(21))
+	body_margin.add_child(master_detail)
+	master_detail.add_child(_build_fleet_roster_browser(visible_ships, selected_ship_id))
+
+	var inspector_surface := _panel(COLOR_PANEL_ALT)
+	inspector_surface.name = "FleetRosterInspectorSurface"
+	inspector_surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_surface.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inspector_surface.size_flags_stretch_ratio = 0.639
+	# STEP 06 Golden geometry: the work surface stays fixed, while the rebuilt
+	# Inspector content uses the reference's 16 px internal presentation inset.
+	var inspector_margin := _margin(16, 16, 16, 16)
+	inspector_margin.name = "FleetRosterInspectorMargin"
+	inspector_surface.add_child(inspector_margin)
+	# At accessibility scales the approved identity and upper presentation keep
+	# their full typography. Give the Inspector its own vertical viewport so the
+	# STEP 07 metadata remains reachable without letting any panel escape the
+	# fixed Master–Detail work surface.
+	var inspector_scroll := ScrollContainer.new()
+	inspector_scroll.name = "FleetRosterInspectorScroll"
+	inspector_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	inspector_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	inspector_scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	inspector_margin.add_child(inspector_scroll)
+	var detail_column := VBoxContainer.new()
+	detail_column.name = "FleetRosterDetail"
+	detail_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_column.add_theme_constant_override("separation", UiTokens.layout_px(5))
+	inspector_scroll.add_child(detail_column)
+	master_detail.add_child(inspector_surface)
+	for ship_value in visible_ships:
 		var ship := ship_value as Dictionary
 		var ship_id := String(ship.get("instance_id", ""))
+		if ship_id != selected_ship_id:
+			continue
 		var blueprint := Game.content.ships.get(String(ship.get("blueprint_id", "")), {}) as Dictionary
-		var card := _card()
-		card.add_child(_label(I18n.core("ships.roster.identity") % [String(ship.get("name", ship_id)), _content_name(blueprint, String(ship.get("blueprint_id", "")))], 18, COLOR_TEXT))
-		var status_color := COLOR_WARN if String(ship.get("status", "")) in ["REPAIRING", "REFITTING", "REACTIVATING"] else COLOR_GOOD
-		card.add_child(_label(I18n.core("ships.roster.status") % [_status_text(String(ship.get("status", "DOCKED"))), _assignment_name(Game.state.ship_formation_id(ship_id)), _zone_text(String(formation.get("ship_zones", {}).get(ship_id, "FRONT")))], 14, status_color))
-		card.add_child(_label(I18n.core("ships.roster.maintenance") % [_status_text(String(ship.get("maintenance_state", "ACTIVE"))), float(ship.get("maintenance_coverage", 1.0)) * 100.0, float(ship.get("maintenance_debt", 0.0))], 13, COLOR_MUTED))
-		var service_record: Dictionary = ship.get("service_record", {})
-		card.add_child(_label(I18n.core("ships.roster.service_record") % [int(service_record.get("combat_deployments", 0)), int(service_record.get("victories", 0)), int(service_record.get("defeats", 0)), float(service_record.get("combat_experience", 0.0)), float(service_record.get("damage_dealt", 0.0))], 13, COLOR_MUTED))
-		card.add_child(_label(I18n.core("ships.roster.modules") % _ship_modules_text(ship), 13, COLOR_MUTED))
-		card.add_child(_label(I18n.core("ships.roster.roles") % _ship_loadout_roles_text(ship), 13, COLOR_ACCENT))
-		card.add_child(_label(I18n.core("ships.roster.lifecycle"), 14, COLOR_ACCENT))
-		var maintenance_row := HFlowContainer.new()
-		maintenance_row.add_theme_constant_override("h_separation", 6)
-		maintenance_row.add_theme_constant_override("v_separation", 6)
-		var maintenance_state := String(ship.get("maintenance_state", "ACTIVE"))
-		if maintenance_state == "MOTHBALLED":
-			var reactivate_button := _button(I18n.core("ships.action.reactivate"), _command.bind(I18n.core("command.ships.reactivate"), Game.start_ship_reactivation.bind(ship_id)), String(ship.get("status", "")) != "DOCKED", COLOR_ACCENT)
-			reactivate_button.name = "ReactivateShip_%s" % ship_id
-			maintenance_row.add_child(reactivate_button)
-		else:
-			var active_button := _button(I18n.core("status.ACTIVE"), _command.bind(I18n.core("command.ships.set_active"), Game.set_ship_maintenance_state.bind(ship_id, "ACTIVE")), maintenance_state == "ACTIVE" or String(ship.get("status", "")) != "DOCKED")
-			active_button.name = "SetShipActive_%s" % ship_id
-			maintenance_row.add_child(active_button)
-			var reserve_button := _button(I18n.core("status.READY_RESERVE"), _command.bind(I18n.core("command.ships.set_ready_reserve"), Game.set_ship_maintenance_state.bind(ship_id, "READY_RESERVE")), maintenance_state == "READY_RESERVE" or String(ship.get("status", "")) != "DOCKED")
-			reserve_button.name = "SetShipReadyReserve_%s" % ship_id
-			maintenance_row.add_child(reserve_button)
-			var mothball_button := _button(I18n.core("ships.action.mothball"), _command.bind(I18n.core("command.ships.mothball"), Game.set_ship_maintenance_state.bind(ship_id, "MOTHBALLED")), String(ship.get("status", "")) != "DOCKED", COLOR_WARN)
-			mothball_button.name = "MothballShip_%s" % ship_id
-			maintenance_row.add_child(mothball_button)
-		card.add_child(maintenance_row)
+		_build_fleet_roster_inspector_upper(detail_column, ship, blueprint)
+		detail_column.add_child(_build_fleet_roster_inspector_lower(ship, blueprint))
+	if selected_ship_id.is_empty():
+		detail_column.add_child(_label(I18n.core("ships.roster.select_ship"), 13, COLOR_MUTED))
+	box.add_child(body_margin)
 
-		card.add_child(_label(I18n.core("ships.roster.assignment"), 14, COLOR_ACCENT))
-		var assignment_row := HFlowContainer.new()
-		assignment_row.add_theme_constant_override("h_separation", 6)
-		assignment_row.add_theme_constant_override("v_separation", 6)
-		var standby_availability := Game.ship_formation_assignment_availability(ship_id, "")
-		var standby_button := _button(I18n.core("ships.assignment.standby"), _command.bind(I18n.core("command.ships.assign_standby"), Game.set_ship_formation_assignment.bind(ship_id, "")), not bool(standby_availability.get("allowed", false)))
-		standby_button.name = "AssignStandby_%s" % ship_id
-		if standby_button.disabled: standby_button.tooltip_text = String(standby_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-		assignment_row.add_child(standby_button)
-		var formation_availability := Game.ship_formation_assignment_availability(ship_id, formation_id)
-		var formation_name := _formation_name(formation_id)
-		var formation_button := _button(I18n.core("ships.assignment.formation", "Join %s") % formation_name, _command.bind(I18n.core("command.ships.assign_formation", "Assign to tactical formation"), Game.set_ship_formation_assignment.bind(ship_id, formation_id)), not bool(formation_availability.get("allowed", false)))
-		formation_button.name = "AssignFormation_%s" % ship_id
-		if formation_button.disabled: formation_button.tooltip_text = String(formation_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-		assignment_row.add_child(formation_button)
-		card.add_child(assignment_row)
-		card.add_child(_label(I18n.core("ships.roster.combat_position"), 14, COLOR_ACCENT))
-		var zone_row := HFlowContainer.new()
-		zone_row.add_theme_constant_override("h_separation", 6)
-		zone_row.add_theme_constant_override("v_separation", 6)
-		var current_zone := String(formation.get("ship_zones", {}).get(ship_id, "FRONT"))
-		for zone in ["FRONT", "MID", "REAR"]:
-			var zone_button := _button(_zone_text(zone), _command.bind(I18n.core("command.ships.set_combat_position"), Game.set_ship_combat_zone.bind(ship_id, zone, formation_id)), Game.state.ship_formation_id(ship_id) != formation_id or current_zone == zone, COLOR_ACCENT)
-			zone_button.name = "ShipCombatZone_%s_%s" % [ship_id, zone]
-			zone_row.add_child(zone_button)
-		card.add_child(zone_row)
-		var design_hint := _label("插件配置已统一迁移到船厂蓝图。实体舰只能通过已保存蓝图创建改装订单。" if I18n.is_chinese() else "Module configuration has moved to Shipyard Blueprints. Physical ships can only be refitted from a saved blueprint.", 12, COLOR_MUTED)
-		design_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		card.add_child(design_hint)
-		if String(ship.get("status", "")) == "DOCKED" and Game.state.ship_formation_id(ship_id).is_empty():
-			card.add_child(_button(I18n.core("ships.action.scrap"), _command.bind(I18n.core("command.ships.scrap"), Game.scrap_ship.bind(ship_id)), false, COLOR_WARN))
-		box.add_child(_wrap_card(card))
-	if Game.state.ships.is_empty():
-		box.add_child(_card_text(I18n.core("ships.roster.empty"), COLOR_WARN))
+
+func _build_fleet_roster_inspector_upper(detail_column: VBoxContainer, ship: Dictionary, blueprint: Dictionary) -> void:
+	var ship_id := String(ship.get("instance_id", ""))
+	var identity_header := HBoxContainer.new()
+	identity_header.name = "FleetRosterInspectorIdentityHeader"
+	identity_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var identity_inset := _margin(6, 0, 0, 0)
+	identity_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var identity_text := VBoxContainer.new()
+	identity_text.name = "FleetRosterInspectorIdentityText"
+	identity_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# The system CJK font carries generous line metrics. Zero container spacing
+	# reproduces the Golden's actual 4–6 px visible glyph gap without overlap.
+	identity_text.add_theme_constant_override("separation", 0)
+	var ship_name := _label(String(ship.get("name", ship_id)).to_upper(), 26, COLOR_TEXT)
+	ship_name.name = "FleetRosterInspectorShipName"
+	ship_name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	ship_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	identity_text.add_child(ship_name)
+	var hull_class := _label(_fleet_roster_hull_class_and_tier(blueprint), 16, COLOR_MUTED)
+	hull_class.name = "FleetRosterInspectorHullClass"
+	hull_class.autowrap_mode = TextServer.AUTOWRAP_OFF
+	identity_text.add_child(hull_class)
+	identity_inset.add_child(identity_text)
+	identity_header.add_child(identity_inset)
+	detail_column.add_child(identity_header)
+
+	var upper_content := HBoxContainer.new()
+	upper_content.name = "FleetRosterInspectorUpperContent"
+	upper_content.custom_minimum_size.y = UiTokens.layout_px(214)
+	upper_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	upper_content.add_theme_constant_override("separation", UiTokens.layout_px(18))
+	upper_content.add_child(_build_fleet_roster_ship_visual_panel(blueprint))
+	upper_content.add_child(_build_fleet_roster_operational_status_panel(ship))
+	detail_column.add_child(upper_content)
+
+
+func _build_fleet_roster_ship_visual_panel(blueprint: Dictionary) -> PanelContainer:
+	var visual_panel := _panel(UiTokens.COLOR_INSET)
+	visual_panel.name = "FleetRosterShipVisualPanel"
+	visual_panel.custom_minimum_size.y = UiTokens.layout_px(214)
+	visual_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	visual_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	visual_panel.size_flags_stretch_ratio = 0.555
+	visual_panel.add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_INSET, COLOR_BORDER, 4))
+	var ui_visual := blueprint.get("ui_visual", {}) as Dictionary
+	var texture_path := String(ui_visual.get("topdown_texture", ""))
+	if texture_path.is_empty() or not ResourceLoader.exists(texture_path):
+		return visual_panel
+	var texture := load(texture_path) as Texture2D
+	if texture == null:
+		return visual_panel
+	var art_margin := _margin(18, 9, 18, 9)
+	art_margin.name = "FleetRosterShipVisualMargin"
+	var art := TextureRect.new()
+	art.name = "FleetRosterShipVisual"
+	art.texture = texture
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	art.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art_margin.add_child(art)
+	visual_panel.add_child(art_margin)
+	return visual_panel
+
+
+func _build_fleet_roster_operational_status_panel(ship: Dictionary) -> PanelContainer:
+	var ship_id := String(ship.get("instance_id", ""))
+	var maintenance_state := String(ship.get("maintenance_state", "ACTIVE"))
+	var formation_id := Game.state.ship_formation_id(ship_id)
+	var formation_name := "—" if formation_id.is_empty() else _formation_name(formation_id)
+	var location_id := String(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	var location_name := "—" if location_id.is_empty() else _location_name(location_id)
+
+	var status_panel := _panel(UiTokens.COLOR_INSET)
+	status_panel.name = "FleetRosterOperationalStatusPanel"
+	status_panel.custom_minimum_size.y = UiTokens.layout_px(214)
+	status_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	status_panel.size_flags_stretch_ratio = 0.445
+	status_panel.add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_INSET, COLOR_BORDER, 4))
+	# The 214 px Golden panel uses five 35 px property bands. Its system-font
+	# glyph metrics need a 3 px edge inset rather than generic card padding.
+	var status_margin := _margin(18, 3, 16, 3)
+	status_panel.add_child(status_margin)
+	var status_column := VBoxContainer.new()
+	status_column.name = "FleetRosterOperationalStatus"
+	status_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_column.add_theme_constant_override("separation", 0)
+	status_margin.add_child(status_column)
+	var title := _label(I18n.core("ships.roster.inspector.operational_status"), 17, COLOR_ACCENT)
+	title.name = "FleetRosterOperationalStatusTitle"
+	title.custom_minimum_size.y = UiTokens.layout_px(32)
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status_column.add_child(title)
+	var title_separator := HSeparator.new()
+	title_separator.add_theme_constant_override("separation", 1)
+	status_column.add_child(title_separator)
+	_add_fleet_roster_operational_row(status_column, "status", I18n.core("ships.roster.inspector.status"), _fleet_roster_lifecycle_text(maintenance_state), maintenance_state)
+	_add_fleet_roster_operational_row(status_column, "location", I18n.core("ships.roster.inspector.location"), location_name)
+	_add_fleet_roster_operational_row(status_column, "formation", I18n.core("ships.roster.inspector.formation"), formation_name)
+	# The current Ship entity has no canonical role/duty property. A neutral dash
+	# is intentionally more honest than reviving the removed loadout-derived role.
+	_add_fleet_roster_operational_row(status_column, "role", I18n.core("ships.roster.inspector.role"), "—")
+	_add_fleet_roster_operational_row(status_column, "combat_position", I18n.core("ships.roster.inspector.combat_position"), _fleet_roster_inspector_zone(ship_id, formation_id), "", true)
+	return status_panel
+
+
+func _add_fleet_roster_operational_row(parent: VBoxContainer, field_id: String, caption: String, value_text: String, lifecycle_state := "", last := false) -> void:
+	var row := HBoxContainer.new()
+	row.name = "FleetRosterOperationalRow_%s" % field_id
+	row.custom_minimum_size.y = UiTokens.layout_px(34)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", UiTokens.layout_px(14))
+	var icon_center := CenterContainer.new()
+	icon_center.name = "FleetRosterOperationalIconColumn_%s" % field_id
+	icon_center.custom_minimum_size.x = UiTokens.layout_px(20)
+	icon_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var icon := TextureRect.new()
+	icon.name = "FleetRosterOperationalIcon_%s" % field_id
+	icon.custom_minimum_size = UiTokens.layout_vector(Vector2(16, 16))
+	var icon_atlas := AtlasTexture.new()
+	icon_atlas.atlas = FLEET_ROSTER_OPERATIONAL_ICONS[field_id] as Texture2D
+	icon_atlas.region = FLEET_ROSTER_OPERATIONAL_ICON_REGIONS[field_id] as Rect2
+	icon_atlas.filter_clip = true
+	icon.texture = icon_atlas
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	icon.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon_center.add_child(icon)
+	row.add_child(icon_center)
+	var caption_label := _label(caption, 14, COLOR_MUTED)
+	caption_label.name = "FleetRosterOperationalLabel_%s" % field_id
+	caption_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	caption_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	row.add_child(caption_label)
+	var value_row := HBoxContainer.new()
+	value_row.name = "FleetRosterOperationalValueGroup_%s" % field_id
+	value_row.custom_minimum_size.x = UiTokens.layout_px(142)
+	value_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	value_row.add_theme_constant_override("separation", UiTokens.layout_px(13))
+	var value_color := COLOR_TEXT
+	# Reserve the lifecycle marker column for every property so all five value
+	# strings share one physical X coordinate in the Golden property table.
+	var indicator_slot := CenterContainer.new()
+	indicator_slot.custom_minimum_size.x = UiTokens.layout_px(8)
+	indicator_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if not lifecycle_state.is_empty():
+		value_color = _fleet_roster_lifecycle_color(lifecycle_state)
+		var status_dot := PanelContainer.new()
+		status_dot.name = "FleetRosterInspectorLifecycleDot"
+		status_dot.custom_minimum_size = UiTokens.layout_vector(Vector2(8, 8))
+		status_dot.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		status_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		status_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		status_dot.add_theme_stylebox_override("panel", UiTokens.panel_style(value_color, value_color, 4))
+		indicator_slot.add_child(status_dot)
+	value_row.add_child(indicator_slot)
+	var value_label := _label(value_text, 14, value_color)
+	value_label.name = "FleetRosterOperationalValue_%s" % field_id
+	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	value_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	value_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	value_row.add_child(value_label)
+	row.add_child(value_row)
+	parent.add_child(row)
+	if not last:
+		var separator := HSeparator.new()
+		separator.add_theme_constant_override("separation", 1)
+		parent.add_child(separator)
+
+
+func _fleet_roster_inspector_zone(ship_id: String, formation_id: String) -> String:
+	if formation_id.is_empty():
+		return "—"
+	var logistics := Game.state.fleet_logistics.get(formation_id, {}) as Dictionary
+	var formation := logistics.get("formation", {}) as Dictionary
+	var ship_zones := formation.get("ship_zones", {}) as Dictionary
+	# Existing formation behavior treats an assigned ship without an explicit
+	# ship_zones override as FRONT; this is a read-only UI fallback, not new state.
+	return _zone_text(String(ship_zones.get(ship_id, "FRONT")))
+
+
+func _build_fleet_roster_inspector_lower(ship: Dictionary, blueprint: Dictionary) -> MarginContainer:
+	# The parent VBox contributes 5 px of separation. This 13 px inset completes
+	# the Golden Reference's 18 px gap without altering the frozen upper layout.
+	var lower_inset := _margin(0, 13, 0, 0)
+	lower_inset.name = "FleetRosterLowerInfoInset"
+	lower_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var lower_row := HBoxContainer.new()
+	lower_row.name = "FleetRosterLowerInfoRow"
+	lower_row.custom_minimum_size.y = UiTokens.layout_px(238)
+	lower_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lower_row.add_theme_constant_override("separation", UiTokens.layout_px(18))
+	lower_row.add_child(_build_fleet_roster_basic_information_panel(ship, blueprint))
+	lower_row.add_child(_build_fleet_roster_configuration_panel(ship))
+	lower_row.add_child(_build_fleet_roster_readiness_panel(ship))
+	lower_inset.add_child(lower_row)
+	return lower_inset
+
+
+func _build_fleet_roster_basic_information_panel(ship: Dictionary, blueprint: Dictionary) -> PanelContainer:
+	var panel := _fleet_roster_lower_panel("FleetRosterBasicInformationPanel", 1.0)
+	var column := _fleet_roster_lower_panel_column(panel, I18n.core("ships.roster.inspector.basic_information"), "FleetRosterBasicInformationTitle")
+	var built_at_available := ship.has("built_at_ms")
+	var fields := [
+		["ship_id", I18n.core("ships.roster.inspector.ship_id"), String(ship.get("instance_id", "—"))],
+		["registry_code", I18n.core("ships.roster.inspector.registry_code"), "—"],
+		["tonnage", I18n.core("ships.roster.inspector.tonnage"), "—"],
+		["crew", I18n.core("ships.roster.inspector.crew"), "—"],
+		["ship_class", I18n.core("ships.roster.inspector.ship_class"), _fleet_roster_hull_class_and_tier(blueprint)],
+		["manufacturer", I18n.core("ships.roster.inspector.manufacturer"), "—"],
+		["built_at", I18n.core("ships.roster.inspector.built_at"), _fleet_roster_simulation_timestamp(int(ship.get("built_at_ms", 0))) if built_at_available else "—"]
+	]
+	for field_value in fields:
+		_add_fleet_roster_metadata_row(column, "basic", String(field_value[0]), String(field_value[1]), String(field_value[2]), 88)
+	return panel
+
+
+func _build_fleet_roster_configuration_panel(ship: Dictionary) -> PanelContainer:
+	var panel := _fleet_roster_lower_panel("FleetRosterConfigurationSummaryPanel", 1.2)
+	var column := _fleet_roster_lower_panel_column(panel, I18n.core("ships.roster.inspector.configuration_summary"), "FleetRosterConfigurationSummaryTitle")
+	var summaries := _fleet_roster_configuration_summaries(ship)
+	var fields := [
+		["weapon", I18n.core("ships.roster.inspector.configuration.weapon")],
+		["propulsion", I18n.core("ships.roster.inspector.configuration.propulsion")],
+		["reactor", I18n.core("ships.roster.inspector.configuration.reactor")],
+		["sensor", I18n.core("ships.roster.inspector.configuration.sensor")],
+		["special", I18n.core("ships.roster.inspector.configuration.special")]
+	]
+	for field_value in fields:
+		var field_id := String(field_value[0])
+		_add_fleet_roster_metadata_row(column, "configuration", field_id, String(field_value[1]), String(summaries.get(field_id, "—")), 82)
+	return panel
+
+
+func _build_fleet_roster_readiness_panel(ship: Dictionary) -> PanelContainer:
+	var panel := _fleet_roster_lower_panel("FleetRosterReadinessPanel", 1.8)
+	var column := _fleet_roster_lower_panel_column(panel, I18n.core("ships.roster.inspector.readiness"), "FleetRosterReadinessTitle")
+	var readiness := _fleet_roster_readiness_values(ship)
+	var fields := [
+		["hull_integrity", I18n.core("ships.roster.inspector.readiness.hull")],
+		["weapon_system", I18n.core("ships.roster.inspector.readiness.weapon")],
+		["propulsion_system", I18n.core("ships.roster.inspector.readiness.propulsion")],
+		["sensor_system", I18n.core("ships.roster.inspector.readiness.sensor")]
+	]
+	for field_value in fields:
+		var field_id := String(field_value[0])
+		_add_fleet_roster_readiness_row(column, field_id, String(field_value[1]), readiness.get(field_id, {}) as Dictionary)
+	return panel
+
+
+func _fleet_roster_lower_panel(control_name: String, stretch_ratio: float) -> PanelContainer:
+	var panel := _panel(UiTokens.COLOR_INSET)
+	panel.name = control_name
+	panel.custom_minimum_size.y = UiTokens.layout_px(238)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.size_flags_stretch_ratio = stretch_ratio
+	panel.add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_INSET, COLOR_BORDER, 4))
+	return panel
+
+
+func _fleet_roster_lower_panel_column(panel: PanelContainer, title_text: String, title_name: String) -> VBoxContainer:
+	var content_margin := _margin(14, 5, 14, 5)
+	panel.add_child(content_margin)
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_theme_constant_override("separation", 0)
+	content_margin.add_child(column)
+	var title := _label(title_text, 17, COLOR_ACCENT)
+	title.name = title_name
+	title.custom_minimum_size.y = UiTokens.layout_px(32)
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	column.add_child(title)
+	var separator := HSeparator.new()
+	separator.add_theme_constant_override("separation", 1)
+	column.add_child(separator)
+	return column
+
+
+func _add_fleet_roster_metadata_row(parent: VBoxContainer, group_id: String, field_id: String, caption: String, value_text: String, caption_width: int) -> void:
+	var row := HBoxContainer.new()
+	row.name = "FleetRoster%sRow_%s" % [group_id.capitalize(), field_id]
+	row.custom_minimum_size.y = UiTokens.layout_px(27)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", UiTokens.layout_px(10))
+	var caption_label := _label(caption, 14, COLOR_MUTED)
+	caption_label.custom_minimum_size.x = UiTokens.layout_px(caption_width)
+	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	caption_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	caption_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	row.add_child(caption_label)
+	var value_label := _label(value_text, 14, COLOR_TEXT)
+	value_label.name = "FleetRoster%sValue_%s" % [group_id.capitalize(), field_id]
+	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	value_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	value_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	value_label.tooltip_text = value_text if value_text != "—" else ""
+	row.add_child(value_label)
+	parent.add_child(row)
+
+
+func _add_fleet_roster_readiness_row(parent: VBoxContainer, field_id: String, caption: String, metric: Dictionary) -> void:
+	var available := bool(metric.get("available", false))
+	var percent := clampf(float(metric.get("value", 0.0)), 0.0, 100.0)
+	var row := HBoxContainer.new()
+	row.name = "FleetRosterReadinessRow_%s" % field_id
+	row.custom_minimum_size.y = UiTokens.layout_px(44)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", UiTokens.layout_px(12))
+	var caption_label := _label(caption, 14, COLOR_MUTED)
+	caption_label.custom_minimum_size.x = UiTokens.layout_px(104)
+	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	caption_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	row.add_child(caption_label)
+	var progress := ProgressBar.new()
+	progress.name = "FleetRosterReadinessBar_%s" % field_id
+	progress.custom_minimum_size.y = UiTokens.layout_px(8)
+	progress.max_value = 100.0
+	progress.value = percent if available else 0.0
+	progress.show_percentage = false
+	progress.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	progress.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	progress.set_meta("canonical_value_available", available)
+	row.add_child(progress)
+	var value_label := _label("%d%%" % int(round(percent)) if available else "—", 14, COLOR_TEXT if available else COLOR_MUTED)
+	value_label.name = "FleetRosterReadinessValue_%s" % field_id
+	value_label.custom_minimum_size.x = UiTokens.layout_px(48)
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	value_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	row.add_child(value_label)
+	parent.add_child(row)
+
+
+func _fleet_roster_simulation_timestamp(milliseconds: int) -> String:
+	var total_minutes := maxi(0, milliseconds) / 60000
+	var day := total_minutes / (24 * 60) + 1
+	var minute_of_day := total_minutes % (24 * 60)
+	return I18n.core("ships.roster.inspector.simulation_timestamp") % [day, minute_of_day / 60, minute_of_day % 60]
+
+
+func _fleet_roster_configuration_summaries(ship: Dictionary) -> Dictionary:
+	var grouped := {"weapon":[], "propulsion":[], "reactor":[], "sensor":[], "special":[]}
+	for module_id_value in Game.state.ship_module_definition_ids(ship):
+		var module_id := String(module_id_value)
+		var module := Game.content.modules.get(module_id, {}) as Dictionary
+		if module.is_empty():
+			continue
+		var field_id := _fleet_roster_configuration_field(module)
+		(grouped[field_id] as Array).append(_content_name(module, module_id))
+	var result := {}
+	for field_id_value in grouped.keys():
+		var field_id := String(field_id_value)
+		result[field_id] = _fleet_roster_compact_module_names(grouped[field_id] as Array)
+	return result
+
+
+func _fleet_roster_configuration_field(module: Dictionary) -> String:
+	match String(module.get("slot", "")):
+		"weapon": return "weapon"
+		"drive": return "propulsion"
+		"core": return "reactor"
+	var capabilities := module.get("capabilities", {}) as Dictionary
+	if float(capabilities.get("sensor", 0.0)) > 0.0 or float(capabilities.get("long_range_scan", 0.0)) > 0.0:
+		return "sensor"
+	return "special"
+
+
+func _fleet_roster_compact_module_names(module_names: Array) -> String:
+	if module_names.is_empty():
+		return "—"
+	var ordered_names: Array[String] = []
+	var counts := {}
+	for name_value in module_names:
+		var module_name := String(name_value)
+		if not counts.has(module_name):
+			ordered_names.append(module_name)
+		counts[module_name] = int(counts.get(module_name, 0)) + 1
+	var parts: Array[String] = []
+	for module_name in ordered_names:
+		var count := int(counts[module_name])
+		parts.append("%s ×%d" % [module_name, count] if count > 1 else module_name)
+	return I18n.core("format.list_separator").join(parts)
+
+
+func _fleet_roster_readiness_values(ship: Dictionary) -> Dictionary:
+	var result := {
+		"hull_integrity":{"available":false},
+		"weapon_system":{"available":false},
+		"propulsion_system":{"available":false},
+		"sensor_system":{"available":false}
+	}
+	var ship_id := String(ship.get("instance_id", ""))
+	if ship_id.is_empty() or not is_instance_valid(Game.simulation) or not is_instance_valid(Game.simulation.combat):
+		return result
+	# CombatResolver owns the canonical aggregation of hull/module combat stats.
+	# Damage is persisted on the Ship entity and is applied to shield before hull,
+	# matching the resolver's actor construction without duplicating stat rules.
+	var combat_stats := Game.simulation.combat.fleet_stats(Game.state, [ship_id]) as Dictionary
+	var maximum_hull := float(combat_stats.get("hull", 0.0))
+	if int(combat_stats.get("ship_count", 0)) == 1 and maximum_hull > 0.0:
+		var maximum_shield := maxf(0.0, float(combat_stats.get("shield", 0.0)))
+		var damage_taken := maxf(0.0, float(ship.get("damage_taken", 0.0)))
+		var hull_damage := maxf(0.0, damage_taken - maximum_shield)
+		result["hull_integrity"] = {"available":true, "value":100.0 * clampf((maximum_hull - hull_damage) / maximum_hull, 0.0, 1.0)}
+	return result
+
+
+func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String) -> PanelContainer:
+	var browser := _panel(COLOR_PANEL_ALT)
+	browser.name = "FleetRosterListSurface"
+	browser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	browser.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	browser.size_flags_stretch_ratio = 0.341
+	var browser_column := VBoxContainer.new()
+	browser_column.name = "FleetRosterBrowser"
+	browser_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	browser_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	browser_column.add_theme_constant_override("separation", 0)
+	browser.add_child(browser_column)
+
+	var header_margin := _margin(20, 6, 16, 6)
+	header_margin.name = "FleetRosterBrowserHeader"
+	header_margin.custom_minimum_size.y = UiTokens.layout_px(46)
+	var header_row := HBoxContainer.new()
+	header_row.add_theme_constant_override("separation", UiTokens.layout_px(8))
+	header_margin.add_child(header_row)
+	var summary := _label(I18n.core("ships.roster.browser_summary") % [Game.state.ships.size(), visible_ships.size()], 14, COLOR_MUTED)
+	summary.name = "FleetRosterBrowserSummary"
+	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	summary.autowrap_mode = TextServer.AUTOWRAP_OFF
+	summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	header_row.add_child(summary)
+	# STEP 05 reserves the Golden Reference control with a real CheckBox. It is
+	# intentionally non-interactive until STEP 10 defines bulk-selection rules.
+	var select_filtered_group := HBoxContainer.new()
+	select_filtered_group.name = "FleetRosterSelectFilteredGroup"
+	select_filtered_group.add_theme_constant_override("separation", UiTokens.layout_px(7))
+	var select_filtered := _fleet_roster_selection_checkbox("FleetRosterSelectFiltered")
+	select_filtered_group.add_child(select_filtered)
+	var select_filtered_label := _label(I18n.core("ships.roster.select_filtered"), 14, COLOR_MUTED)
+	select_filtered_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	select_filtered_group.add_child(select_filtered_label)
+	header_row.add_child(select_filtered_group)
+	browser_column.add_child(header_margin)
+	var header_separator := HSeparator.new()
+	header_separator.add_theme_constant_override("separation", 1)
+	browser_column.add_child(header_separator)
+
+	var list_margin := _margin(6, 0, 6, 0)
+	list_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var list_scroll := ScrollContainer.new()
+	list_scroll.name = "FleetRosterListScroll"
+	list_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Godot's fallback ScrollContainer panel carries a 3 px content inset. The
+	# Golden list begins directly below the metadata divider, so remove only that
+	# visual inset while preserving the accepted scrolling behavior.
+	list_scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	list_margin.add_child(list_scroll)
+	var ship_list := VBoxContainer.new()
+	ship_list.name = "FleetRosterShipList"
+	ship_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ship_list.add_theme_constant_override("separation", 0)
+	list_scroll.add_child(ship_list)
+	for ship_value in visible_ships:
+		var ship := ship_value as Dictionary
+		ship_list.add_child(_build_fleet_roster_ship_row(ship, String(ship.get("instance_id", "")) == selected_ship_id))
+	if visible_ships.is_empty():
+		var empty_margin := _margin(14, 14, 14, 14)
+		empty_margin.add_child(_label(I18n.core("ships.roster.filtered_empty"), 13, COLOR_MUTED))
+		ship_list.add_child(empty_margin)
+	browser_column.add_child(list_margin)
+	var footer_separator := HSeparator.new()
+	footer_separator.add_theme_constant_override("separation", 1)
+	browser_column.add_child(footer_separator)
+
+	var footer_margin := _margin(20, 10, 16, 10)
+	footer_margin.name = "FleetRosterBrowserFooter"
+	# Match the Golden footer band now so STEP 09 pagination can be added beside
+	# the range without changing the Browser's vertical geometry again.
+	footer_margin.custom_minimum_size.y = UiTokens.layout_px(86)
+	var range_start := 1 if not visible_ships.is_empty() else 0
+	var range_end := visible_ships.size()
+	var result_range := _label(I18n.core("ships.roster.result_range") % [range_start, range_end, Game.state.ships.size()], 14, COLOR_MUTED)
+	result_range.name = "FleetRosterResultRange"
+	result_range.autowrap_mode = TextServer.AUTOWRAP_OFF
+	result_range.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	footer_margin.add_child(result_range)
+	browser_column.add_child(footer_margin)
+	return browser
+
+
+func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool) -> Button:
+	var ship_id := String(ship.get("instance_id", ""))
+	var blueprint := Game.content.ships.get(String(ship.get("blueprint_id", "")), {}) as Dictionary
+	var maintenance_state := String(ship.get("maintenance_state", "ACTIVE"))
+	var lifecycle_color := _fleet_roster_lifecycle_color(maintenance_state)
+	var formation_id := Game.state.ship_formation_id(ship_id)
+	var formation_name := "—" if formation_id.is_empty() else _formation_name(formation_id)
+
+	var row := Button.new()
+	row.name = "FleetRosterShip_%s" % ship_id
+	row.text = ""
+	# Fonts follow the player's full accessibility scale while general layout
+	# geometry uses a moderated scale. A Button does not include child Control
+	# minimum sizes in its own minimum, so the old layout-scaled 61 px row let the
+	# two Label lines escape at 150%. Track the larger of the layout and font
+	# scales: 100% remains the accepted 61 px, while 150% safely becomes 92 px.
+	row.custom_minimum_size.y = maxi(UiTokens.layout_px(61), int(round(61.0 * UiTokens.ui_scale())))
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.focus_mode = Control.FOCUS_ALL
+	row.accessibility_name = "%s, %s, %s, %s" % [String(ship.get("name", ship_id)), _fleet_roster_hull_class_and_tier(blueprint), _fleet_roster_lifecycle_text(maintenance_state), formation_name]
+	row.pressed.connect(_select_fleet_roster_ship.bind(ship_id))
+	row.add_theme_stylebox_override("normal", _fleet_roster_row_style(selected, false))
+	row.add_theme_stylebox_override("hover", _fleet_roster_row_style(selected, true))
+	row.add_theme_stylebox_override("pressed", _fleet_roster_row_style(true, true))
+	row.add_theme_stylebox_override("focus", _fleet_roster_row_style(true, false))
+
+	var row_margin := _margin(14, 10, 14, 10)
+	row_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.add_child(row_margin)
+	var row_content := HBoxContainer.new()
+	row_content.name = "FleetRosterShipContent_%s" % ship_id
+	row_content.add_theme_constant_override("separation", UiTokens.layout_px(12))
+	row_margin.add_child(row_content)
+
+	var selection_area := CenterContainer.new()
+	selection_area.custom_minimum_size.x = UiTokens.layout_px(20)
+	selection_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	selection_area.add_child(_fleet_roster_selection_checkbox("FleetRosterSelectionControl_%s" % ship_id))
+	row_content.add_child(selection_area)
+
+	var left_info := VBoxContainer.new()
+	left_info.name = "FleetRosterLeftInfo_%s" % ship_id
+	left_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	left_info.add_theme_constant_override("separation", UiTokens.layout_px(2))
+	var ship_name := _label(String(ship.get("name", ship_id)), 17, COLOR_TEXT)
+	ship_name.name = "FleetRosterShipName_%s" % ship_id
+	ship_name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	ship_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	left_info.add_child(ship_name)
+	var hull_class := _label(_fleet_roster_hull_class_and_tier(blueprint), 14, COLOR_MUTED)
+	hull_class.name = "FleetRosterHullClass_%s" % ship_id
+	hull_class.autowrap_mode = TextServer.AUTOWRAP_OFF
+	left_info.add_child(hull_class)
+	row_content.add_child(left_info)
+
+	var right_info := VBoxContainer.new()
+	right_info.name = "FleetRosterRightInfo_%s" % ship_id
+	right_info.custom_minimum_size.x = UiTokens.layout_px(142)
+	right_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	right_info.add_theme_constant_override("separation", UiTokens.layout_px(2))
+	var lifecycle_row := HBoxContainer.new()
+	lifecycle_row.add_theme_constant_override("separation", UiTokens.layout_px(7))
+	var status_dot := PanelContainer.new()
+	status_dot.name = "FleetRosterLifecycleDot_%s" % ship_id
+	status_dot.custom_minimum_size = UiTokens.layout_vector(Vector2(8, 8))
+	status_dot.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	status_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	status_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_dot.add_theme_stylebox_override("panel", UiTokens.panel_style(lifecycle_color, lifecycle_color, 4))
+	lifecycle_row.add_child(status_dot)
+	var lifecycle := _label(_fleet_roster_lifecycle_text(maintenance_state), 14, lifecycle_color)
+	lifecycle.name = "FleetRosterLifecycle_%s" % ship_id
+	lifecycle.autowrap_mode = TextServer.AUTOWRAP_OFF
+	lifecycle_row.add_child(lifecycle)
+	right_info.add_child(lifecycle_row)
+	var fleet_name := _label(formation_name, 14, COLOR_MUTED)
+	fleet_name.name = "FleetRosterFormation_%s" % ship_id
+	fleet_name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	fleet_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	right_info.add_child(fleet_name)
+	row_content.add_child(right_info)
+	return row
+
+
+func _fleet_roster_row_style(selected: bool, hovered: bool) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = UiTokens.COLOR_CONTROL_HOVER if hovered else (UiTokens.COLOR_CONTROL_ACTIVE if selected else COLOR_PANEL_ALT)
+	style.border_color = COLOR_ACCENT if selected else COLOR_BORDER
+	if selected:
+		style.set_border_width_all(1)
+		style.set_corner_radius_all(UiTokens.layout_px(3))
+	else:
+		style.border_width_bottom = 1
+	return style
+
+
+func _fleet_roster_selection_checkbox(control_name: String) -> CheckBox:
+	var checkbox := CheckBox.new()
+	checkbox.name = control_name
+	checkbox.text = ""
+	checkbox.button_pressed = false
+	checkbox.focus_mode = Control.FOCUS_NONE
+	checkbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	checkbox.custom_minimum_size = UiTokens.layout_vector(Vector2(16, 16))
+	checkbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	checkbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	# Empty CheckBox text still contributes the theme's normal line height unless
+	# collapsed explicitly, which would turn the Golden 16 px square into a pill.
+	checkbox.add_theme_font_size_override("font_size", 1)
+	for state_name in ["normal", "hover", "pressed", "focus"]:
+		checkbox.add_theme_stylebox_override(state_name, StyleBoxEmpty.new())
+	# The project theme intentionally has no bitmap checkbox icon. Keep the real
+	# CheckBox as the future state owner and render its empty mark from a centered
+	# Godot Panel primitive, never from Unicode or placeholder artwork.
+	var indicator_center := CenterContainer.new()
+	indicator_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	indicator_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var indicator := PanelContainer.new()
+	indicator.name = "%sIndicator" % control_name
+	indicator.custom_minimum_size = UiTokens.layout_vector(Vector2(15, 15))
+	indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	indicator.add_theme_stylebox_override("panel", UiTokens.panel_style(Color(0.0, 0.0, 0.0, 0.0), UiTokens.COLOR_BORDER_STRONG, 2))
+	indicator_center.add_child(indicator)
+	checkbox.add_child(indicator_center)
+	return checkbox
+
+
+func _fleet_roster_lifecycle_color(maintenance_state: String) -> Color:
+	match maintenance_state:
+		"ACTIVE": return UiTokens.COLOR_RUNNING
+		"READY_RESERVE": return UiTokens.COLOR_WARNING
+		_: return UiTokens.COLOR_GHOST
+
+
+func _fleet_roster_lifecycle_text(maintenance_state: String) -> String:
+	if maintenance_state == "MOTHBALLED":
+		return I18n.core("ships.roster.filter.mothballed")
+	return _status_text(maintenance_state)
+
+
+func _build_fleet_roster_header() -> HBoxContainer:
+	var header := HBoxContainer.new()
+	header.name = "FleetRosterHeader"
+	header.custom_minimum_size.y = UiTokens.layout_px(40)
+	var title := _label(I18n.core("ships.roster.title"), 21, COLOR_TEXT)
+	title.name = "FleetRosterHeaderTitle"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.autowrap_mode = TextServer.AUTOWRAP_OFF
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	header.add_child(title)
+	var ship_count := Game.state.ships.size()
+	var count_key := "ships.roster.count_one" if ship_count == 1 else "ships.roster.count_many"
+	var count_label := _label(I18n.core(count_key) % ship_count, 13, COLOR_MUTED)
+	count_label.name = "FleetRosterHeaderCount"
+	count_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	header.add_child(count_label)
+	return header
+
+
+func _build_fleet_roster_filters() -> HFlowContainer:
+	var counts := {"ALL":Game.state.ships.size(), "ACTIVE":0, "READY_RESERVE":0, "MOTHBALLED":0}
+	for ship_value in Game.state.ships:
+		var maintenance_state := String((ship_value as Dictionary).get("maintenance_state", "ACTIVE"))
+		if counts.has(maintenance_state):
+			counts[maintenance_state] = int(counts[maintenance_state]) + 1
+	var filters := HFlowContainer.new()
+	filters.name = "FleetRosterFilters"
+	filters.add_theme_constant_override("h_separation", UiTokens.layout_px(6))
+	filters.add_theme_constant_override("v_separation", UiTokens.layout_px(4))
+	for filter_id in ["ALL", "ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
+		var caption := I18n.core("ships.roster.filter.%s" % String(filter_id).to_lower())
+		var button := _button("%s %d" % [caption, int(counts[filter_id])], _select_fleet_roster_filter.bind(filter_id), false, COLOR_MUTED)
+		button.name = "FleetRosterFilter_%s" % filter_id
+		if filter_id == _fleet_roster_filter:
+			button.add_theme_stylebox_override("normal", _button_style(UiTokens.COLOR_CONTROL_ACTIVE, COLOR_ACCENT))
+			button.add_theme_color_override("font_color", COLOR_TEXT)
+		filters.add_child(button)
+	return filters
+
+
+func _select_fleet_roster_filter(filter_id: String) -> void:
+	if filter_id not in ["ALL", "ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
+		return
+	_fleet_roster_filter = filter_id
+	_request_active_page_refresh(true)
+
+
+func _select_fleet_roster_ship(ship_id: String) -> void:
+	var ship := Game.state.ship_by_id(ship_id)
+	if ship.is_empty() or not _fleet_roster_ship_matches_filter(ship):
+		return
+	_selected_roster_ship_ids.clear()
+	_selected_roster_ship_ids[ship_id] = true
+	_request_active_page_refresh(true)
+
+
+func _fleet_roster_selected_ship_id() -> String:
+	if _selected_roster_ship_ids.size() != 1:
+		return ""
+	return String(_selected_roster_ship_ids.keys()[0])
+
+
+func _reconcile_fleet_roster_selection(visible_ships: Array) -> void:
+	var selected_ship_id := _fleet_roster_selected_ship_id()
+	if not selected_ship_id.is_empty() and visible_ships.any(func(ship): return String((ship as Dictionary).get("instance_id", "")) == selected_ship_id):
+		return
+	_selected_roster_ship_ids.clear()
+	if not visible_ships.is_empty():
+		_selected_roster_ship_ids[String((visible_ships[0] as Dictionary).get("instance_id", ""))] = true
+
+
+func _fleet_roster_hull_class_and_tier(blueprint: Dictionary) -> String:
+	var hull_class := String(blueprint.get("class", ""))
+	var class_display_name := I18n.t("ships.class.%s" % hull_class.to_lower(), hull_class)
+	var tier := int(blueprint.get("tier", 0))
+	if tier <= 0:
+		var blueprint_id := String(blueprint.get("id", ""))
+		for plan_value in Game.content.ship_construction_projects.values():
+			var plan := plan_value as Dictionary
+			if String(plan.get("ship_id", "")) == blueprint_id:
+				tier = int(plan.get("engineering_required", 0))
+				break
+	return "%s · T%d" % [class_display_name, maxi(1, tier)]
+
+
+func _fleet_roster_ship_matches_filter(ship: Dictionary) -> bool:
+	return _fleet_roster_filter == "ALL" or String(ship.get("maintenance_state", "ACTIVE")) == _fleet_roster_filter
 
 
 func _ship_loadout_roles_text(ship: Dictionary) -> String:
