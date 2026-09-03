@@ -9,7 +9,7 @@ const DEMO_SHIPS: Array[Dictionary] = [
 	{"id":"lunar_pathfinder", "plan_id":"construct_lunar_pathfinder", "english":"LUNAR PATHFINDER"}
 ]
 const DEMO_PART_IDS: Array[String] = [
-	"light_autocannon", "civilian_shield", "advanced_drive", "sensor_array", "cargo_expansion", "civilian_reactor_core"
+	"light_autocannon", "civilian_shield", "radiation_shielding", "advanced_drive", "sensor_array", "cargo_expansion", "civilian_reactor_core"
 ]
 const REFERENCE_UI_SIZE := Vector2i(1440, 900)
 const FONT_SCALE_OPTIONS: Array[int] = [75, 100, 125, 150, 175, 200]
@@ -349,7 +349,7 @@ func _demo_catalog() -> Dictionary:
 		"hulls":hulls,
 		"modules":modules,
 		"slot_labels":{"weapon":"武器", "shield":"防御", "drive":"推进", "utility":"功能", "core":"核心"},
-		"structural_label":"结构 / LOGISTICS",
+		"structural_label":"通用结构 / STRUCTURE",
 		"socket_label_format":"%s %d",
 		"module_label_format":"%s · %s",
 		"hull_summary_format":"%s · %d sockets",

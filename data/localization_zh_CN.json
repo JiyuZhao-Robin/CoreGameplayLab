@@ -2394,7 +2394,7 @@
       "name": "高输出反应堆核心"
     },
     "radiation_shielding": {
-      "name": "辐射防护层"
+      "name": "船体装甲"
     },
     "corsair_overcharged_laser": {
       "name": "海盗超载激光器",
@@ -2812,8 +2812,8 @@
       "description": "应用装配方案时使用的扫描插件制造规范。"
     },
     "build_radiation_shielding": {
-      "name": "制造辐射防护层",
-      "description": "应用装配方案时使用的环境防护插件制造规范。"
+      "name": "制造船体装甲",
+      "description": "应用装配方案时使用的耐辐射船体装甲制造规范。"
     },
     "build_electronics_facility": {
       "name": "建设高能系统工厂"

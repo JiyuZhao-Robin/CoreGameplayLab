@@ -855,14 +855,16 @@ func ship_design_validation(plan_id: String, nodes: Array, connections: Array) -
 		var module_slot := str(content.modules.get(module_id, {}).get("slot", "utility"))
 		var module_mount := ship_module_mount_role(module_id)
 		var socket := socket_slots[socket_id] as Dictionary
-		if module_slot != str(socket.get("slot", "")) or module_mount != str(socket.get("mount_role", "")):
+		var module_family := _ship_design_connection_family(module_slot, module_mount)
+		var socket_family := str(socket.get("interface_family", _ship_design_connection_family(str(socket.get("slot", "")), str(socket.get("mount_role", "")))))
+		if module_family != socket_family or _ship_design_port_shape(module_slot, module_mount) != str(socket.get("shape", "")):
 			return {"allowed":false, "reason_code":"SOCKET_MISMATCH", "reason":I18n.t("notice.ship_design_socket_mismatch", "The connector shape does not match the hull socket")}
 		var module_size := str(content.modules.get(module_id, {}).get("size", "S"))
 		if _ship_module_size_rank(module_size) > int(socket.get("tier", 1)):
 			return {"allowed":false, "reason_code":"SOCKET_SIZE_MISMATCH", "reason":I18n.t("notice.ship_design_socket_size_mismatch", "The module is physically larger than the selected hull socket")}
 		used_modules[module_node_id] = true
 		used_sockets[socket_id] = true
-		sanitized_connections.append({"module_node_id":module_node_id, "socket_id":socket_id, "slot":module_slot, "mount_role":module_mount, "shape":_ship_design_port_shape(module_slot, module_mount), "max_size":str(socket.get("max_size", "S")), "tier":int(socket.get("tier", 1)), "diameter_m":float(socket.get("diameter_m", 5.0))})
+		sanitized_connections.append({"module_node_id":module_node_id, "socket_id":socket_id, "slot":module_slot, "mount_role":module_mount, "interface_family":module_family, "shape":_ship_design_port_shape(module_slot, module_mount), "max_size":str(socket.get("max_size", "S")), "tier":int(socket.get("tier", 1)), "diameter_m":float(socket.get("diameter_m", 5.0))})
 	if used_modules.size() != module_nodes.size():
 		return {"allowed":false, "reason_code":"MODULE_UNCONNECTED", "reason":I18n.t("notice.ship_design_module_unconnected", "Every placed module must be connected to one matching hull socket")}
 	var modules: Array = []
@@ -950,8 +952,10 @@ func ship_design_engineering_summary(plan_id: String, nodes: Array, connections:
 
 
 func _ship_design_connection_family(slot: String, mount_role: String) -> String:
+	if mount_role == "STRUCTURAL":
+		return "structure"
 	if slot == "utility":
-		return "logistics" if mount_role == "STRUCTURAL" else "utility"
+		return "utility"
 	return slot
 
 
@@ -1019,57 +1023,43 @@ func enqueue_saved_ship_design(design_id: String, quantity: int = 1) -> bool:
 
 
 func ship_module_mount_role(module_id: String) -> String:
-	var module := content.modules.get(module_id, {}) as Dictionary
-	var explicit_role := str(module.get("assembly_mount", ""))
-	if explicit_role in ["STRUCTURAL", "SPECIAL", "DRIVE", "CORE"]:
-		return explicit_role
-	var slot := str(module.get("slot", "utility"))
-	if slot == "core":
-		return "CORE"
-	if slot == "drive":
-		return "DRIVE"
-	if slot == "shield":
-		return "STRUCTURAL"
-	if slot == "weapon":
-		return "SPECIAL"
-	var structural_ids := ["cargo_expansion", "bulk_freight_array", "cryogenic_hold_system"]
-	return "STRUCTURAL" if structural_ids.has(module_id) else "SPECIAL"
+	return content.ship_module_mount_role(module_id)
 
 
 func ship_design_socket_schema(plan_id: String) -> Array[Dictionary]:
 	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
-	var hull := content.ships.get(str(plan.get("ship_id", "")), {}) as Dictionary
+	var hull_id := str(plan.get("ship_id", ""))
+	var hull := content.ships.get(hull_id, {}) as Dictionary
 	var slots := hull.get("slot_layout", {}) as Dictionary
+	var interfaces := content.ship_installation_interface_layout(hull_id)
 	var allowed_sizes := hull.get("allowed_sizes", ["S"]) as Array
 	var hull_visual := hull.get("hull_visual", {}) as Dictionary
 	var max_socket_size := str(hull_visual.get("socket_size", allowed_sizes.back() if not allowed_sizes.is_empty() else "S"))
 	if _ship_module_size_rank(max_socket_size) <= 0:
 		max_socket_size = "S"
-	var structural_utility_required := 0
-	var special_utility_required := 0
-	for module_id_value in plan.get("starting_modules", []):
-		var module_id := str(module_id_value)
-		if str(content.modules.get(module_id, {}).get("slot", "")) != "utility":
-			continue
-		if ship_module_mount_role(module_id) == "STRUCTURAL":
-			structural_utility_required += 1
-		else:
-			special_utility_required += 1
-	var utility_count := int(slots.get("utility", 0))
-	var structural_utility_count := clampi(maxi(structural_utility_required, utility_count - special_utility_required), 0, utility_count)
-	var special_utility_count := utility_count - structural_utility_count
+	var shield_socket_count := mini(int(slots.get("shield", 0)), int(interfaces.get("structure", 0)))
+	var structural_utility_count := maxi(0, int(interfaces.get("structure", 0)) - shield_socket_count)
+	var special_utility_count := int(interfaces.get("utility", 0))
 	var result: Array[Dictionary] = []
-	for weapon_index in int(slots.get("weapon", 0)):
+	for weapon_index in int(interfaces.get("weapon", 0)):
 		result.append(_ship_design_socket_definition("socket_weapon_%d" % weapon_index, "weapon", "SPECIAL", "TRIANGLE", max_socket_size))
-	for shield_index in int(slots.get("shield", 0)):
+	for shield_index in shield_socket_count:
 		result.append(_ship_design_socket_definition("socket_shield_%d" % shield_index, "shield", "STRUCTURAL", "SQUARE", max_socket_size))
-	for drive_index in int(slots.get("drive", 0)):
+	for drive_index in int(interfaces.get("drive", 0)):
 		result.append(_ship_design_socket_definition("socket_drive_%d" % drive_index, "drive", "DRIVE", "DIAMOND", max_socket_size))
-	for utility_index in utility_count:
-		var mount_role := "SPECIAL" if utility_index < special_utility_count else "STRUCTURAL"
-		result.append(_ship_design_socket_definition("socket_utility_%d" % utility_index, "utility", mount_role, "SQUARE" if mount_role == "STRUCTURAL" else "PENTAGON", max_socket_size))
-	for core_index in int(slots.get("core", 0)):
+	for utility_index in special_utility_count:
+		result.append(_ship_design_socket_definition("socket_utility_%d" % utility_index, "utility", "SPECIAL", "PENTAGON", max_socket_size))
+	for structural_index in structural_utility_count:
+		var utility_index := special_utility_count + structural_index
+		result.append(_ship_design_socket_definition("socket_utility_%d" % utility_index, "utility", "STRUCTURAL", "SQUARE", max_socket_size))
+	for core_index in int(interfaces.get("core", 0)):
 		result.append(_ship_design_socket_definition("socket_core_%d" % core_index, "core", "CORE", "CIRCLE", max_socket_size))
+	var family_counts := {}
+	for socket in result:
+		var family := _ship_design_connection_family(str(socket.get("slot", "")), str(socket.get("mount_role", "")))
+		socket["interface_family"] = family
+		socket["family_index"] = int(family_counts.get(family, 0))
+		family_counts[family] = int(family_counts.get(family, 0)) + 1
 	return result
 
 
@@ -1322,7 +1312,7 @@ func _validate_loadout_modules(blueprint_id: String, module_ids: Array) -> Strin
 		return I18n.t("notice.module_retired", "This ship plugin has been retired; collection and production equipment now belongs to factory buildings")
 	if "size" in error:
 		return I18n.t("notice.module_size", "Module size is incompatible with this hull")
-	if "slot limit" in error:
+	if "slot limit" in error or "installation-interface limit" in error:
 		return I18n.t("notice.module_full", "This ship has no free compatible module slot")
 	return I18n.t("notice.module_budget", "Hull fitting budget exceeded: %s") % error
 

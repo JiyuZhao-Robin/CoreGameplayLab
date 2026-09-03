@@ -534,6 +534,8 @@ func validate() -> void:
 			errors.append("module '%s' has an invalid domain contribution" % module.get("id", "?"))
 		if str(module.get("slot", "")) not in ["weapon", "shield", "drive", "utility", "core"]:
 			errors.append("module '%s' has an invalid slot type" % module.get("id", "?"))
+		if not str(module.get("assembly_mount", "")).is_empty() and str(module.get("assembly_mount", "")) not in ["STRUCTURAL", "SPECIAL", "DRIVE", "CORE"]:
+			errors.append("module '%s' has an invalid assembly mount" % module.get("id", "?"))
 		if not items.has(str(module.get("id", ""))):
 			errors.append("module '%s' requires matching recipe-catalog metadata" % module.get("id", "?"))
 		var module_skill_ids: Dictionary = {}
@@ -628,6 +630,19 @@ func validate() -> void:
 			slot_total += int(count)
 		if slot_total != int(ship.get("module_slots", 0)):
 			errors.append("ship '%s' slot layout does not match module_slots" % ship.get("id", "?"))
+		var installation_interfaces := ship.get("installation_interfaces", {}) as Dictionary
+		if not installation_interfaces.is_empty():
+			var interface_total := 0
+			for family_value in installation_interfaces.keys():
+				var family := str(family_value)
+				var count := int(installation_interfaces[family_value])
+				if family not in ["weapon", "structure", "drive", "utility", "core"]:
+					errors.append("ship '%s' has an invalid installation interface family '%s'" % [ship.get("id", "?"), family])
+				if count < 0:
+					errors.append("ship '%s' has a negative installation interface count for '%s'" % [ship.get("id", "?"), family])
+				interface_total += int(count)
+			if interface_total != int(ship.get("module_slots", 0)):
+				errors.append("ship '%s' installation interface layout does not match module_slots" % ship.get("id", "?"))
 	for item_id in consumed_items:
 		if not produced_items.has(item_id):
 			errors.append("Consumed item '%s' has no production source" % item_id)
@@ -1454,6 +1469,7 @@ func ship_loadout_engineering_summary(ship_id: String, module_ids: Array) -> Dic
 	if blueprint.is_empty():
 		return {}
 	var slot_usage := {}
+	var interface_usage := {}
 	var totals := {"mass":0.0, "power":0.0, "thermal":0.0}
 	var base_stats: Dictionary = blueprint.get("base_stats", {})
 	var capacities := {
@@ -1467,6 +1483,8 @@ func ship_loadout_engineering_summary(ship_id: String, module_ids: Array) -> Dic
 			continue
 		var slot := str(module.get("slot", "utility"))
 		slot_usage[slot] = int(slot_usage.get(slot, 0)) + 1
+		var interface_family := ship_module_interface_family(str(module.get("id", module_value)))
+		interface_usage[interface_family] = int(interface_usage.get(interface_family, 0)) + 1
 		totals["mass"] = float(totals["mass"]) + float(module.get("mass", module.get("cpu", 0.0)))
 		totals["power"] = float(totals["power"]) + float(module.get("power", module.get("power_grid", 0.0)))
 		totals["thermal"] = float(totals["thermal"]) + float(module.get("thermal", module.get("cooling", 0.0)))
@@ -1479,6 +1497,8 @@ func ship_loadout_engineering_summary(ship_id: String, module_ids: Array) -> Dic
 		"module_count":module_ids.size(),
 		"slot_usage":slot_usage,
 		"slot_capacity":blueprint.get("slot_layout", {}).duplicate(true),
+		"interface_usage":interface_usage,
+		"interface_capacity":ship_installation_interface_layout(ship_id),
 		"totals":totals,
 		"capacities":capacities
 	}
@@ -1488,7 +1508,8 @@ func ship_loadout_error(ship_id: String, module_ids: Array) -> String:
 	var blueprint: Dictionary = ships.get(ship_id, {})
 	if blueprint.is_empty():
 		return "missing hull definition"
-	var slot_usage := {}
+	var interface_usage := {}
+	var interface_capacity := ship_installation_interface_layout(ship_id)
 	var allowed_sizes: Array = blueprint.get("allowed_sizes", ["S"])
 	for module_value in module_ids:
 		var module_id := str(module_value)
@@ -1500,10 +1521,10 @@ func ship_loadout_error(ship_id: String, module_ids: Array) -> String:
 		var module_size := str(module.get("size", "S"))
 		if not allowed_sizes.has(module_size):
 			return "module '%s' size %s is not supported" % [module_id, module_size]
-		var slot := str(module.get("slot", "utility"))
-		slot_usage[slot] = int(slot_usage.get(slot, 0)) + 1
-		if int(slot_usage[slot]) > int(blueprint.get("slot_layout", {}).get(slot, 0)):
-			return "module '%s' exceeds the %s slot limit" % [module_id, slot]
+		var interface_family := ship_module_interface_family(module_id)
+		interface_usage[interface_family] = int(interface_usage.get(interface_family, 0)) + 1
+		if int(interface_usage[interface_family]) > int(interface_capacity.get(interface_family, 0)):
+			return "module '%s' exceeds the %s installation-interface limit" % [module_id, interface_family]
 	var engineering := ship_loadout_engineering_summary(ship_id, module_ids)
 	var totals: Dictionary = engineering.get("totals", {})
 	var capacities: Dictionary = engineering.get("capacities", {})
@@ -1511,6 +1532,73 @@ func ship_loadout_error(ship_id: String, module_ids: Array) -> String:
 		if float(totals[stat]) > float(capacities.get(stat, 0.0)) + 0.001:
 			return "%s demand %.1f exceeds capacity %.1f" % [stat, float(totals[stat]), float(capacities.get(stat, 0.0))]
 	return ""
+
+
+func ship_module_mount_role(module_id: String) -> String:
+	var module := modules.get(module_id, {}) as Dictionary
+	var explicit_role := str(module.get("assembly_mount", ""))
+	if explicit_role in ["STRUCTURAL", "SPECIAL", "DRIVE", "CORE"]:
+		return explicit_role
+	var slot := str(module.get("slot", "utility"))
+	if slot == "core":
+		return "CORE"
+	if slot == "drive":
+		return "DRIVE"
+	if slot == "shield":
+		return "STRUCTURAL"
+	if slot == "weapon":
+		return "SPECIAL"
+	return "STRUCTURAL" if module_id in ["cargo_expansion", "bulk_freight_array", "cryogenic_hold_system"] else "SPECIAL"
+
+
+func ship_module_interface_family(module_id: String) -> String:
+	var module := modules.get(module_id, {}) as Dictionary
+	var mount_role := ship_module_mount_role(module_id)
+	if mount_role == "STRUCTURAL":
+		return "structure"
+	var slot := str(module.get("slot", "utility"))
+	return "utility" if slot == "utility" else slot
+
+
+func ship_installation_interface_layout(ship_id: String) -> Dictionary:
+	var blueprint := ships.get(ship_id, {}) as Dictionary
+	if blueprint.is_empty():
+		return {}
+	var explicit_layout := blueprint.get("installation_interfaces", {}) as Dictionary
+	if not explicit_layout.is_empty():
+		var normalized := {}
+		for family in ["weapon", "structure", "drive", "utility", "core"]:
+			normalized[family] = maxi(0, int(explicit_layout.get(family, 0)))
+		return normalized
+	var slots := blueprint.get("slot_layout", {}) as Dictionary
+	var utility_count := int(slots.get("utility", 0))
+	var structural_utility_required := 0
+	var special_utility_required := 0
+	var matching_plan_found := false
+	for plan_value in ship_construction_projects.values():
+		var plan := plan_value as Dictionary
+		if str(plan.get("ship_id", "")) != ship_id:
+			continue
+		matching_plan_found = true
+		for module_id_value in plan.get("starting_modules", []):
+			var module_id := str(module_id_value)
+			if str(modules.get(module_id, {}).get("slot", "")) != "utility":
+				continue
+			if ship_module_mount_role(module_id) == "STRUCTURAL":
+				structural_utility_required += 1
+			else:
+				special_utility_required += 1
+		break
+	if not matching_plan_found:
+		special_utility_required = utility_count
+	var structural_utility_count := clampi(maxi(structural_utility_required, utility_count - special_utility_required), 0, utility_count)
+	return {
+		"weapon":maxi(0, int(slots.get("weapon", 0))),
+		"structure":maxi(0, int(slots.get("shield", 0))) + structural_utility_count,
+		"drive":maxi(0, int(slots.get("drive", 0))),
+		"utility":maxi(0, utility_count - structural_utility_count),
+		"core":maxi(0, int(slots.get("core", 0)))
+	}
 
 
 func _build_progression_graph() -> void:

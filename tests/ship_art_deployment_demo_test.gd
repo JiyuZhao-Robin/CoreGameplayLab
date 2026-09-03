@@ -81,6 +81,9 @@ func _run() -> void:
 	await _frames(2)
 	for fitting in FITTINGS:
 		_check(demo.find_child("AssemblyModuleCard_%s" % str(fitting[0]), true, false) is Button, "%s is exposed as a draggable production module" % str(fitting[0]))
+	var armor_card := demo.find_child("AssemblyModuleCard_radiation_shielding", true, false) as Button
+	var armor_title := armor_card.find_child("PaletteTitle", true, false) as Label if armor_card != null else null
+	_check(armor_title != null and armor_title.text == "船体装甲", "the third blue-square option is exposed to the Demo as Hull Armor")
 	var search := demo.find_child("AssemblyModuleSearch", true, false) as LineEdit
 	var category := demo.find_child("AssemblyModuleCategory", true, false) as OptionButton
 	_check(search != null and category != null and category.item_count == 7, "module library provides search plus compact functional category filtering")
@@ -122,6 +125,11 @@ func _run() -> void:
 		_check(glyph != null and str(glyph.get("shape")) == str(expected_shapes[socket_id]), "%s keeps its canonical functional socket geometry" % socket_id)
 	var summary := Game.ship_design_engineering_summary(PLAN_ID, populated.get("nodes", []), populated.get("connections", []))
 	_check(int(summary.get("module_count", 0)) == 6 and int(summary.get("connected_count", 0)) == 6, "right-panel module and connection counts come from the real draft summary")
+	var connection_overview := summary.get("connection_overview", {}) as Dictionary
+	_check(int(connection_overview.get("capacity", {}).get("structure", 0)) == 2 and int(connection_overview.get("usage", {}).get("structure", 0)) == 2, "engineering data reports one shared 2 / 2 structure-interface pool instead of separate shield and cargo rows")
+	var shield_family := (canvas.get_node_or_null(NodePath("ship_design_module_0002")) as GraphNode).find_child("ModuleFamily", true, false) as Label
+	var cargo_family := (canvas.get_node_or_null(NodePath("ship_design_module_0005")) as GraphNode).find_child("ModuleFamily", true, false) as Label
+	_check(shield_family != null and cargo_family != null and shield_family.text == cargo_family.text and shield_family.text.find("STRUCTURE") >= 0, "shield and cargo cards display the same physical STRUCTURE interface family")
 	_check(float(summary.get("engineering", {}).get("totals", {}).get("mass", 0.0)) == 63.0, "right-panel total mass uses the shared content engineering calculation")
 	_check(not (summary.get("construction_costs", {}) as Dictionary).is_empty() and not (summary.get("refit_costs", {}) as Dictionary).is_empty(), "build and refit estimates use real simulation BOM APIs")
 	_check(str(summary.get("handoff_mode", "")) in ["REFIT", "BUILD_HULL"], "summary explicitly reports the downstream starport handoff path")

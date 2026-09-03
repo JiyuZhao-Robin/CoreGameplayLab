@@ -592,7 +592,9 @@ func _add_hull_socket_node(hull_node: GraphNode, socket: Dictionary) -> void:
 	add_child(socket_node)
 	_socket_nodes[socket_id] = String(socket_node.name)
 	_socket_glyphs[socket_id] = glyph
-	var base_tooltip := String(_catalog.get("core_socket_format")) % (int(socket_id.get_slice("_", 2)) + 1) if slot == "core" else String(_catalog.get("socket_label_format")) % [String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), int(socket_id.get_slice("_", 2)) + 1]
+	var interface_family := _installation_family(slot, String(socket.get("mount_role", "")))
+	var family_index := int(socket.get("family_index", int(socket_id.get_slice("_", 2)))) + 1
+	var base_tooltip := String(_catalog.get("core_socket_format")) % family_index if slot == "core" else String(_catalog.get("socket_label_format")) % [String(_catalog.get("structural_label", "结构接口 / STRUCTURE")) if interface_family == "structure" else String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())), family_index]
 	socket_node.tooltip_text = I18n.core("ships.shipyard.socket_physical_scale", "%s · T%d / Ø%.0fm") % [base_tooltip, tier, diameter_m]
 
 
@@ -638,7 +640,7 @@ func _add_module_visual(node: GraphNode, module: Dictionary, slot: String, mount
 		"module_id":String(node.get_meta("entity_id", "")),
 		"stable_id":String(node.name),
 		"display_name":String(module.get("title", module.get("name", node.get_meta("entity_id", "")))),
-		"family_label":String(_catalog.get("structural_label", "结构")) if slot == "utility" and mount_role == "STRUCTURAL" else String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())),
+		"family_label":String(_catalog.get("structural_label", "结构接口 / STRUCTURE")) if mount_role == "STRUCTURAL" else String(_catalog.get("slot_labels", {}).get(slot, slot.to_upper())),
 		"english_subtitle":String(node.get_meta("entity_id", "")).replace("_", " ").to_upper() if I18n.is_chinese() else "",
 		"metadata":"%s · T%d · Ø%.0fm" % [module_size, module_tier, module_diameter_m],
 		"shape":shape,
@@ -718,7 +720,7 @@ func _on_connection_request(from_node: StringName, from_port: int, to_node: Stri
 	if String(module_data.get("kind", "")) != "module" or socket.is_empty() or not sockets.has(socket):
 		notice_requested.emit("PORT_DIRECTION_INVALID")
 		return
-	if String(module_data.get("slot", "")) != String(socket.get("slot", "")) or String(module_data.get("mount_role", "")) != String(socket.get("mount_role", "")) or String(module_data.get("shape", "")) != String(socket.get("shape", "")):
+	if _installation_family(String(module_data.get("slot", "")), String(module_data.get("mount_role", ""))) != _installation_family(String(socket.get("slot", "")), String(socket.get("mount_role", ""))) or String(module_data.get("shape", "")) != String(socket.get("shape", "")):
 		notice_requested.emit("PORT_SHAPE_MISMATCH")
 		return
 	if int(module_data.get("tier", 1)) > int(socket.get("tier", 1)):
@@ -729,7 +731,7 @@ func _on_connection_request(from_node: StringName, from_port: int, to_node: Stri
 			notice_requested.emit("PORT_ALREADY_OCCUPIED")
 			return
 	connect_node(module_node_id, 0, String(socket_node.name), 0)
-	var installed_link := {"module_node_id":module_node_id, "socket_id":String(socket.get("id", "")), "slot":String(socket.get("slot", "")), "shape":String(socket.get("shape", "")), "max_size":String(socket.get("max_size", "S")), "tier":int(socket.get("tier", 1))}
+	var installed_link := {"module_node_id":module_node_id, "socket_id":String(socket.get("id", "")), "slot":String(module_data.get("slot", "")), "mount_role":String(module_data.get("mount_role", "")), "interface_family":_installation_family(String(module_data.get("slot", "")), String(module_data.get("mount_role", ""))), "shape":String(socket.get("shape", "")), "max_size":String(socket.get("max_size", "S")), "tier":int(socket.get("tier", 1))}
 	_links.append(installed_link)
 	_refresh_socket_visuals()
 	if is_instance_valid(_visual_layer):
@@ -1177,8 +1179,7 @@ func _socket_matches_dragged_module(socket: Dictionary) -> bool:
 		if String(link.get("module_node_id", "")) == _connection_drag_module_name or String(link.get("socket_id", "")) == socket_id:
 			return false
 	return not socket_id.is_empty() \
-		and String(module.get("slot", "")) == String(socket.get("slot", "")) \
-		and String(module.get("mount_role", "")) == String(socket.get("mount_role", "")) \
+		and _installation_family(String(module.get("slot", "")), String(module.get("mount_role", ""))) == _installation_family(String(socket.get("slot", "")), String(socket.get("mount_role", ""))) \
 		and String(module.get("shape", "")) == String(socket.get("shape", "")) \
 		and int(module.get("tier", 1)) <= int(socket.get("tier", 1))
 
@@ -1317,14 +1318,20 @@ func _slot_shape(slot: String, mount_role := "") -> String:
 
 
 func _slot_port_type(slot: String, mount_role := "") -> int:
+	if mount_role == "STRUCTURAL":
+		return 12
 	match "%s:%s" % [slot, mount_role]:
 		"weapon:SPECIAL": return 11
-		"shield:STRUCTURAL": return 12
 		"drive:DRIVE": return 13
 		"utility:SPECIAL": return 14
-		"utility:STRUCTURAL": return 15
 		"core:CORE": return 16
 		_: return 0
+
+
+func _installation_family(slot: String, mount_role: String) -> String:
+	if mount_role == "STRUCTURAL":
+		return "structure"
+	return "utility" if slot == "utility" else slot
 
 
 func _slot_tone(slot: String, mount_role: String = "") -> Color:

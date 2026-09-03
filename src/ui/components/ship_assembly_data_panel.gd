@@ -152,7 +152,7 @@ func _build_blueprint_overview() -> void:
 	var usage := connection_overview.get("usage", {}) as Dictionary
 	var capacity := connection_overview.get("capacity", {}) as Dictionary
 	var connections := _section("连接概览  /  CONNECTION OVERVIEW")
-	for slot in ["weapon", "drive", "shield", "core", "utility", "logistics"]:
+	for slot in ["weapon", "drive", "structure", "core", "utility"]:
 		if int(capacity.get(slot, 0)) <= 0:
 			continue
 		connections.add_child(_value_row(_slot_label(slot), "%d / %d" % [int(usage.get(slot, 0)), int(capacity.get(slot, 0))], _slot_tone(slot)))
@@ -207,12 +207,12 @@ func _build_module_inspector(module_id: String) -> void:
 	inspector.name = "AssemblyModuleInspector"
 	inspector.configure(module, {
 		"display_name":I18n.content(module),
-		"family_label":_slot_label(slot),
+		"family_label":_slot_label("structure") if mount_role == "STRUCTURAL" else _slot_label(slot),
 		"tier_label":"T%d" % tier,
 		"installation_state":"BLUEPRINT",
 		"diameter_label":"Ø%.0fm" % float({"S":5.0, "M":11.0, "L":22.0, "XL":44.0, "XXL":88.0}.get(size_id, 5.0)),
 		"mount_role":mount_role,
-		"tone":_slot_tone(slot),
+		"tone":_slot_tone("structure") if mount_role == "STRUCTURAL" else _slot_tone(slot),
 		"art_path":ShipAssemblyMapViewScript.module_icon_path(module),
 		"description":str(module.get("description", ""))
 	})
@@ -346,11 +346,11 @@ func _time_text(milliseconds: float) -> String:
 
 
 func _slot_label(slot: String) -> String:
-	return {"weapon":"武器", "drive":"推进", "shield":"防御", "core":"核心", "utility":"功能", "logistics":"结构"}.get(slot, slot.to_upper())
+	return {"weapon":"武器", "drive":"推进", "shield":"防御", "structure":"通用结构", "core":"核心", "utility":"功能", "logistics":"结构"}.get(slot, slot.to_upper())
 
 
 func _slot_tone(slot: String) -> Color:
-	return {"weapon":UiTokens.COLOR_CRITICAL, "drive":UiTokens.COLOR_FOCUS, "shield":UiTokens.COLOR_INFORMATION, "core":UiTokens.COLOR_WARNING, "utility":UiTokens.COLOR_RUNNING, "logistics":UiTokens.COLOR_INFO}.get(slot, UiTokens.COLOR_FOCUS)
+	return {"weapon":UiTokens.COLOR_CRITICAL, "drive":UiTokens.COLOR_FOCUS, "shield":UiTokens.COLOR_INFORMATION, "structure":UiTokens.COLOR_INFORMATION, "core":UiTokens.COLOR_WARNING, "utility":UiTokens.COLOR_RUNNING, "logistics":UiTokens.COLOR_INFO}.get(slot, UiTokens.COLOR_FOCUS)
 
 
 func _number_text(value: float) -> String:

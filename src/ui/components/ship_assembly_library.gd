@@ -198,12 +198,14 @@ func _rebuild_module_cards() -> void:
 func _module_category(module_id: String, module: Dictionary) -> String:
 	var slot := str(module.get("slot", "utility"))
 	var mount_role := str(module.get("assembly_mount", ""))
+	if mount_role == "STRUCTURAL":
+		return "LOGISTICS"
 	match slot:
 		"drive": return "PROPULSION"
 		"weapon": return "WEAPON"
 		"shield": return "DEFENSE"
 		"core": return "CORE"
-		"utility": return "LOGISTICS" if mount_role == "STRUCTURAL" or module_id in ["cargo_expansion", "bulk_freight_array", "cryogenic_hold_system"] else "UTILITY"
+		"utility": return "LOGISTICS" if module_id in ["cargo_expansion", "bulk_freight_array", "cryogenic_hold_system"] else "UTILITY"
 		_: return "UTILITY"
 
 

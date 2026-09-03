@@ -37,6 +37,9 @@ func _run() -> void:
 	plan["assembly_sockets"] = Game.ship_design_socket_schema(plan_id)
 	var hull_id := String(plan.get("ship_id", ""))
 	var hull := (Game.content.ships[hull_id] as Dictionary).duplicate(true)
+	var installation_interfaces := Game.content.ship_installation_interface_layout(hull_id)
+	_check(int(installation_interfaces.get("structure", 0)) == 2 and int(installation_interfaces.get("utility", 0)) == 1, "Lunar Pathfinder declares two interchangeable blue-square structure interfaces plus one special utility interface")
+	_audit_interchangeable_structure_interfaces(plan_id, hull_id)
 	var large_plan_id := "construct_ultimate_combat"
 	var large_plan := (Game.content.ship_construction_projects[large_plan_id] as Dictionary).duplicate(true)
 	large_plan["title"] = "Solar Aegis"
@@ -48,7 +51,7 @@ func _run() -> void:
 		"fx_mask":"res://assets/ships/missing_visual/fx_mask.png"
 	}
 	var modules := {}
-	for module_id in ["light_autocannon", "civilian_shield", "civilian_reactor_core", "sensor_array", "plasma_cannon"]:
+	for module_id in ["light_autocannon", "civilian_shield", "radiation_shielding", "cargo_expansion", "civilian_reactor_core", "sensor_array", "plasma_cannon"]:
 		var module := (Game.content.modules[module_id] as Dictionary).duplicate(true)
 		module["title"] = module_id
 		module["assembly_mount"] = Game.ship_module_mount_role(module_id)
@@ -105,6 +108,10 @@ func _run() -> void:
 	var shield_socket := view.get_node(NodePath("ship_design_socket_shield_0")) as GraphNode
 	var structural_socket := view.get_node(NodePath("ship_design_socket_utility_1")) as GraphNode
 	var special_socket := view.get_node(NodePath("ship_design_socket_utility_0")) as GraphNode
+	_check(int(view.call("_slot_port_type", "shield", "STRUCTURAL")) == int(view.call("_slot_port_type", "utility", "STRUCTURAL")), "shield, cargo and armor share one GraphEdit physical interface type")
+	view.call("_on_connection_drag_started", StringName("ship_design_module_0002"), 0, true)
+	_check(bool(view.call("_socket_matches_dragged_module", view.call("_hull_socket", "socket_shield_0"))) and bool(view.call("_socket_matches_dragged_module", view.call("_hull_socket", "socket_utility_1"))), "a civilian shield advertises both blue square sockets as compatible targets")
+	view.call("_on_connection_drag_ended")
 	var socket_glyphs := view.get("_socket_glyphs") as Dictionary
 	var weapon_visual_socket := module_card_surface.call("visual_socket_center_local") as Vector2
 	var weapon_route_port := module_card_surface.call("routing_port_local") as Vector2
@@ -373,7 +380,9 @@ func _run() -> void:
 	var fitted_right := fitted_bounds.end.x * view.zoom - view.scroll_offset.x
 	var fitted_bottom := fitted_bounds.end.y * view.zoom - view.scroll_offset.y
 	_check(fitted_left >= -1.0 and fitted_top >= -1.0 and fitted_right <= view.size.x + 1.0 and fitted_bottom <= view.size.y + 1.0, "Fit all includes the complete ship design instead of leaving a cropped partial canvas")
-	await _audit_module_removal_interactions({"plans":{plan_id:plan}, "hulls":{hull_id:hull}, "modules":modules, "slot_labels":{}, "socket_label_format":"%s %d", "module_label_format":"%s · %s", "hull_summary_format":"%s · %d sockets", "core_socket_format":"Energy Core %d"})
+	var interaction_catalog := {"plans":{plan_id:plan}, "hulls":{hull_id:hull}, "modules":modules, "structural_label":"Structure", "slot_labels":{}, "socket_label_format":"%s %d", "module_label_format":"%s · %s", "hull_summary_format":"%s · %d sockets", "core_socket_format":"Energy Core %d"}
+	await _audit_structure_interface_dragging(interaction_catalog)
+	await _audit_module_removal_interactions(interaction_catalog)
 	view.queue_free()
 	await get_tree().process_frame
 	if failures.is_empty():
@@ -388,6 +397,51 @@ func _run() -> void:
 func _check(condition: bool, message: String) -> void:
 	if not condition:
 		failures.append(message)
+
+
+func _audit_interchangeable_structure_interfaces(plan_id: String, hull_id: String) -> void:
+	var common_modules := ["light_autocannon", "advanced_drive", "sensor_array", "civilian_reactor_core"]
+	var common_sockets := ["socket_weapon_0", "socket_drive_0", "socket_utility_0", "socket_core_0"]
+	var structure_pairs := [
+		["civilian_shield", "civilian_shield"],
+		["cargo_expansion", "cargo_expansion"],
+		["radiation_shielding", "radiation_shielding"],
+		["civilian_shield", "cargo_expansion"],
+		["civilian_shield", "radiation_shielding"],
+		["cargo_expansion", "radiation_shielding"]
+	]
+	for pair_value in structure_pairs:
+		var pair := pair_value as Array
+		var module_ids := common_modules.duplicate()
+		module_ids.append_array(pair)
+		var nodes: Array = [{"node_id":"test_hull", "kind":"hull", "definition_id":hull_id, "position":{"x":0.0, "y":0.0}}]
+		var connections: Array = []
+		for module_index in module_ids.size():
+			var node_id := "test_module_%d" % module_index
+			nodes.append({"node_id":node_id, "kind":"module", "definition_id":module_ids[module_index], "position":{"x":float(module_index * 40), "y":120.0}})
+			var socket_id: String = str(common_sockets[module_index] if module_index < common_sockets.size() else ["socket_shield_0", "socket_utility_1"][module_index - common_sockets.size()])
+			connections.append({"module_node_id":node_id, "socket_id":socket_id})
+		var validation := Game.ship_design_validation(plan_id, nodes, connections)
+		_check(bool(validation.get("allowed", false)), "structure pair %s + %s is accepted by the authoritative blueprint validator: %s" % [pair[0], pair[1], validation.get("reason", "")])
+		_check(Game.content.ship_loadout_error(hull_id, module_ids).is_empty(), "structure pair %s + %s is accepted by the downstream shipyard loadout validator" % [pair[0], pair[1]])
+
+
+func _audit_structure_interface_dragging(catalog: Dictionary) -> void:
+	for module_id in ["civilian_shield", "cargo_expansion", "radiation_shielding"]:
+		var structure_view := ShipAssemblyMapViewScript.new()
+		add_child(structure_view)
+		structure_view.size = Vector2(1200.0, 800.0)
+		structure_view.configure(catalog, {})
+		structure_view.call("_drop_data", Vector2(520.0, 220.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":"construct_lunar_pathfinder", "definition_id":"lunar_pathfinder"})
+		structure_view.call("_drop_data", Vector2(80.0, 120.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":module_id})
+		structure_view.call("_drop_data", Vector2(80.0, 300.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":module_id})
+		structure_view.request_module_connection("ship_design_module_0001", "socket_shield_0")
+		structure_view.request_module_connection("ship_design_module_0002", "socket_utility_1")
+		await get_tree().process_frame
+		var links := structure_view.draft_snapshot().get("connections", []) as Array
+		_check(links.size() == 2 and links.all(func(link: Dictionary) -> bool: return str(link.get("interface_family", "")) == "structure"), "two %s modules connect simultaneously to the two interchangeable blue-square sockets" % module_id)
+		structure_view.queue_free()
+		await get_tree().process_frame
 
 
 func _audit_all_module_visuals() -> void:

@@ -3498,7 +3498,7 @@ func _ship_assembly_catalog() -> Dictionary:
 		module["title"] = _content_name(module, module_id)
 		module["assembly_mount"] = Game.ship_module_mount_role(module_id)
 		modules[module_id] = module
-	return {"plans":plans, "hulls":hulls, "modules":modules, "socket_label_format":I18n.core("ships.shipyard.socket_label"), "module_label_format":I18n.core("ships.shipyard.part_label"), "hull_summary_format":I18n.core("ships.shipyard.hull_backplane"), "core_socket_format":I18n.core("ships.shipyard.energy_core_socket"), "slot_labels":{
+	return {"plans":plans, "hulls":hulls, "modules":modules, "structural_label":"通用结构 / STRUCTURE", "socket_label_format":I18n.core("ships.shipyard.socket_label"), "module_label_format":I18n.core("ships.shipyard.part_label"), "hull_summary_format":I18n.core("ships.shipyard.hull_backplane"), "core_socket_format":I18n.core("ships.shipyard.energy_core_socket"), "slot_labels":{
 		"weapon":I18n.core("ships.shipyard.slot.weapon"), "shield":I18n.core("ships.shipyard.slot.shield"), "drive":I18n.core("ships.shipyard.slot.drive"), "utility":I18n.core("ships.shipyard.slot.utility"), "core":I18n.core("ships.shipyard.slot.core")
 	}}
 
