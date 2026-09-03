@@ -41,9 +41,14 @@ func _run() -> void:
 		_finish()
 		return
 	_check(demo.scale.is_equal_approx(Vector2.ONE), "Demo keeps native CanvasItem scale so enlarged text is rerasterized instead of interpolated and blurred")
-	_check(is_equal_approx(float(demo.call("effective_font_scale_for_output", Vector2(2880.0, 1800.0), 1.0)), 2.0), "a doubled output resolution doubles native font rasterization size")
 	var library_eyebrow := demo.find_child("AssemblyLibraryEyebrow", true, false) as Label
-	_check(library_eyebrow != null and library_eyebrow.get_theme_font_size("font_size") >= 15, "the 1600×1000 test window natively rerasterizes text above the 1440×900 baseline")
+	var baseline_font_size := library_eyebrow.get_theme_font_size("font_size") if library_eyebrow != null else 0
+	get_window().size = Vector2i(2400, 1400)
+	await _frames(3)
+	library_eyebrow = demo.find_child("AssemblyLibraryEyebrow", true, false) as Label
+	_check(baseline_font_size > 0 and library_eyebrow != null and library_eyebrow.get_theme_font_size("font_size") == baseline_font_size, "enlarging the game window leaves the selected 100 percent font size unchanged; only the player percentage is authoritative")
+	get_window().size = Vector2i(1600, 1000)
+	await _frames(3)
 	var font_scale_picker := demo.find_child("ShipAssemblyFontScale", true, false) as OptionButton
 	_check(font_scale_picker != null and font_scale_picker.item_count == 6, "font-size control exposes exactly 75, 100, 125, 150, 175 and 200 percent")
 	if font_scale_picker != null:

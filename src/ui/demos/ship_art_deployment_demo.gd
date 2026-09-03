@@ -11,7 +11,6 @@ const DEMO_SHIPS: Array[Dictionary] = [
 const DEMO_PART_IDS: Array[String] = [
 	"light_autocannon", "civilian_shield", "radiation_shielding", "advanced_drive", "sensor_array", "cargo_expansion", "civilian_reactor_core"
 ]
-const REFERENCE_UI_SIZE := Vector2i(1440, 900)
 const FONT_SCALE_OPTIONS: Array[int] = [75, 100, 125, 150, 175, 200]
 const DEFAULT_FONT_SCALE := 1.0
 const FONT_SCALE_SESSION_META := "ship_assembly_demo_font_scale"
@@ -34,7 +33,7 @@ var _selection_kind := ""
 var _selection_id := ""
 var _previous_ui_scale := 1.0
 var _user_font_scale := DEFAULT_FONT_SCALE
-var _last_effective_font_scale := -1.0
+var _applied_font_scale := -1.0
 var _interface_rebuild_queued := false
 var _interface_rebuilding := false
 
@@ -42,7 +41,7 @@ var _interface_rebuilding := false
 func _ready() -> void:
 	_previous_ui_scale = UiTokens.ui_scale()
 	_user_font_scale = _sanitize_font_scale(float(get_tree().root.get_meta(FONT_SCALE_SESSION_META, DEFAULT_FONT_SCALE)))
-	_configure_resolution_scaling()
+	_configure_manual_scaling()
 	_apply_native_theme()
 	_catalog = _demo_catalog()
 	_build_demo()
@@ -52,53 +51,22 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	UiTokens.set_ui_scale(_previous_ui_scale)
-	var window := get_window()
-	if window != null and window.size_changed.is_connected(_update_resolution_scaling):
-		window.size_changed.disconnect(_update_resolution_scaling)
 
 
-func _configure_resolution_scaling() -> void:
-	var window := get_window()
-	if window == null:
-		return
-	# Keep every Control at native scale. Window growth changes the Theme's
-	# actual font rasterization size and then rebuilds layout; no fractional
-	# CanvasItem transform remains to blur glyph edges.
+func _configure_manual_scaling() -> void:
+	# Resolution changes only alter the available workspace. Font and symbol size
+	# are controlled exclusively by the percentage selector in the command bar.
 	scale = Vector2.ONE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	if not window.size_changed.is_connected(_update_resolution_scaling):
-		window.size_changed.connect(_update_resolution_scaling)
-
-
-func _update_resolution_scaling() -> void:
-	scale = Vector2.ONE
-	_queue_interface_rebuild()
-
-
-func resolution_scale_for_output(output_size: Vector2) -> float:
-	return maxf(0.5, minf(output_size.x / float(REFERENCE_UI_SIZE.x), output_size.y / float(REFERENCE_UI_SIZE.y)))
-
-
-func _native_layout_scale() -> float:
-	var window := get_window()
-	return 1.0 if window == null else resolution_scale_for_output(Vector2(window.size))
 
 
 func _accessibility_layout_scale() -> float:
 	return maxf(1.0, sqrt(_user_font_scale))
 
 
-func effective_font_scale_for_output(output_size: Vector2, user_scale: float = -1.0) -> float:
-	var selected_scale := _user_font_scale if user_scale <= 0.0 else _sanitize_font_scale(user_scale)
-	return clampf(selected_scale * resolution_scale_for_output(output_size), 0.5, 4.0)
-
-
 func _apply_native_theme() -> void:
-	var window := get_window()
-	var output_size := Vector2(REFERENCE_UI_SIZE) if window == null else Vector2(window.size)
-	var effective_scale := effective_font_scale_for_output(output_size)
-	_last_effective_font_scale = effective_scale
-	theme = UiTokens.build_theme(effective_scale, true)
+	_applied_font_scale = _user_font_scale
+	theme = UiTokens.build_theme(_applied_font_scale, true)
 
 
 func _sanitize_font_scale(value: float) -> float:
@@ -118,17 +86,14 @@ func _queue_interface_rebuild() -> void:
 	if _interface_rebuild_queued or _interface_rebuilding or not is_inside_tree():
 		return
 	_interface_rebuild_queued = true
-	call_deferred("_rebuild_interface_for_native_scale")
+	call_deferred("_rebuild_interface_for_manual_scale")
 
 
-func _rebuild_interface_for_native_scale() -> void:
+func _rebuild_interface_for_manual_scale() -> void:
 	_interface_rebuild_queued = false
 	if not is_inside_tree():
 		return
-	var window := get_window()
-	var output_size := Vector2(REFERENCE_UI_SIZE) if window == null else Vector2(window.size)
-	var effective_scale := effective_font_scale_for_output(output_size)
-	if is_equal_approx(effective_scale, _last_effective_font_scale):
+	if is_equal_approx(_user_font_scale, _applied_font_scale):
 		return
 	_interface_rebuilding = true
 	var selected_tab: int = _library.current_tab() if is_instance_valid(_library) else 0
@@ -201,13 +166,13 @@ func _build_demo() -> void:
 	_library.entity_selected.connect(_on_entity_selected)
 	workspace.add_child(_library)
 	_library.configure(_catalog, DEMO_SHIPS, DEMO_PART_IDS)
-	_library.custom_minimum_size.x = 300.0 * _native_layout_scale() * _accessibility_layout_scale()
+	_library.custom_minimum_size.x = 320.0 * _accessibility_layout_scale()
 	workspace.add_child(_build_canvas())
 	_data_panel = ShipAssemblyDataPanelScript.new()
 	_data_panel.save_requested.connect(_save_blueprint)
 	_data_panel.blueprint_name_changed.connect(_on_blueprint_name_changed)
 	workspace.add_child(_data_panel)
-	_data_panel.custom_minimum_size.x = 270.0 * _native_layout_scale() * _accessibility_layout_scale()
+	_data_panel.custom_minimum_size.x = 288.0 * _accessibility_layout_scale()
 
 
 func _build_header() -> Control:
@@ -221,7 +186,7 @@ func _build_header() -> Control:
 	margin.add_theme_constant_override("margin_right", 10)
 	margin.add_theme_constant_override("margin_bottom", 8)
 	panel.add_child(margin)
-	var high_text_scale := _last_effective_font_scale >= 1.5
+	var high_text_scale := _applied_font_scale >= 1.5
 	var primary_row := HBoxContainer.new()
 	primary_row.add_theme_constant_override("separation", 10)
 	var actions_row := primary_row
