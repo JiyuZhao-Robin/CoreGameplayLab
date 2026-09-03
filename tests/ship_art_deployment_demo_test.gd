@@ -23,6 +23,7 @@ func _ready() -> void:
 
 func _run() -> void:
 	Game.persistence_enabled = false
+	I18n.set_locale("zh_CN")
 	Game.reset_game()
 	Game.state.unlocked_ship_plans.erase(PLAN_ID)
 	_check(not bool(Game.state.unlocked_ship_plans.get(PLAN_ID, false)), "standalone Demo workflow starts from the real locked Lunar hull state")

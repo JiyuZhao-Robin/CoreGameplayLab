@@ -125,7 +125,7 @@ func _ready() -> void:
 	_select_tool_button = Button.new()
 	_select_tool_button.name = "ShipAssemblySelectTool"
 	_select_tool_button.text = "⌖"
-	_select_tool_button.tooltip_text = "选择工具 / SELECT"
+	_select_tool_button.tooltip_text = "选择工具 / SELECT" if I18n.is_chinese() else "SELECT TOOL"
 	_select_tool_button.custom_minimum_size = Vector2(51.0, 51.0)
 	_select_tool_button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(13))
 	_select_tool_button.pressed.connect(set_canvas_tool.bind("SELECT"))
@@ -133,7 +133,7 @@ func _ready() -> void:
 	_pan_tool_button = Button.new()
 	_pan_tool_button.name = "ShipAssemblyPanTool"
 	_pan_tool_button.text = "✥"
-	_pan_tool_button.tooltip_text = "平移工具 / PAN"
+	_pan_tool_button.tooltip_text = "平移工具 / PAN" if I18n.is_chinese() else "PAN TOOL"
 	_pan_tool_button.custom_minimum_size = Vector2(51.0, 51.0)
 	_pan_tool_button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(13))
 	_pan_tool_button.pressed.connect(set_canvas_tool.bind("PAN"))
@@ -659,7 +659,7 @@ func _add_module_visual(node: GraphNode, module: Dictionary, slot: String, mount
 	_entities[node_name] = {"kind":"module", "definition_id":String(node.get_meta("entity_id", "")), "slot":slot, "mount_role":mount_role, "shape":shape, "size":module_size, "tier":module_tier, "diameter_m":module_diameter_m}
 	_module_visuals[node_name] = visual
 	_module_glyphs[node_name] = visual.socket_glyph()
-	node.tooltip_text = "拖动卡片主体可移动；拖到底部垃圾桶或选中后按退格键可移除；内嵌接口负责连接舰体"
+	node.tooltip_text = "拖动卡片主体可移动；拖到底部垃圾桶或选中后按退格键可移除；内嵌接口负责连接舰体" if I18n.is_chinese() else "Drag the card body to move it. Drop it in the bottom trash zone or press Backspace to remove it. Use the inset interface to connect to the hull."
 	node.gui_input.connect(_on_module_move_gui_input.bind(node_name, node))
 	visual.socket_gui_input.connect(_on_module_connector_gui_input.bind(node_name, visual.socket_hit_target()))
 	_sync_module_presentations()

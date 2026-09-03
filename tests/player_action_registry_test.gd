@@ -22,15 +22,16 @@ const REQUIRED_CORE_ACTIONS := [
 	"START_RESEARCH", "SELECT_RESEARCH_ROUTE", "STOP_RESEARCH",
 	"BUILD_SHIP", "REORDER_SHIP_BUILD", "CANCEL_SHIP_BUILD", "ASSIGN_SHIP",
 	"SET_FLEET_SUPPLY_PLAN", "RESUPPLY_FLEET", "SET_FLEET_DOCTRINE",
-	"SET_RETREAT_POLICY", "SET_COMBAT_ZONE", "APPLY_SHIP_LOADOUT", "REPLACE_SHIP_MODULE",
-	"INSTALL_SHIP_MODULE", "REMOVE_SHIP_MODULE", "CANCEL_SHIP_REFIT",
+	"SET_RETREAT_POLICY", "SET_COMBAT_ZONE", "REFIT_SHIP_FROM_BLUEPRINT", "CANCEL_SHIP_REFIT",
 	"START_EXPEDITION", "RECALL_EXPEDITION", "START_COMBAT_ACTION",
 	"SELECT_MEGASTRUCTURE_SITE", "START_MEGASTRUCTURE_PHASE", "CANCEL_MEGASTRUCTURE_PHASE"
 ]
 const RETIRED_ACTIONS := [
 	"SET_PRODUCTION_CONTROL_AUTO", "DEVELOP_SITE", "START_EXTRACTION",
 	"STOP_EXTRACTION", "INTEGRATE_EXTRACTION_SITE",
-	"ASSIGN_CONSTRUCTION_SUPPORT", "RELEASE_CONSTRUCTION_SUPPORT"
+	"ASSIGN_CONSTRUCTION_SUPPORT", "RELEASE_CONSTRUCTION_SUPPORT",
+	"SAVE_SHIP_LOADOUT", "APPLY_SHIP_LOADOUT", "DELETE_SHIP_LOADOUT",
+	"REPLACE_SHIP_MODULE", "INSTALL_SHIP_MODULE", "REMOVE_SHIP_MODULE"
 ]
 
 var failures: Array[String] = []
@@ -99,8 +100,9 @@ func _ready() -> void:
 	expected_core_actions.sort()
 	_check(actual_core_actions == expected_core_actions, "registry contains exactly the declared core player action inventory")
 	_check(not _ui_source.contains('Game.set_production_line_control.bind(slot, "AUTO"'), "UI does not recreate the retired AUTO production action")
-	_check(_ui_source.contains("Game.install_ship_module.bind"), "ship-module install has a real UI callback")
-	_check(_ui_source.contains("Game.remove_ship_module.bind"), "ship-module removal has a real UI callback")
+	_check(_ui_source.contains("Game.begin_ship_design_refit.bind"), "saved-blueprint refit has a real UI callback")
+	_check(not _ui_source.contains("Game.install_ship_module.bind"), "retired direct module-install UI is absent")
+	_check(not _ui_source.contains("Game.remove_ship_module.bind"), "retired direct module-removal UI is absent")
 	_finish()
 
 

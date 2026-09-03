@@ -1994,8 +1994,11 @@ func module_design_available(state: SpaceGameState, module_id: String) -> bool:
 	for requirement_value in recipe.get("requirements", []):
 		if not requirement_met(state, requirement_value as Dictionary):
 			return false
-	var facility_id := str(recipe.get("facility", ""))
-	return facility_available(state, facility_id) and industry_recipe_capabilities_met(state, recipe)
+	# Blueprint refit manufacturing is executed by the starport project itself.
+	# The recipe's reveal/progression requirements establish whether the design is
+	# known; a legacy aggregate Industry facility is no longer required after the
+	# square-grid factory cutover.
+	return true
 
 
 func loadout_semantics_validation_errors(state: SpaceGameState) -> Array[String]:

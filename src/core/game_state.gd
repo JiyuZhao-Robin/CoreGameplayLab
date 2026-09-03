@@ -131,6 +131,9 @@ var energy_system := {
 var manufacturing_module_inventory := {}
 var manufacturing_modules_built := {}
 var pinned_items: Array = []
+# Schema-38 compatibility only. Active UI/application commands use ship_designs;
+# legacy Loadout presets are read and round-tripped solely to avoid corrupting
+# existing saves until a dedicated schema migration removes these fields.
 var saved_loadouts := {}
 var next_loadout_serial := 1
 var ship_designs := {}
@@ -219,6 +222,7 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	state.facilities = {"orbital_starport":{"level":1, "status":"ACTIVE", "installed_modules":[]}}
 	state.ships = []
 	state._create_ship_instance("patchwork_prospector", ["light_autocannon", "civilian_shield", "basic_drive", "sensor_array", "civilian_reactor_core"], "ISS Pioneer")
+	state.unlocked_ship_plans["construct_patchwork_prospector"] = true
 	# The founding stockpile prevents an early circular dependency before basic
 	# electronics production comes online.
 	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":12, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}

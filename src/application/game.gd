@@ -1023,6 +1023,44 @@ func enqueue_saved_ship_design(design_id: String, quantity: int = 1) -> bool:
 	return true
 
 
+func ship_design_refit_candidates(design_id: String) -> Array[String]:
+	var result: Array[String] = []
+	var design := state.ship_designs.get(design_id, {}) as Dictionary
+	if design.is_empty():
+		return result
+	var hull_id := str(design.get("hull_id", ""))
+	for ship_value in state.ships:
+		var ship := ship_value as Dictionary
+		if str(ship.get("blueprint_id", "")) == hull_id:
+			result.append(str(ship.get("instance_id", "")))
+	result.sort()
+	return result
+
+
+func ship_design_refit_availability(design_id: String, instance_id: String) -> Dictionary:
+	var design := state.ship_designs.get(design_id, {}) as Dictionary
+	if design.is_empty():
+		return {"allowed":false, "reason_code":"DESIGN_MISSING", "reason":I18n.t("notice.ship_design_missing", "Saved ship design was not found")}
+	var validation := ship_design_validation(str(design.get("plan_id", "")), design.get("nodes", []), design.get("connections", []))
+	if not bool(validation.get("allowed", false)):
+		return validation
+	var ship := state.ship_by_id(instance_id)
+	if ship.is_empty():
+		return {"allowed":false, "reason_code":"SHIP_MISSING", "reason":I18n.t("notice.ship_missing", "Ship instance was not found")}
+	if str(ship.get("blueprint_id", "")) != str(validation.get("hull_id", "")):
+		return {"allowed":false, "reason_code":"HULL_MISMATCH", "reason":I18n.t("notice.loadout_hull", "This blueprint belongs to a different hull model")}
+	return ship_loadout_availability(instance_id, validation.get("modules", []))
+
+
+func begin_ship_design_refit(design_id: String, instance_id: String) -> bool:
+	var availability := ship_design_refit_availability(design_id, instance_id)
+	if not bool(availability.get("allowed", false)):
+		return _reject(str(availability.get("reason", I18n.t("notice.refit_locked", "The ship cannot enter refit"))))
+	var design := state.ship_designs.get(design_id, {}) as Dictionary
+	var validation := ship_design_validation(str(design.get("plan_id", "")), design.get("nodes", []), design.get("connections", []))
+	return begin_ship_refit(instance_id, validation.get("modules", []), design_id)
+
+
 func ship_module_mount_role(module_id: String) -> String:
 	return content.ship_module_mount_role(module_id)
 
@@ -1248,61 +1286,6 @@ func toggle_pinned_item(item_id: String) -> bool:
 	return true
 
 
-func save_ship_loadout(instance_id: String, requested_name: String = "") -> bool:
-	var ship := state.ship_by_id(instance_id)
-	if ship.is_empty():
-		return _reject(I18n.t("notice.ship_missing", "Ship instance was not found"))
-	var blueprint_id := str(ship.get("blueprint_id", ""))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	var serial := transaction.working_state.next_loadout_serial
-	transaction.working_state.next_loadout_serial = serial + 1
-	var loadout_id := "LOADOUT-%04d" % serial
-	var existing_count := transaction.working_state.saved_loadouts.values().filter(func(loadout): return str(loadout.get("blueprint_id", "")) == blueprint_id).size()
-	var blueprint_name := I18n.content(content.ships.get(blueprint_id, {"name":blueprint_id}))
-	transaction.working_state.saved_loadouts[loadout_id] = {
-		"id":loadout_id,
-		"name":requested_name if not requested_name.strip_edges().is_empty() else I18n.t("format.loadout_name", "%s Loadout %d") % [blueprint_name, existing_count + 1],
-		"blueprint_id":blueprint_id,
-		"modules":state.ship_module_definition_ids(ship),
-		"saved_at_ms":int(state.total_elapsed_ms)
-	}
-	last_notice = I18n.t("notice.loadout_saved", "Loadout preset saved: %s") % transaction.working_state.saved_loadouts[loadout_id]["name"]
-	transaction.record({"type":"ShipLoadoutSaved", "ship_id":instance_id, "loadout_id":loadout_id})
-	_commit_transaction(transaction)
-	return true
-
-
-func delete_ship_loadout(loadout_id: String) -> bool:
-	if not state.saved_loadouts.has(loadout_id):
-		return _reject(I18n.t("notice.loadout_missing", "Saved loadout was not found"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	var loadout_name := str(transaction.working_state.saved_loadouts.get(loadout_id, {}).get("name", loadout_id))
-	transaction.working_state.saved_loadouts.erase(loadout_id)
-	last_notice = I18n.t("notice.loadout_deleted", "Loadout deleted: %s") % loadout_name
-	transaction.record({"type":"ShipLoadoutDeleted", "loadout_id":loadout_id})
-	_commit_transaction(transaction)
-	return true
-
-
-func apply_ship_loadout(instance_id: String, loadout_id: String) -> bool:
-	if not state.ship_can_refit(instance_id):
-		return _reject(I18n.t("notice.refit_locked", "The ship must be operational and docked before refitting"))
-	if not state.saved_loadouts.has(loadout_id):
-		return _reject(I18n.t("notice.loadout_missing", "Saved loadout was not found"))
-	var ship: Dictionary = state.ship_by_id(instance_id)
-	if ship.is_empty():
-		return _reject(I18n.t("notice.ship_missing", "Ship instance was not found"))
-	var loadout: Dictionary = state.saved_loadouts[loadout_id]
-	var blueprint_id := str(ship.get("blueprint_id", ""))
-	if str(loadout.get("blueprint_id", "")) != blueprint_id:
-		return _reject(I18n.t("notice.loadout_hull", "This preset belongs to a different hull model"))
-	var desired: Array = loadout.get("modules", []).duplicate()
-	var validation: String = _validate_loadout_modules(blueprint_id, desired)
-	if not validation.is_empty():
-		return _reject(validation)
-	return begin_ship_refit(instance_id, desired, loadout_id)
-
-
 func _validate_loadout_modules(blueprint_id: String, module_ids: Array) -> String:
 	var error := content.ship_loadout_error(blueprint_id, module_ids)
 	if error.is_empty():
@@ -1493,47 +1476,6 @@ func cancel_ship_refit(project_id: String) -> bool:
 	transaction.record({"type":"ShipRefitCancelled", "project_id":project_id, "ship_id":runtime.get("ship_id", ""), "consumed_lost":runtime.get("consumed_bom", {}).duplicate(true)})
 	_commit_transaction(transaction)
 	return true
-
-
-func install_ship_module(instance_id: String, module_id: String) -> bool:
-	if not content.modules.has(module_id):
-		return _reject(I18n.t("notice.module_unknown", "Unknown ship module"))
-	var ship := state.ship_by_id(instance_id)
-	if ship.is_empty():
-		return _reject(I18n.t("notice.ship_missing", "Ship instance was not found"))
-	var desired := state.ship_module_definition_ids(ship)
-	desired.append(module_id)
-	return begin_ship_refit(instance_id, desired)
-
-
-func remove_ship_module(instance_id: String, module_id: String) -> bool:
-	var ship := state.ship_by_id(instance_id)
-	if ship.is_empty():
-		return _reject(I18n.t("notice.ship_missing", "Ship instance was not found"))
-	var desired := state.ship_module_definition_ids(ship)
-	var index := desired.find(module_id)
-	if index < 0:
-		return _reject(I18n.t("notice.module_not_installed", "The module is not installed on this ship"))
-	desired.remove_at(index)
-	return begin_ship_refit(instance_id, desired)
-
-
-func replace_ship_module(instance_id: String, old_module_id: String, new_module_id: String) -> bool:
-	if old_module_id == new_module_id:
-		return true
-	if not content.modules.has(new_module_id):
-		return _reject(I18n.t("notice.module_missing", "The module blueprint is unavailable"))
-	var source_ship := state.ship_by_id(instance_id)
-	if source_ship.is_empty():
-		return _reject(I18n.t("notice.ship_missing", "Ship instance was not found"))
-	var candidate: Array = state.ship_module_definition_ids(source_ship)
-	if not old_module_id.is_empty():
-		var old_index := candidate.find(old_module_id)
-		if old_index < 0:
-			return _reject(I18n.t("notice.module_not_installed", "The module is not installed on this ship"))
-		candidate.remove_at(old_index)
-	candidate.append(new_module_id)
-	return begin_ship_refit(instance_id, candidate)
 
 
 func ship_loadout_availability(instance_id: String, desired_module_definitions: Array) -> Dictionary:

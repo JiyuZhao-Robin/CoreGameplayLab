@@ -12,7 +12,8 @@ const UI_PATHS := [
 	"res://src/ui/components/industrial_network_edge_layer.gd",
 	"res://src/ui/components/industrial_network_glyph.gd",
 	"res://src/ui/components/system_map_view.gd",
-	"res://src/ui/components/megastructure_progress_view.gd"
+	"res://src/ui/components/megastructure_progress_view.gd",
+	"res://src/ui/components/ship_assembly_blueprint_editor.gd"
 ]
 const ENGINE_CALLBACKS := ["_ready", "_process", "_draw", "_input", "_unhandled_input", "_gui_input", "_notification"]
 const STATE_MUTATORS := [
@@ -140,14 +141,12 @@ func _guard_atomic_ui_commands(main_source: String) -> void:
 
 
 func _guard_canonical_loadout_candidates(main_source: String) -> void:
-	var body := _function_body(main_source, "_compatible_loadout_modules")
-	if body.is_empty():
-		return
-	_check(body.contains("ship_loadout_valid(") or body.contains("loadout_availability("), "replacement-module buttons must use the canonical complete-loadout validator/availability query")
 	var roster_body := _function_body(main_source, "_build_fleet_roster")
-	_check(roster_body.count("Game.ship_loadout_availability(") >= 4, "apply/replace/install/remove refit surfaces all consume the authoritative loadout availability query")
 	for control_prefix in ["ApplyShipLoadout_", "ReplaceModule_", "InstallModule_", "RemoveModule_"]:
-		_check(control_prefix in roster_body, "%s refit surface remains represented in the roster" % control_prefix)
+		_check(control_prefix not in roster_body, "%s retired direct-adjustment surface is absent" % control_prefix)
+	var handoff_body := _function_body(main_source, "_build_ship_design_library")
+	_check("Game.ship_design_refit_availability" in handoff_body, "blueprint refit handoff consumes the authoritative availability query")
+	_check("Game.begin_ship_design_refit.bind" in handoff_body, "blueprint refit handoff starts through the application-layer command")
 
 
 func _guard_single_guidance_authority(main_source: String) -> void:

@@ -54,7 +54,7 @@ func _spawn_main(scale_value: float) -> Control:
 
 
 func _test_scale_math() -> void:
-	var expected := [1.0, 1.25, 1.5, 1.75, 2.0]
+	var expected := [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 	for index in expected.size():
 		_check(is_equal_approx(UiTokens.sanitize_ui_scale(float(UiTokens.SUPPORTED_UI_SCALES[index])), expected[index]), "supported UI scale %d%% remains stable" % int(expected[index] * 100.0))
 	_check(is_equal_approx(UiTokens.sanitize_ui_scale(125.0), 1.25), "percentage-form UI scale values normalize to factors")
@@ -69,7 +69,7 @@ func _test_default_shell(main: Control) -> void:
 	var system_page := main.find_child("system_map", true, false) as ScrollContainer
 	_check(main.size.y >= 890.0 and tabs != null and tabs.size.y > 0.0 and system_page != null and system_page.size.y > 0.0, "the 1440x900 baseline retains a non-zero central gameplay workspace (root=%s, center=%s, page=%s)" % [main.size, tabs.size if tabs != null else Vector2.ZERO, system_page.size if system_page != null else Vector2.ZERO])
 	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
-	_check(selector != null and selector.item_count == 5, "the global header exposes the five approved UI scale steps")
+	_check(selector != null and selector.item_count == 6, "the global header exposes the six approved UI scale steps")
 	_check(selector != null and selector.get_item_id(selector.selected) == 125, "new installations default to 125% UI scale")
 	_check(main.theme != null and main.theme.default_font_size == 19, "the selected scale reaches the inherited Godot theme")
 	var speed := main.find_child("Speed1", true, false) as Button

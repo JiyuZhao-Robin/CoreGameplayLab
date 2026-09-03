@@ -29,7 +29,7 @@ func _run() -> void:
 		_check(violations.is_empty(), "%s socket layout stays inside its hull without overlap: %s" % [audit_hull_id, ", ".join(violations)])
 		_check(_outline_is_axially_symmetric(ShipHullProfiles.outline_meters(audit_spec), float(audit_spec.get("beam_m", 0.0))), "%s uses an axially symmetric hull outline" % audit_hull_id)
 		audited_hulls += 1
-	_check(audited_hulls == 14, "every constructible hull participates in the projection and socket-layout audit")
+	_check(audited_hulls == Game.content.ship_construction_projects.size(), "every constructible hull participates in the projection and socket-layout audit")
 	var plan_id := "construct_lunar_pathfinder"
 	Game.state.unlocked_ship_plans[plan_id] = true
 	var plan := (Game.content.ship_construction_projects[plan_id] as Dictionary).duplicate(true)

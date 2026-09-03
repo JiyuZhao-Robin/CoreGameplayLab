@@ -49,10 +49,10 @@ func _build_frame() -> void:
 	root.add_child(header_margin)
 	var header := VBoxContainer.new()
 	header.add_theme_constant_override("separation", 3)
-	var header_title := _label("ENGINEERING DATA  /  工程数据", 9, UiTokens.COLOR_FOCUS)
+	var header_title := _label(_localized("ENGINEERING DATA  /  工程数据", "ENGINEERING DATA"), 9, UiTokens.COLOR_FOCUS)
 	header_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	header.add_child(header_title)
-	var subtitle := _label("蓝图、选中对象与船厂交接信息", 8, UiTokens.COLOR_TEXT_MUTED)
+	var subtitle := _label(_localized("蓝图、选中对象与船厂交接信息", "Blueprint, selection, and shipyard handoff data"), 8, UiTokens.COLOR_TEXT_MUTED)
 	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	header.add_child(subtitle)
 	header_margin.add_child(header)
@@ -84,22 +84,22 @@ func _build_footer() -> Control:
 	margin.add_theme_constant_override("margin_bottom", 12)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 6)
-	var name_label := _label("当前设计 / BLUEPRINT", 8, UiTokens.COLOR_TEXT_MUTED)
+	var name_label := _label(_localized("当前设计 / BLUEPRINT", "CURRENT BLUEPRINT"), 8, UiTokens.COLOR_TEXT_MUTED)
 	column.add_child(name_label)
 	_name_edit = LineEdit.new()
 	_name_edit.name = "BlueprintNameEdit"
-	_name_edit.placeholder_text = "巡航护卫方案 A"
+	_name_edit.placeholder_text = _localized("巡航护卫方案 A", "Escort Configuration A")
 	_name_edit.max_length = 48
 	_name_edit.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(9))
 	_name_edit.text_changed.connect(func(value: String): blueprint_name_changed.emit(value))
 	column.add_child(_name_edit)
-	_save_status_label = _label("◇ 等待完整蓝图", 7, UiTokens.COLOR_WARNING)
+	_save_status_label = _label(_localized("◇ 等待完整蓝图", "◇ Awaiting complete blueprint"), 7, UiTokens.COLOR_WARNING)
 	_save_status_label.name = "BlueprintSaveStatus"
 	_save_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(_save_status_label)
 	_save_button = Button.new()
 	_save_button.name = "SaveBlueprintButton"
-	_save_button.text = "保存设定\nSAVE BLUEPRINT"
+	_save_button.text = _localized("保存设定\nSAVE BLUEPRINT", "SAVE BLUEPRINT")
 	_save_button.custom_minimum_size.y = 72.0
 	_save_button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(10))
 	var normal := UiTokens.control_style(Color("17302d"), UiTokens.COLOR_FOCUS.darkened(0.16), 3)
@@ -135,7 +135,7 @@ func _rebuild() -> void:
 		var allowed := bool(validation.get("allowed", false))
 		_save_button.disabled = not allowed
 		_save_button.tooltip_text = str(validation.get("reason", ""))
-		_save_status_label.text = "● 蓝图已就绪，可保存" if allowed else "◇ %s" % _validation_reason_text(str(validation.get("reason_code", "")), str(validation.get("reason", "蓝图尚未完成")))
+		_save_status_label.text = _localized("● 蓝图已就绪，可保存", "● Blueprint ready to save") if allowed else "◇ %s" % _validation_reason_text(str(validation.get("reason_code", "")), str(validation.get("reason", _localized("蓝图尚未完成", "Blueprint is incomplete"))))
 		_save_status_label.add_theme_color_override("font_color", UiTokens.COLOR_RUNNING if allowed else UiTokens.COLOR_WARNING)
 
 
@@ -143,54 +143,54 @@ func _build_blueprint_overview() -> void:
 	var summary := _context.get("summary", {}) as Dictionary
 	var validation := _context.get("validation", {}) as Dictionary
 	var hull := _context.get("hull", {}) as Dictionary
-	var status_section := _section("蓝图状态  /  BLUEPRINT STATUS")
+	var status_section := _section(_localized("蓝图状态  /  BLUEPRINT STATUS", "BLUEPRINT STATUS"))
 	var allowed := bool(validation.get("allowed", false))
-	status_section.add_child(_status_row("蓝图有效" if allowed else "蓝图未完成", allowed, str(validation.get("reason", "等待放置舰体"))))
+	status_section.add_child(_status_row(_localized("蓝图有效", "Blueprint valid") if allowed else _localized("蓝图未完成", "Blueprint incomplete"), allowed, str(validation.get("reason", _localized("等待放置舰体", "Awaiting hull placement")))))
 	_content.add_child(status_section)
 	var engineering := summary.get("engineering", {}) as Dictionary
 	var connection_overview := summary.get("connection_overview", {}) as Dictionary
 	var usage := connection_overview.get("usage", {}) as Dictionary
 	var capacity := connection_overview.get("capacity", {}) as Dictionary
-	var connections := _section("连接概览  /  CONNECTION OVERVIEW")
+	var connections := _section(_localized("连接概览  /  CONNECTION OVERVIEW", "CONNECTION OVERVIEW"))
 	for slot in ["weapon", "drive", "structure", "core", "utility"]:
 		if int(capacity.get(slot, 0)) <= 0:
 			continue
 		connections.add_child(_value_row(_slot_label(slot), "%d / %d" % [int(usage.get(slot, 0)), int(capacity.get(slot, 0))], _slot_tone(slot)))
 	_content.add_child(connections)
-	var blueprint := _section("蓝图摘要  /  BLUEPRINT SUMMARY")
-	blueprint.add_child(_value_row("舰体", I18n.content(hull) if not hull.is_empty() else "—"))
-	blueprint.add_child(_value_row("模块数量", str(int(summary.get("module_count", 0)))))
-	blueprint.add_child(_value_row("已连接", "%d / %d" % [int(summary.get("connected_count", 0)), int(summary.get("module_count", 0))]))
+	var blueprint := _section(_localized("蓝图摘要  /  BLUEPRINT SUMMARY", "BLUEPRINT SUMMARY"))
+	blueprint.add_child(_value_row(_localized("舰体", "Hull"), I18n.content(hull) if not hull.is_empty() else "—"))
+	blueprint.add_child(_value_row(_localized("模块数量", "Modules"), str(int(summary.get("module_count", 0)))))
+	blueprint.add_child(_value_row(_localized("已连接", "Connected"), "%d / %d" % [int(summary.get("connected_count", 0)), int(summary.get("module_count", 0))]))
 	var totals := engineering.get("totals", {}) as Dictionary
-	blueprint.add_child(_value_row("总质量", "%.1f t" % float(totals.get("mass", 0.0))))
-	blueprint.add_child(_value_row("功率需求", "%.1f MW" % float(totals.get("power", 0.0))))
-	blueprint.add_child(_value_row("热负载", "%.1f TU" % float(totals.get("thermal", 0.0))))
+	blueprint.add_child(_value_row(_localized("总质量", "Total Mass"), "%.1f t" % float(totals.get("mass", 0.0))))
+	blueprint.add_child(_value_row(_localized("功率需求", "Power Demand"), "%.1f MW" % float(totals.get("power", 0.0))))
+	blueprint.add_child(_value_row(_localized("热负载", "Heat Load"), "%.1f TU" % float(totals.get("thermal", 0.0))))
 	_content.add_child(blueprint)
 	var capacities := engineering.get("capacities", {}) as Dictionary
 	if not capacities.is_empty():
-		var stats := _section("舰船数据  /  SHIP STATS")
+		var stats := _section(_localized("舰船数据  /  SHIP STATS", "SHIP STATS"))
 		stats.add_child(_capacity_row("MASS", float(totals.get("mass", 0.0)), float(capacities.get("mass", 0.0)), UiTokens.COLOR_INFORMATION))
 		stats.add_child(_capacity_row("POWER", float(totals.get("power", 0.0)), float(capacities.get("power", 0.0)), UiTokens.COLOR_WARNING))
 		stats.add_child(_capacity_row("HEAT", float(totals.get("thermal", 0.0)), float(capacities.get("thermal", 0.0)), UiTokens.COLOR_CRITICAL))
 		_content.add_child(stats)
 	if not summary.is_empty():
-		var estimate := _section("建造估算  /  BUILD ESTIMATE")
+		var estimate := _section(_localized("建造估算  /  BUILD ESTIMATE", "BUILD ESTIMATE"))
 		estimate.add_child(_detail_block("Build Materials", _cost_text(summary.get("construction_costs", {}) as Dictionary)))
 		estimate.add_child(_value_row("Build Time", _time_text(float(summary.get("estimated_build_time_ms", 0.0)))))
 		estimate.add_child(_detail_block("Refit Materials", _cost_text(summary.get("refit_costs", {}) as Dictionary)))
 		estimate.add_child(_value_row("Refit Time", _time_text(float(summary.get("estimated_refit_time_ms", 0.0)))))
 		_content.add_child(estimate)
-		var requirements := _section("需求与兼容性  /  REQUIREMENTS")
+		var requirements := _section(_localized("需求与兼容性  /  REQUIREMENTS", "REQUIREMENTS & COMPATIBILITY"))
 		var handoff_mode := str(summary.get("handoff_mode", "BUILD_HULL"))
 		var matching_count := (summary.get("matching_refit_ship_ids", []) as Array).size()
 		var plan_unlocked := bool(summary.get("plan_unlocked", false))
-		var handoff_text := "舰体方案尚未解锁；蓝图仍可保存、载入和继续编辑，解锁后才能提交船厂。"
+		var handoff_text := _localized("舰体方案尚未解锁；蓝图仍可保存、载入和继续编辑，解锁后才能提交船厂。", "Hull plan locked. The blueprint can still be saved and edited, but cannot enter the shipyard yet.")
 		if plan_unlocked:
-			handoff_text = "发现 %d 艘可用同型舰体；保存后可由船厂创建改装订单。" % matching_count if handoff_mode == "REFIT" else "当前无可用同型舰体；保存后需先建造舰体，再按蓝图装配。"
+			handoff_text = (_localized("发现 %d 艘可用同型舰体；保存后可由船厂创建改装订单。", "%d matching physical hulls are available for a shipyard refit order.") % matching_count) if handoff_mode == "REFIT" else _localized("当前无可用同型舰体；保存后需先建造舰体，再按蓝图装配。", "No matching hull is available. Build the hull first, then assemble this blueprint.")
 		var handoff := _label(handoff_text, 8, UiTokens.COLOR_TEXT_SECONDARY)
 		handoff.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		requirements.add_child(handoff)
-		var semantic := _label("保存仅记录设计意图，不消耗材料，也不会立即修改任何实体舰船。", 8, UiTokens.COLOR_TEXT_MUTED)
+		var semantic := _label(_localized("保存仅记录设计意图，不消耗材料，也不会立即修改任何实体舰船。", "Saving records design intent only; it consumes no materials and does not modify a physical ship."), 8, UiTokens.COLOR_TEXT_MUTED)
 		semantic.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		requirements.add_child(semantic)
 		_content.add_child(requirements)
@@ -205,7 +205,7 @@ func _build_module_inspector(module_id: String) -> void:
 	var mount_role := Game.ship_module_mount_role(module_id)
 	var size_id := str(module.get("size", "S"))
 	var tier := int({"S":1, "M":2, "L":3, "XL":4, "XXL":5}.get(size_id, 1))
-	_content.add_child(_view_heading("零件检视  /  MODULE INSPECTOR", "返回蓝图摘要", show_blueprint_summary))
+	_content.add_child(_view_heading(_localized("零件检视  /  MODULE INSPECTOR", "MODULE INSPECTOR"), _localized("返回蓝图摘要", "Back to summary"), show_blueprint_summary))
 	var inspector := ShipModuleInspectorScript.new()
 	inspector.name = "AssemblyModuleInspector"
 	inspector.configure(module, {
@@ -227,7 +227,7 @@ func _build_hull_inspector(hull_id: String) -> void:
 	if hull.is_empty():
 		_build_blueprint_overview()
 		return
-	_content.add_child(_view_heading("舰体检视  /  HULL INSPECTOR", "返回蓝图摘要", show_blueprint_summary))
+	_content.add_child(_view_heading(_localized("舰体检视  /  HULL INSPECTOR", "HULL INSPECTOR"), _localized("返回蓝图摘要", "Back to summary"), show_blueprint_summary))
 	var art_frame := PanelContainer.new()
 	art_frame.custom_minimum_size.y = 150.0
 	art_frame.add_theme_stylebox_override("panel", UiTokens.panel_style(Color("07100f"), Color(UiTokens.COLOR_FOCUS, 0.32), 3))
@@ -246,7 +246,7 @@ func _build_hull_inspector(hull_id: String) -> void:
 	identity.add_child(_value_row("Sockets", str(int(hull.get("module_slots", 0)))))
 	_content.add_child(identity)
 	var base_stats := hull.get("base_stats", {}) as Dictionary
-	var stats := _section("基础工程能力  /  BASELINE")
+	var stats := _section(_localized("基础工程能力  /  BASELINE", "BASELINE ENGINEERING"))
 	for stat in [["Mass Capacity", "mass_capacity", "t"], ["Power Capacity", "power_capacity", "MW"], ["Heat Capacity", "thermal_capacity", "TU"], ["Hull Integrity", "hull", ""], ["Cargo", "cargo_capacity", "SCU"]]:
 		var key := str(stat[1])
 		var value: Variant = hull.get(key, base_stats.get(key, 0.0))
@@ -349,7 +349,9 @@ func _time_text(milliseconds: float) -> String:
 
 
 func _slot_label(slot: String) -> String:
-	return {"weapon":"武器", "drive":"推进", "shield":"防御", "structure":"通用结构", "core":"核心", "utility":"功能", "logistics":"结构"}.get(slot, slot.to_upper())
+	var chinese := {"weapon":"武器", "drive":"推进", "shield":"防御", "structure":"通用结构", "core":"核心", "utility":"功能", "logistics":"结构"}
+	var english := {"weapon":"Weapon", "drive":"Propulsion", "shield":"Defense", "structure":"Structure", "core":"Core", "utility":"Utility", "logistics":"Logistics"}
+	return (chinese if I18n.is_chinese() else english).get(slot, slot.to_upper())
 
 
 func _slot_tone(slot: String) -> Color:
@@ -361,7 +363,7 @@ func _number_text(value: float) -> String:
 
 
 func _validation_reason_text(reason_code: String, fallback: String) -> String:
-	return {
+	var chinese := {
 		"PLAN_LOCKED":"舰体方案尚未解锁",
 		"HULL_INVALID":"请准确放置一艘当前方案舰体",
 		"MODULE_UNCONNECTED":"每个已放置零件都必须连接到匹配插槽",
@@ -369,7 +371,21 @@ func _validation_reason_text(reason_code: String, fallback: String) -> String:
 		"SOCKET_MISMATCH":"零件接口与舰体插槽不兼容",
 		"SOCKET_SIZE_MISMATCH":"零件尺寸超过插槽等级",
 		"FITTING_INVALID":"质量、功率或热量超出舰体工程限制"
-	}.get(reason_code, fallback)
+	}
+	var english := {
+		"PLAN_LOCKED":"Hull plan is locked",
+		"HULL_INVALID":"Place exactly one hull matching this plan",
+		"MODULE_UNCONNECTED":"Every module must connect to a compatible socket",
+		"CORE_REQUIRED":"Install and connect an energy core",
+		"SOCKET_MISMATCH":"Module interface is incompatible with the hull socket",
+		"SOCKET_SIZE_MISMATCH":"Module exceeds the socket size rating",
+		"FITTING_INVALID":"Mass, power, or heat exceeds hull limits"
+	}
+	return (chinese if I18n.is_chinese() else english).get(reason_code, fallback)
+
+
+func _localized(chinese: String, english: String) -> String:
+	return chinese if I18n.is_chinese() else english
 
 
 func _clear_children(parent: Node) -> void:

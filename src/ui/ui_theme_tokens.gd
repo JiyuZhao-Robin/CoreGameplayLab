@@ -68,7 +68,7 @@ const NETWORK_GRID_MAJOR_EVERY := 5
 # interactive graph/canvas zoom. Fonts follow the selected scale directly;
 # shell geometry uses a moderated scale so the 1440x900 minimum layout remains
 # operable while larger windows gain a more readable desktop UI.
-const SUPPORTED_UI_SCALES := [1.0, 1.25, 1.5, 1.75, 2.0]
+const SUPPORTED_UI_SCALES := [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 const DEFAULT_UI_SCALE := 1.25
 const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"
 const SHIP_ASSEMBLY_FONT_MULTIPLIER := 1.5
@@ -146,10 +146,9 @@ static func control_style(background: Color, border: Color, radius := 4) -> Styl
 
 
 static func build_theme(scale_value: float = DEFAULT_UI_SCALE, exact_scale := false) -> Theme:
-	# Production shell preferences snap to the supported global steps. Focused
-	# presentation surfaces such as the Ship Assembly Demo may request an exact
-	# native scale that also includes the current output-resolution ratio. This
-	# changes font rasterization size; it never stretches an already rendered UI.
+	# Production shell preferences snap to the supported manual steps. Focused
+	# presentation surfaces may request an exact player-selected native scale.
+	# Resolution never changes this value; fonts are rerasterized, not stretched.
 	if exact_scale:
 		_ui_scale = clampf(scale_value, 0.5, 4.0)
 	else:

@@ -9,33 +9,34 @@ func _ready() -> void:
 	var ship: Dictionary = Game.state.ships[0]
 	var ship_id := str(ship.get("instance_id", ""))
 	_check(str(ship.get("blueprint_id", "")) == "patchwork_prospector", "new game starts with the mining-first prospector")
-	_check(Game.state.ship_module_definition_ids(ship).has("mining_laser"), "starter ship already carries its mining Component Design")
+	_check(Game.state.ship_module_definition_ids(ship).has("light_autocannon"), "starter ship already carries its baseline combat Component Design")
 	_check(Game.state.item_quantity("scrap_metal") == 12 and Game.state.item_quantity("electronics") == 16 and Game.state.item_quantity("data_core") == 2, "founding stockpile covers the finite bootstrap requirements")
-	_check(Game.save_ship_loadout(ship_id, "Prospector Mining") and Game.save_ship_loadout(ship_id, "Prospector Escort"), "one Hull can save multiple named Loadouts")
-	_check(Game.state.saved_loadouts.size() == 2 and Game.state.saved_loadouts.keys()[0] != Game.state.saved_loadouts.keys()[1], "saved Loadouts have independent persistent identities")
-	var selected_loadout_id := str(Game.state.saved_loadouts.keys()[0])
-	var initial_loadout: Array = Game.state.saved_loadouts[selected_loadout_id].get("modules", [])
+	var selected_loadout_id := _save_starter_blueprint("Prospector Patrol")
+	var second_design_id := _save_starter_blueprint("Prospector Escort")
+	_check(not selected_loadout_id.is_empty() and not second_design_id.is_empty(), "one Hull can save multiple named blueprints")
+	_check(Game.state.ship_designs.size() == 2 and selected_loadout_id != second_design_id, "saved blueprints have independent persistent identities")
+	var initial_loadout: Array = Game.state.ship_designs[selected_loadout_id].get("modules", [])
 	var initial_loadout_bom: Dictionary = Game.simulation.loadout_fabrication_costs(initial_loadout)
 	_check(not initial_loadout_bom.is_empty(), "starter Loadout has a physical fabrication BOM")
 	var shortage_item_id := str(initial_loadout_bom.keys()[0])
 	var temporarily_removed := Game.state.item_quantity(shortage_item_id)
 	if temporarily_removed > 0:
 		Game.state.remove_item(shortage_item_id, temporarily_removed)
-	var initial_availability := Game.ship_loadout_availability(ship_id, initial_loadout)
-	_check(not bool(initial_availability.get("allowed", true)) and str(initial_availability.get("reason_code", "")) == "FABRICATION_INPUT_SHORTAGE", "Loadout availability rejects the same missing full-BOM resources as the refit transaction")
+	var initial_availability := Game.ship_design_refit_availability(selected_loadout_id, ship_id)
+	_check(not bool(initial_availability.get("allowed", true)) and str(initial_availability.get("reason_code", "")) == "FABRICATION_INPUT_SHORTAGE", "blueprint refit availability rejects the same missing full-BOM resources as the refit transaction")
 	if temporarily_removed > 0:
 		Game.state.add_item(shortage_item_id, temporarily_removed)
 	for item_id_value in initial_loadout_bom.keys():
 		Game.state.add_item(str(item_id_value), int(initial_loadout_bom[item_id_value]))
-	_check(bool(Game.ship_loadout_availability(ship_id, initial_loadout).get("allowed", false)), "Loadout availability becomes ready once every full-BOM input is physically available")
-	_check(Game.apply_ship_loadout(ship_id, selected_loadout_id), "a named Loadout commits a real fabrication-and-installation refit")
+	_check(bool(Game.ship_design_refit_availability(selected_loadout_id, ship_id).get("allowed", false)), "blueprint refit availability becomes ready once every full-BOM input is physically available")
+	_check(Game.begin_ship_design_refit(selected_loadout_id, ship_id), "a named blueprint commits a real fabrication-and-installation refit")
 	_check(Game.state.refit_projects[0].get("consumed_bom", {}) == initial_loadout_bom and Game.state.ship_by_id(ship_id).get("modules", []).is_empty(), "applying even the current configuration consumes its complete ordinary-plugin BOM and dismantles the old configuration")
 	Game.simulation.advance(Game.state, 1000000.0)
 	_check(str(Game.state.ship_by_id(ship_id).get("current_loadout_id", "")) == selected_loadout_id, "Ship Entity persists its Current Loadout after refit completion")
 	_check(Game.state.ship_by_id(ship_id).has("commissioned_at_ms"), "Ship Entity persists its Commission Date")
 	Game.state.completed_activities["assemble_frame"] = 1
 	var refit_desired: Array = Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id))
-	refit_desired[refit_desired.find("mining_laser")] = "cargo_expansion"
+	refit_desired[refit_desired.find("civilian_shield")] = "cargo_expansion"
 	var refit_bom: Dictionary = Game.simulation.loadout_fabrication_costs(refit_desired)
 	for item_id_value in refit_bom.keys():
 		Game.state.add_item(str(item_id_value), int(refit_bom[item_id_value]))
@@ -44,7 +45,7 @@ func _ready() -> void:
 	_check(Game.begin_ship_refit(ship_id, refit_desired), "a refit fabricates the selected complete Loadout without requiring module inventory")
 	var refit_project_id := str(Game.state.refit_projects[0].get("project_id", ""))
 	_check(Game.cancel_ship_refit(refit_project_id), "a running refit can be cancelled through the shared Game transaction")
-	_check(Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)).has("mining_laser") and Game.state.item_quantity(tracked_item) == tracked_before - int(refit_bom[tracked_item]) and Game.state.item_quantity("cargo_expansion") == 0, "refit cancellation restores the original Loadout without refunding committed materials or creating plugin stock")
+	_check(Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)).has("light_autocannon") and Game.state.item_quantity(tracked_item) == tracked_before - int(refit_bom[tracked_item]) and Game.state.item_quantity("cargo_expansion") == 0, "refit cancellation restores the original Loadout without refunding committed materials or creating plugin stock")
 
 	var plan_id := "construct_lunar_pathfinder"
 	var plan: Dictionary = Game.content.ship_construction_projects[plan_id]
@@ -94,6 +95,24 @@ func _ready() -> void:
 		for failure in failures:
 			push_error(failure)
 		get_tree().quit(1)
+
+
+func _save_starter_blueprint(display_name: String) -> String:
+	var nodes: Array = [{"node_id":"ship_design_hull", "kind":"hull", "definition_id":"patchwork_prospector", "position":{"x":600.0, "y":260.0}}]
+	var fittings := [
+		["light_autocannon", "socket_weapon_0"],
+		["civilian_shield", "socket_shield_0"],
+		["basic_drive", "socket_drive_0"],
+		["civilian_reactor_core", "socket_core_0"]
+	]
+	var connections: Array = []
+	for index in fittings.size():
+		var node_id := "ship_design_module_%04d" % (index + 1)
+		nodes.append({"node_id":node_id, "kind":"module", "definition_id":str(fittings[index][0]), "position":{"x":80.0 + float(index % 2) * 300.0, "y":80.0 + float(index / 2) * 140.0}})
+		connections.append({"module_node_id":node_id, "socket_id":str(fittings[index][1])})
+	if not Game.save_ship_design("", display_name, "construct_patchwork_prospector", nodes, connections):
+		return ""
+	return Game.last_saved_ship_design_id
 
 
 func _check(condition: bool, message: String) -> void:

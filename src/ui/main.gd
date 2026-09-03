@@ -7,10 +7,7 @@ const UiNavigationStateScript = preload("res://src/ui/ui_navigation_state.gd")
 const IndustrialNetworkProjectionScript = preload("res://src/ui/view_models/industrial_network_projection.gd")
 const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_network_view.gd")
 const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
-const ShipAssemblyMapViewScript = preload("res://src/ui/components/ship_assembly_map_view.gd")
-const ShipAssemblyPaletteItemScript = preload("res://src/ui/components/ship_assembly_palette_item.gd")
-const ShipModuleInspectorScript = preload("res://src/ui/components/ship_module_inspector.gd")
-const ShipHullProfiles = preload("res://src/ui/components/ship_hull_profiles.gd")
+const ShipAssemblyBlueprintEditorScript = preload("res://src/ui/components/ship_assembly_blueprint_editor.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
 const COLOR_BG := UiTokens.COLOR_CANVAS
@@ -78,12 +75,7 @@ var _industrial_network_projection: IndustrialNetworkProjection
 var _industrial_network_preferences: Dictionary = {}
 var _selected_industrial_network_node: Dictionary = {}
 var _selected_research_project_id := ""
-var _selected_shipyard_plan_id := ""
-var _selected_shipyard_entity := {"kind":"hull", "id":""}
-var _selected_ship_design_id := ""
-var _ship_assembly_draft: Dictionary = {}
-var _ship_assembly_view: ShipAssemblyMapView
-var _ship_design_name_input: LineEdit
+var _ship_blueprint_editor: ShipAssemblyBlueprintEditor
 var _reduced_motion := false
 var _ui_scale := UiTokens.DEFAULT_UI_SCALE
 var _ui_scale_selector: OptionButton
@@ -297,6 +289,7 @@ func _switch_page(key: String, record_history: bool = true) -> void:
 		return
 	_tabs.current_tab = page.get_index()
 	_active_page_key = _ui_state.active_workspace
+	_sync_blueprint_workspace_chrome()
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
 	_update_navigation_state()
@@ -643,10 +636,6 @@ func _rebuild_sidebar() -> void:
 		_build_research_project_inspector(box, _selected_research_project_id)
 		_build_sidebar_footer(box)
 		return
-	if _active_page_key == "fleet" and _fleet_section == "shipyard":
-		_build_shipyard_inspector(box, _ship_assembly_draft, _selected_shipyard_entity)
-		_build_sidebar_footer(box)
-		return
 	_ui_state.select_context("location", _selected_location_id)
 	if not selected.is_empty():
 		var power: Dictionary = selected.get("power", {})
@@ -701,68 +690,6 @@ func _build_research_project_inspector(box: VBoxContainer, project_id: String) -
 	var close := _button(I18n.core("research.inspector.close", "Close project inspector"), _clear_research_project_selection, false, COLOR_MUTED)
 	close.name = "ResearchInspectorClose"
 	box.add_child(close)
-
-
-func _build_shipyard_inspector(box: VBoxContainer, draft: Dictionary, entity: Dictionary) -> void:
-	box.add_child(_label(I18n.core("ships.shipyard.inspector_title", "SHIP DESIGN INSPECTOR"), 10, COLOR_MUTED))
-	var plan_id := String(draft.get("plan_id", ""))
-	var plan := Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary
-	if plan.is_empty():
-		box.add_child(_label(I18n.core("ships.shipyard.blank_title", "Blank assembly canvas"), 18, COLOR_TEXT))
-		box.add_child(_label(I18n.core("ships.shipyard.blank_help", "Drag an unlocked hull from the Ship tab onto the canvas. Then drag parts and connect each color-coded interface yourself."), 12, COLOR_TEXT_SECONDARY))
-		box.add_child(_separator())
-		box.add_child(_ship_port_color_legend())
-		return
-	var hull_id := String(plan.get("ship_id", ""))
-	var hull := Game.content.ships.get(hull_id, {}) as Dictionary
-	box.add_child(_label(_content_name(plan, plan_id), 18, COLOR_TEXT))
-	box.add_child(_label(I18n.core("ships.shipyard.canvas_hull") % [_content_name(hull, hull_id), String(hull.get("class", "Ship"))], 12, COLOR_TEXT_SECONDARY))
-	box.add_child(_label(I18n.core("ships.shipyard.canvas_hull_metrics") % [int(hull.get("module_slots", 0)), int(hull.get("cargo_capacity", 0)), int(hull.get("command_cost", 0))], 12, COLOR_TEXT_SECONDARY))
-	var validation := Game.ship_design_validation(plan_id, draft.get("nodes", []), draft.get("connections", []))
-	box.add_child(_label(String(validation.get("reason", "")), 12, COLOR_GOOD if bool(validation.get("allowed", false)) else COLOR_WARN))
-	box.add_child(_separator())
-	var kind := String(entity.get("kind", "hull"))
-	var entity_id := String(entity.get("id", hull_id))
-	if kind == "module":
-		var module := Game.content.modules.get(entity_id, {}) as Dictionary
-		var slot := String(module.get("slot", "utility"))
-		var tier := ShipHullProfiles.size_tier(String(module.get("size", "S")))
-		var diameter_m := ShipHullProfiles.socket_diameter_m(String(module.get("size", "S")))
-		var installed := false
-		for node_value in draft.get("nodes", []):
-			var module_node := node_value as Dictionary
-			if String(module_node.get("kind", "")) != "module" or String(module_node.get("definition_id", "")) != entity_id:
-				continue
-			var module_node_id := String(module_node.get("node_id", ""))
-			for connection_value in draft.get("connections", []):
-				if String((connection_value as Dictionary).get("module_node_id", "")) == module_node_id:
-					installed = true
-					break
-			if installed:
-				break
-		var inspector := ShipModuleInspectorScript.new()
-		inspector.name = "ShipModuleInspector"
-		inspector.configure(module, {
-			"display_name":_content_name(module, entity_id),
-			"family_label":I18n.core("ships.shipyard.slot.%s" % slot),
-			"tier_label":"T%d" % tier,
-			"diameter_label":"Ø%.0fm" % diameter_m,
-			"mount_role":Game.ship_module_mount_role(entity_id),
-			"installation_state":"INSTALLED" if installed else "AVAILABLE",
-			"art_path":ShipAssemblyMapViewScript.module_icon_path(module),
-			"tone":_ship_module_slot_tone(slot, Game.ship_module_mount_role(entity_id)),
-			"description":_project_summary(module)
-		})
-		box.add_child(inspector)
-	else:
-		box.add_child(_label(I18n.core("ships.shipyard.inspector_hull"), 10, COLOR_MUTED))
-		box.add_child(_label(_project_summary(plan), 12, COLOR_TEXT_SECONDARY))
-	box.add_child(_separator())
-	box.add_child(_label(I18n.core("ships.shipyard.inspector_bom"), 10, COLOR_MUTED))
-	var effective_plan := plan.duplicate(true)
-	if bool(validation.get("allowed", false)):
-		effective_plan["starting_modules"] = validation.get("modules", []).duplicate()
-	box.add_child(_label(_resource_dictionary(Game.simulation.ship_construction_material_totals(effective_plan)), 11, COLOR_TEXT_SECONDARY))
 
 
 func _clear_research_project_selection() -> void:
@@ -1724,24 +1651,27 @@ func _capture_requested_view() -> void:
 
 
 func _build_capture_ship_design(plan_id: String) -> void:
-	if not is_instance_valid(_ship_assembly_view):
+	if not is_instance_valid(_ship_blueprint_editor):
+		return
+	var assembly_view := _ship_blueprint_editor.assembly_view()
+	if not is_instance_valid(assembly_view):
 		return
 	var plan := Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary
 	var hull_id := String(plan.get("ship_id", ""))
 	var hull := Game.content.ships.get(hull_id, {}) as Dictionary
 	if plan.is_empty() or hull.is_empty():
 		return
-	_ship_assembly_view.clear_draft(false)
-	_ship_assembly_view.call("_drop_data", Vector2(690.0, 300.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id})
+	assembly_view.clear_draft(false)
+	assembly_view.call("_drop_data", Vector2(690.0, 300.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id})
 	var slot_counts := {}
 	for module_index in plan.get("starting_modules", []).size():
 		var module_id := String(plan.get("starting_modules", [])[module_index])
 		var slot := String(Game.content.modules.get(module_id, {}).get("slot", "utility"))
 		var slot_index := int(slot_counts.get(slot, 0))
 		slot_counts[slot] = slot_index + 1
-		_ship_assembly_view.call("_drop_data", Vector2(90.0 + float(module_index % 2) * 290.0, 80.0 + float(module_index / 2) * 135.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":module_id})
-		_ship_assembly_view.request_module_connection("ship_design_module_%04d" % (module_index + 1), "socket_%s_%d" % [slot, slot_index])
-	_ship_assembly_view.fit_design()
+		assembly_view.call("_drop_data", Vector2(90.0 + float(module_index % 2) * 290.0, 80.0 + float(module_index / 2) * 135.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":module_id})
+		assembly_view.request_module_connection("ship_design_module_%04d" % (module_index + 1), "socket_%s_%d" % [slot, slot_index])
+	assembly_view.fit_design()
 
 
 func _rebuild_frontier() -> void:
@@ -2966,6 +2896,11 @@ func _research_blocker_guidance(blocker: Dictionary) -> String:
 func _rebuild_fleet() -> void:
 	var box: VBoxContainer = _pages["fleet"]
 	_clear(box)
+	if _fleet_section == "shipyard":
+		box.add_child(_build_fleet_section_tabs())
+		_build_fleet_shipyard(box)
+		_sync_blueprint_workspace_chrome()
+		return
 	box.add_child(_page_title(I18n.core("ships.title"), I18n.core("ships.subtitle")))
 	_add_unlock_banner(box, "fleet")
 	_ensure_selected_formation()
@@ -3002,6 +2937,17 @@ func _rebuild_fleet() -> void:
 	summary.add_child(_stat_card(I18n.core("ships.stat.expedition_command"), I18n.core("common.ratio") % [command_used, command_capacity], COLOR_ACCENT))
 	box.add_child(summary)
 
+	box.add_child(_build_fleet_section_tabs())
+	match _fleet_section:
+		"readiness":
+			_build_fleet_readiness(box)
+		"archive":
+			_build_fleet_archive(box)
+		_:
+			_build_fleet_roster(box)
+
+
+func _build_fleet_section_tabs() -> Control:
 	var section_tabs := HFlowContainer.new()
 	section_tabs.add_theme_constant_override("h_separation", 6)
 	section_tabs.add_theme_constant_override("v_separation", 6)
@@ -3013,22 +2959,19 @@ func _rebuild_fleet() -> void:
 	var missions_button := _button(I18n.core("ships.missions", "Missions"), _switch_page.bind("expedition"), false, COLOR_ACCENT)
 	missions_button.name = "ShipsMissions"
 	section_tabs.add_child(missions_button)
-	box.add_child(section_tabs)
-	match _fleet_section:
-		"readiness":
-			_build_fleet_readiness(box)
-		"shipyard":
-			_build_fleet_shipyard(box)
-		"archive":
-			_build_fleet_archive(box)
-		_:
-			_build_fleet_roster(box)
+	return section_tabs
 
 
 func _select_fleet_section(section: String) -> void:
 	_fleet_section = section
+	_sync_blueprint_workspace_chrome()
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
+
+
+func _sync_blueprint_workspace_chrome() -> void:
+	if is_instance_valid(_shell):
+		_shell.set_blueprint_workspace(_active_page_key == "fleet" and _fleet_section == "shipyard")
 
 
 func _ensure_selected_formation() -> void:
@@ -3190,91 +3133,9 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 			zone_button.name = "ShipCombatZone_%s_%s" % [ship_id, zone]
 			zone_row.add_child(zone_button)
 		card.add_child(zone_row)
-		var save_loadout_button := _button(I18n.core("ships.action.save_configuration"), _command.bind(I18n.core("command.ships.save_configuration"), Game.save_ship_loadout.bind(ship_id)), String(ship.get("status", "DOCKED")) != "DOCKED", COLOR_GOOD)
-		save_loadout_button.name = "SaveShipLoadout_%s" % ship_id
-		card.add_child(save_loadout_button)
-		var matching_loadouts: Array = Game.state.saved_loadouts.values().filter(func(loadout): return String(loadout.get("blueprint_id", "")) == String(ship.get("blueprint_id", "")))
-		matching_loadouts.sort_custom(func(a, b): return String(a.get("name", a.get("id", ""))) < String(b.get("name", b.get("id", ""))))
-		if not matching_loadouts.is_empty():
-			card.add_child(_label(I18n.core("ships.saved_configuration"), 14, COLOR_ACCENT))
-		for loadout_value in matching_loadouts:
-			var loadout := loadout_value as Dictionary
-			var loadout_id := String(loadout.get("id", ""))
-			var loadout_modules: Array = loadout.get("modules", []).duplicate()
-			var loadout_availability: Dictionary = Game.ship_loadout_availability(ship_id, loadout_modules)
-			var loadout_row := HFlowContainer.new()
-			loadout_row.add_theme_constant_override("h_separation", 6)
-			loadout_row.add_theme_constant_override("v_separation", 6)
-			loadout_row.add_child(_label(String(loadout.get("name", loadout_id)), 13, COLOR_MUTED))
-			var apply_loadout_button := _button(I18n.core("common.apply"), _command.bind(I18n.core("command.ships.apply_configuration"), Game.apply_ship_loadout.bind(ship_id, loadout_id)), not bool(loadout_availability.get("allowed", false)))
-			apply_loadout_button.name = "ApplyShipLoadout_%s_%s" % [ship_id, loadout_id]
-			if apply_loadout_button.disabled:
-				apply_loadout_button.tooltip_text = String(loadout_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-			loadout_row.add_child(apply_loadout_button)
-			var delete_loadout_button := _button(I18n.core("ships.action.delete"), _command.bind(I18n.core("command.ships.delete_configuration"), Game.delete_ship_loadout.bind(loadout_id)), false, COLOR_WARN)
-			delete_loadout_button.name = "DeleteShipLoadout_%s" % loadout_id
-			loadout_row.add_child(delete_loadout_button)
-			card.add_child(loadout_row)
-
-		var module_choices := _compatible_loadout_modules(ship)
-		if not module_choices.is_empty():
-			card.add_child(_label(I18n.core("ships.roster.available_loadouts"), 14, COLOR_ACCENT))
-			for choice_value in module_choices:
-				var choice := choice_value as Dictionary
-				var new_id := String(choice.get("new_id", ""))
-				var old_id := String(choice.get("old_id", ""))
-				var module_def := Game.content.modules.get(new_id, {}) as Dictionary
-				var old_def := Game.content.modules.get(old_id, {}) as Dictionary
-				var button_text := I18n.core("ships.action.replace_module") % [_content_name(old_def, old_id), _content_name(module_def, new_id)]
-				var replacement_modules: Array = Game.state.ship_module_definition_ids(ship).duplicate()
-				var replacement_index := replacement_modules.find(old_id)
-				if replacement_index >= 0:
-					replacement_modules[replacement_index] = new_id
-				var replacement_availability: Dictionary = Game.ship_loadout_availability(ship_id, replacement_modules)
-				var replace_button := _button(button_text, _command.bind(I18n.core("command.ships.start_refit"), Game.replace_ship_module.bind(ship_id, old_id, new_id)), not bool(replacement_availability.get("allowed", false)))
-				replace_button.name = "ReplaceModule_%s_%s_%s" % [ship_id, old_id, new_id]
-				if replace_button.disabled:
-					replace_button.tooltip_text = String(replacement_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-				card.add_child(replace_button)
-		var install_choices := _installable_loadout_modules(ship)
-		if not install_choices.is_empty():
-			card.add_child(_label(I18n.core("ships.install_module", "Install into an empty slot"), 14, COLOR_ACCENT))
-			for module_id_value in install_choices:
-				var module_id := String(module_id_value)
-				var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
-				var desired_modules: Array = Game.state.ship_module_definition_ids(ship).duplicate()
-				desired_modules.append(module_id)
-				var availability: Dictionary = Game.ship_loadout_availability(ship_id, desired_modules)
-				var install_button := _button(
-					I18n.core("ships.install_module_action", "Install %s") % _content_name(module_definition, module_id),
-					_command.bind(I18n.core("command.ships.install_module"), Game.install_ship_module.bind(ship_id, module_id)),
-					not bool(availability.get("allowed", false))
-				)
-				install_button.name = "InstallModule_%s_%s" % [ship_id, module_id]
-				if install_button.disabled:
-					install_button.tooltip_text = String(availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-				card.add_child(install_button)
-		var installed_definitions: Array = Game.state.ship_module_definition_ids(ship)
-		if not installed_definitions.is_empty():
-			card.add_child(_label(I18n.core("ships.remove_module", "Remove an installed module"), 14, COLOR_ACCENT))
-			for module_id_value in installed_definitions:
-				var module_id := String(module_id_value)
-				var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
-				var removal_modules: Array = installed_definitions.duplicate()
-				var removal_index := removal_modules.find(module_id)
-				if removal_index >= 0:
-					removal_modules.remove_at(removal_index)
-				var removal_availability: Dictionary = Game.ship_loadout_availability(ship_id, removal_modules)
-				var remove_button := _button(
-					I18n.core("ships.remove_module_action", "Remove %s") % _content_name(module_definition, module_id),
-					_command.bind(I18n.core("command.ships.remove_module"), Game.remove_ship_module.bind(ship_id, module_id)),
-					not bool(removal_availability.get("allowed", false)),
-					COLOR_WARN
-				)
-				remove_button.name = "RemoveModule_%s_%s" % [ship_id, module_id]
-				if remove_button.disabled:
-					remove_button.tooltip_text = String(removal_availability.get("reason", I18n.core("ships.disabled.must_be_docked")))
-				card.add_child(remove_button)
+		var design_hint := _label("插件配置已统一迁移到船厂蓝图。实体舰只能通过已保存蓝图创建改装订单。" if I18n.is_chinese() else "Module configuration has moved to Shipyard Blueprints. Physical ships can only be refitted from a saved blueprint.", 12, COLOR_MUTED)
+		design_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		card.add_child(design_hint)
 		if String(ship.get("status", "")) == "DOCKED" and Game.state.ship_formation_id(ship_id).is_empty():
 			card.add_child(_button(I18n.core("ships.action.scrap"), _command.bind(I18n.core("command.ships.scrap"), Game.scrap_ship.bind(ship_id)), false, COLOR_WARN))
 		box.add_child(_wrap_card(card))
@@ -3329,6 +3190,16 @@ func _build_fleet_archive(box: VBoxContainer) -> void:
 
 
 func _build_fleet_shipyard(box: VBoxContainer) -> void:
+	_ship_blueprint_editor = ShipAssemblyBlueprintEditorScript.new()
+	_ship_blueprint_editor.name = "MainShipBlueprintEditor"
+	_ship_blueprint_editor.configure_for_main_game()
+	_ship_blueprint_editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ship_blueprint_editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_ship_blueprint_editor.custom_minimum_size.y = 680.0
+	_ship_blueprint_editor.blueprint_saved.connect(_on_main_blueprint_saved)
+	box.add_child(_ship_blueprint_editor)
+	box.add_child(_section_title("船厂交接 / SHIPYARD HANDOFF" if I18n.is_chinese() else "SHIPYARD HANDOFF"))
+	box.add_child(_build_ship_design_library())
 	box.add_child(_section_title(I18n.core("ships.shipyard.queue")))
 	for order_index in Game.state.shipyard_queue.size():
 		var order_value = Game.state.shipyard_queue[order_index]
@@ -3357,36 +3228,6 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 		box.add_child(_wrap_card(order_card))
 	if Game.state.shipyard_queue.is_empty():
 		box.add_child(_card_text(I18n.core("ships.shipyard.empty"), COLOR_MUTED))
-	box.add_child(_section_title(I18n.core("ships.shipyard.saved_designs", "SAVED SHIP DESIGNS")))
-	box.add_child(_build_ship_design_library())
-	box.add_child(_section_title(I18n.core("ships.shipyard.canvas_title")))
-	box.add_child(_card_text(I18n.core("ships.shipyard.canvas_help", "Start with an empty canvas. Drag a hull from the Ship tab, add parts from the Parts tab, then connect matching shapes yourself. Grid spacing is a physical scale: zoom out for capital ships and zoom in for small hulls. A part must also fit the socket tier and diameter."), COLOR_MUTED))
-	box.add_child(_build_ship_assembly_palette())
-	var controls := HFlowContainer.new()
-	controls.add_theme_constant_override("h_separation", 6)
-	_ship_design_name_input = LineEdit.new()
-	_ship_design_name_input.name = "ShipDesignName"
-	_ship_design_name_input.placeholder_text = I18n.core("ships.shipyard.design_name_placeholder", "Design name")
-	_ship_design_name_input.custom_minimum_size.x = UiTokens.layout_px(260.0)
-	if not _selected_ship_design_id.is_empty():
-		_ship_design_name_input.text = String(Game.state.ship_designs.get(_selected_ship_design_id, {}).get("name", ""))
-	controls.add_child(_ship_design_name_input)
-	var validate := _button(I18n.core("ships.shipyard.validate_design", "VALIDATE"), _validate_ship_assembly_draft, false, COLOR_ACCENT)
-	validate.name = "ValidateShipDesign"
-	controls.add_child(validate)
-	var save := _button(I18n.core("ships.shipyard.save_design", "SAVE DESIGN"), _save_ship_assembly_draft, false, COLOR_GOOD)
-	save.name = "SaveShipDesign"
-	controls.add_child(save)
-	var clear := _button(I18n.core("ships.shipyard.clear_design", "CLEAR CANVAS"), _clear_ship_assembly_draft, false, COLOR_WARN)
-	clear.name = "ClearShipDesign"
-	controls.add_child(clear)
-	box.add_child(controls)
-	_ship_assembly_view = ShipAssemblyMapViewScript.new()
-	_ship_assembly_view.draft_changed.connect(_on_ship_assembly_draft_changed)
-	_ship_assembly_view.entity_selected.connect(_select_shipyard_entity)
-	_ship_assembly_view.notice_requested.connect(_on_ship_assembly_notice)
-	box.add_child(_ship_assembly_view)
-	_ship_assembly_view.configure(_ship_assembly_catalog(), _ship_assembly_draft)
 
 
 func _build_ship_design_library() -> Control:
@@ -3401,185 +3242,36 @@ func _build_ship_design_library() -> Control:
 	for design_id_value in design_ids:
 		var design_id := String(design_id_value)
 		var design := Game.state.ship_designs[design_id] as Dictionary
+		var design_group := VBoxContainer.new()
+		design_group.add_theme_constant_override("separation", 5)
+		var hull := Game.content.ships.get(String(design.get("hull_id", "")), {}) as Dictionary
+		design_group.add_child(_label("%s  ·  %s  ·  %d MODULES" % [String(design.get("name", design_id)), _content_name(hull, String(design.get("hull_id", ""))), (design.get("modules", []) as Array).size()], 13, COLOR_TEXT))
 		var row := HFlowContainer.new()
 		row.add_theme_constant_override("h_separation", 6)
-		var load := _button(String(design.get("name", design_id)), _load_ship_design.bind(design_id), design_id == _selected_ship_design_id, COLOR_ACCENT)
-		load.name = "LoadShipDesign_%s" % design_id
-		load.custom_minimum_size.x = UiTokens.layout_px(260.0)
-		row.add_child(load)
 		for quantity in [1, 5, 20]:
 			var build := _button(I18n.core("ships.shipyard.build_batch") % quantity, _enqueue_saved_ship_design.bind(design_id, quantity), false, COLOR_GOOD)
 			build.name = "BuildShipDesign_%s_%d" % [design_id, quantity]
 			row.add_child(build)
+		for ship_id_value in Game.ship_design_refit_candidates(design_id):
+			var ship_id := String(ship_id_value)
+			var ship := Game.state.ship_by_id(ship_id)
+			var availability := Game.ship_design_refit_availability(design_id, ship_id)
+			var refit_caption := ("改装 %s" if I18n.is_chinese() else "Refit %s") % String(ship.get("name", ship_id))
+			var refit := _button(refit_caption, _command.bind("Start blueprint refit", Game.begin_ship_design_refit.bind(design_id, ship_id)), not bool(availability.get("allowed", false)), COLOR_ACCENT)
+			refit.name = "RefitShipDesign_%s_%s" % [design_id, ship_id]
+			refit.tooltip_text = String(availability.get("reason", ""))
+			row.add_child(refit)
 		var remove := _button(I18n.core("ships.shipyard.delete_design"), _delete_ship_design.bind(design_id), false, COLOR_WARN)
 		remove.name = "DeleteShipDesign_%s" % design_id
 		row.add_child(remove)
-		column.add_child(row)
+		design_group.add_child(row)
+		column.add_child(design_group)
 	panel.add_child(column)
 	return panel
 
 
-func _build_ship_assembly_palette() -> Control:
-	var tabs := TabContainer.new()
-	tabs.name = "ShipAssemblyPalette"
-	# One compact shelf is enough; overflowing unlocked hulls/parts already have
-	# their own scroll containers.  The saved height belongs to the canvas.
-	tabs.custom_minimum_size.y = UiTokens.layout_px(158.0)
-	var hull_scroll := ScrollContainer.new()
-	hull_scroll.name = "Ships"
-	hull_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	hull_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var hull_row := HBoxContainer.new()
-	hull_row.add_theme_constant_override("separation", 6)
-	var plans: Array[Dictionary] = []
-	for plan_value in Game.content.ship_construction_projects.values():
-		plans.append(plan_value as Dictionary)
-	plans.sort_custom(func(a: Dictionary, b: Dictionary): return _content_name(a, String(a.get("id", ""))) < _content_name(b, String(b.get("id", ""))))
-	for plan in plans:
-		var plan_id := String(plan.get("id", ""))
-		var hull_id := String(plan.get("ship_id", ""))
-		var hull := Game.content.ships.get(hull_id, {}) as Dictionary
-		var unlocked := bool(Game.state.unlocked_ship_plans.get(plan_id, false))
-		# The palette is an inventory of hull models the player can actually
-		# construct, not a catalogue of every hull definition in the database.
-		if not unlocked:
-			continue
-		var item := ShipAssemblyPaletteItemScript.new()
-		item.name = "ShipPaletteHull_%s" % plan_id
-		var ui_visual := hull.get("ui_visual", {}) as Dictionary
-		item.configure({"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":hull_id}, "%s\n%s · %d slots" % [_content_name(hull, hull_id), String(hull.get("class", "Ship")), int(hull.get("module_slots", 0))], true, I18n.core("ships.shipyard.drag_hull", "Drag this hull onto the empty canvas"), String(ui_visual.get("topdown_texture", "")))
-		hull_row.add_child(item)
-	hull_scroll.add_child(hull_row)
-	tabs.add_child(hull_scroll)
-	var parts_scroll := ScrollContainer.new()
-	parts_scroll.name = "Parts"
-	parts_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	parts_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	var parts_flow := HFlowContainer.new()
-	parts_flow.add_theme_constant_override("h_separation", 6)
-	parts_flow.add_theme_constant_override("v_separation", 6)
-	var module_ids: Array = Game.content.modules.keys()
-	module_ids.sort()
-	for module_id_value in module_ids:
-		var module_id := String(module_id_value)
-		var module := Game.content.modules[module_id] as Dictionary
-		if not Game.simulation.definition_revealed(Game.state, module):
-			continue
-		var slot := String(module.get("slot", "utility"))
-		var item := ShipAssemblyPaletteItemScript.new()
-		item.name = "ShipPalettePart_%s" % module_id
-		item.configure({"ship_assembly_palette":true, "kind":"module", "definition_id":module_id, "slot":slot, "mount_role":Game.ship_module_mount_role(module_id)}, "%s\n%s · %s" % [_content_name(module, module_id), String(module.get("size", "S")), I18n.core("ships.shipyard.slot.%s" % slot)], true, I18n.core("ships.shipyard.drag_part", "Drag this part onto the canvas, then connect its color-coded interface"), ShipAssemblyMapViewScript.module_icon_path(module))
-		parts_flow.add_child(item)
-	parts_scroll.add_child(parts_flow)
-	tabs.add_child(parts_scroll)
-	tabs.set_tab_title(0, I18n.core("ships.shipyard.palette_ships", "舰船"))
-	tabs.set_tab_title(1, I18n.core("ships.shipyard.palette_parts", "零件"))
-	return tabs
-
-
-func _ship_assembly_catalog() -> Dictionary:
-	var plans := {}
-	for plan_id_value in Game.content.ship_construction_projects.keys():
-		var plan_id := String(plan_id_value)
-		var plan := (Game.content.ship_construction_projects[plan_id] as Dictionary).duplicate(true)
-		plan["title"] = _content_name(plan, plan_id)
-		plan["assembly_sockets"] = Game.ship_design_socket_schema(plan_id)
-		plans[plan_id] = plan
-	var hulls := {}
-	for hull_id_value in Game.content.ships.keys():
-		var hull_id := String(hull_id_value)
-		var hull := (Game.content.ships[hull_id] as Dictionary).duplicate(true)
-		hull["title"] = _content_name(hull, hull_id)
-		hulls[hull_id] = hull
-	var modules := {}
-	for module_id_value in Game.content.modules.keys():
-		var module_id := String(module_id_value)
-		var module := (Game.content.modules[module_id] as Dictionary).duplicate(true)
-		module["title"] = _content_name(module, module_id)
-		module["assembly_mount"] = Game.ship_module_mount_role(module_id)
-		modules[module_id] = module
-	return {"plans":plans, "hulls":hulls, "modules":modules, "structural_label":"通用结构 / STRUCTURE", "socket_label_format":I18n.core("ships.shipyard.socket_label"), "module_label_format":I18n.core("ships.shipyard.part_label"), "hull_summary_format":I18n.core("ships.shipyard.hull_backplane"), "core_socket_format":I18n.core("ships.shipyard.energy_core_socket"), "slot_labels":{
-		"weapon":I18n.core("ships.shipyard.slot.weapon"), "shield":I18n.core("ships.shipyard.slot.shield"), "drive":I18n.core("ships.shipyard.slot.drive"), "utility":I18n.core("ships.shipyard.slot.utility"), "core":I18n.core("ships.shipyard.slot.core")
-	}}
-
-
-func _ship_port_color_legend() -> Control:
-	var legend := HFlowContainer.new()
-	legend.add_theme_constant_override("h_separation", 12)
-	legend.add_theme_constant_override("v_separation", 4)
-	for definition in [
-		{"slot":"weapon", "label":I18n.core("ships.shipyard.slot.weapon")},
-		{"slot":"drive", "label":I18n.core("ships.shipyard.slot.drive")},
-		{"slot":"utility", "label":I18n.core("ships.shipyard.slot.utility")},
-		{"slot":"shield", "label":I18n.core("ships.shipyard.slot.shield")},
-		{"slot":"core", "label":I18n.core("ships.shipyard.slot.core")}
-	]:
-		var label := _label("● %s" % String(definition.get("label", "")), 12, _ship_module_slot_tone(String(definition.get("slot", "")), String(definition.get("mount_role", ""))))
-		legend.add_child(label)
-	return legend
-
-
-func _on_ship_assembly_draft_changed(snapshot: Dictionary) -> void:
-	_ship_assembly_draft = snapshot.duplicate(true)
-	_selected_shipyard_plan_id = String(snapshot.get("plan_id", ""))
-	if not _selected_shipyard_plan_id.is_empty():
-		_ui_state.select_context("ship_assembly", _selected_shipyard_plan_id)
-	_rebuild_sidebar()
-
-
-func _on_ship_assembly_notice(code: String) -> void:
-	var messages := {
-		"HULL_ALREADY_PLACED":I18n.core("ships.shipyard.notice.hull_already_placed", "Only one hull can be placed. Clear or delete it before choosing another."),
-		"PORT_DIRECTION_INVALID":I18n.core("ships.shipyard.notice.port_direction", "Connect a part plug to a hull socket."),
-		"PORT_SHAPE_MISMATCH":I18n.core("ships.shipyard.notice.port_mismatch", "That part does not match the socket's connector and mount family."),
-		"PORT_SIZE_MISMATCH":I18n.core("ships.shipyard.notice.port_size_mismatch", "That part is physically larger than this socket tier. Choose a larger socket or a smaller part."),
-		"PORT_ALREADY_OCCUPIED":I18n.core("ships.shipyard.notice.port_occupied", "That part or socket is already connected.")
-	}
-	_append_log(String(messages.get(code, code)))
-
-
-func _validate_ship_assembly_draft() -> void:
-	var snapshot := _ship_assembly_view.draft_snapshot() if is_instance_valid(_ship_assembly_view) else _ship_assembly_draft
-	var validation := Game.ship_design_validation(String(snapshot.get("plan_id", "")), snapshot.get("nodes", []), snapshot.get("connections", []))
-	_append_log(String(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
-	_rebuild_sidebar()
-
-
-func _save_ship_assembly_draft() -> void:
-	var snapshot := _ship_assembly_view.draft_snapshot() if is_instance_valid(_ship_assembly_view) else _ship_assembly_draft
-	var requested_name := _ship_design_name_input.text if is_instance_valid(_ship_design_name_input) else ""
-	_command(I18n.core("command.ships.save_design", "Save ship design"), _commit_ship_design.bind(snapshot, requested_name))
-
-
-func _commit_ship_design(snapshot: Dictionary, requested_name: String) -> bool:
-	var success := Game.save_ship_design(_selected_ship_design_id, requested_name, String(snapshot.get("plan_id", "")), snapshot.get("nodes", []), snapshot.get("connections", []))
-	if success:
-		_selected_ship_design_id = Game.last_saved_ship_design_id
-		_ship_assembly_draft = (Game.state.ship_designs.get(_selected_ship_design_id, {}) as Dictionary).duplicate(true)
-	return success
-
-
-func _clear_ship_assembly_draft() -> void:
-	_selected_ship_design_id = ""
-	_selected_shipyard_plan_id = ""
-	_selected_shipyard_entity = {"kind":"hull", "id":""}
-	_ship_assembly_draft = {}
-	if is_instance_valid(_ship_design_name_input):
-		_ship_design_name_input.text = ""
-	if is_instance_valid(_ship_assembly_view):
-		_ship_assembly_view.clear_draft(false)
-	_rebuild_sidebar()
-
-
-func _load_ship_design(design_id: String) -> void:
-	var design := Game.state.ship_designs.get(design_id, {}) as Dictionary
-	if design.is_empty():
-		return
-	_selected_ship_design_id = design_id
-	_ship_assembly_draft = design.duplicate(true)
-	_selected_shipyard_plan_id = String(design.get("plan_id", ""))
-	_selected_shipyard_entity = {"kind":"hull", "id":String(design.get("hull_id", ""))}
-	_request_active_page_refresh(true)
+func _on_main_blueprint_saved(design_id: String) -> void:
+	_append_log("Blueprint saved: %s" % String(Game.state.ship_designs.get(design_id, {}).get("name", design_id)))
 
 
 func _delete_ship_design(design_id: String) -> void:
@@ -3587,37 +3279,11 @@ func _delete_ship_design(design_id: String) -> void:
 
 
 func _commit_delete_ship_design(design_id: String) -> bool:
-	var success := Game.delete_ship_design(design_id)
-	if success and _selected_ship_design_id == design_id:
-		_selected_ship_design_id = ""
-		_selected_shipyard_plan_id = ""
-		_ship_assembly_draft = {}
-	return success
+	return Game.delete_ship_design(design_id)
 
 
 func _enqueue_saved_ship_design(design_id: String, quantity: int) -> void:
 	_command(I18n.core("command.ships.enqueue"), Game.enqueue_saved_ship_design.bind(design_id, quantity))
-
-
-func _select_shipyard_entity(kind: String, entity_id: String) -> void:
-	_selected_shipyard_entity = {"kind":kind, "id":entity_id}
-	_ui_state.select_context("ship_assembly", entity_id)
-	if _ui_state.right_inspector_collapsed:
-		_ui_state.right_inspector_collapsed = false
-		if is_instance_valid(_shell):
-			_shell.set_right_collapsed(false)
-	_rebuild_sidebar()
-
-
-func _ship_module_slot_tone(slot: String, mount_role: String = "") -> Color:
-	if mount_role == "STRUCTURAL":
-		return COLOR_ACCENT.lerp(Color("78a8d8"), 0.55)
-	match slot:
-		"core": return COLOR_WARN
-		"drive": return COLOR_ACCENT
-		"weapon": return COLOR_BAD
-		"shield": return COLOR_ACCENT.lerp(Color("78a8d8"), 0.55)
-		_: return COLOR_GOOD
 
 
 func _rebuild_expedition() -> void:
@@ -3795,60 +3461,6 @@ func _next_flow_step() -> String:
 
 func _next_flow_page() -> String:
 	return String(Game.guidance_snapshot().get("page", "system_map"))
-
-
-func _compatible_loadout_modules(ship: Dictionary) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	var installed: Array = Game.state.ship_module_definition_ids(ship)
-	var blueprint_id := String(ship.get("blueprint_id", ""))
-	for new_id_value in Game.content.modules.keys():
-		var new_id := String(new_id_value)
-		var new_module := Game.content.modules.get(new_id, {}) as Dictionary
-		if bool(new_module.get("special_equipment", false)):
-			if Game.state.stored_equipment_ids(new_id).is_empty():
-				continue
-		elif not Game.simulation.module_design_available(Game.state, new_id):
-			continue
-		for old_id_value in installed:
-			var old_id := String(old_id_value)
-			if not Game.content.modules.has(old_id):
-				continue
-			var old_module := Game.content.modules[old_id] as Dictionary
-			if String(old_module.get("slot", "")) == String(new_module.get("slot", "")) and old_id != new_id:
-				var desired := installed.duplicate()
-				desired[desired.find(old_id)] = new_id
-				# Keep valid choices visible while unavailable. The card renderer asks
-				# the authoritative Domain query for disabled state and explanation.
-				if Game.content.ship_loadout_valid(blueprint_id, desired):
-					result.append({"old_id": old_id, "new_id": new_id})
-				break
-	return result
-
-
-func _installable_loadout_modules(ship: Dictionary) -> Array[String]:
-	# Keep structurally valid, revealed module choices visible even when the
-	# authoritative transaction is currently blocked by resources or ship state.
-	# The renderer asks ship_loadout_availability for disabled state and reason;
-	# fitting rules still remain in the Content Database / Domain query.
-	var result: Array[String] = []
-	var installed: Array = Game.state.ship_module_definition_ids(ship)
-	var blueprint_id := String(ship.get("blueprint_id", ""))
-	for module_id_value in Game.content.modules.keys():
-		var module_id := String(module_id_value)
-		var module_definition := Game.content.modules.get(module_id, {}) as Dictionary
-		if bool(module_definition.get("retired", false)):
-			continue
-		if bool(module_definition.get("special_equipment", false)):
-			if Game.state.stored_equipment_ids(module_id).is_empty():
-				continue
-		elif not Game.simulation.module_design_available(Game.state, module_id):
-			continue
-		var desired := installed.duplicate()
-		desired.append(module_id)
-		if Game.content.ship_loadout_valid(blueprint_id, desired):
-			result.append(module_id)
-	result.sort()
-	return result
 
 
 func _ship_modules_text(ship: Dictionary) -> String:

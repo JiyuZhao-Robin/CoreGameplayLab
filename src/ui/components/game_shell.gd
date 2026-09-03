@@ -14,6 +14,7 @@ var bottom_slot: MarginContainer
 
 var _left_panel: PanelContainer
 var _right_panel: PanelContainer
+var _bottom_panel: PanelContainer
 var _left_content: Control
 var _right_content: Control
 var _left_toggle: Button
@@ -88,12 +89,12 @@ func build() -> void:
 	right_column.add_child(right_slot)
 	_right_content = right_slot
 
-	var bottom_panel := _surface(UiTokens.COLOR_PANEL)
-	bottom_panel.name = "CommandDockSurface"
-	bottom_panel.custom_minimum_size.y = UiTokens.layout_px(UiTokens.BOTTOM_BAR_HEIGHT)
-	rows.add_child(bottom_panel)
+	_bottom_panel = _surface(UiTokens.COLOR_PANEL)
+	_bottom_panel.name = "CommandDockSurface"
+	_bottom_panel.custom_minimum_size.y = UiTokens.layout_px(UiTokens.BOTTOM_BAR_HEIGHT)
+	rows.add_child(_bottom_panel)
 	bottom_slot = _margin(UiTokens.SPACING_MD, UiTokens.SPACING_SM, UiTokens.SPACING_MD, UiTokens.SPACING_SM)
-	bottom_panel.add_child(bottom_slot)
+	_bottom_panel.add_child(bottom_slot)
 	_refresh_toggle_copy()
 
 
@@ -119,6 +120,17 @@ func set_right_collapsed(collapsed: bool, emit_change := false) -> void:
 	_refresh_toggle_copy()
 	if emit_change:
 		right_inspector_toggled.emit(collapsed)
+
+
+func set_blueprint_workspace(enabled: bool) -> void:
+	# Ship Assembly already owns its library, engineering inspector and status
+	# feedback. Hide the shell duplicates while this full-width workspace is open.
+	if is_instance_valid(_left_panel):
+		_left_panel.visible = not enabled
+	if is_instance_valid(_right_panel):
+		_right_panel.visible = not enabled
+	if is_instance_valid(_bottom_panel):
+		_bottom_panel.visible = not enabled
 
 
 func refresh_locale() -> void:

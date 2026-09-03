@@ -54,10 +54,10 @@ func _build_frame() -> void:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 10)
 	margin.add_child(column)
-	var eyebrow := _label("DESIGN ASSETS  /  设计资源", 9, UiTokens.COLOR_FOCUS)
+	var eyebrow := _label(_localized("DESIGN ASSETS  /  设计资源", "DESIGN ASSETS"), 9, UiTokens.COLOR_FOCUS)
 	eyebrow.name = "AssemblyLibraryEyebrow"
 	column.add_child(eyebrow)
-	var hint := _label("把舰体和模块拖入中央蓝图。选择条目可在右侧查看工程信息。", 9, UiTokens.COLOR_TEXT_MUTED)
+	var hint := _label(_localized("把舰体和模块拖入中央蓝图。选择条目可在右侧查看工程信息。", "Drag hulls and modules into the blueprint. Select an asset to inspect its engineering data."), 9, UiTokens.COLOR_TEXT_MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(hint)
 	_tabs = TabContainer.new()
@@ -70,8 +70,8 @@ func _build_frame() -> void:
 	# At accessibility sizes the bilingual labels made two tabs wider than the
 	# complete asset rail. Chinese is primary in this locale; the English meaning
 	# remains available in the panel heading and tooltips.
-	_tabs.set_tab_title(0, "舰船")
-	_tabs.set_tab_title(1, "零件")
+	_tabs.set_tab_title(0, _localized("舰船", "SHIPS"))
+	_tabs.set_tab_title(1, _localized("零件", "MODULES"))
 	_rebuild_ship_cards()
 	_rebuild_module_cards()
 
@@ -97,7 +97,7 @@ func _build_modules_tab() -> Control:
 	tools.add_theme_constant_override("separation", 6)
 	_search = LineEdit.new()
 	_search.name = "AssemblyModuleSearch"
-	_search.placeholder_text = "搜索零件"
+	_search.placeholder_text = _localized("搜索零件", "Search modules")
 	_search.clear_button_enabled = true
 	_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_search.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(9))
@@ -120,7 +120,7 @@ func _build_modules_tab() -> Control:
 	_module_cards.add_theme_constant_override("separation", 8)
 	scroll.add_child(_module_cards)
 	column.add_child(scroll)
-	_empty_modules = _label("没有符合筛选条件的零件。", 9, UiTokens.COLOR_TEXT_MUTED)
+	_empty_modules = _label(_localized("没有符合筛选条件的零件。", "No modules match the current filters."), 9, UiTokens.COLOR_TEXT_MUTED)
 	_empty_modules.name = "AssemblyModuleEmptyState"
 	_empty_modules.visible = false
 	column.add_child(_empty_modules)
@@ -148,7 +148,7 @@ func _rebuild_ship_cards() -> void:
 			{"ship_assembly_palette":true, "kind":"hull", "plan_id":plan_id, "definition_id":ship_id},
 			"%s\n%s · %.0fm\n%d SLOTS" % [I18n.content(hull), str(hull.get("class", "SHIP")).to_upper(), float(visual.get("length_m", 0.0)), int(hull.get("module_slots", 0))],
 			bool(entry.get("available", true)),
-			"拖动舰体到装配画布",
+			_localized("拖动舰体到装配画布", "Drag hull to the assembly canvas"),
 			str(ui_visual.get("topdown_texture", ""))
 		)
 		card.custom_minimum_size = Vector2(266.0, card.recommended_height(140.0))
@@ -185,7 +185,7 @@ func _rebuild_module_cards() -> void:
 			{"ship_assembly_palette":true, "kind":"module", "definition_id":module_id, "slot":slot, "mount_role":mount_role},
 			"%s\n%s\n%s · T%d · Ø%.0fm" % [I18n.content(module), _category_filter_label(module_category), size_id, tier, diameter],
 			true,
-			"拖入画布，并连接到同一功能族的舰体插槽",
+			_localized("拖入画布，并连接到同一功能族的舰体插槽", "Drag into the canvas and connect to a matching hull socket"),
 			ShipAssemblyMapViewScript.module_icon_path(module)
 		)
 		card.custom_minimum_size = Vector2(266.0, card.recommended_height(132.0))
@@ -210,27 +210,19 @@ func _module_category(module_id: String, module: Dictionary) -> String:
 
 
 func _category_label(category_name: String) -> String:
-	return {
-		"ALL":"全部 / ALL",
-		"PROPULSION":"推进 / PROPULSION",
-		"WEAPON":"武器 / WEAPON",
-		"DEFENSE":"防御 / DEFENSE",
-		"CORE":"核心 / CORE",
-		"UTILITY":"功能 / UTILITY",
-		"LOGISTICS":"结构 / LOGISTICS"
-	}.get(category_name, category_name)
+	var english := {"ALL":"ALL", "PROPULSION":"PROPULSION", "WEAPON":"WEAPON", "DEFENSE":"DEFENSE", "CORE":"CORE", "UTILITY":"UTILITY", "LOGISTICS":"STRUCTURE"}
+	var chinese := {"ALL":"全部 / ALL", "PROPULSION":"推进 / PROPULSION", "WEAPON":"武器 / WEAPON", "DEFENSE":"防御 / DEFENSE", "CORE":"核心 / CORE", "UTILITY":"功能 / UTILITY", "LOGISTICS":"结构 / LOGISTICS"}
+	return (chinese if I18n.is_chinese() else english).get(category_name, category_name)
 
 
 func _category_filter_label(category_name: String) -> String:
-	return {
-		"ALL":"全部",
-		"PROPULSION":"推进",
-		"WEAPON":"武器",
-		"DEFENSE":"防御",
-		"CORE":"核心",
-		"UTILITY":"功能",
-		"LOGISTICS":"结构"
-	}.get(category_name, category_name)
+	var english := {"ALL":"ALL", "PROPULSION":"DRIVE", "WEAPON":"WEAPON", "DEFENSE":"DEFENSE", "CORE":"CORE", "UTILITY":"UTILITY", "LOGISTICS":"STRUCTURE"}
+	var chinese := {"ALL":"全部", "PROPULSION":"推进", "WEAPON":"武器", "DEFENSE":"防御", "CORE":"核心", "UTILITY":"功能", "LOGISTICS":"结构"}
+	return (chinese if I18n.is_chinese() else english).get(category_name, category_name)
+
+
+func _localized(chinese: String, english: String) -> String:
+	return chinese if I18n.is_chinese() else english
 
 
 func _on_card_pressed(kind: String, entity_id: String) -> void:
