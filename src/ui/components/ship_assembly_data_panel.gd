@@ -183,7 +183,10 @@ func _build_blueprint_overview() -> void:
 		var requirements := _section("需求与兼容性  /  REQUIREMENTS")
 		var handoff_mode := str(summary.get("handoff_mode", "BUILD_HULL"))
 		var matching_count := (summary.get("matching_refit_ship_ids", []) as Array).size()
-		var handoff_text := "发现 %d 艘可用同型舰体；保存后可由船厂创建改装订单。" % matching_count if handoff_mode == "REFIT" else "当前无可用同型舰体；保存后需先建造舰体，再按蓝图装配。"
+		var plan_unlocked := bool(summary.get("plan_unlocked", false))
+		var handoff_text := "舰体方案尚未解锁；蓝图仍可保存、载入和继续编辑，解锁后才能提交船厂。"
+		if plan_unlocked:
+			handoff_text = "发现 %d 艘可用同型舰体；保存后可由船厂创建改装订单。" % matching_count if handoff_mode == "REFIT" else "当前无可用同型舰体；保存后需先建造舰体，再按蓝图装配。"
 		var handoff := _label(handoff_text, 8, UiTokens.COLOR_TEXT_SECONDARY)
 		handoff.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		requirements.add_child(handoff)

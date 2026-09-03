@@ -24,10 +24,12 @@ var _status_label: Label
 var _measurement_label: Label
 var _design_badge: Label
 var _load_picker: OptionButton
+var _load_button: Button
 var _font_scale_picker: OptionButton
 var _draft: Dictionary = {}
 var _blueprint_name := "巡航护卫方案 A"
 var _design_id := ""
+var _draft_dirty := false
 var _selection_kind := ""
 var _selection_id := ""
 var _previous_ui_scale := 1.0
@@ -266,13 +268,14 @@ func _build_header() -> Control:
 	_load_picker.name = "SavedBlueprintPicker"
 	_load_picker.custom_minimum_size.x = 208.0
 	_load_picker.tooltip_text = "选择已经保存的舰船蓝图"
+	_load_picker.item_selected.connect(_on_load_picker_selected)
 	actions_row.add_child(_load_picker)
-	var load_button := Button.new()
-	load_button.name = "LoadBlueprintButton"
-	load_button.text = "载入"
-	load_button.custom_minimum_size = Vector2(104.0, 40.0)
-	load_button.pressed.connect(_load_selected_blueprint)
-	actions_row.add_child(load_button)
+	_load_button = Button.new()
+	_load_button.name = "LoadBlueprintButton"
+	_load_button.text = "载入"
+	_load_button.custom_minimum_size = Vector2(104.0, 40.0)
+	_load_button.pressed.connect(_load_selected_blueprint)
+	actions_row.add_child(_load_button)
 	var new_button := Button.new()
 	new_button.name = "NewBlueprintButton"
 	new_button.text = "新建"
@@ -366,8 +369,11 @@ func _refresh_engineering() -> void:
 		plan_id = str(DEMO_SHIPS[0].get("plan_id", ""))
 	var nodes := _draft.get("nodes", []) as Array
 	var connections := _draft.get("connections", []) as Array
-	var validation := Game.ship_design_validation(plan_id, nodes, connections)
-	var summary := Game.ship_design_engineering_summary(plan_id, nodes, connections)
+	# The standalone replacement Demo may author design intent before the hull
+	# development project is complete. Shipyard submission still enforces the
+	# real unlock in Game.enqueue_saved_ship_design().
+	var validation := Game.ship_design_validation(plan_id, nodes, connections, true)
+	var summary := Game.ship_design_engineering_summary(plan_id, nodes, connections, true)
 	var default_hull_id := str(Game.content.ship_construction_projects.get(plan_id, {}).get("ship_id", ""))
 	var hull_id := str(_draft.get("hull_id", default_hull_id))
 	_data_panel.configure({
@@ -381,23 +387,28 @@ func _refresh_engineering() -> void:
 		"selection_kind":_selection_kind,
 		"selection_id":_selection_id
 	})
-	_design_badge.text = "%s  ·  %s" % [_blueprint_name, _design_id if not _design_id.is_empty() else "UNSAVED"]
+	_refresh_design_badge()
 
 
 func _on_draft_changed(snapshot: Dictionary) -> void:
 	_draft = snapshot.duplicate(true)
-	var hull_id := str(snapshot.get("hull_id", ""))
+	_draft_dirty = true
+	_refresh_draft_chrome()
+	_refresh_engineering()
+
+
+func _refresh_draft_chrome(status_override: String = "") -> void:
+	var hull_id := str(_draft.get("hull_id", ""))
 	if hull_id.is_empty():
-		_status_label.text = "从左侧选择一艘舰船开始设计。"
+		_status_label.text = status_override if not status_override.is_empty() else "从左侧选择一艘舰船开始设计。"
 		_measurement_label.text = "W —  ·  L —"
 	else:
 		var hull := Game.content.ships.get(hull_id, {}) as Dictionary
 		var visual := hull.get("hull_visual", {}) as Dictionary
-		var module_count := maxi(0, (snapshot.get("nodes", []) as Array).size() - 1)
-		var connection_count := (snapshot.get("connections", []) as Array).size()
-		_status_label.text = "%s · 已放置 %d 个零件 · 已连接 %d 个插槽" % [I18n.content(hull), module_count, connection_count]
+		var module_count := maxi(0, (_draft.get("nodes", []) as Array).size() - 1)
+		var connection_count := (_draft.get("connections", []) as Array).size()
+		_status_label.text = status_override if not status_override.is_empty() else "%s · 已放置 %d 个零件 · 已连接 %d 个插槽" % [I18n.content(hull), module_count, connection_count]
 		_measurement_label.text = "W %.0fm  ·  L %.0fm" % [float(visual.get("beam_m", 0.0)), float(visual.get("length_m", 0.0))]
-	_refresh_engineering()
 
 
 func _on_entity_selected(kind: String, entity_id: String) -> void:
@@ -408,7 +419,15 @@ func _on_entity_selected(kind: String, entity_id: String) -> void:
 
 func _on_blueprint_name_changed(value: String) -> void:
 	_blueprint_name = value
-	_design_badge.text = "%s  ·  %s" % [_blueprint_name, _design_id if not _design_id.is_empty() else "UNSAVED"]
+	_draft_dirty = true
+	_refresh_design_badge()
+
+
+func _refresh_design_badge() -> void:
+	if not is_instance_valid(_design_badge):
+		return
+	var state_label := "UNSAVED" if _design_id.is_empty() else ("MODIFIED" if _draft_dirty else "SAVED")
+	_design_badge.text = "%s  ·  %s" % [_blueprint_name, state_label]
 
 
 func _on_font_scale_selected(index: int) -> void:
@@ -420,12 +439,21 @@ func _on_font_scale_selected(index: int) -> void:
 
 
 func _save_blueprint() -> void:
-	var plan_id := str(_draft.get("plan_id", ""))
-	if Game.save_ship_design(_design_id, _blueprint_name, plan_id, _draft.get("nodes", []), _draft.get("connections", [])):
+	var snapshot := _assembly_view.draft_snapshot() if is_instance_valid(_assembly_view) else _draft
+	var plan_id := str(snapshot.get("plan_id", ""))
+	if Game.save_ship_design(_design_id, _blueprint_name, plan_id, snapshot.get("nodes", []), snapshot.get("connections", []), true):
 		_design_id = Game.last_saved_ship_design_id
-		_blueprint_name = str(Game.state.ship_designs.get(_design_id, {}).get("name", _blueprint_name))
-		_status_label.text = "%s；蓝图已保存，未启动建造或改装。" % Game.last_notice
-		_refresh_saved_designs()
+		var saved_design := Game.state.ship_designs.get(_design_id, {}) as Dictionary
+		_blueprint_name = str(saved_design.get("name", _blueprint_name))
+		_draft = saved_design.duplicate(true)
+		_draft_dirty = false
+		var saved_notice := Game.last_notice
+		var persisted := not Game.persistence_enabled or Game.save_game()
+		var status := "%s；蓝图已保存，未启动建造或改装。" % saved_notice
+		if not persisted:
+			status = "%s；蓝图保留在当前会话，但本地存档写入失败。" % saved_notice
+		_refresh_saved_designs(_design_id)
+		_refresh_draft_chrome(status)
 	else:
 		_status_label.text = Game.last_notice
 	_refresh_engineering()
@@ -433,22 +461,24 @@ func _save_blueprint() -> void:
 
 func _new_blueprint() -> void:
 	_design_id = ""
-	_blueprint_name = "新舰船设定"
+	_blueprint_name = "新舰船设定 %d" % (Game.state.ship_designs.size() + 1)
 	_selection_kind = ""
 	_selection_id = ""
 	_draft = {}
-	_assembly_view.clear_draft()
+	_draft_dirty = false
+	_assembly_view.clear_draft(false)
 	_assembly_view.call("_reset_view")
 	_library.select_tab(0)
-	_status_label.text = "已创建空白蓝图；不会影响任何实体舰船。"
+	_refresh_saved_designs()
+	_refresh_draft_chrome("已创建空白蓝图；不会影响任何实体舰船。")
 	_refresh_engineering()
 
 
-func _refresh_saved_designs() -> void:
+func _refresh_saved_designs(preferred_design_id: String = "") -> void:
 	if not is_instance_valid(_load_picker):
 		return
 	_load_picker.clear()
-	_load_picker.add_item("已保存蓝图")
+	_load_picker.add_item("暂无已保存蓝图")
 	_load_picker.set_item_metadata(0, "")
 	var design_ids: Array = Game.state.ship_designs.keys()
 	design_ids.sort()
@@ -459,10 +489,30 @@ func _refresh_saved_designs() -> void:
 			continue
 		_load_picker.add_item(str(design.get("name", design_id)))
 		_load_picker.set_item_metadata(_load_picker.item_count - 1, design_id)
+	var target_design_id := preferred_design_id if not preferred_design_id.is_empty() else _design_id
+	var selected_index := -1
+	for item_index in range(1, _load_picker.item_count):
+		if str(_load_picker.get_item_metadata(item_index)) == target_design_id:
+			selected_index = item_index
+			break
+	if selected_index < 0 and _load_picker.item_count > 1:
+		selected_index = 1
+	if selected_index > 0:
+		_load_picker.set_item_text(0, "选择已保存蓝图")
+		_load_picker.select(selected_index)
+	else:
+		_load_picker.select(0)
+	if is_instance_valid(_load_button):
+		_load_button.disabled = selected_index <= 0
+
+
+func _on_load_picker_selected(index: int) -> void:
+	if is_instance_valid(_load_button):
+		_load_button.disabled = index <= 0
 
 
 func _load_selected_blueprint() -> void:
-	if _load_picker.selected <= 0:
+	if not is_instance_valid(_load_picker) or _load_picker.selected <= 0:
 		_status_label.text = "请先选择一个已经保存的舰船蓝图。"
 		return
 	var design_id := str(_load_picker.get_item_metadata(_load_picker.selected))
@@ -470,18 +520,17 @@ func _load_selected_blueprint() -> void:
 	if design.is_empty():
 		_status_label.text = "找不到所选蓝图。"
 		return
+	if not (_catalog.get("plans", {}) as Dictionary).has(str(design.get("plan_id", ""))):
+		_status_label.text = "所选蓝图不属于当前舰船装配 Demo。"
+		return
 	_design_id = design_id
 	_blueprint_name = str(design.get("name", design_id))
 	_selection_kind = ""
 	_selection_id = ""
-	_draft = {
-		"plan_id":str(design.get("plan_id", "")),
-		"hull_id":str(design.get("hull_id", "")),
-		"nodes":design.get("nodes", []).duplicate(true),
-		"connections":design.get("connections", []).duplicate(true)
-	}
+	_draft = design.duplicate(true)
+	_draft_dirty = false
 	_assembly_view.configure(_catalog, _draft)
-	_status_label.text = "已载入 %s；修改仍只存在于当前蓝图草稿中。" % _blueprint_name
+	_refresh_draft_chrome("已载入 %s；修改仍只存在于当前蓝图草稿中。" % _blueprint_name)
 	_refresh_engineering()
 
 

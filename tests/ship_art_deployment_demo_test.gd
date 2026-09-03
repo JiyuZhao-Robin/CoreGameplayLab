@@ -24,7 +24,8 @@ func _ready() -> void:
 func _run() -> void:
 	Game.persistence_enabled = false
 	Game.reset_game()
-	Game.state.unlocked_ship_plans[PLAN_ID] = true
+	Game.state.unlocked_ship_plans.erase(PLAN_ID)
+	_check(not bool(Game.state.unlocked_ship_plans.get(PLAN_ID, false)), "standalone Demo workflow starts from the real locked Lunar hull state")
 	get_tree().root.remove_meta("ship_assembly_demo_font_scale")
 	get_window().size = Vector2i(1600, 1000)
 	var demo := DemoScene.instantiate()
@@ -123,7 +124,7 @@ func _run() -> void:
 		var socket_node := canvas.get_node_or_null(NodePath("ship_design_%s" % socket_id)) as GraphNode
 		var glyph := _find_ship_port_glyph(socket_node)
 		_check(glyph != null and str(glyph.get("shape")) == str(expected_shapes[socket_id]), "%s keeps its canonical functional socket geometry" % socket_id)
-	var summary := Game.ship_design_engineering_summary(PLAN_ID, populated.get("nodes", []), populated.get("connections", []))
+	var summary := Game.ship_design_engineering_summary(PLAN_ID, populated.get("nodes", []), populated.get("connections", []), true)
 	_check(int(summary.get("module_count", 0)) == 6 and int(summary.get("connected_count", 0)) == 6, "right-panel module and connection counts come from the real draft summary")
 	var connection_overview := summary.get("connection_overview", {}) as Dictionary
 	_check(int(connection_overview.get("capacity", {}).get("structure", 0)) == 2 and int(connection_overview.get("usage", {}).get("structure", 0)) == 2, "engineering data reports one shared 2 / 2 structure-interface pool instead of separate shield and cargo rows")
@@ -134,10 +135,12 @@ func _run() -> void:
 	_check(not (summary.get("construction_costs", {}) as Dictionary).is_empty() and not (summary.get("refit_costs", {}) as Dictionary).is_empty(), "build and refit estimates use real simulation BOM APIs")
 	_check(str(summary.get("handoff_mode", "")) in ["REFIT", "BUILD_HULL"], "summary explicitly reports the downstream starport handoff path")
 	var save_button := demo.find_child("SaveBlueprintButton", true, false) as Button
-	_check(not save_button.disabled, "valid connected blueprint enables Save Blueprint")
+	var locked_validation := Game.ship_design_validation(PLAN_ID, populated.get("nodes", []), populated.get("connections", []))
+	_check(str(locked_validation.get("reason_code", "")) == "PLAN_LOCKED" and not save_button.disabled, "Demo can save design intent before hull unlock while the production validator still protects construction")
 	await _capture("05_populated_blueprint")
 	demo.call("_on_entity_selected", "", "")
 	await _frames(2)
+	_check(_tree_text_contains(demo, "解锁后才能提交船厂"), "engineering requirements explain that a locked-hull blueprint cannot enter the shipyard yet")
 	await _capture("13_blueprint_summary")
 	await _capture("15_save_enabled")
 
@@ -185,17 +188,35 @@ func _run() -> void:
 	var refits_before := Game.state.refit_projects.size()
 	var queue_before := Game.state.shipyard_queue.size()
 	var inventory_before := JSON.stringify(Game.state.inventory)
-	demo.call("_save_blueprint")
+	var persistence_root := OS.get_temp_dir().path_join("helios-ui-persistence-audit-demo-%d" % OS.get_process_id())
+	DirAccess.make_dir_recursive_absolute(persistence_root)
+	var persistence_configured := Game.saves.configure_audit_root(persistence_root)
+	if persistence_configured:
+		Game.saves.delete_save()
+	Game.persistence_enabled = persistence_configured
+	save_button.pressed.emit()
 	await _frames(3)
 	var design_id := Game.last_saved_ship_design_id
 	var saved := Game.state.ship_designs.get(design_id, {}) as Dictionary
-	_check(not design_id.is_empty() and saved.get("nodes", []).size() == 7 and saved.get("connections", []).size() == 6, "Save Blueprint persists hull, modules, positions and logical connections")
+	_check(not design_id.is_empty() and saved.get("nodes", []).size() == 7 and saved.get("connections", []).size() == 6, "visible Save Blueprint button persists hull, modules, positions and logical connections")
 	_check(Game.state.ships.size() == ships_before and Game.state.refit_projects.size() == refits_before and Game.state.shipyard_queue.size() == queue_before and JSON.stringify(Game.state.inventory) == inventory_before, "saving design intent does not construct, refit, queue or consume physical resources")
 	_check(str(saved.get("name", "")) == "巡航护卫方案 A", "blueprint display name persists with the real design record")
+	var persisted_repository := LocalSaveRepository.new()
+	var persisted_payload := {}
+	if persistence_configured and persisted_repository.configure_audit_root(persistence_root):
+		persisted_payload = persisted_repository.load_data()
+	_check((persisted_payload.get("ship_designs", {}) as Dictionary).has(design_id), "Save Blueprint immediately writes the design through the real LocalSaveRepository")
+	_check(not bool(Game.state.unlocked_ship_plans.get(PLAN_ID, false)) and not Game.enqueue_saved_ship_design(design_id, 1) and Game.state.shipyard_queue.size() == queue_before, "saving in the Demo never unlocks the hull or bypasses authoritative shipyard availability")
+	var picker_after_save := demo.find_child("SavedBlueprintPicker", true, false) as OptionButton
+	_check(picker_after_save != null and str(picker_after_save.get_item_metadata(picker_after_save.selected)) == design_id, "saved design becomes the active Load selection immediately")
+	await _capture("17_blueprint_saved")
 	var saved_nodes_json := JSON.stringify(saved.get("nodes", []))
-	demo.call("_new_blueprint")
+	var new_button := demo.find_child("NewBlueprintButton", true, false) as Button
+	new_button.pressed.emit()
 	await _frames(2)
-	_check((canvas.call("draft_snapshot") as Dictionary).get("nodes", []).is_empty(), "New Blueprint creates a clean draft without deleting the saved design")
+	var badge := demo.find_child("CurrentBlueprintBadge", true, false) as Label
+	_check((canvas.call("draft_snapshot") as Dictionary).get("nodes", []).is_empty() and badge != null and badge.text.find("UNSAVED") >= 0, "visible New button creates a clean unsaved draft without deleting the saved design")
+	await _capture("18_new_blueprint")
 	var picker := demo.find_child("SavedBlueprintPicker", true, false) as OptionButton
 	var saved_index := -1
 	for item_index in picker.item_count:
@@ -204,17 +225,22 @@ func _run() -> void:
 			break
 	if saved_index >= 0:
 		picker.select(saved_index)
-		demo.call("_load_selected_blueprint")
+		var load_button := demo.find_child("LoadBlueprintButton", true, false) as Button
+		load_button.pressed.emit()
 		await _frames(4)
 	var loaded := canvas.call("draft_snapshot") as Dictionary
-	_check(saved_index >= 0 and JSON.stringify(loaded.get("nodes", [])) == saved_nodes_json and (loaded.get("connections", []) as Array).size() == 6, "Load Blueprint restores persisted node positions and logical connections")
+	badge = demo.find_child("CurrentBlueprintBadge", true, false) as Label
+	_check(saved_index >= 0 and JSON.stringify(loaded.get("nodes", [])) == saved_nodes_json and (loaded.get("connections", []) as Array).size() == 6 and badge != null and badge.text.find("SAVED") >= 0, "visible Load button restores persisted node positions, connections, name and saved state")
+	_check(measurements.text == "W 44m  ·  L 132m", "loading a blueprint restores its hull measurement chrome")
+	await _capture("19_blueprint_loaded")
 
 	var first_link := (canvas.call("draft_snapshot") as Dictionary).get("connections", [])[0] as Dictionary
 	var target_node := canvas.get_node_or_null(NodePath("ship_design_%s" % str(first_link.get("socket_id", "")))) as GraphNode
 	if target_node != null:
 		canvas.call("_on_disconnection_request", StringName(str(first_link.get("module_node_id", ""))), 0, target_node.name, 0)
 	await _frames(3)
-	_check(save_button.disabled, "disconnecting a required module returns Save Blueprint to the authoritative invalid state")
+	badge = demo.find_child("CurrentBlueprintBadge", true, false) as Label
+	_check(save_button.disabled and badge != null and badge.text.find("MODIFIED") >= 0, "disconnecting a required module marks the loaded design modified and returns Save Blueprint to the invalid state")
 	await _capture("16_save_disabled_invalid")
 
 	var previous_font_size := 0
@@ -255,6 +281,10 @@ func _run() -> void:
 		demo.call("_on_font_scale_selected", default_index)
 		await _frames(4)
 
+	Game.persistence_enabled = false
+	if persistence_configured:
+		Game.saves.delete_save()
+	DirAccess.remove_absolute(persistence_root)
 	demo.queue_free()
 	await get_tree().process_frame
 	_finish()

@@ -803,11 +803,11 @@ func enqueue_unlocked_ship_plan(plan_id: String, quantity: int = 1) -> bool:
 	return true
 
 
-func ship_design_validation(plan_id: String, nodes: Array, connections: Array) -> Dictionary:
+func ship_design_validation(plan_id: String, nodes: Array, connections: Array, allow_locked_plan: bool = false) -> Dictionary:
 	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
 	if plan.is_empty():
 		return {"allowed":false, "reason_code":"PLAN_UNKNOWN", "reason":I18n.t("notice.ship_design_plan_unknown", "Unknown hull plan")}
-	if not bool(state.unlocked_ship_plans.get(plan_id, false)):
+	if not allow_locked_plan and not bool(state.unlocked_ship_plans.get(plan_id, false)):
 		return {"allowed":false, "reason_code":"PLAN_LOCKED", "reason":I18n.t("notice.ship_design_plan_locked", "The hull plan is still locked")}
 	var hull_id := str(plan.get("ship_id", ""))
 	var hull_nodes: Array = []
@@ -884,7 +884,7 @@ func ship_design_validation(plan_id: String, nodes: Array, connections: Array) -
 	return {"allowed":true, "reason_code":"READY", "reason":I18n.t("notice.ship_design_ready", "All connectors and fitting limits are valid"), "plan_id":plan_id, "hull_id":hull_id, "modules":modules, "nodes":sanitized_nodes, "connections":sanitized_connections}
 
 
-func ship_design_engineering_summary(plan_id: String, nodes: Array, connections: Array) -> Dictionary:
+func ship_design_engineering_summary(plan_id: String, nodes: Array, connections: Array, allow_locked_plan: bool = false) -> Dictionary:
 	var plan := content.ship_construction_projects.get(plan_id, {}) as Dictionary
 	if plan.is_empty():
 		return {}
@@ -937,7 +937,8 @@ func ship_design_engineering_summary(plan_id: String, nodes: Array, connections:
 		"module_ids":module_ids,
 		"module_count":module_ids.size(),
 		"connected_count":connections.size(),
-		"validation":ship_design_validation(plan_id, nodes, connections),
+		"validation":ship_design_validation(plan_id, nodes, connections, allow_locked_plan),
+		"plan_unlocked":bool(state.unlocked_ship_plans.get(plan_id, false)),
 		"engineering":content.ship_loadout_engineering_summary(hull_id, module_ids),
 		"connection_overview":{"usage":connection_usage, "capacity":connection_capacity},
 		"construction_costs":construction_costs,
@@ -959,8 +960,8 @@ func _ship_design_connection_family(slot: String, mount_role: String) -> String:
 	return slot
 
 
-func save_ship_design(design_id: String, requested_name: String, plan_id: String, nodes: Array, connections: Array) -> bool:
-	var validation := ship_design_validation(plan_id, nodes, connections)
+func save_ship_design(design_id: String, requested_name: String, plan_id: String, nodes: Array, connections: Array, allow_locked_plan: bool = false) -> bool:
+	var validation := ship_design_validation(plan_id, nodes, connections, allow_locked_plan)
 	if not bool(validation.get("allowed", false)):
 		return _reject(str(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())

@@ -52,6 +52,14 @@ func save_state(state: SpaceGameState, content_version: String, enabled_content_
 	payload["saved_at_ms"] = next_saved_at_ms
 	payload["content_version"] = content_version
 	payload["enabled_content_packs"] = enabled_content_packs
+	# Hash the exact JSON-compatible value that will be read back. Blueprint node
+	# positions may contain editor-produced floating-point values whose textual
+	# JSON representation is normalized during serialization; hashing the live
+	# Variant tree could therefore reject the file immediately after writing it.
+	var serialized_payload: Variant = JSON.parse_string(JSON.stringify(payload))
+	if serialized_payload is not Dictionary:
+		return false
+	var persisted_payload := serialized_payload as Dictionary
 	var wrapper := {
 		"save_id":state.save_id,
 		"revision":next_revision,
@@ -62,8 +70,8 @@ func save_state(state: SpaceGameState, content_version: String, enabled_content_
 		"game_version":SpaceGameState.GAME_VERSION,
 		"enabled_content_packs":enabled_content_packs,
 		"saved_at_ms":next_saved_at_ms,
-		"payload":payload,
-		"checksum":_checksum(payload),
+		"payload":persisted_payload,
+		"checksum":_checksum(persisted_payload),
 		"checksum_version":4
 	}
 	var process_temp_path := _save_path.get_base_dir().path_join("space_idle_save.%d.tmp" % OS.get_process_id())
