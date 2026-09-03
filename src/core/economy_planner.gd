@@ -5,13 +5,16 @@ extends RefCounted
 ## rate comes from SimulationEngine's runtime formula entry points.
 
 var content: ContentDatabase
-var simulation: RefCounted
+var _simulation_ref: WeakRef
+var simulation: RefCounted:
+	get:
+		return _simulation_ref.get_ref() if _simulation_ref != null else null
 var _dependency_graph_cache := {}
 
 
 func _init(database: ContentDatabase, simulation_engine: RefCounted) -> void:
 	content = database
-	simulation = simulation_engine
+	_simulation_ref = weakref(simulation_engine)
 
 
 func production_dependency_graph() -> Dictionary:

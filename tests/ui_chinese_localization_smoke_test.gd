@@ -43,7 +43,7 @@ func _run() -> void:
 	_check(_has_text_fragment(main, I18n.core("location.resources.known_sites")), "active page is rebuilt from the English stable key")
 	_press(main.find_child("ToggleLocale", true, false) as Button)
 	await _redraw()
-	_check(I18n.current_locale == "zh_CN" and _has_text_fragment(main, "已知资源点"), "locale toggle restores Chinese without losing state")
+	_check(I18n.current_locale == "zh_CN" and _has_text_fragment(main, I18n.core("location.resources.known_sites")), "locale toggle restores Chinese without losing state")
 	_finish()
 
 

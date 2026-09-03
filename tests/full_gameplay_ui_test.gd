@@ -1657,7 +1657,7 @@ func _mine_and_freight_ui(main: Control, location_id: String, site_id: String, s
 	await _press_named(main, "AssignMining_%s" % ship_id, "ASSIGN_%s_MINING_AT_%s" % [ship_id.to_upper(), location_id.to_upper()])
 	if Game.state.ship_fleet_domain(ship_id) != "mining":
 		return _journey_fail("visible Mining assignment was rejected before %s: %s" % [site_id, Game.last_notice])
-	var availability := Game.extraction_operation_availability(site_id, [ship_id])
+	var availability: Dictionary = Game.extraction_operation_availability(site_id, [ship_id])
 	if not bool(availability.get("allowed", false)):
 		_print_mining_diagnostic(site_id, ship_id)
 		return _journey_fail("authoritative Mining availability rejected %s: %s / %s" % [site_id, availability.get("reason_code", "UNKNOWN"), availability.get("reason", "")])
@@ -3240,7 +3240,7 @@ func _set_idle_fleet_ready_reserve_ui(main: Control) -> int:
 		var ship := ship_value as Dictionary
 		var ship_id := String(ship.get("instance_id", ""))
 		var assignment: Dictionary = ship.get("assignment", {})
-		var assignment_domain := Game.state.ship_fleet_domain(ship_id)
+		var assignment_domain: String = String(Game.state.ship_fleet_domain(ship_id))
 		if String(ship.get("status", "")) != "DOCKED" \
 				or String(ship.get("condition", "")) != "OPERATIONAL" \
 				or String(ship.get("maintenance_state", "ACTIVE")) != "ACTIVE" \

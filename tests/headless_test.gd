@@ -599,10 +599,10 @@ func _test_mature_extraction_network(database: ContentDatabase) -> void:
 	_check(state.ship_is_docked(ship_id) and state.mining_operations[0].get("status", "") == "INTEGRATED", "integration releases bound ships for other work")
 	var before := state.item_quantity("mixed_raw_ore")
 	var network: Dictionary = database.extraction_networks["earth_extraction_network"]
-	var accelerated_network_duration := simulation.extraction_network_cycle_duration_ms(network)
+	var accelerated_network_duration: float = float(simulation.extraction_network_cycle_duration_ms(network))
 	var configured_speed := simulation.simulation_speed_multiplier("mining")
 	simulation.set_simulation_profile("NORMAL_PROFILE")
-	var baseline_network_duration := simulation.extraction_network_cycle_duration_ms(network)
+	var baseline_network_duration: float = float(simulation.extraction_network_cycle_duration_ms(network))
 	simulation.set_simulation_profile("TEST_PROFILE")
 	_check(is_equal_approx(accelerated_network_duration * 10.0, baseline_network_duration), "automatic extraction networks use the configured tenfold mining speed")
 	var network_cycles := 20.0
@@ -865,7 +865,7 @@ func _test_industrial_templates(database: ContentDatabase) -> void:
 	state.add_item("industrial_machine_tools", 10)
 	_check(simulation.apply_industrial_template(state, "earth_orbit", "heavy_industry_world"), "a legacy production Template remains loadable as a logistics-policy preset")
 	var foundry_before := int(state.location_industry("earth_orbit", "orbital_foundry").get("level", 0))
-	var accelerated_expansion_interval := float(database.industry_rules.get("automation_expansion_interval_ms", 60000.0)) / simulation.production_speed_multiplier()
+	var accelerated_expansion_interval: float = float(database.industry_rules.get("automation_expansion_interval_ms", 60000.0)) / float(simulation.production_speed_multiplier())
 	simulation._progress_location_industrial_automation(state, accelerated_expansion_interval + 1.0)
 	_check(int(state.location_industry("earth_orbit", "orbital_foundry").get("level", 0)) == foundry_before and not simulation.facility_expansion_project_queued(state, "earth_orbit", "orbital_foundry") and not bool(state.location_state("earth_orbit").get("automation", {}).get("auto_expand_enabled", true)), "legacy Templates never auto-expand or create production capacity")
 
@@ -1561,7 +1561,7 @@ func _test_phase_eight_industrial_geography(database: ContentDatabase) -> void:
 	_check(not bool(state.regions.get("earth_sun_lagrange", false)) and str(state.location_state("earth_sun_lagrange").get("survey_state", "")) == LocationState.DETECTED, "Survey intelligence does not manufacture a strategic region unlock")
 
 	var site_id := "belt_cobalt_frontier"
-	var base_potential := simulation.extraction_site_sustainable_potential(state, site_id, "fixed_excavation")
+	var base_potential: float = float(simulation.extraction_site_sustainable_potential(state, site_id, "fixed_excavation"))
 	state.add_item("industrial_machine_tools", 10, "asteroid_belt")
 	state.add_item("heavy_structural_section", 10, "asteroid_belt")
 	state.add_item("electronics", 10, "asteroid_belt")

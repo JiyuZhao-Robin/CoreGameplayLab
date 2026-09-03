@@ -283,14 +283,14 @@ func _run() -> void:
 		return
 	if mining_start_probe:
 		var mining_ship_id := _ship_id_for_blueprint("lunar_pathfinder")
-		var mining_activity := Game.content.get_mining_activity_for_site("belt_cobalt_frontier")
-		var wrong_fleet_availability := Game.extraction_operation_availability("belt_cobalt_frontier", [mining_ship_id])
+		var mining_activity: Dictionary = Game.content.get_mining_activity_for_site("belt_cobalt_frontier")
+		var wrong_fleet_availability: Dictionary = Game.extraction_operation_availability("belt_cobalt_frontier", [mining_ship_id])
 		_check(String(wrong_fleet_availability.get("reason_code", "")) == "SHIP_WRONG_FLEET", "explicit extraction query rejects a site-capable ship outside the Mining Fleet")
 		await _press_named(main, "SpeedPause", "PAUSE_FOR_MINING_START_PROBE")
 		await _press_named(main, "Navigation_survey", "OPEN_SURVEY_FOR_MINING_BLOCKER_PROBE")
 		var blocked_start := main.find_child("StartMining_belt_cobalt_frontier", true, false) as Button
 		_check(blocked_start != null and blocked_start.disabled, "Survey disables Start Mining while no Mining Fleet ship satisfies the site capability")
-		var blocked_query := Game.extraction_operation_availability("belt_cobalt_frontier")
+		var blocked_query: Dictionary = Game.extraction_operation_availability("belt_cobalt_frontier")
 		_check(String(blocked_query.get("reason_code", "")) == "SHIP_REQUIREMENTS", "disabled Survey action exposes the structured site-capability blocker")
 		await _press_named(main, "Navigation_ships", "OPEN_SHIPS_FOR_MINING_START_PROBE")
 		var roster_section := main.find_child("FleetSection_roster", true, false) as Button
@@ -315,8 +315,8 @@ func _run() -> void:
 			if Game.state.ship_is_docked(candidate_id) and Game.simulation.mining_power(Game.state, [candidate_id]) > 0.0 and not requirements_met:
 				unsuitable_predecessor = true
 				unsuitable_predecessor_id = candidate_id
-		var ready_availability := Game.extraction_operation_availability("belt_cobalt_frontier")
-		var unsuitable_availability := Game.extraction_operation_availability("belt_cobalt_frontier", [unsuitable_predecessor_id]) if not unsuitable_predecessor_id.is_empty() else {}
+		var ready_availability: Dictionary = Game.extraction_operation_availability("belt_cobalt_frontier")
+		var unsuitable_availability: Dictionary = Game.extraction_operation_availability("belt_cobalt_frontier", [unsuitable_predecessor_id]) if not unsuitable_predecessor_id.is_empty() else {}
 		# Classify readiness from an isolated authoritative save snapshot. A fitted,
 		# site-capable miner at zero maintenance coverage still owns its equipment;
 		# both explicit and automatic selection must report service debt rather than
@@ -325,8 +325,8 @@ func _run() -> void:
 		var maintenance_ship: Dictionary = maintenance_state.ship_by_id(mining_ship_id)
 		maintenance_ship["maintenance_coverage"] = 0.0
 		maintenance_ship["maintenance_debt"] = 1.0
-		var maintenance_explicit := Game._extraction_operation_availability_for_state(maintenance_state, "belt_cobalt_frontier", [mining_ship_id])
-		var maintenance_auto := Game._extraction_operation_availability_for_state(maintenance_state, "belt_cobalt_frontier")
+		var maintenance_explicit: Dictionary = Game._extraction_operation_availability_for_state(maintenance_state, "belt_cobalt_frontier", [mining_ship_id])
+		var maintenance_auto: Dictionary = Game._extraction_operation_availability_for_state(maintenance_state, "belt_cobalt_frontier")
 		_check(String(maintenance_explicit.get("reason_code", "")) == "MAINTENANCE_REQUIRED", "explicit extraction availability preserves fitted equipment identity at zero Maintenance coverage")
 		_check(String(maintenance_auto.get("reason_code", "")) == "MAINTENANCE_REQUIRED", "automatic extraction selection reports Maintenance debt instead of SHIP_REQUIRED")
 		var availability_before := {

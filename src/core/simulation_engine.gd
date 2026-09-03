@@ -51,7 +51,7 @@ var simulation_profile_id := ""
 func _init(database: ContentDatabase) -> void:
 	content = database
 	simulation_profile_id = str(content.simulation_profiles.get("default_profile", "TEST_PROFILE"))
-	requirements = RequirementEngine.new(content, capability_value)
+	requirements = RequirementEngine.new(content, self, &"capability_value")
 	combat = CombatResolverScript.new(content, rng)
 	logistics = LogisticsEngineScript.new(content)
 	economy_planner = EconomyPlannerScript.new(content, self)

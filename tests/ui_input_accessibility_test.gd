@@ -188,13 +188,13 @@ func _test_mouse_keyboard_navigation(main: Control) -> void:
 func _test_focus_survives_domain_refresh(main: Control) -> void:
 	_press(main.find_child("Navigation_ships", true, false) as Button)
 	await _settle_ui()
-	var assignment := _first_enabled_named_prefix(main, "AssignMining_")
-	if assignment == null:
-		_check(false, "a focusable fleet assignment action exists for refresh testing", "EXECUTED", {})
+	var registry_action := main.find_child("FleetRosterFavorite", true, false) as Button
+	if registry_action == null or registry_action.disabled:
+		_check(false, "a focusable Ship Registry action exists for refresh testing", "EXECUTED", {})
 		return
-	var original_name := String(assignment.name)
-	assignment.grab_focus()
-	_press(assignment)
+	var original_name := String(registry_action.name)
+	registry_action.grab_focus()
+	_press(registry_action)
 	await _settle_ui()
 	var owner := get_viewport().gui_get_focus_owner()
 	_check(owner != null and owner.is_visible_in_tree() and String(owner.name) == original_name, "a state-driven page rebuild restores logical keyboard focus", "EXECUTED_EXPECTED_FAILURE", {

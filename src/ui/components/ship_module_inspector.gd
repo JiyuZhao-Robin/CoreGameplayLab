@@ -4,15 +4,15 @@ extends VBoxContainer
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
 const PROPERTY_SPECS: Array[Dictionary] = [
-	{"id":"efficiency_bonus", "display_name":"Efficiency", "unit":"%", "presentation_type":"PERCENT", "priority":90, "category":"PERFORMANCE"},
-	{"id":"mass", "display_name":"Mass", "unit":"t", "presentation_type":"NUMBER", "priority":90, "category":"ENGINEERING"},
-	{"id":"power", "display_name":"Power", "unit":"MW", "presentation_type":"NUMBER", "priority":85, "category":"ENGINEERING"},
-	{"id":"power_grid", "display_name":"Power grid", "unit":"MW", "presentation_type":"NUMBER", "priority":82, "category":"ENGINEERING"},
-	{"id":"thermal", "display_name":"Heat", "unit":"TU", "presentation_type":"NUMBER", "priority":80, "category":"ENGINEERING"},
-	{"id":"cooling", "display_name":"Cooling", "unit":"TU", "presentation_type":"NUMBER", "priority":78, "category":"ENGINEERING"},
-	{"id":"cpu", "display_name":"Compute", "unit":"CU", "presentation_type":"NUMBER", "priority":72, "category":"ENGINEERING"},
-	{"id":"cargo_capacity", "display_name":"Cargo capacity", "unit":"SCU", "presentation_type":"NUMBER", "priority":70, "category":"PERFORMANCE"},
-	{"id":"ammunition_per_attack", "display_name":"Ammunition / attack", "unit":"", "presentation_type":"NUMBER", "priority":65, "category":"INSTALLATION"}
+	{"id":"efficiency_bonus", "unit":"%", "presentation_type":"PERCENT", "priority":90, "category":"PERFORMANCE"},
+	{"id":"mass", "unit":"t", "presentation_type":"NUMBER", "priority":90, "category":"ENGINEERING"},
+	{"id":"power", "unit":"MW", "presentation_type":"NUMBER", "priority":85, "category":"ENGINEERING"},
+	{"id":"power_grid", "unit":"MW", "presentation_type":"NUMBER", "priority":82, "category":"ENGINEERING"},
+	{"id":"thermal", "unit":"TU", "presentation_type":"NUMBER", "priority":80, "category":"ENGINEERING"},
+	{"id":"cooling", "unit":"TU", "presentation_type":"NUMBER", "priority":78, "category":"ENGINEERING"},
+	{"id":"cpu", "unit":"CU", "presentation_type":"NUMBER", "priority":72, "category":"ENGINEERING"},
+	{"id":"cargo_capacity", "unit":"SCU", "presentation_type":"NUMBER", "priority":70, "category":"PERFORMANCE"},
+	{"id":"ammunition_per_attack", "unit":"", "presentation_type":"NUMBER", "priority":65, "category":"INSTALLATION"}
 ]
 
 var _module: Dictionary = {}
@@ -35,6 +35,7 @@ func property_descriptors() -> Array[Dictionary]:
 	for spec_value in PROPERTY_SPECS:
 		var spec := (spec_value as Dictionary).duplicate(true)
 		var property_id := String(spec.get("id", ""))
+		spec["display_name"] = _property_display_name(property_id)
 		if _module.has(property_id):
 			spec["value"] = _module[property_id]
 			descriptors.append(spec)
@@ -47,8 +48,8 @@ func property_descriptors() -> Array[Dictionary]:
 			explicit["value"] = _module[source_field]
 		if explicit.has("value"):
 			descriptors.append(explicit)
-	_append_nested_number_properties(descriptors, "fitting_capacity_bonus", "INSTALLATION", "Capacity")
-	_append_nested_number_properties(descriptors, "combat_stats", "PERFORMANCE", "Combat")
+	_append_nested_number_properties(descriptors, "fitting_capacity_bonus", "INSTALLATION", I18n.core("ships.assembly.inspector.capacity", "Capacity"))
+	_append_nested_number_properties(descriptors, "combat_stats", "PERFORMANCE", I18n.core("ships.assembly.inspector.combat", "Combat"))
 	var capabilities := _module.get("capabilities", {}) as Dictionary
 	for capability_id_value in capabilities.keys():
 		var capability_id := String(capability_id_value)
@@ -61,7 +62,7 @@ func _append_nested_number_properties(result: Array[Dictionary], field: String, 
 	var values := _module.get(field, {}) as Dictionary
 	for key_value in values.keys():
 		var key := String(key_value)
-		result.append({"id":"%s.%s" % [field, key], "display_name":"%s · %s" % [prefix, key.replace("_", " ").capitalize()], "value":values[key_value], "unit":"", "presentation_type":"NUMBER", "priority":55, "category":category})
+		result.append({"id":"%s.%s" % [field, key], "display_name":I18n.core("ships.assembly.format.named_detail", "%s · %s") % [prefix, key.replace("_", " ").capitalize()], "value":values[key_value], "unit":"", "presentation_type":"NUMBER", "priority":55, "category":category})
 
 
 func _rebuild() -> void:
@@ -112,16 +113,16 @@ func _build_header() -> Control:
 	identity.add_theme_constant_override("separation", 4)
 	identity.add_child(_label(String(_context.get("display_name", _module.get("name", _module.get("id", "Module")))), UiTokens.ship_assembly_font_size(13), UiTokens.COLOR_TEXT))
 	identity.add_child(_label(String(_context.get("family_label", String(_module.get("slot", "utility")).capitalize())), UiTokens.ship_assembly_font_size(9), tone))
-	identity.add_child(_label("%s · %s" % [String(_context.get("tier_label", "T1")), String(_context.get("installation_state", "AVAILABLE"))], UiTokens.ship_assembly_font_size(8), UiTokens.COLOR_TEXT_SECONDARY))
+	identity.add_child(_label(I18n.core("ships.assembly.format.named_detail", "%s · %s") % [String(_context.get("tier_label", "T1")), String(_context.get("installation_state", "AVAILABLE"))], UiTokens.ship_assembly_font_size(8), UiTokens.COLOR_TEXT_SECONDARY))
 	header.add_child(identity)
 	return header
 
 
 func _compatibility_properties() -> Array:
 	return [
-		{"id":"socket_family", "display_name":"Socket family", "value":String(_context.get("family_label", String(_module.get("slot", "utility")).capitalize())), "presentation_type":"TEXT"},
-		{"id":"interface_size", "display_name":"Interface", "value":"%s · %s" % [String(_module.get("size", "S")), String(_context.get("diameter_label", ""))], "presentation_type":"TEXT"},
-		{"id":"mount_role", "display_name":"Mount role", "value":String(_context.get("mount_role", "—")), "presentation_type":"TEXT"}
+		{"id":"socket_family", "display_name":I18n.core("ships.assembly.inspector.socket_family", "Socket family"), "value":String(_context.get("family_label", String(_module.get("slot", "utility")).capitalize())), "presentation_type":"TEXT"},
+		{"id":"interface_size", "display_name":I18n.core("ships.assembly.inspector.interface", "Interface"), "value":I18n.core("ships.assembly.format.named_detail", "%s · %s") % [String(_module.get("size", "S")), String(_context.get("diameter_label", ""))], "presentation_type":"TEXT"},
+		{"id":"mount_role", "display_name":I18n.core("ships.assembly.inspector.mount_role", "Mount role"), "value":String(_context.get("mount_role", "—")), "presentation_type":"TEXT"}
 	]
 
 
@@ -165,7 +166,7 @@ func _build_section(category: String, descriptors: Array) -> Control:
 			body.add_child(value_label)
 	section.add_child(body)
 	var collapsed := bool(_collapsed.get(category, true))
-	button.text = "%s  %s" % ["▸" if collapsed else "▾", category.replace("_", " ")]
+	button.text = I18n.core("ships.assembly.inspector.section_header", "%s  %s") % ["▸" if collapsed else "▾", _category_display_name(category)]
 	body.visible = not collapsed
 	return section
 
@@ -210,6 +211,31 @@ func _format_property(descriptor: Dictionary) -> String:
 
 func _number_text(value: float) -> String:
 	return String.num(value, 2).trim_suffix("0").trim_suffix(".") if not is_equal_approx(value, roundf(value)) else str(roundi(value))
+
+
+func _property_display_name(property_id: String) -> String:
+	match property_id:
+		"efficiency_bonus": return I18n.core("ships.assembly.inspector.efficiency", "Efficiency")
+		"mass": return I18n.core("ships.assembly.inspector.mass", "Mass")
+		"power": return I18n.core("ships.assembly.inspector.power", "Power")
+		"power_grid": return I18n.core("ships.assembly.inspector.power_grid", "Power grid")
+		"thermal": return I18n.core("ships.assembly.inspector.heat", "Heat")
+		"cooling": return I18n.core("ships.assembly.inspector.cooling", "Cooling")
+		"cpu": return I18n.core("ships.assembly.inspector.compute", "Compute")
+		"cargo_capacity": return I18n.core("ships.assembly.inspector.cargo_capacity", "Cargo capacity")
+		"ammunition_per_attack": return I18n.core("ships.assembly.inspector.ammunition_per_attack", "Ammunition / attack")
+		_: return property_id.replace("_", " ").capitalize()
+
+
+func _category_display_name(category: String) -> String:
+	match category:
+		"PERFORMANCE": return I18n.core("ships.assembly.inspector.category.performance", "PERFORMANCE")
+		"ENGINEERING": return I18n.core("ships.assembly.inspector.category.engineering", "ENGINEERING")
+		"COMPATIBILITY": return I18n.core("ships.assembly.inspector.category.compatibility", "COMPATIBILITY")
+		"INSTALLATION": return I18n.core("ships.assembly.inspector.category.installation", "INSTALLATION")
+		"EFFECTS": return I18n.core("ships.assembly.inspector.category.effects", "EFFECTS")
+		"DESCRIPTION": return I18n.core("ships.assembly.inspector.category.description", "DESCRIPTION")
+		_: return I18n.core("ships.assembly.inspector.category.advanced", "ADVANCED")
 
 
 func _label(text_value: String, font_size: int, color: Color) -> Label:

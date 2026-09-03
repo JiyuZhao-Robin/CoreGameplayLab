@@ -57,7 +57,7 @@ func configure_for_main_game() -> void:
 func _ready() -> void:
 	_previous_ui_scale = UiTokens.ui_scale()
 	if _blueprint_name.is_empty():
-		_blueprint_name = _localized("巡航护卫方案 A", "Escort Configuration A")
+		_blueprint_name = I18n.core("ships.assembly.default_blueprint_name", "Escort Configuration A")
 	_user_font_scale = _sanitize_font_scale(_previous_ui_scale if _embedded_in_main else float(get_tree().root.get_meta(FONT_SCALE_SESSION_META, DEFAULT_FONT_SCALE)))
 	_configure_manual_scaling()
 	_apply_native_theme()
@@ -243,13 +243,13 @@ func _build_header() -> Control:
 	var brand_name := _label("HELIOS CORE", 10, UiTokens.COLOR_FOCUS)
 	brand_name.name = "BlueprintBrand"
 	brand.add_child(brand_name)
-	brand.add_child(_label(_localized("舰船装配实验室\nSHIP ASSEMBLY LAB", "SHIP ASSEMBLY LAB"), 14, UiTokens.COLOR_TEXT))
+	brand.add_child(_label(I18n.core("ships.assembly.lab_title", "SHIP ASSEMBLY LAB"), 14, UiTokens.COLOR_TEXT))
 	primary_row.add_child(brand)
 	var context := VBoxContainer.new()
 	context.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	context.alignment = BoxContainer.ALIGNMENT_CENTER
 	context.add_theme_constant_override("separation", 1)
-	context.add_child(_label(_localized("当前设计  /  BLUEPRINT", "CURRENT BLUEPRINT"), 8, UiTokens.COLOR_TEXT_MUTED))
+	context.add_child(_label(I18n.core("ships.assembly.current_blueprint", "CURRENT BLUEPRINT"), 8, UiTokens.COLOR_TEXT_MUTED))
 	_design_badge = _label("UNSAVED DESIGN", 9, UiTokens.COLOR_TEXT_SECONDARY)
 	_design_badge.name = "CurrentBlueprintBadge"
 	context.add_child(_design_badge)
@@ -258,8 +258,8 @@ func _build_header() -> Control:
 		_font_scale_picker = OptionButton.new()
 		_font_scale_picker.name = "ShipAssemblyFontScale"
 		_font_scale_picker.custom_minimum_size.x = 96.0
-		_font_scale_picker.tooltip_text = _localized("字体大小 / TEXT SIZE", "TEXT SIZE")
-		_font_scale_picker.accessibility_name = _localized("字体大小", "Text size")
+		_font_scale_picker.tooltip_text = I18n.core("ships.assembly.text_size_tooltip", "TEXT SIZE")
+		_font_scale_picker.accessibility_name = I18n.core("ships.assembly.text_size", "Text size")
 		for percent in FONT_SCALE_OPTIONS:
 			_font_scale_picker.add_item("%d%%" % percent, percent)
 		var selected_percent := int(round(_user_font_scale * 100.0))
@@ -269,18 +269,18 @@ func _build_header() -> Control:
 	_load_picker = OptionButton.new()
 	_load_picker.name = "SavedBlueprintPicker"
 	_load_picker.custom_minimum_size.x = 208.0
-	_load_picker.tooltip_text = _localized("选择已经保存的舰船蓝图", "Select a saved ship blueprint")
+	_load_picker.tooltip_text = I18n.core("ships.assembly.select_saved_tooltip", "Select a saved ship blueprint")
 	_load_picker.item_selected.connect(_on_load_picker_selected)
 	actions_row.add_child(_load_picker)
 	_load_button = Button.new()
 	_load_button.name = "LoadBlueprintButton"
-	_load_button.text = _localized("载入", "LOAD")
+	_load_button.text = I18n.core("ships.assembly.load", "LOAD")
 	_load_button.custom_minimum_size = Vector2(104.0, 40.0)
 	_load_button.pressed.connect(_load_selected_blueprint)
 	actions_row.add_child(_load_button)
 	var new_button := Button.new()
 	new_button.name = "NewBlueprintButton"
-	new_button.text = _localized("新建", "NEW")
+	new_button.text = I18n.core("ships.assembly.new", "NEW")
 	new_button.custom_minimum_size = Vector2(126.0, 40.0)
 	new_button.pressed.connect(_new_blueprint)
 	actions_row.add_child(new_button)
@@ -299,7 +299,7 @@ func _build_canvas() -> Control:
 	var caption := HBoxContainer.new()
 	caption.custom_minimum_size.y = 28.0
 	caption.add_theme_constant_override("separation", 8)
-	var canvas_title := _label(_localized("装配画布  /  ASSEMBLY CANVAS", "ASSEMBLY CANVAS"), 9, UiTokens.COLOR_TEXT_MUTED)
+	var canvas_title := _label(I18n.core("ships.assembly.canvas_title", "ASSEMBLY CANVAS"), 9, UiTokens.COLOR_TEXT_MUTED)
 	canvas_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	caption.add_child(canvas_title)
 	_measurement_label = _label("W —  ·  L —", 8, UiTokens.COLOR_TEXT_MUTED)
@@ -318,7 +318,7 @@ func _build_canvas() -> Control:
 	status_bar.name = "BlueprintStatusBar"
 	status_bar.custom_minimum_size.y = 30.0
 	status_bar.add_theme_stylebox_override("panel", UiTokens.panel_style(Color("071210"), UiTokens.COLOR_BORDER, 0))
-	_status_label = _label(_localized("从左侧选择一艘舰船开始设计。", "Choose a hull from the left to begin."), 8, UiTokens.COLOR_TEXT_SECONDARY)
+	_status_label = _label(I18n.core("ships.assembly.choose_hull", "Choose a hull from the left to begin."), 8, UiTokens.COLOR_TEXT_SECONDARY)
 	_status_label.name = "BlueprintStatusLabel"
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	status_bar.add_child(_status_label)
@@ -358,12 +358,12 @@ func _blueprint_catalog() -> Dictionary:
 		"plans":plans,
 		"hulls":hulls,
 		"modules":modules,
-		"slot_labels":{"weapon":_localized("武器", "WEAPON"), "shield":_localized("防御", "DEFENSE"), "drive":_localized("推进", "PROPULSION"), "utility":_localized("功能", "UTILITY"), "core":_localized("核心", "CORE")},
-		"structural_label":_localized("通用结构 / STRUCTURE", "STRUCTURE"),
-		"socket_label_format":"%s %d",
-		"module_label_format":"%s · %s",
-		"hull_summary_format":"%s · %d sockets",
-		"core_socket_format":_localized("能源核心 %d", "ENERGY CORE %d"),
+		"slot_labels":{"weapon":I18n.core("ships.assembly.slot.weapon", "WEAPON"), "shield":I18n.core("ships.assembly.slot.shield", "DEFENSE"), "drive":I18n.core("ships.assembly.slot.drive", "PROPULSION"), "utility":I18n.core("ships.assembly.slot.utility", "UTILITY"), "core":I18n.core("ships.assembly.slot.core", "CORE")},
+		"structural_label":I18n.core("ships.assembly.slot.structure", "STRUCTURE"),
+		"socket_label_format":I18n.core("ships.assembly.format.socket_label", "%s %d"),
+		"module_label_format":I18n.core("ships.assembly.format.module_label", "%s · %s"),
+		"hull_summary_format":I18n.core("ships.assembly.format.hull_summary", "%s · %d sockets"),
+		"core_socket_format":I18n.core("ships.assembly.format.core_socket", "ENERGY CORE %d"),
 		"functional_socket_shapes":true
 	}
 
@@ -407,15 +407,15 @@ func _on_draft_changed(snapshot: Dictionary) -> void:
 func _refresh_draft_chrome(status_override: String = "") -> void:
 	var hull_id := str(_draft.get("hull_id", ""))
 	if hull_id.is_empty():
-		_status_label.text = status_override if not status_override.is_empty() else _localized("从左侧选择一艘舰船开始设计。", "Choose a hull from the left to begin.")
+		_status_label.text = status_override if not status_override.is_empty() else I18n.core("ships.assembly.choose_hull", "Choose a hull from the left to begin.")
 		_measurement_label.text = "W —  ·  L —"
 	else:
 		var hull := Game.content.ships.get(hull_id, {}) as Dictionary
 		var visual := hull.get("hull_visual", {}) as Dictionary
 		var module_count := maxi(0, (_draft.get("nodes", []) as Array).size() - 1)
 		var connection_count := (_draft.get("connections", []) as Array).size()
-		_status_label.text = status_override if not status_override.is_empty() else (_localized("%s · 已放置 %d 个零件 · 已连接 %d 个插槽", "%s · %d modules placed · %d sockets connected") % [I18n.content(hull), module_count, connection_count])
-		_measurement_label.text = "W %.0fm  ·  L %.0fm" % [float(visual.get("beam_m", 0.0)), float(visual.get("length_m", 0.0))]
+		_status_label.text = status_override if not status_override.is_empty() else (I18n.core("ships.assembly.draft_summary", "%s · %d modules placed · %d sockets connected") % [I18n.content(hull), module_count, connection_count])
+		_measurement_label.text = I18n.core("ships.assembly.dimensions", "W %.0fm  ·  L %.0fm") % [float(visual.get("beam_m", 0.0)), float(visual.get("length_m", 0.0))]
 
 
 func _on_entity_selected(kind: String, entity_id: String) -> void:
@@ -434,7 +434,7 @@ func _refresh_design_badge() -> void:
 	if not is_instance_valid(_design_badge):
 		return
 	var state_label := "UNSAVED" if _design_id.is_empty() else ("MODIFIED" if _draft_dirty else "SAVED")
-	_design_badge.text = "%s  ·  %s" % [_blueprint_name, state_label]
+	_design_badge.text = I18n.core("ships.assembly.format.blueprint_state", "%s  ·  %s") % [_blueprint_name, state_label]
 
 
 func _on_font_scale_selected(index: int) -> void:
@@ -456,9 +456,9 @@ func _save_blueprint() -> void:
 		_draft_dirty = false
 		var saved_notice := Game.last_notice
 		var persisted := not Game.persistence_enabled or Game.save_game()
-		var status := _localized("%s；蓝图已保存，未启动建造或改装。", "%s; blueprint saved without starting construction or refit.") % saved_notice
+		var status := I18n.core("ships.assembly.saved_notice", "%s; blueprint saved without starting construction or refit.") % saved_notice
 		if not persisted:
-			status = _localized("%s；蓝图保留在当前会话，但本地存档写入失败。", "%s; blueprint remains in this session, but the local save write failed.") % saved_notice
+			status = I18n.core("ships.assembly.save_write_failed", "%s; blueprint remains in this session, but the local save write failed.") % saved_notice
 		_refresh_saved_designs(_design_id)
 		_refresh_draft_chrome(status)
 		blueprint_saved.emit(_design_id)
@@ -469,7 +469,7 @@ func _save_blueprint() -> void:
 
 func _new_blueprint() -> void:
 	_design_id = ""
-	_blueprint_name = _localized("新舰船设定 %d", "New Ship Blueprint %d") % (Game.state.ship_designs.size() + 1)
+	_blueprint_name = I18n.core("ships.assembly.new_blueprint_name", "New Ship Blueprint %d") % (Game.state.ship_designs.size() + 1)
 	_selection_kind = ""
 	_selection_id = ""
 	_draft = {}
@@ -478,7 +478,7 @@ func _new_blueprint() -> void:
 	_assembly_view.call("_reset_view")
 	_library.select_tab(0)
 	_refresh_saved_designs()
-	_refresh_draft_chrome(_localized("已创建空白蓝图；不会影响任何实体舰船。", "Blank blueprint created; no physical ship was changed."))
+	_refresh_draft_chrome(I18n.core("ships.assembly.blank_created", "Blank blueprint created; no physical ship was changed."))
 	_refresh_engineering()
 
 
@@ -486,7 +486,7 @@ func _refresh_saved_designs(preferred_design_id: String = "") -> void:
 	if not is_instance_valid(_load_picker):
 		return
 	_load_picker.clear()
-	_load_picker.add_item(_localized("暂无已保存蓝图", "No saved blueprints"))
+	_load_picker.add_item(I18n.core("ships.assembly.no_saved_blueprints", "No saved blueprints"))
 	_load_picker.set_item_metadata(0, "")
 	var design_ids: Array = Game.state.ship_designs.keys()
 	design_ids.sort()
@@ -506,7 +506,7 @@ func _refresh_saved_designs(preferred_design_id: String = "") -> void:
 	if selected_index < 0 and _load_picker.item_count > 1:
 		selected_index = 1
 	if selected_index > 0:
-		_load_picker.set_item_text(0, _localized("选择已保存蓝图", "Select saved blueprint"))
+		_load_picker.set_item_text(0, I18n.core("ships.assembly.select_saved", "Select saved blueprint"))
 		_load_picker.select(selected_index)
 	else:
 		_load_picker.select(0)
@@ -521,7 +521,7 @@ func _on_load_picker_selected(index: int) -> void:
 
 func _load_selected_blueprint() -> void:
 	if not is_instance_valid(_load_picker) or _load_picker.selected <= 0:
-		_status_label.text = _localized("请先选择一个已经保存的舰船蓝图。", "Select a saved ship blueprint first.")
+		_status_label.text = I18n.core("ships.assembly.select_saved_first", "Select a saved ship blueprint first.")
 		return
 	var design_id := str(_load_picker.get_item_metadata(_load_picker.selected))
 	_load_blueprint_by_id(design_id)
@@ -530,10 +530,10 @@ func _load_selected_blueprint() -> void:
 func _load_blueprint_by_id(design_id: String) -> bool:
 	var design := Game.state.ship_designs.get(design_id, {}) as Dictionary
 	if design.is_empty():
-		_status_label.text = _localized("找不到所选蓝图。", "The selected blueprint was not found.")
+		_status_label.text = I18n.core("ships.assembly.selected_not_found", "The selected blueprint was not found.")
 		return false
 	if not (_catalog.get("plans", {}) as Dictionary).has(str(design.get("plan_id", ""))):
-		_status_label.text = _localized("所选蓝图的舰体方案不在当前可用目录中。", "The selected blueprint hull plan is not in the current catalogue.")
+		_status_label.text = I18n.core("ships.assembly.selected_hull_unavailable", "The selected blueprint hull plan is not in the current catalogue.")
 		return false
 	_design_id = design_id
 	_blueprint_name = str(design.get("name", design_id))
@@ -542,31 +542,19 @@ func _load_blueprint_by_id(design_id: String) -> bool:
 	_draft = design.duplicate(true)
 	_draft_dirty = false
 	_assembly_view.configure(_catalog, _draft)
-	_refresh_draft_chrome(_localized("已载入 %s；修改仍只存在于当前蓝图草稿中。", "Loaded %s; edits remain in the current blueprint draft.") % _blueprint_name)
+	_refresh_draft_chrome(I18n.core("ships.assembly.loaded_notice", "Loaded %s; edits remain in the current blueprint draft.") % _blueprint_name)
 	_refresh_engineering()
 	return true
 
 
 func _on_notice_requested(code: String) -> void:
-	var chinese := {
-		"HULL_ALREADY_PLACED":"当前蓝图已有舰体；一个蓝图只能使用一艘舰体。",
-		"PORT_DIRECTION_INVALID":"请从零件的内嵌接口连接到舰体插槽。",
-		"PORT_SHAPE_MISMATCH":"功能族或物理安装接口不匹配。",
-		"PORT_SIZE_MISMATCH":"零件尺寸超过该舰体插槽的物理等级。",
-		"PORT_ALREADY_OCCUPIED":"该零件或舰体插槽已经被占用。"
-	}
-	var english := {
-		"HULL_ALREADY_PLACED":"This blueprint already contains its single allowed hull.",
-		"PORT_DIRECTION_INVALID":"Connect from the module's inset interface to a hull socket.",
-		"PORT_SHAPE_MISMATCH":"The functional family or physical interface is incompatible.",
-		"PORT_SIZE_MISMATCH":"The module exceeds this socket's physical size rating.",
-		"PORT_ALREADY_OCCUPIED":"The module interface or hull socket is already occupied."
-	}
-	_status_label.text = (chinese if I18n.is_chinese() else english).get(code, _localized("当前操作无法完成。", "The operation could not be completed."))
-
-
-func _localized(chinese: String, english: String) -> String:
-	return chinese if I18n.is_chinese() else english
+	match code:
+		"HULL_ALREADY_PLACED": _status_label.text = I18n.core("ships.assembly.notice.hull_already_placed", "This blueprint already contains its single allowed hull.")
+		"PORT_DIRECTION_INVALID": _status_label.text = I18n.core("ships.assembly.notice.port_direction_invalid", "Connect from the module's inset interface to a hull socket.")
+		"PORT_SHAPE_MISMATCH": _status_label.text = I18n.core("ships.assembly.notice.port_shape_mismatch", "The functional family or physical interface is incompatible.")
+		"PORT_SIZE_MISMATCH": _status_label.text = I18n.core("ships.assembly.notice.port_size_mismatch", "The module exceeds this socket's physical size rating.")
+		"PORT_ALREADY_OCCUPIED": _status_label.text = I18n.core("ships.assembly.notice.port_already_occupied", "The module interface or hull socket is already occupied.")
+		_: _status_label.text = I18n.core("ships.assembly.notice.operation_failed", "The operation could not be completed.")
 
 
 func _label(text_value: String, font_size: int, color: Color) -> Label:

@@ -36,6 +36,10 @@ func _run() -> void:
 		var item_id := String(item_id_value)
 		Game.state.add_item(item_id, int(refit_bom[item_id]))
 	var main := MainScene.instantiate() as Control
+	# The production acceptance viewport is fixed even under the 64×64 Dummy
+	# headless root, so layout assertions exercise the real STEP 08 composition.
+	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	main.size = Vector2(1672.0, 941.0)
 	add_child(main)
 	await _redraw()
 	var formations_before_roster := Game.state.fleet_formations.duplicate(true)
@@ -80,7 +84,7 @@ func _run() -> void:
 	_check(is_equal_approx(list_surface.size_flags_stretch_ratio, 0.341) and is_equal_approx(inspector_surface.size_flags_stretch_ratio, 0.639), "master-detail body uses the Golden Reference 34/64 responsive width weights")
 	var measured_gap := inspector_surface.position.x - (list_surface.position.x + list_surface.size.x)
 	var browser_share := list_surface.size.x / maxf(1.0, list_surface.size.x + inspector_surface.size.x)
-	_check(absf(measured_gap - float(UiTokens.layout_px(21))) <= 1.0 and absf(browser_share - (34.1 / 98.0)) <= 0.01, "Ship Browser and Ship Inspector preserve the approximately 20 px gutter and normalized Golden Reference width ratio")
+	_check(absf(measured_gap - 21.0) <= 1.0 and absf(browser_share - (34.1 / 98.0)) <= 0.01, "Ship Browser and Ship Inspector preserve the approximately 20 px gutter and normalized Golden Reference width ratio")
 	_check(is_equal_approx(list_surface.size.y, inspector_surface.size.y) and list_surface.size.y > pioneer_list_item.size.y * 2.0, "both roster work surfaces expand through the remaining vertical workspace")
 	print("SHIP_ROSTER_STEP04_GEOMETRY viewport=%dx%d body_x=%.1f browser=%.1f gap=%.1f inspector=%.1f height=%.1f" % [get_viewport().get_visible_rect().size.x, get_viewport().get_visible_rect().size.y, list_surface.global_position.x, list_surface.size.x, measured_gap, inspector_surface.size.x, list_surface.size.y])
 	_check(ship_list.get_child_count() == 8 and pioneer_list_item != null and pioneer_hull_class != null and pioneer_hull_class.text == "护卫舰 · T1", "Ship Browser renders eight isolated fixture rows from real Hull Class and construction engineering tier data")
@@ -139,7 +143,7 @@ func _run() -> void:
 		operational_values_aligned = operational_values_aligned and absf((main.find_child("FleetRosterOperationalValue_%s" % field_id, true, false) as Label).global_position.x - operational_value_x) <= 1.0
 	_check(operational_values_aligned, "all five Operational Status values share one aligned value column")
 	var inspector_dot_style := inspector_status_dot.get_theme_stylebox("panel") as StyleBoxFlat if inspector_status_dot != null else null
-	_check(inspector_status_dot != null and inspector_status_dot.custom_minimum_size == UiTokens.layout_vector(Vector2(8, 8)) and inspector_dot_style != null and inspector_dot_style.bg_color.is_equal_approx(UiTokens.COLOR_RUNNING), "Inspector status reuses the accepted real 8 px lifecycle primitive and semantic color")
+	_check(inspector_status_dot != null and inspector_status_dot.custom_minimum_size == Vector2(8, 8) and inspector_dot_style != null and inspector_dot_style.bg_color.is_equal_approx(UiTokens.COLOR_RUNNING), "Inspector status reuses the accepted real 8 px lifecycle primitive and semantic color")
 	var inspector_ship_art := main.find_child("FleetRosterShipVisual", true, false) as TextureRect
 	_check(inspector_ship_art != null and inspector_ship_art.texture != null and inspector_ship_art.texture.resource_path == "res://assets/ui/ship_registry/ships/patchwork_prospector_ship.png" and inspector_ship_art.stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_CENTERED, "patchwork_prospector Inspector uses only its approved aspect-preserving project-owned artwork")
 	var operational_icon_paths := {
@@ -154,7 +158,7 @@ func _run() -> void:
 		var field_id := String(field_id_value)
 		var operational_icon := main.find_child("FleetRosterOperationalIcon_%s" % field_id, true, false) as TextureRect
 		var operational_atlas := operational_icon.texture as AtlasTexture if operational_icon != null else null
-		operational_icons_valid = operational_icons_valid and operational_icon != null and operational_atlas != null and operational_atlas.atlas != null and operational_icon.custom_minimum_size == UiTokens.layout_vector(Vector2(16, 16)) and operational_atlas.atlas.resource_path == String(operational_icon_paths[field_id])
+		operational_icons_valid = operational_icons_valid and operational_icon != null and operational_atlas != null and operational_atlas.atlas != null and operational_icon.custom_minimum_size == Vector2(16, 16) and operational_atlas.atlas.resource_path == String(operational_icon_paths[field_id])
 	_check(operational_icons_valid, "all five Operational Status rows use their approved 16 px project-owned texture assets")
 	_check(main.find_child("SetShipActive_%s" % pioneer_id, true, false) == null and main.find_child("SetShipReadyReserve_%s" % pioneer_id, true, false) == null and main.find_child("MothballShip_%s" % pioneer_id, true, false) == null and main.find_child("AssignStandby_%s" % pioneer_id, true, false) == null and main.find_child("AssignFormation_%s" % pioneer_id, true, false) == null and main.find_child("ShipCombatZone_%s_FRONT" % pioneer_id, true, false) == null and not _has_button_text(roster_box, I18n.core("ships.action.scrap")), "legacy lifecycle, formation, combat-position, and dismantle controls are no longer rendered")
 	var inspector_scroll := main.find_child("FleetRosterInspectorScroll", true, false) as ScrollContainer
@@ -164,8 +168,8 @@ func _run() -> void:
 	var readiness_panel := main.find_child("FleetRosterReadinessPanel", true, false) as PanelContainer
 	_check(inspector_scroll != null and inspector_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and inspector_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO, "the Inspector owns a vertical accessibility viewport while preserving the fixed Master–Detail work surface")
 	_check(lower_row != null and lower_row.get_child_count() == 3 and basic_panel != null and configuration_panel != null and readiness_panel != null and is_equal_approx(basic_panel.size_flags_stretch_ratio, 1.0) and is_equal_approx(configuration_panel.size_flags_stretch_ratio, 1.2) and is_equal_approx(readiness_panel.size_flags_stretch_ratio, 1.8), "STEP 07 lower region contains exactly the 1.0/1.2/1.8 Basic, Configuration, and Readiness panels")
-	var expected_lower_height := float(UiTokens.layout_px(238))
-	var expected_lower_gap := float(UiTokens.layout_px(18))
+	var expected_lower_height := 238.0
+	var expected_lower_gap := 18.0
 	var actual_lower_gap := lower_row.global_position.y - inspector_upper.get_global_rect().end.y
 	_check(absf(lower_row.size.y - expected_lower_height) <= 1.0 and absf(configuration_panel.global_position.x - basic_panel.get_global_rect().end.x - expected_lower_gap) <= 1.0 and absf(readiness_panel.global_position.x - configuration_panel.get_global_rect().end.x - expected_lower_gap) <= 1.0 and absf(actual_lower_gap - expected_lower_gap) <= 1.0, "lower panels preserve their Golden height and 18 px vertical/horizontal rhythm")
 	_check((main.find_child("FleetRosterBasicValue_ship_id", true, false) as Label).text == pioneer_id and (main.find_child("FleetRosterBasicValue_registry_code", true, false) as Label).text == "—" and (main.find_child("FleetRosterBasicValue_tonnage", true, false) as Label).text == "—" and (main.find_child("FleetRosterBasicValue_crew", true, false) as Label).text == "—" and (main.find_child("FleetRosterBasicValue_ship_class", true, false) as Label).text == "护卫舰 · T1" and (main.find_child("FleetRosterBasicValue_manufacturer", true, false) as Label).text == "—" and not (main.find_child("FleetRosterBasicValue_built_at", true, false) as Label).text.is_empty(), "Basic Information binds canonical identity/class/build time and exposes missing model concepts honestly")
@@ -186,6 +190,281 @@ func _run() -> void:
 	_check(String(main.call("_fleet_roster_compact_module_names", ["重复模块", "重复模块", "不同模块"])) == "重复模块 ×2%s不同模块" % I18n.core("format.list_separator"), "Configuration Summary compresses repeated real module definitions without duplicating rows")
 	_check(_controls_inside(basic_panel, main.find_children("FleetRosterBasicValue_*", "Label", true, false)) and _controls_inside(configuration_panel, main.find_children("FleetRosterConfigurationValue_*", "Label", true, false)) and _controls_inside(readiness_panel, main.find_children("FleetRosterReadinessValue_*", "Label", true, false)) and _controls_inside(readiness_panel, main.find_children("FleetRosterReadinessBar_*", "ProgressBar", true, false)), "all STEP 07 values and ProgressBars remain inside their panels at every tested UI scale")
 	_check(Game.state.fleet_formations == formations_before_roster and Game.state.ships == ships_before_roster, "roster layout cleanup does not mutate ship, task-force, formation, or save data")
+
+	var action_asset_paths := [
+		"res://assets/ui/ship_registry/actions/star_normal.png",
+		"res://assets/ui/ship_registry/actions/star_hover.png",
+		"res://assets/ui/ship_registry/actions/star_active.png",
+		"res://assets/ui/ship_registry/actions/star_disabled.png",
+		"res://assets/ui/ship_registry/actions/lock_normal.png",
+		"res://assets/ui/ship_registry/actions/lock_hover.png",
+		"res://assets/ui/ship_registry/actions/lock_active.png",
+		"res://assets/ui/ship_registry/actions/lock_disabled.png",
+		"res://assets/ui/ship_registry/actions/more_normal.png",
+		"res://assets/ui/ship_registry/actions/more_hover.png",
+		"res://assets/ui/ship_registry/actions/more_active.png",
+		"res://assets/ui/ship_registry/actions/more_disabled.png"
+	]
+	var all_action_assets_valid := true
+	for asset_path_value in action_asset_paths:
+		var asset_path := String(asset_path_value)
+		var texture := load(asset_path) as Texture2D if ResourceLoader.exists(asset_path) else null
+		all_action_assets_valid = all_action_assets_valid and texture != null and texture.resource_path == asset_path and texture.get_width() <= 64 and texture.get_height() <= 64
+	_check(all_action_assets_valid, "all twelve supplied Ship Registry action assets resolve as runtime textures no larger than 64 px")
+
+	var header_actions := main.find_child("FleetRosterHeaderActions", true, false) as HBoxContainer
+	var favorite_button := main.find_child("FleetRosterFavorite", true, false) as Button
+	var lock_button := main.find_child("FleetRosterLock", true, false) as Button
+	var more_button := main.find_child("FleetRosterMore", true, false) as Button
+	var footer_actions := main.find_child("FleetRosterFooterActions", true, false) as HBoxContainer
+	var dispatch_button := main.find_child("FleetRosterDispatch", true, false) as Button
+	var details_button := main.find_child("FleetRosterViewDetails", true, false) as Button
+	var dismantle_button := main.find_child("FleetRosterDismantle", true, false) as Button
+	_check(header_actions != null and header_actions.get_child_count() == 3 and header_actions.get_child(0) == favorite_button and header_actions.get_child(1) == lock_button and header_actions.get_child(2) == more_button, "STEP 08 header action order is Favorite, Lock, More")
+	_check(footer_actions != null and footer_actions.get_child_count() == 3 and footer_actions.get_child(0) == dispatch_button and footer_actions.get_child(1) == details_button and footer_actions.get_child(2) == dismantle_button, "STEP 08 footer action order is Dispatch, View Details, Dismantle Ship")
+	var step08_inspector_scroll := main.find_child("FleetRosterInspectorScroll", true, false) as ScrollContainer
+	var step08_identity := main.find_child("FleetRosterInspectorIdentityHeader", true, false) as HBoxContainer
+	var step08_lower_inset := main.find_child("FleetRosterLowerInfoInset", true, false) as MarginContainer
+	var step08_footer_inset := main.find_child("FleetRosterFooterInset", true, false) as MarginContainer
+	var step08_footer_gap := details_button.global_position.x - dispatch_button.get_global_rect().end.x if dispatch_button != null and details_button != null else -1.0
+	var step08_header_gap := lock_button.global_position.x - favorite_button.get_global_rect().end.x if favorite_button != null and lock_button != null else -1.0
+	var inspector_scroll_free := step08_inspector_scroll != null and step08_inspector_scroll.get_v_scroll_bar().max_value <= step08_inspector_scroll.get_v_scroll_bar().page + 1.0
+	_check(inspector_scroll_free and step08_inspector_scroll.get_global_rect().grow(1.0).encloses(footer_actions.get_global_rect()), "STEP 08 keeps the complete Inspector and footer visible without an active Inspector scrollbar")
+	print("SHIP_ROSTER_STEP08_ACTION_GEOMETRY scale=%d identity_h=%.1f header_h=%.1f header_gap=%.1f favorite_w=%.1f lock_w=%.1f more_w=%.1f upper_h=%.1f lower_inset_h=%.1f lower_h=%.1f lower_gap=%.1f footer_inset_h=%.1f footer_h=%.1f footer_gap=%.1f footer_widths=%.1f/%.1f/%.1f inspector_page=%.1f inspector_content=%.1f" % [UiTokens.ui_scale_percent(), step08_identity.size.y, favorite_button.size.y, step08_header_gap, favorite_button.size.x, lock_button.size.x, more_button.size.x, inspector_upper.size.y, step08_lower_inset.size.y, lower_row.size.y, actual_lower_gap, step08_footer_inset.size.y, dispatch_button.size.y, step08_footer_gap, dispatch_button.size.x, details_button.size.x, dismantle_button.size.x, step08_inspector_scroll.get_v_scroll_bar().page, step08_inspector_scroll.get_v_scroll_bar().max_value])
+	_check(details_button != null and details_button.disabled and details_button.tooltip_text == I18n.core("ships.roster.tooltip.details_unavailable"), "View Details truthfully reports the missing independent destination instead of opening a placeholder")
+	_check(favorite_button != null and lock_button != null and more_button != null and favorite_button.icon.resource_path.ends_with("star_normal.png") and lock_button.icon.resource_path.ends_with("lock_normal.png") and more_button.icon.resource_path.ends_with("more_normal.png"), "inactive header actions use the supplied normal Star, Lock, and More assets")
+	if more_button != null:
+		more_button.disabled = true
+		main.call("_refresh_fleet_roster_action_icon", more_button)
+		_check(String(more_button.get_meta("ship_registry_icon_state", "")) == "disabled" and more_button.icon.resource_path.ends_with("more_disabled.png"), "disabled header actions use the supplied disabled asset")
+		more_button.disabled = false
+		main.call("_set_fleet_roster_action_pointer_down", more_button, true)
+		_check(String(more_button.get_meta("ship_registry_icon_state", "")) == "active" and more_button.icon.resource_path.ends_with("more_active.png"), "pointer-down header actions use the supplied active asset")
+		main.call("_set_fleet_roster_action_pointer_down", more_button, false)
+		if DisplayServer.get_name() != "headless":
+			var hover_position := more_button.get_global_rect().get_center()
+			Input.warp_mouse(hover_position)
+			var hover_motion := InputEventMouseMotion.new()
+			hover_motion.position = hover_position
+			hover_motion.global_position = hover_position
+			get_viewport().push_input(hover_motion)
+			await _redraw()
+			main.call("_refresh_fleet_roster_action_icon", more_button)
+			_check(String(more_button.get_meta("ship_registry_icon_state", "")) == "hover" and more_button.icon.resource_path.ends_with("more_hover.png"), "hovered header actions use the supplied hover asset in the real window")
+			Input.warp_mouse(Vector2.ZERO)
+			await _redraw()
+
+	if favorite_button != null:
+		favorite_button.button_pressed = true
+		favorite_button.toggled.emit(true)
+	await _redraw()
+	_check(bool(Game.state.ship_by_id(pioneer_id).get("favorite", false)), "Favorite toggles the selected canonical Ship")
+	var horizon_row_for_favorite := main.find_child("FleetRosterShip_%s" % horizon_id, true, false) as Button
+	if horizon_row_for_favorite != null:
+		horizon_row_for_favorite.pressed.emit()
+	await _redraw()
+	var pioneer_row_for_favorite := main.find_child("FleetRosterShip_%s" % pioneer_id, true, false) as Button
+	if pioneer_row_for_favorite != null:
+		pioneer_row_for_favorite.pressed.emit()
+	await _redraw()
+	favorite_button = main.find_child("FleetRosterFavorite", true, false) as Button
+	_check(favorite_button != null and favorite_button.button_pressed and favorite_button.icon.resource_path.ends_with("star_active.png"), "Favorite survives selection changes and restores the supplied active Star asset")
+
+	lock_button = main.find_child("FleetRosterLock", true, false) as Button
+	if lock_button != null:
+		lock_button.button_pressed = true
+		lock_button.toggled.emit(true)
+	await _redraw()
+	dismantle_button = main.find_child("FleetRosterDismantle", true, false) as Button
+	var locked_ship_count := Game.state.ships.size()
+	var locked_scrap_count := int(Game.state.statistics.get("ships_scrapped", 0))
+	_check(bool(Game.state.ship_by_id(pioneer_id).get("locked", false)) and dismantle_button != null and dismantle_button.disabled and dismantle_button.tooltip_text == I18n.t("notice.scrap_ship_locked"), "Lock toggles canonical Ship protection and immediately disables Dismantle with its localized reason")
+	_check(not Game.scrap_ship(pioneer_id) and Game.state.ships.size() == locked_ship_count and int(Game.state.statistics.get("ships_scrapped", 0)) == locked_scrap_count and not Game.state.ship_by_id(pioneer_id).is_empty(), "a locked Ship cannot bypass protection through direct domain invocation")
+	await _redraw()
+	var horizon_row_for_lock := main.find_child("FleetRosterShip_%s" % horizon_id, true, false) as Button
+	if horizon_row_for_lock != null:
+		horizon_row_for_lock.pressed.emit()
+	await _redraw()
+	var pioneer_row_for_lock := main.find_child("FleetRosterShip_%s" % pioneer_id, true, false) as Button
+	if pioneer_row_for_lock != null:
+		pioneer_row_for_lock.pressed.emit()
+	await _redraw()
+	lock_button = main.find_child("FleetRosterLock", true, false) as Button
+	_check(lock_button != null and lock_button.button_pressed and lock_button.icon.resource_path.ends_with("lock_active.png"), "Lock survives selection changes and restores the supplied active Lock asset")
+
+	var persistence_root := ProjectSettings.globalize_path("res://.audit-logs/helios-ui-persistence-audit-step08")
+	DirAccess.make_dir_recursive_absolute(persistence_root)
+	var step08_repository := LocalSaveRepository.new()
+	var persistence_configured := step08_repository.configure_audit_root(persistence_root)
+	step08_repository.delete_save()
+	var persisted_source := SpaceGameState.from_dictionary(Game.state.to_dictionary(), Game.content.domains.keys(), Game.content.regions)
+	var disk_saved := persistence_configured and step08_repository.save_state(persisted_source, Game.content.version, [Game.content.pack_metadata])
+	var disk_payload := step08_repository.load_data() if disk_saved else {}
+	var disk_restored := SpaceGameState.from_dictionary(disk_payload, Game.content.domains.keys(), Game.content.regions) if not disk_payload.is_empty() else null
+	_check(disk_restored != null and bool(disk_restored.ship_by_id(pioneer_id).get("favorite", false)) and bool(disk_restored.ship_by_id(pioneer_id).get("locked", false)), "Favorite and Lock survive the canonical LocalSaveRepository save/load path")
+	step08_repository.delete_save()
+	var system_nav_for_reopen := main.find_child("Navigation_system_map", true, false) as Button
+	if system_nav_for_reopen != null:
+		system_nav_for_reopen.pressed.emit()
+	await _redraw()
+	fleet_nav = main.find_child("Navigation_ships", true, false) as Button
+	if fleet_nav != null:
+		fleet_nav.pressed.emit()
+	await _redraw()
+	favorite_button = main.find_child("FleetRosterFavorite", true, false) as Button
+	lock_button = main.find_child("FleetRosterLock", true, false) as Button
+	_check(favorite_button != null and favorite_button.button_pressed and lock_button != null and lock_button.button_pressed, "Favorite and Lock restore from canonical Ship state after closing and reopening the Ship Registry")
+
+	lock_button = main.find_child("FleetRosterLock", true, false) as Button
+	if lock_button != null:
+		lock_button.button_pressed = false
+		lock_button.toggled.emit(false)
+	await _redraw()
+	dismantle_button = main.find_child("FleetRosterDismantle", true, false) as Button
+	_check(not bool(Game.state.ship_by_id(pioneer_id).get("locked", true)) and dismantle_button != null and not dismantle_button.disabled, "unlocking immediately restores valid Dismantle availability")
+
+	more_button = main.find_child("FleetRosterMore", true, false) as Button
+	if more_button != null:
+		more_button.pressed.emit()
+	await _redraw()
+	var more_popup := main.find_child("FleetRosterMoreMenu", true, false) as PopupMenu
+	var more_actions_real := more_popup != null and more_popup.item_count > 0
+	if more_popup != null:
+		for item_index in more_popup.item_count:
+			more_actions_real = more_actions_real and String(more_popup.get_item_metadata(item_index)) in ["set_active", "set_ready_reserve", "mothball", "reactivate"]
+	_check(more_actions_real, "More is a non-empty anchored menu containing only canonical lifecycle operations")
+	var ready_reserve_index := _popup_item_index_by_metadata(more_popup, "set_ready_reserve")
+	if ready_reserve_index >= 0:
+		more_popup.id_pressed.emit(more_popup.get_item_id(ready_reserve_index))
+	await _redraw()
+	_check(String(Game.state.ship_by_id(pioneer_id).get("maintenance_state", "")) == "READY_RESERVE", "More invokes the real Ready Reserve lifecycle command for the selected Ship")
+	more_button = main.find_child("FleetRosterMore", true, false) as Button
+	if more_button != null:
+		more_button.pressed.emit()
+	await _redraw()
+	more_popup = main.find_child("FleetRosterMoreMenu", true, false) as PopupMenu
+	var set_active_index := _popup_item_index_by_metadata(more_popup, "set_active")
+	if set_active_index >= 0:
+		more_popup.id_pressed.emit(more_popup.get_item_id(set_active_index))
+	await _redraw()
+	_check(String(Game.state.ship_by_id(pioneer_id).get("maintenance_state", "")) == "ACTIVE", "More invokes the real Active lifecycle command and preserves the selected Ship identifier")
+
+	dispatch_button = main.find_child("FleetRosterDispatch", true, false) as Button
+	if dispatch_button != null:
+		dispatch_button.pressed.emit()
+	await _redraw()
+	var dispatch_popup := main.find_child("FleetRosterDispatchMenu", true, false) as PopupMenu
+	var formation_index := _popup_item_index_by_metadata(dispatch_popup, SpaceGameState.DEFAULT_FORMATION_ID)
+	if formation_index >= 0:
+		dispatch_popup.id_pressed.emit(dispatch_popup.get_item_id(formation_index))
+	await _redraw()
+	_check(Game.state.ship_formation_id(pioneer_id) == SpaceGameState.DEFAULT_FORMATION_ID, "Dispatch passes the selected canonical Ship identifier to the real formation-assignment service")
+	dispatch_button = main.find_child("FleetRosterDispatch", true, false) as Button
+	if dispatch_button != null:
+		dispatch_button.pressed.emit()
+	await _redraw()
+	dispatch_popup = main.find_child("FleetRosterDispatchMenu", true, false) as PopupMenu
+	var mid_zone_index := -1
+	if dispatch_popup != null:
+		for item_index in dispatch_popup.item_count:
+			var metadata: Variant = dispatch_popup.get_item_metadata(item_index)
+			if metadata is Dictionary and String((metadata as Dictionary).get("zone", "")) == "MID":
+				mid_zone_index = item_index
+				break
+	if mid_zone_index >= 0:
+		dispatch_popup.id_pressed.emit(dispatch_popup.get_item_id(mid_zone_index))
+	await _redraw()
+	var pioneer_logistics := Game.state.fleet_logistics_runtime(SpaceGameState.DEFAULT_FORMATION_ID)
+	var dispatched_formation := pioneer_logistics.get("formation", {}) as Dictionary
+	_check(String((dispatched_formation.get("ship_zones", {}) as Dictionary).get(pioneer_id, "")) == "MID", "Dispatch passes the selected canonical Ship identifier to the real tactical-position service")
+	dispatch_button = main.find_child("FleetRosterDispatch", true, false) as Button
+	if dispatch_button != null:
+		dispatch_button.pressed.emit()
+	await _redraw()
+	dispatch_popup = main.find_child("FleetRosterDispatchMenu", true, false) as PopupMenu
+	var standby_index := _popup_item_index_by_metadata(dispatch_popup, "")
+	if standby_index >= 0:
+		dispatch_popup.id_pressed.emit(dispatch_popup.get_item_id(standby_index))
+	await _redraw()
+	_check(Game.state.ship_formation_id(pioneer_id).is_empty(), "Dispatch can return the same selected Ship to canonical standby state")
+
+	var dismantle_fixture := Game.state._create_ship_instance("patchwork_prospector", ["light_autocannon", "civilian_shield", "basic_drive", "sensor_array", "civilian_reactor_core"], "STEP 08 Dismantle Fixture")
+	var dismantle_fixture_id := String(dismantle_fixture.get("instance_id", ""))
+	main.call("_rebuild_active_page")
+	await _redraw()
+	var fixture_row := main.find_child("FleetRosterShip_%s" % dismantle_fixture_id, true, false) as Button
+	if fixture_row != null:
+		fixture_row.pressed.emit()
+	await _redraw()
+	var dismantle_availability := Game.ship_scrap_availability(dismantle_fixture_id)
+	var expected_recovery := dismantle_availability.get("recovery", {}) as Dictionary
+	var expected_recovery_text := "—" if expected_recovery.is_empty() else String(main.call("_resource_dictionary", expected_recovery))
+	var before_cancel_ship_count := Game.state.ships.size()
+	var before_cancel_scrap_count := int(Game.state.statistics.get("ships_scrapped", 0))
+	var before_cancel_archive_count := Game.state.naval_archive.size()
+	var before_cancel_inventory := Game.state.aggregate_inventory().duplicate(true)
+	dismantle_button = main.find_child("FleetRosterDismantle", true, false) as Button
+	if dismantle_button != null and not dismantle_button.disabled:
+		dismantle_button.pressed.emit()
+	await _redraw()
+	var dismantle_dialog := main.find_child("FleetRosterDismantleConfirmation", true, false) as ConfirmationDialog
+	_check(dismantle_dialog != null and not Game.state.ship_by_id(dismantle_fixture_id).is_empty() and dismantle_dialog.dialog_text.contains("STEP 08 Dismantle Fixture") and dismantle_dialog.dialog_text.contains(dismantle_fixture_id) and dismantle_dialog.dialog_text.contains(expected_recovery_text), "Dismantle opens confirmation without mutation and displays canonical recovery data")
+	if dismantle_dialog != null:
+		dismantle_dialog.canceled.emit()
+	await _redraw()
+	_check(not Game.state.ship_by_id(dismantle_fixture_id).is_empty() and Game.state.ships.size() == before_cancel_ship_count and int(Game.state.statistics.get("ships_scrapped", 0)) == before_cancel_scrap_count and Game.state.naval_archive.size() == before_cancel_archive_count and Game.state.aggregate_inventory() == before_cancel_inventory, "Cancel closes the dismantle confirmation without mutating Ships, archive, counters, or inventory")
+
+	dismantle_button = main.find_child("FleetRosterDismantle", true, false) as Button
+	if dismantle_button != null and not dismantle_button.disabled:
+		dismantle_button.pressed.emit()
+	await _redraw()
+	dismantle_dialog = main.find_child("FleetRosterDismantleConfirmation", true, false) as ConfirmationDialog
+	Game.set_ship_locked(dismantle_fixture_id, true)
+	if dismantle_dialog != null:
+		dismantle_dialog.confirmed.emit()
+	await _redraw()
+	_check(not Game.state.ship_by_id(dismantle_fixture_id).is_empty() and bool(Game.state.ship_by_id(dismantle_fixture_id).get("locked", false)) and dismantle_dialog != null and dismantle_dialog.dialog_text.contains(I18n.t("notice.scrap_ship_locked")), "confirmation re-checks Lock and blocks a stale-dialog dismantle bypass")
+	if dismantle_dialog != null:
+		dismantle_dialog.canceled.emit()
+	Game.set_ship_locked(dismantle_fixture_id, false)
+	await _redraw()
+
+	var inventory_before_dismantle := {}
+	for item_id_value in expected_recovery.keys():
+		var item_id := String(item_id_value)
+		inventory_before_dismantle[item_id] = Game.state.item_quantity(item_id, String(dismantle_fixture.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
+	var ships_before_dismantle := Game.state.ships.size()
+	var scraps_before_dismantle := int(Game.state.statistics.get("ships_scrapped", 0))
+	dismantle_button = main.find_child("FleetRosterDismantle", true, false) as Button
+	if dismantle_button != null and not dismantle_button.disabled:
+		dismantle_button.pressed.emit()
+	await _redraw()
+	dismantle_dialog = main.find_child("FleetRosterDismantleConfirmation", true, false) as ConfirmationDialog
+	if dismantle_dialog != null:
+		dismantle_dialog.confirmed.emit()
+		dismantle_dialog.confirmed.emit()
+	await _redraw()
+	var exact_recovery_credited := true
+	for item_id_value in expected_recovery.keys():
+		var item_id := String(item_id_value)
+		exact_recovery_credited = exact_recovery_credited and Game.state.item_quantity(item_id, String(dismantle_fixture.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))) - int(inventory_before_dismantle[item_id]) == int(expected_recovery[item_id])
+	var dismantled_round_trip := SpaceGameState.from_dictionary(Game.state.to_dictionary(), Game.content.domains.keys(), Game.content.regions)
+	_check(Game.state.ship_by_id(dismantle_fixture_id).is_empty() and Game.state.ships.size() == ships_before_dismantle - 1 and int(Game.state.statistics.get("ships_scrapped", 0)) == scraps_before_dismantle + 1 and exact_recovery_credited and dismantled_round_trip.ship_by_id(dismantle_fixture_id).is_empty(), "Confirm performs exactly one atomic transaction, credits exact recovery, updates counts, and persists removal")
+	var selected_after_dismantle := main.get("_selected_roster_ship_ids") as Dictionary
+	_check(selected_after_dismantle.size() == 1 and not selected_after_dismantle.has(dismantle_fixture_id) and main.find_child("FleetRosterHeaderCount", true, false).text == "8 艘舰船" and main.find_child("FleetRosterShip_%s" % dismantle_fixture_id, true, false) == null, "successful dismantling refreshes list, counters, Inspector selection, and the truthful next Ship")
+
+	var en_catalog := JSON.parse_string(FileAccess.get_file_as_string("res://data/localization_en.json")) as Dictionary
+	var zh_catalog := JSON.parse_string(FileAccess.get_file_as_string("res://data/localization_zh_CN.json")) as Dictionary
+	var step08_core_keys := ["ships.roster.action.favorite", "ships.roster.action.remove_favorite", "ships.roster.action.lock", "ships.roster.action.unlock", "ships.roster.action.more", "ships.roster.action.dispatch", "ships.roster.action.view_details", "ships.roster.action.dismantle", "ships.roster.tooltip.dispatch_unavailable", "ships.roster.tooltip.details_unavailable", "ships.roster.dismantle.confirmation_title", "ships.roster.dismantle.warning", "ships.roster.dismantle.recoverable", "ships.roster.dismantle.confirm", "common.cancel"]
+	var step08_ui_keys := ["notice.scrap_ship_locked", "notice.ship_favorited", "notice.ship_unfavorited", "notice.ship_locked", "notice.ship_unlocked"]
+	var step08_localization_parity := true
+	for key_value in step08_core_keys:
+		step08_localization_parity = step08_localization_parity and en_catalog.get("core_ui", {}).has(key_value) and zh_catalog.get("core_ui", {}).has(key_value)
+	for key_value in step08_ui_keys:
+		step08_localization_parity = step08_localization_parity and en_catalog.get("ui", {}).has(key_value) and zh_catalog.get("ui", {}).has(key_value)
+	_check(step08_localization_parity, "STEP 08 Chinese and English localization keys remain in parity")
+	Game.set_ship_favorite(pioneer_id, false)
+	await _redraw()
 	if OS.get_cmdline_user_args().has("--capture-roster-step05-fixture"):
 		RenderingServer.force_draw(false)
 		await get_tree().process_frame
@@ -201,7 +480,9 @@ func _run() -> void:
 	var reserve_filter := main.find_child("FleetRosterFilter_READY_RESERVE", true, false) as Button
 	var mothballed_filter := main.find_child("FleetRosterFilter_MOTHBALLED", true, false) as Button
 	_check(all_filter != null and active_filter != null and reserve_filter != null and mothballed_filter != null and all_filter.text == "全部 8" and active_filter.text == "运行中 4" and reserve_filter.text == "战备储备 2" and mothballed_filter.text == "封存 2", "lifecycle filter counts are calculated from the eight-ship test fixture")
-	_check(String(main.get("_fleet_roster_filter")) == "ALL" and all_filter.has_theme_stylebox_override("normal") and not active_filter.has_theme_stylebox_override("normal"), "All is the default filter and uses the existing selected-button accent")
+	var all_filter_style := all_filter.get_theme_stylebox("normal") as StyleBoxFlat if all_filter != null else null
+	var active_filter_style := active_filter.get_theme_stylebox("normal") as StyleBoxFlat if active_filter != null else null
+	_check(String(main.get("_fleet_roster_filter")) == "ALL" and all_filter_style != null and active_filter_style != null and all_filter_style.bg_color == UiTokens.COLOR_CONTROL_ACTIVE and active_filter_style.bg_color == UiTokens.COLOR_CONTROL, "All is the default filter and uses the existing selected-button accent")
 	reserve_filter.pressed.emit()
 	await _redraw()
 	roster_box = _current_roster_box(main)
@@ -347,6 +628,11 @@ func _run() -> void:
 		refit_button.pressed.emit()
 	await _redraw()
 	_check(Game.state.refit_projects.any(func(project): return String((project as Dictionary).get("ship_id", "")) == refit_ship_id and String((project as Dictionary).get("target_loadout_id", "")) == design_id), "blueprint handoff starts the authoritative starport refit project")
+	Game.state.ships.clear()
+	main.set("_fleet_section", "roster")
+	main.call("_rebuild_active_page")
+	await _redraw()
+	_check((main.get("_selected_roster_ship_ids") as Dictionary).is_empty() and main.find_child("FleetRosterHeaderCount", true, false).text == "0 艘舰船" and main.find_child("FleetRosterFavorite", true, false) == null and main.find_child("FleetRosterFooterActions", true, false) == null and _has_exact_label(main.find_child("FleetRosterDetail", true, false), I18n.core("ships.roster.select_ship")), "Ship Registry remains valid with no selected Ship and renders its truthful empty Inspector state")
 	main.queue_free()
 	await get_tree().process_frame
 	if failures.is_empty():
@@ -377,6 +663,15 @@ func _named_child_count(root: Node, prefix: String) -> int:
 		if String(child.name).begins_with(prefix):
 			count += 1
 	return count
+
+
+func _popup_item_index_by_metadata(popup: PopupMenu, expected: String) -> int:
+	if popup == null:
+		return -1
+	for item_index in popup.item_count:
+		if String(popup.get_item_metadata(item_index)) == expected:
+			return item_index
+	return -1
 
 
 func _current_roster_box(root: Node) -> Node:

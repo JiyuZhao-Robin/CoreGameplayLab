@@ -1340,6 +1340,8 @@ func _create_ship_instance(blueprint_id: String, module_definitions: Array = [],
 		"built_at_ms":int(total_elapsed_ms),
 		"commissioned_at_ms":int(total_elapsed_ms),
 		"current_loadout_id":"",
+		"favorite":false,
+		"locked":false,
 		"maintenance_state":"ACTIVE",
 		"maintenance_coverage":1.0,
 		"maintenance_debt":0.0,
@@ -2098,6 +2100,10 @@ func _normalize_ship_assignments() -> void:
 			ship["commissioned_at_ms"] = int(ship.get("built_at_ms", 0))
 		if not ship.has("current_loadout_id"):
 			ship["current_loadout_id"] = ""
+		# Ship Registry preferences are authoritative per-Ship metadata. Additive
+		# defaults keep older saves compatible without creating a parallel UI store.
+		ship["favorite"] = bool(ship.get("favorite", false))
+		ship["locked"] = bool(ship.get("locked", false))
 		ship["maintenance_state"] = str(ship.get("maintenance_state", "ACTIVE"))
 		if str(ship["maintenance_state"]) not in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
 			ship["maintenance_state"] = "ACTIVE"

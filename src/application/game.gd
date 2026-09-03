@@ -10,7 +10,6 @@ const SIMULATION_STEP_MS := 100.0
 const MAX_TIME_ORCHESTRATION_STEPS := 500000
 const MAX_ONLINE_FRAME_SIMULATION_MS := 15000.0
 const MIN_TIME_ORCHESTRATION_STEP_MS := 0.01
-const REMOVED_AGGREGATE_INDUSTRY_REASON := "The location-level mining, Production Line and generic Construction runtime has been removed. Use the factory grid."
 
 var content := ContentDatabase.new()
 var state: SpaceGameState
@@ -82,65 +81,65 @@ func _notification(what: int) -> void:
 
 func initialize_factory_world(world_id: String, location_id: String, size_tiles: Vector2i, seed: int = 1) -> bool:
 	if world_id.is_empty() or not state.has_location(location_id) or size_tiles.x <= 0 or size_tiles.y <= 0:
-		return _reject("Invalid factory world identity, location or bounds")
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
 	if state.factory_worlds.has(world_id):
-		return _reject("Factory world already exists")
+		return _reject(I18n.t("notice.factory_world_exists", "Factory world already exists"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	transaction.working_state.factory_worlds[world_id] = simulation.factory_grid.create_world(world_id, location_id, size_tiles, seed)
 	transaction.record({"type":"FactoryWorldInitialized", "world_id":world_id, "location_id":location_id, "size_tiles":{"x":size_tiles.x, "y":size_tiles.y}, "seed":seed})
-	last_notice = "Factory grid initialized: %s" % world_id
+	last_notice = I18n.t("notice.factory_world_initialized", "Factory grid initialized: %s") % world_id
 	_commit_transaction(transaction)
 	return true
 
 
 func register_factory_resource_field(world_id: String, resource_field_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> bool:
 	if not state.factory_worlds.has(world_id) or not content.items.has(resource_id):
-		return _reject("Unknown factory world or resource")
+		return _reject(I18n.t("notice.factory_resource_unknown", "Unknown factory world or resource"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var result: Dictionary = simulation.factory_grid.add_resource_field(transaction.working_state.factory_worlds[world_id], resource_field_id, resource_id, origin, size, grade, potential_density, resource_category)
 	if not bool(result.get("ok", false)):
-		return _reject(str(result.get("reason", "Resource-field generation failed")))
+		return _reject(str(result.get("reason", I18n.t("notice.factory_resource_failed", "Resource-field generation failed"))))
 	transaction.record({"type":"FactoryResourceFieldRegistered", "world_id":world_id, "resource_field_id":resource_field_id, "resource_id":resource_id})
-	last_notice = "Tile resource field registered: %s" % resource_field_id
+	last_notice = I18n.t("notice.factory_resource_registered", "Tile resource field registered: %s") % resource_field_id
 	_commit_transaction(transaction)
 	return true
 
 
 func queue_factory_construction(world_id: String, definition_id: String, origin: Vector2i, recipe_id: String = "", priority: int = 50) -> bool:
 	if not state.factory_worlds.has(world_id) or not content.factory_buildings.has(definition_id):
-		return _reject("Unknown factory world or building")
+		return _reject(I18n.t("notice.factory_building_unknown", "Unknown factory world or building"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var result: Dictionary = simulation.factory_grid.queue_construction(transaction.working_state.factory_worlds[world_id], definition_id, origin, recipe_id, priority)
 	if not bool(result.get("ok", false)):
-		return _reject(str(result.get("reason", "Factory construction rejected")))
+		return _reject(str(result.get("reason", I18n.t("notice.factory_construction_rejected", "Factory construction rejected"))))
 	transaction.record({"type":"FactoryConstructionQueued", "world_id":world_id, "order_id":result.get("order_id", ""), "definition_id":definition_id, "origin":{"x":origin.x, "y":origin.y}})
-	last_notice = "Factory construction queued: %s" % definition_id
+	last_notice = I18n.t("notice.factory_construction_queued", "Factory construction queued: %s") % definition_id
 	_commit_transaction(transaction)
 	return true
 
 
 func fund_factory_construction(world_id: String, order_id: String, storage_id: String) -> bool:
 	if not state.factory_worlds.has(world_id):
-		return _reject("Unknown factory world")
+		return _reject(I18n.t("notice.factory_world_unknown", "Unknown factory world"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var result: Dictionary = simulation.factory_grid.fund_construction_from_storage(transaction.working_state.factory_worlds[world_id], order_id, storage_id)
 	if not bool(result.get("ok", false)):
-		return _reject(str(result.get("reason", "Construction funding failed")))
+		return _reject(str(result.get("reason", I18n.t("notice.factory_funding_failed", "Construction funding failed"))))
 	transaction.record({"type":"FactoryConstructionFunded", "world_id":world_id, "order_id":order_id, "storage_id":storage_id, "moved":result.get("moved", {})})
-	last_notice = "Construction materials delivered: %s" % order_id
+	last_notice = I18n.t("notice.factory_materials_delivered", "Construction materials delivered: %s") % order_id
 	_commit_transaction(transaction)
 	return true
 
 
 func connect_factory_entities(world_id: String, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1) -> bool:
 	if not state.factory_worlds.has(world_id):
-		return _reject("Unknown factory world")
+		return _reject(I18n.t("notice.factory_world_unknown", "Unknown factory world"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var result: Dictionary = simulation.factory_grid.connect_entities(transaction.working_state.factory_worlds[world_id], kind, source_id, target_id, item_id, capacity_per_second, priority)
 	if not bool(result.get("ok", false)):
-		return _reject(str(result.get("reason", "Factory connection rejected")))
+		return _reject(str(result.get("reason", I18n.t("notice.factory_connection_rejected", "Factory connection rejected"))))
 	transaction.record({"type":"FactoryEntitiesConnected", "world_id":world_id, "link_id":result.get("link_id", ""), "kind":kind, "source_id":source_id, "target_id":target_id, "item_id":item_id})
-	last_notice = "Factory connection created"
+	last_notice = I18n.t("notice.factory_connection_created", "Factory connection created")
 	_commit_transaction(transaction)
 	return true
 
@@ -164,7 +163,7 @@ func factory_world_summary(world_id: String) -> Dictionary:
 
 
 func _reject_removed_aggregate_industry() -> bool:
-	return _reject(REMOVED_AGGREGATE_INDUSTRY_REASON)
+	return _reject(I18n.t("notice.aggregate_industry_removed", "The location-level mining, Production Line and generic Construction runtime has been removed. Use the factory grid."))
 
 
 func start_activity(domain_id: String, activity_id: String, formation_id: String = SpaceGameState.DEFAULT_FORMATION_ID) -> bool:
@@ -284,18 +283,61 @@ func start_ship_reactivation(instance_id: String) -> bool:
 	return true
 
 
-func scrap_ship(instance_id: String) -> bool:
+func set_ship_favorite(instance_id: String, favorite: bool) -> bool:
 	var ship := state.ship_by_id(instance_id)
-	if ship.is_empty() or str(ship.get("status", "")) != "DOCKED":
-		return _reject(I18n.t("notice.scrap_ship_invalid", "Only an idle docked ship can be scrapped"))
+	if ship.is_empty():
+		return _reject(I18n.t("notice.ship_missing"))
+	if bool(ship.get("favorite", false)) == favorite:
+		return true
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	transaction.working_state.ship_by_id(instance_id)["favorite"] = favorite
+	last_notice = I18n.t("notice.ship_favorited" if favorite else "notice.ship_unfavorited") % str(ship.get("name", instance_id))
+	transaction.record({"type":"ShipFavoriteChanged", "ship_id":instance_id, "favorite":favorite})
+	_commit_transaction(transaction)
+	return true
+
+
+func set_ship_locked(instance_id: String, locked: bool) -> bool:
+	var ship := state.ship_by_id(instance_id)
+	if ship.is_empty():
+		return _reject(I18n.t("notice.ship_missing"))
+	if bool(ship.get("locked", false)) == locked:
+		return true
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	transaction.working_state.ship_by_id(instance_id)["locked"] = locked
+	last_notice = I18n.t("notice.ship_locked" if locked else "notice.ship_unlocked") % str(ship.get("name", instance_id))
+	transaction.record({"type":"ShipLockChanged", "ship_id":instance_id, "locked":locked})
+	_commit_transaction(transaction)
+	return true
+
+
+func ship_scrap_availability(instance_id: String) -> Dictionary:
+	var ship := state.ship_by_id(instance_id)
+	if ship.is_empty():
+		return {"allowed":false, "reason_code":"SHIP_MISSING", "reason":I18n.t("notice.ship_missing"), "recovery":{}}
+	if bool(ship.get("locked", false)):
+		return {"allowed":false, "reason_code":"SHIP_LOCKED", "reason":I18n.t("notice.scrap_ship_locked"), "recovery":{}}
+	if str(ship.get("status", "")) != "DOCKED":
+		return {"allowed":false, "reason_code":"SHIP_NOT_DOCKED", "reason":I18n.t("notice.scrap_ship_invalid"), "recovery":{}}
 	if not state.ship_formation_id(instance_id).is_empty() or state.refit_projects.any(func(project): return str(project.get("ship_id", "")) == instance_id) or state.ship_service_projects.any(func(project): return str(project.get("ship_id", "")) == instance_id):
-		return _reject(I18n.t("notice.scrap_ship_assigned", "Remove the ship from fleets and finish all service projects before scrapping"))
+		return {"allowed":false, "reason_code":"SHIP_ASSIGNED", "reason":I18n.t("notice.scrap_ship_assigned"), "recovery":{}}
+	var recovered := simulation.ship_scrap_recovery(ship)
+	var location_id := str(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+	if not simulation.storage_can_apply_transaction(state, location_id, recovered):
+		return {"allowed":false, "reason_code":"STORAGE_FULL", "reason":I18n.t("notice.scrap_storage_full"), "recovery":recovered, "location_id":location_id}
+	return {"allowed":true, "reason_code":"READY", "reason":"", "recovery":recovered, "location_id":location_id}
+
+
+func scrap_ship(instance_id: String) -> bool:
+	# Re-run the complete guard at commit time. UI disabled state and confirmation
+	# previews are advisory; direct calls and stale dialogs use this same boundary.
+	var availability := ship_scrap_availability(instance_id)
+	if not bool(availability.get("allowed", false)):
+		return _reject(str(availability.get("reason", I18n.t("notice.scrap_ship_invalid"))))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
-	var recovered := simulation.ship_scrap_recovery(working_ship)
-	var location_id := str(working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-	if not simulation.storage_can_apply_transaction(transaction.working_state, location_id, recovered):
-		return _reject(I18n.t("notice.scrap_storage_full", "The ship cannot be scrapped because the recovered materials exceed available storage"))
+	var recovered: Dictionary = availability.get("recovery", {}).duplicate(true)
+	var location_id := str(availability.get("location_id", working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
 	var archive_entry := {
 		"ship_id":instance_id,
 		"name":str(working_ship.get("name", instance_id)),
@@ -1230,6 +1272,8 @@ func clear_location_logistics_policy(location_id: String, item_id: String) -> bo
 
 
 func set_location_logistics_limits(location_id: String, storage_capacity: int, hub_throughput: int) -> bool:
+	if not state.has_location(location_id):
+		return _reject(I18n.t("notice.unknown_location", "Unknown location"))
 	return _reject_removed_aggregate_industry()
 
 

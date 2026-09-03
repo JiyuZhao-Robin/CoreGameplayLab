@@ -1134,12 +1134,12 @@ func _verify_ship_assignment_and_expedition_actions() -> void:
 		await _settle_ui()
 	var ship_id := "SHIP-001"
 	var assign_button := main.find_child("AssignExpedition_%s" % ship_id, true, false) as Button
-	var assignment_before := Game.state.ship_fleet_domain(ship_id)
+	var assignment_before: String = String(Game.state.ship_fleet_domain(ship_id))
 	var notice_before := Game.last_notice
 	if _button_usable(assign_button):
 		assign_button.pressed.emit()
 	var assignment_notice := Game.last_notice
-	var assigned := assignment_before != "expedition" and Game.state.ship_fleet_domain(ship_id) == "expedition" \
+	var assigned: bool = assignment_before != "expedition" and Game.state.ship_fleet_domain(ship_id) == "expedition" \
 		and Game.state.fleet_ship_ids("expedition").has(ship_id) and not Game.state.fleet_ship_ids("mining").has(ship_id)
 	_record_quadrant("ASSIGN_SHIP", "success", assigned and assignment_notice != notice_before, {
 		"scenario":scenario_id, "controlName":"AssignExpedition_%s" % ship_id, "successNotice":assignment_notice
