@@ -29,6 +29,13 @@ const DEFAULT_MODULE_ICON_PATHS := {
 	"utility":"res://assets/modules/ui/utility_module_4k.png",
 	"core":"res://assets/modules/ui/core_module_4k.png"
 }
+const DEFAULT_MODULE_THUMBNAIL_PATHS := {
+	"weapon":"res://assets/modules/ui/weapon_module.png",
+	"shield":"res://assets/modules/ui/shield_module.png",
+	"drive":"res://assets/modules/ui/drive_module.png",
+	"utility":"res://assets/modules/ui/utility_module.png",
+	"core":"res://assets/modules/ui/core_module.png"
+}
 
 var _catalog: Dictionary = {}
 var _entities := {}
@@ -230,6 +237,17 @@ static func module_icon_path(module: Dictionary) -> String:
 		return authored_path
 	var default_path := String(DEFAULT_MODULE_ICON_PATHS.get(String(module.get("slot", "utility")), ""))
 	return default_path if not default_path.is_empty() and ResourceLoader.exists(default_path) else ""
+
+
+static func module_thumbnail_path(module: Dictionary) -> String:
+	var ui_visual := module.get("ui_visual", {}) as Dictionary
+	var authored_path := String(ui_visual.get("thumbnail_texture", module.get("thumbnail_texture", "")))
+	if not authored_path.is_empty() and ResourceLoader.exists(authored_path):
+		return authored_path
+	var default_path := String(DEFAULT_MODULE_THUMBNAIL_PATHS.get(String(module.get("slot", "utility")), ""))
+	if not default_path.is_empty() and ResourceLoader.exists(default_path):
+		return default_path
+	return module_icon_path(module)
 
 
 func _get_entity_connection_line(source: GraphNode, target_position: Vector2, target: GraphNode = null) -> PackedVector2Array:

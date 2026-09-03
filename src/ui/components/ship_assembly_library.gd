@@ -149,7 +149,7 @@ func _rebuild_ship_cards() -> void:
 			"%s\n%s · %.0fm\n%d SLOTS" % [I18n.content(hull), str(hull.get("class", "SHIP")).to_upper(), float(visual.get("length_m", 0.0)), int(hull.get("module_slots", 0))],
 			bool(entry.get("available", true)),
 			_localized("拖动舰体到装配画布", "Drag hull to the assembly canvas"),
-			str(ui_visual.get("topdown_texture", ""))
+			_hull_thumbnail_path(ui_visual)
 		)
 		card.custom_minimum_size = Vector2(266.0, card.recommended_height(140.0))
 		card.pressed.connect(_on_card_pressed.bind("hull", ship_id))
@@ -186,13 +186,24 @@ func _rebuild_module_cards() -> void:
 			"%s\n%s\n%s · T%d · Ø%.0fm" % [I18n.content(module), _category_filter_label(module_category), size_id, tier, diameter],
 			true,
 			_localized("拖入画布，并连接到同一功能族的舰体插槽", "Drag into the canvas and connect to a matching hull socket"),
-			ShipAssemblyMapViewScript.module_icon_path(module)
+			ShipAssemblyMapViewScript.module_thumbnail_path(module)
 		)
 		card.custom_minimum_size = Vector2(266.0, card.recommended_height(132.0))
 		card.pressed.connect(_on_card_pressed.bind("module", module_id))
 		_module_cards.add_child(card)
 		visible_count += 1
 	_empty_modules.visible = visible_count == 0
+
+
+func _hull_thumbnail_path(ui_visual: Dictionary) -> String:
+	var thumbnail_path := str(ui_visual.get("thumbnail_texture", ""))
+	if not thumbnail_path.is_empty() and ResourceLoader.exists(thumbnail_path):
+		return thumbnail_path
+	var topdown_path := str(ui_visual.get("topdown_texture", ""))
+	var preview_path := topdown_path.replace("_4k.png", ".png")
+	if preview_path != topdown_path and ResourceLoader.exists(preview_path):
+		return preview_path
+	return topdown_path if not topdown_path.is_empty() and ResourceLoader.exists(topdown_path) else ""
 
 
 func _module_category(module_id: String, module: Dictionary) -> String:

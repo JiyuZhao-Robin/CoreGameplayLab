@@ -47,8 +47,9 @@ var _part_ids: Array[String] = DEMO_PART_IDS.duplicate()
 
 func configure_for_main_game() -> void:
 	# Configure before entering the tree. The production host shares the shell's
-	# explicit UI scale and exposes the design catalogue. Saving locked-hull
-	# intent is allowed; the shipyard handoff remains progression-authoritative.
+	# explicit UI scale. While the Ship tab frame is being rebuilt, its visible
+	# content stays intentionally limited to the approved Demo hull and modules;
+	# the full domain catalogue remains untouched and authoritative elsewhere.
 	_embedded_in_main = true
 	_allow_locked_plan = true
 
@@ -157,6 +158,15 @@ func library_panel() -> PanelContainer:
 
 func data_panel() -> PanelContainer:
 	return _data_panel
+
+
+func refresh_domain_state() -> void:
+	# The main game may advance while this editor is open. Refresh data that can
+	# change in the domain without rebuilding the canvas or discarding its draft.
+	if not is_node_ready():
+		return
+	_refresh_saved_designs()
+	_refresh_engineering()
 
 
 func current_design_id() -> String:
@@ -317,39 +327,16 @@ func _build_canvas() -> Control:
 
 
 func _prepare_catalog_scope() -> void:
-	if not _embedded_in_main:
-		_ship_entries = DEMO_SHIPS.duplicate(true)
-		_part_ids = DEMO_PART_IDS.duplicate()
-		return
-	_ship_entries.clear()
-	_part_ids.clear()
-	var plans: Array[Dictionary] = []
-	for plan_value in Game.content.ship_construction_projects.values():
-		plans.append(plan_value as Dictionary)
-	plans.sort_custom(func(a: Dictionary, b: Dictionary): return I18n.content(a) < I18n.content(b))
-	for plan in plans:
-		var plan_id := str(plan.get("id", ""))
-		var hull_id := str(plan.get("ship_id", ""))
-		if hull_id.is_empty() or not Game.content.ships.has(hull_id):
-			continue
-		_ship_entries.append({"id":hull_id, "plan_id":plan_id, "available":true})
-	for module_id_value in Game.content.modules.keys():
-		var module_id := str(module_id_value)
-		var module := Game.content.modules.get(module_id, {}) as Dictionary
-		if bool(module.get("retired", false)) or not Game.simulation.definition_revealed(Game.state, module):
-			continue
-		_part_ids.append(module_id)
-	_part_ids.sort()
+	_ship_entries = DEMO_SHIPS.duplicate(true)
+	_part_ids = DEMO_PART_IDS.duplicate()
 
 
 func _blueprint_catalog() -> Dictionary:
 	var plans := {}
 	var hulls := {}
-	var scoped_hull_ids := {}
 	for definition in _ship_entries:
 		var ship_id := str(definition.get("id", ""))
 		var plan_id := str(definition.get("plan_id", ""))
-		scoped_hull_ids[ship_id] = true
 		var hull := (Game.content.ships.get(ship_id, {}) as Dictionary).duplicate(true)
 		var plan := (Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary).duplicate(true)
 		if hull.is_empty() or plan.is_empty():
@@ -360,24 +347,6 @@ func _blueprint_catalog() -> Dictionary:
 		hulls[ship_id] = hull
 		plans[plan_id] = plan
 	var modules := {}
-	# Saved designs remain loadable even if progression changed after saving.
-	# Their domain validation still decides whether they may be saved or handed
-	# to the shipyard again.
-	if _embedded_in_main:
-		for design_value in Game.state.ship_designs.values():
-			var design := design_value as Dictionary
-			var plan_id := str(design.get("plan_id", ""))
-			var plan := (Game.content.ship_construction_projects.get(plan_id, {}) as Dictionary).duplicate(true)
-			var ship_id := str(plan.get("ship_id", ""))
-			if plan.is_empty() or ship_id.is_empty() or not Game.content.ships.has(ship_id):
-				continue
-			plan["title"] = I18n.content(plan)
-			plan["assembly_sockets"] = Game.ship_design_socket_schema(plan_id)
-			plans[plan_id] = plan
-			if not scoped_hull_ids.has(ship_id):
-				var hull := (Game.content.ships[ship_id] as Dictionary).duplicate(true)
-				hull["title"] = I18n.content(hull)
-				hulls[ship_id] = hull
 	for module_id in _part_ids:
 		var module := (Game.content.modules.get(module_id, {}) as Dictionary).duplicate(true)
 		if module.is_empty():

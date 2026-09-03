@@ -76,6 +76,7 @@ var _industrial_network_preferences: Dictionary = {}
 var _selected_industrial_network_node: Dictionary = {}
 var _selected_research_project_id := ""
 var _ship_blueprint_editor: ShipAssemblyBlueprintEditor
+var _shipyard_handoff_content: VBoxContainer
 var _reduced_motion := false
 var _ui_scale := UiTokens.DEFAULT_UI_SCALE
 var _ui_scale_selector: OptionButton
@@ -505,7 +506,12 @@ func _rebuild_active_page() -> void:
 		"logistics": _rebuild_logistics()
 		"construction": _rebuild_construction()
 		"research": _rebuild_research()
-		"fleet": _rebuild_fleet()
+		"fleet":
+			if _fleet_section == "shipyard" and is_instance_valid(_ship_blueprint_editor) and is_instance_valid(_shipyard_handoff_content):
+				_ship_blueprint_editor.refresh_domain_state()
+				_rebuild_shipyard_handoff()
+			else:
+				_rebuild_fleet()
 		"expedition": _rebuild_expedition()
 		"megastructure": _rebuild_megastructure()
 		"diagnostics": _rebuild_diagnostics()
@@ -2901,6 +2907,8 @@ func _rebuild_fleet() -> void:
 		_build_fleet_shipyard(box)
 		_sync_blueprint_workspace_chrome()
 		return
+	_ship_blueprint_editor = null
+	_shipyard_handoff_content = null
 	box.add_child(_page_title(I18n.core("ships.title"), I18n.core("ships.subtitle")))
 	_add_unlock_banner(box, "fleet")
 	_ensure_selected_formation()
@@ -3198,9 +3206,20 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 	_ship_blueprint_editor.custom_minimum_size.y = 680.0
 	_ship_blueprint_editor.blueprint_saved.connect(_on_main_blueprint_saved)
 	box.add_child(_ship_blueprint_editor)
-	box.add_child(_section_title("船厂交接 / SHIPYARD HANDOFF" if I18n.is_chinese() else "SHIPYARD HANDOFF"))
-	box.add_child(_build_ship_design_library())
-	box.add_child(_section_title(I18n.core("ships.shipyard.queue")))
+	_shipyard_handoff_content = VBoxContainer.new()
+	_shipyard_handoff_content.name = "ShipyardHandoffContent"
+	_shipyard_handoff_content.add_theme_constant_override("separation", 6)
+	box.add_child(_shipyard_handoff_content)
+	_rebuild_shipyard_handoff()
+
+
+func _rebuild_shipyard_handoff() -> void:
+	if not is_instance_valid(_shipyard_handoff_content):
+		return
+	_clear(_shipyard_handoff_content)
+	_shipyard_handoff_content.add_child(_section_title("船厂交接 / SHIPYARD HANDOFF" if I18n.is_chinese() else "SHIPYARD HANDOFF"))
+	_shipyard_handoff_content.add_child(_build_ship_design_library())
+	_shipyard_handoff_content.add_child(_section_title(I18n.core("ships.shipyard.queue")))
 	for order_index in Game.state.shipyard_queue.size():
 		var order_value = Game.state.shipyard_queue[order_index]
 		var order := order_value as Dictionary
@@ -3225,9 +3244,9 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 		cancel_order_button.name = "CancelShipBuild_%s" % order_project_id
 		queue_actions.add_child(cancel_order_button)
 		order_card.add_child(queue_actions)
-		box.add_child(_wrap_card(order_card))
+		_shipyard_handoff_content.add_child(_wrap_card(order_card))
 	if Game.state.shipyard_queue.is_empty():
-		box.add_child(_card_text(I18n.core("ships.shipyard.empty"), COLOR_MUTED))
+		_shipyard_handoff_content.add_child(_card_text(I18n.core("ships.shipyard.empty"), COLOR_MUTED))
 
 
 func _build_ship_design_library() -> Control:
