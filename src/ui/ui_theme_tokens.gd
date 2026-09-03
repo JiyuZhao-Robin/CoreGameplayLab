@@ -71,7 +71,8 @@ const NETWORK_GRID_MAJOR_EVERY := 5
 const SUPPORTED_UI_SCALES := [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 const DEFAULT_UI_SCALE := 1.25
 const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"
-const SHIP_ASSEMBLY_FONT_MULTIPLIER := 1.5
+const SHIP_ASSEMBLY_FONT_MULTIPLIER := 1.0
+const SHIP_ASSEMBLY_MIN_FONT_SIZE := 10
 
 static var _ui_scale := DEFAULT_UI_SCALE
 
@@ -110,7 +111,13 @@ static func font_size(base_size: int) -> int:
 
 
 static func ship_assembly_font_size(base_size: int) -> int:
-	return font_size(maxi(1, int(round(float(base_size) * SHIP_ASSEMBLY_FONT_MULTIPLIER))))
+	# The Ship workspace uses the same native type scale as every other main-game
+	# tab. Keep this scoped helper for its presentation components, but do not add
+	# a second multiplier on top of the player's global percentage selection.
+	# Its former 7–9 px microcopy is normalized to one readable technical-text
+	# floor so the library, canvas chrome and engineering panel agree visually.
+	var normalized_base := maxi(SHIP_ASSEMBLY_MIN_FONT_SIZE, int(round(float(base_size) * SHIP_ASSEMBLY_FONT_MULTIPLIER)))
+	return font_size(normalized_base)
 
 
 static func layout_px(base_size: float) -> int:

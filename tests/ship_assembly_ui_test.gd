@@ -43,7 +43,8 @@ func _run() -> void:
 	_check(weapon_palette_item != null, "revealed part is a draggable palette item")
 	_check(weapon_palette_item.find_child("PaletteArtwork", true, false) is TextureRect, "parts palette fills its left frame with generated equipment artwork")
 	var palette_title := weapon_palette_item.find_child("PaletteTitle", true, false) as Label
-	_check(palette_title != null and palette_title.get_theme_font_size("font_size") == UiTokens.ship_assembly_font_size(13), "parts palette typography uses the 1.5x ship-assembly font scale")
+	_check(palette_title != null and palette_title.get_theme_font_size("font_size") == UiTokens.ship_assembly_font_size(13) and UiTokens.ship_assembly_font_size(13) == UiTokens.font_size(13), "Ship workspace typography uses the same player-selected font scale as the other main-game tabs")
+	_check(UiTokens.ship_assembly_font_size(7) == UiTokens.ship_assembly_font_size(10), "Ship workspace microcopy shares one readable technical-text floor")
 	_check(_graph_node_count(map) == 0 and map.get_connection_list().is_empty(), "new ship design canvas is blank and contains no pre-wired links")
 	map.call("_drop_data", Vector2(620.0, 260.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":"construct_lunar_pathfinder", "definition_id":"lunar_pathfinder"})
 	map.call("_drop_data", Vector2(120.0, 160.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":"light_autocannon"})
