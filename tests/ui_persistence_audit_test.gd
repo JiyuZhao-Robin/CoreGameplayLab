@@ -1,6 +1,7 @@
 extends Node
 
 const MainScene := preload("res://src/ui/main.tscn")
+const ResponsivePolicy := preload("res://src/ui/responsive_ui_policy.gd")
 const RESULT_PATH := "res://artifacts/test-results/ui-persistence-audit.json"
 
 var failures: Array[String] = []
@@ -53,11 +54,24 @@ func _write_phase() -> void:
 
 	_press(main.find_child("Navigation_ships", true, false) as Button)
 	await _settle_ui()
-	var assignment := _first_enabled_named_prefix(main, "AssignMining_")
-	_press(assignment)
-	await _settle_ui()
 	var ship_id := String(Game.state.ships[0].get("instance_id", "")) if not Game.state.ships.is_empty() else ""
-	_check(not ship_id.is_empty() and Game.state.ship_fleet_domain(ship_id) == "mining", "visible Ships control creates the state later loaded by the reader")
+	var favorite_button := main.find_child("FleetRosterFavorite", true, false) as Button
+	if favorite_button != null:
+		favorite_button.button_pressed = true
+		favorite_button.toggled.emit(true)
+	await _settle_ui()
+	var lock_button := main.find_child("FleetRosterLock", true, false) as Button
+	if lock_button != null:
+		lock_button.button_pressed = true
+		lock_button.toggled.emit(true)
+	await _settle_ui()
+	var ship := Game.state.ship_by_id(ship_id)
+	_check(not ship_id.is_empty() and bool(ship.get("favorite", false)) and bool(ship.get("locked", false)), "visible Ship Registry controls create Favorite and Lock state later loaded by the reader")
+	main.set("_fleet_roster_search_query", "ISS")
+	main.set("_fleet_roster_ship_type_filter", "FRIGATE")
+	main.set("_fleet_roster_formation_filter", "__UNASSIGNED__")
+	main.set("_fleet_roster_sort_mode", "NAME_ASCENDING")
+	main.call("_save_ui_preferences")
 
 	_press(main.find_child("Navigation_inventory", true, false) as Button)
 	await _settle_ui()
@@ -67,7 +81,10 @@ func _write_phase() -> void:
 	_check(FileAccess.file_exists(audit_root.path_join("space_idle_save.json")) and Game.state.revision > revision_before, "visible SaveButton writes the isolated LocalSaveRepository")
 	var ui_preferences := ConfigFile.new()
 	var ui_preferences_loaded := ui_preferences.load(audit_root.path_join("core_gameplay_ui.cfg")) == OK
-	_check(ui_preferences_loaded and is_equal_approx(float(ui_preferences.get_value("display", "ui_scale", 0.0)), 1.25), "the default UI scale persists in the isolated device-local preference file")
+	_check(ui_preferences_loaded and String(ui_preferences.get_value("display", "ui_scale_mode", "")) == "auto" and is_equal_approx(float(ui_preferences.get_value("display", "manual_ui_scale", 0.0)), 1.25), "AUTO mode and the independent Manual preference persist in the isolated device-local preference file")
+	_check(ui_preferences_loaded and is_equal_approx(float(ui_preferences.get_value("display", "ui_scale", 0.0)), 1.25), "the legacy ui_scale rollback shadow stores the Manual preference")
+	_check(ui_preferences_loaded and not ui_preferences.has_section_key("display", "recommended_ui_scale") and not ui_preferences.has_section_key("display", "effective_ui_scale"), "environment-dependent recommended and effective scales are never persisted")
+	_check(ui_preferences_loaded and String(ui_preferences.get_value("ship_registry", "search_query", "")) == "ISS" and String(ui_preferences.get_value("ship_registry", "ship_type_filter", "")) == "FRIGATE" and String(ui_preferences.get_value("ship_registry", "formation_filter", "")) == "__UNASSIGNED__" and String(ui_preferences.get_value("ship_registry", "sort_mode", "")) == "NAME_ASCENDING", "STEP 09 presentation state uses the existing device-local UI preference file without changing the Domain save schema")
 
 	var marker := FileAccess.open(marker_path, FileAccess.WRITE)
 	if marker == null:
@@ -103,26 +120,26 @@ func _read_phase() -> void:
 
 	_check(Game.state.save_id == String(marker.get("saveId", "")) and Game.state.revision >= int(marker.get("revision", 0)), "startup auto-load restores stable Save identity and revision")
 	var ship_id := String(marker.get("shipId", ""))
-	_check(Game.state.ship_fleet_domain(ship_id) == "mining", "startup auto-load restores the UI-created fleet assignment")
+	var restored_ship := Game.state.ship_by_id(ship_id)
+	_check(bool(restored_ship.get("favorite", false)) and bool(restored_ship.get("locked", false)), "startup auto-load restores the UI-created Favorite and Lock state")
 	var inventory_page := main.find_child("inventory", true, false) as Control
 	_check(inventory_page != null and inventory_page.is_visible_in_tree(), "UI preferences restore the last active core page")
 	var ui_scale_selector := main.find_child("UIScaleSelector", true, false) as OptionButton
-	_check(ui_scale_selector != null and ui_scale_selector.get_item_id(ui_scale_selector.selected) == 125, "UI preferences restore the persisted scale independently of the Domain save")
+	var responsive_snapshot: Dictionary = main.call("ui_responsive_snapshot")
+	_check(ui_scale_selector != null and ui_scale_selector.get_item_id(ui_scale_selector.selected) == ResponsivePolicy.AUTO_SELECTOR_ID, "UI preferences restore AUTO independently of the Domain save")
+	_check(String(responsive_snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_AUTO and is_equal_approx(float(responsive_snapshot.get("manual_scale", 0.0)), 1.25), "AUTO restore retains the player's dormant Manual preference")
 	_check(not Game.offline_report.is_empty() and float(Game.offline_report.get("simulated_ms", 0.0)) > 1000.0, "startup processes elapsed offline time through the shared orchestrator")
 	var sidebar_text := _visible_text(main)
 	_check(not Game.offline_report.is_empty() and sidebar_text.contains(I18n.core("sidebar.offline")), "the loaded UI visibly presents the offline-return report")
 
 	_press(main.find_child("Navigation_ships", true, false) as Button)
 	await _settle_ui()
-	var fleet_text := _visible_text(main.find_child("fleet", true, false))
-	var ship := Game.state.ship_by_id(ship_id)
-	var zone := String(Game.state.fleet_logistics_runtime("expedition").get("formation", {}).get("ship_zones", {}).get(ship_id, "FRONT"))
-	var expected_status := I18n.core("ships.roster.status") % [
-		main.call("_status_text", String(ship.get("status", "DOCKED"))),
-		I18n.core("ships.assignment.mining"),
-		main.call("_zone_text", zone)
-	]
-	_check(not ship.is_empty() and fleet_text.contains(expected_status), "the loaded Ships page derives visible assignment state from the restored Domain state")
+	var favorite_button := main.find_child("FleetRosterFavorite", true, false) as Button
+	var lock_button := main.find_child("FleetRosterLock", true, false) as Button
+	var dismantle_button := main.find_child("FleetRosterDismantle", true, false) as Button
+	_check(not restored_ship.is_empty() and favorite_button != null and favorite_button.button_pressed and lock_button != null and lock_button.button_pressed and dismantle_button != null and dismantle_button.disabled, "the loaded Ship Registry visibly restores Favorite, Lock, and the protected Dismantle state")
+	var registry_search := main.find_child("FleetRosterSearch", true, false) as LineEdit
+	_check(registry_search != null and registry_search.text == "ISS" and String(main.get("_fleet_roster_ship_type_filter")) == "FRIGATE" and String(main.get("_fleet_roster_formation_filter")) == "__UNASSIGNED__" and String(main.get("_fleet_roster_sort_mode")) == "NAME_ASCENDING", "STEP 09 search/filter/sort presentation state survives closing and reopening through the canonical UI preference layer")
 	main.queue_free()
 	await get_tree().process_frame
 

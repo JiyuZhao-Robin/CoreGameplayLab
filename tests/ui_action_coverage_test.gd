@@ -5,6 +5,10 @@ const GameplayScenarioBuilderScript := preload("res://tests/gameplay_scenario_bu
 const REGISTRY_PATH := "res://data/player_action_registry.json"
 const EVIDENCE_PATH := "res://artifacts/test-results/ui-action-coverage.json"
 const UI_PERSISTENCE_EVIDENCE_PATH := "res://artifacts/test-results/ui-persistence-audit.json"
+# START_EXTRACTION / STOP_EXTRACTION were retired with the schema-36 factory-
+# grid cutover. Extraction is now covered through canonical production-line
+# commands below; the removed ship-mining aggregate is intentionally not
+# restored as a compatibility test fixture.
 const EXPECTED_FOUR_CASE_ACTIONS := [
 	"SAVE_GAME",
 	"START_CONSTRUCTION",
@@ -15,15 +19,10 @@ const EXPECTED_FOUR_CASE_ACTIONS := [
 	"START_RESEARCH",
 	"SELECT_RESEARCH_ROUTE",
 	"START_SURVEY_MISSION",
-	"DEVELOP_SITE",
-	"INTEGRATE_EXTRACTION_SITE",
 	"BUILD_SHIP",
-	"INSTALL_SHIP_MODULE",
-	"REMOVE_SHIP_MODULE",
+	"REFIT_SHIP_FROM_BLUEPRINT",
 	"CANCEL_SHIP_REFIT",
 	"ASSIGN_SHIP",
-	"ASSIGN_CONSTRUCTION_SUPPORT",
-	"RELEASE_CONSTRUCTION_SUPPORT",
 	"START_EXPEDITION",
 	"RECALL_EXPEDITION",
 	"SELECT_MEGASTRUCTURE_SITE",
@@ -38,8 +37,6 @@ const EXPECTED_FOUR_CASE_ACTIONS := [
 	"CLEAR_LOGISTICS_POLICY",
 	"SET_FLEET_SUPPLY_PLAN",
 	"RESUPPLY_FLEET",
-	"START_EXTRACTION",
-	"STOP_EXTRACTION",
 	"START_PRODUCTION",
 	"STOP_PRODUCTION",
 	"CHANGE_PRODUCTION_METHOD",
@@ -60,8 +57,6 @@ const EXPECTED_FOUR_CASE_ACTIONS := [
 	"SET_FLEET_DOCTRINE",
 	"SET_RETREAT_POLICY",
 	"SET_COMBAT_ZONE",
-	"APPLY_SHIP_LOADOUT",
-	"REPLACE_SHIP_MODULE",
 	"START_COMBAT_ACTION"
 ]
 
@@ -78,7 +73,6 @@ func _run() -> void:
 	Game.persistence_enabled = false
 	Engine.time_scale = 0.0
 	_initialize_coverage()
-	await _verify_extraction_actions()
 	await _verify_production_start_stop_actions()
 	await _verify_location_production_actions()
 	await _verify_add_production_line_action()
@@ -88,18 +82,13 @@ func _run() -> void:
 	await _verify_research_action()
 	await _verify_research_route_action()
 	await _verify_survey_action()
-	await _verify_site_development_action()
-	await _verify_extraction_site_integration_action()
 	await _verify_location_capacity_action()
 	await _verify_facility_module_action()
 	await _verify_advanced_power_priority_action()
 	await _verify_build_ship_action()
 	await _verify_shipyard_queue_actions()
-	await _verify_ship_module_install_and_cancel_actions()
-	await _verify_ship_module_remove_action()
-	await _verify_ship_loadout_actions()
+	await _verify_ship_design_refit_and_cancel_actions()
 	await _verify_ship_assignment_and_expedition_actions()
-	await _verify_construction_support_actions()
 	await _verify_fleet_configuration_actions()
 	await _verify_fleet_supply_actions()
 	await _verify_combat_action()
@@ -118,43 +107,6 @@ func _run() -> void:
 		_check(_four_case_verified(action_id), "%s has Success + Failure + Consequence + Persistence evidence" % action_id)
 	_write_evidence()
 	_finish()
-
-
-func _verify_extraction_actions() -> void:
-	var scenario_id := "establish_industry"
-	_check(_activate_scenario(scenario_id), "%s activates for extraction controls" % scenario_id)
-	await _spawn_main()
-	_check(await _press_named("Navigation_survey"), "Survey is reachable for permanent-site extraction")
-	var site_id := "earth_resource_cluster_prospect"
-	var start_button := main.find_child("StartMining_%s" % site_id, true, false) as Button
-	var start_result := await _double_submit_with_structured_rejection(start_button, func() -> bool:
-		var runtime := _active_mining_for_site(site_id)
-		if runtime.is_empty() or (runtime.get("assigned_ship_ids", []) as Array).is_empty():
-			return false
-		var ship := Game.state.ship_by_id(String((runtime.get("assigned_ship_ids", []) as Array)[0]))
-		return String(runtime.get("status", "")) == "RUNNING" \
-			and String(ship.get("status", "")) == "EXTRACTION_OPERATION"
-	)
-	_record_double_submit_action("START_EXTRACTION", scenario_id, String(start_result.get("controlName", "")), start_result,
-		"A permanent-site runtime owns a physical extraction-capable ship; the ship is no longer docked or spendable elsewhere.")
-	var live_runtime := _active_mining_for_site(site_id)
-	var mining_slot := int(live_runtime.get("slot", -1))
-	var mining_ship_ids: Array = live_runtime.get("assigned_ship_ids", []).duplicate()
-	_record_quadrant("START_EXTRACTION", "persistence", _persisted_active_mining(site_id, mining_ship_ids), {
-		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "siteId":site_id, "shipIds":mining_ship_ids
-	})
-	await _settle_ui()
-
-	var stop_text := I18n.core("survey.stop_mining")
-	var stop_button := _first_visible_button_by_text(stop_text, false)
-	var stop_result := await _double_submit_with_structured_rejection(stop_button, func() -> bool:
-		return _mining_slot_is_released(mining_slot, mining_ship_ids)
-	)
-	_record_double_submit_action("STOP_EXTRACTION", scenario_id, String(stop_result.get("controlName", "")), stop_result,
-		"The mining runtime is reset to IDLE and every exclusively assigned physical ship is released back to its fleet while docked.")
-	_record_quadrant("STOP_EXTRACTION", "persistence", _persisted_mining_released(mining_slot, mining_ship_ids), {
-		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "slot":mining_slot, "shipIds":mining_ship_ids
-	})
 
 
 func _verify_production_start_stop_actions() -> void:
@@ -707,26 +659,6 @@ func _verify_site_development_action() -> void:
 	})
 
 
-func _verify_extraction_site_integration_action() -> void:
-	var scenario_id := "automate_earth"
-	var site_id := "earth_resource_cluster_prospect"
-	var network_id := "earth_extraction_network"
-	_check(_activate_scenario(scenario_id), "%s activates for permanent Extraction-site integration" % scenario_id)
-	await _spawn_main()
-	_check(await _press_named("Navigation_survey"), "Survey is reachable for Extraction-site integration")
-	var control_name := "IntegrateMining_%s" % site_id
-	var button := main.find_child(control_name, true, false) as Button
-	var result := await _double_submit_with_structured_rejection(button, func() -> bool:
-		return _site_integrated_with_network(Game.state, site_id, network_id)
-	)
-	_record_double_submit_action("INTEGRATE_EXTRACTION_SITE", scenario_id, String(result.get("controlName", "")), result,
-		"The mastered physical site joins the unlocked regional Extraction Network in both reciprocal Domain records; a rapid duplicate is rejected.")
-	_record_quadrant("INTEGRATE_EXTRACTION_SITE", "persistence", _persisted_site_network_integration(site_id, network_id), {
-		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "siteId":site_id, "networkId":network_id,
-		"claim":"The site-to-network and network-to-site ownership links both survive Domain round-trip."
-	})
-
-
 func _verify_location_capacity_action() -> void:
 	var scenario_id := "prototype_complete"
 	_check(_activate_scenario(scenario_id), "%s activates for Location capacity projects" % scenario_id)
@@ -924,6 +856,57 @@ func _verify_shipyard_queue_actions() -> void:
 	_record_quadrant("CANCEL_SHIP_BUILD", "persistence", _persisted_shipyard_project_absent(cancel_project_id), {
 		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "projectId":cancel_project_id, "planId":cancel_plan_id,
 		"consumedLost":cancel_order.get("consumed", {})
+	})
+
+
+func _verify_ship_design_refit_and_cancel_actions() -> void:
+	var scenario_id := "open_deep"
+	_check(_activate_scenario(scenario_id), "%s activates for saved-design Ship refit" % scenario_id)
+	var design_ids := _create_saved_ship_designs(1)
+	var design_id := design_ids[0] if not design_ids.is_empty() else ""
+	var candidates := Game.ship_design_refit_candidates(design_id) if not design_id.is_empty() else []
+	var ship_id := String(candidates[0]) if not candidates.is_empty() else ""
+	var design := Game.state.ship_designs.get(design_id, {}) as Dictionary
+	var desired_modules: Array = design.get("modules", []).duplicate()
+	var original_modules := Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)) if not ship_id.is_empty() else []
+	var funded_bom := _fund_ship_refit_setup(ship_id, desired_modules)
+	await _spawn_main()
+	_check(await _press_named("Navigation_ships"), "Ships is reachable for saved-design refit")
+	_check(await _press_named("FleetSection_shipyard"), "Shipyard exposes the canonical saved-design refit entry point")
+	var refit_control := "RefitShipDesign_%s_%s" % [design_id, ship_id]
+	var refit_button := main.find_child(refit_control, true, false) as Button
+	var refit_result := await _double_submit_with_structured_rejection(refit_button, func() -> bool:
+		return _active_refit_matches(ship_id, desired_modules)
+	)
+	var refit := _active_refit_for_ship(ship_id)
+	var refit_id := String(refit.get("project_id", ""))
+	_record_double_submit_action("REFIT_SHIP_FROM_BLUEPRINT", scenario_id, String(refit_result.get("controlName", "")), refit_result,
+		"The visible saved-design action creates one canonical full-loadout refit and exclusively assigns the real physical ship to it.")
+	_record_quadrant("REFIT_SHIP_FROM_BLUEPRINT", "consequence", bool(refit_result.get("consequence", false)) \
+		and (refit.get("consumed_bom", {}) as Dictionary) == funded_bom, {
+		"shipId":ship_id, "designId":design_id, "projectId":refit_id,
+		"desiredDefinitions":desired_modules, "consumedBom":refit.get("consumed_bom", {})
+	})
+	_record_quadrant("REFIT_SHIP_FROM_BLUEPRINT", "persistence", _persisted_refit_matches(refit_id, ship_id, desired_modules), {
+		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "shipId":ship_id, "designId":design_id, "projectId":refit_id
+	})
+
+	_check(await _press_named("FleetSection_archive"), "Maintenance Archive exposes the active refit cancellation")
+	var cancel_control := "CancelShipRefit_%s" % refit_id
+	var cancel_button := main.find_child(cancel_control, true, false) as Button
+	var stock_after_refit := _inventory_snapshot(funded_bom.keys(), String(Game.state.ship_by_id(ship_id).get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
+	var cancel_result := await _double_submit_with_structured_rejection(cancel_button, func() -> bool:
+		return _refit_cancelled_to_original(ship_id, refit_id, original_modules)
+	)
+	_record_double_submit_action("CANCEL_SHIP_REFIT", scenario_id, String(cancel_result.get("controlName", "")), cancel_result,
+		"Cancellation removes exactly the active refit, restores the physical ship and keeps committed fabrication materials consumed.")
+	_record_quadrant("CANCEL_SHIP_REFIT", "consequence", bool(cancel_result.get("consequence", false)) \
+		and _inventory_snapshot_matches(stock_after_refit, String(Game.state.ship_by_id(ship_id).get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))), {
+		"shipId":ship_id, "cancelledProjectId":refit_id,
+		"restoredDefinitions":Game.state.ship_module_definition_ids(Game.state.ship_by_id(ship_id)), "committedBomStillLost":funded_bom
+	})
+	_record_quadrant("CANCEL_SHIP_REFIT", "persistence", _persisted_refit_cancelled(ship_id, refit_id, original_modules), {
+		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "shipId":ship_id, "cancelledProjectId":refit_id
 	})
 
 
@@ -1126,30 +1109,41 @@ func _verify_ship_loadout_actions() -> void:
 func _verify_ship_assignment_and_expedition_actions() -> void:
 	var scenario_id := "automate_earth"
 	_check(_activate_scenario(scenario_id), "%s activates for Ship assignment and Lunar Expedition" % scenario_id)
+	var ship_id := "SHIP-001"
+	var formation_id := SpaceGameState.DEFAULT_FORMATION_ID
+	if Game.state.ship_formation_id(ship_id) == formation_id:
+		Game.set_ship_formation_assignment(ship_id, "")
 	await _spawn_main()
 	_check(await _press_named("Navigation_ships"), "Ships is reachable for physical fleet assignment")
 	var roster_tab := main.find_child("FleetSection_roster", true, false) as Button
 	if roster_tab != null and not roster_tab.disabled:
 		roster_tab.pressed.emit()
 		await _settle_ui()
-	var ship_id := "SHIP-001"
-	var assign_button := main.find_child("AssignExpedition_%s" % ship_id, true, false) as Button
-	var assignment_before: String = String(Game.state.ship_fleet_domain(ship_id))
+	var assign_button := main.find_child("FleetRosterDispatch", true, false) as Button
+	var assignment_before := Game.state.ship_formation_id(ship_id)
 	var notice_before := Game.last_notice
 	if _button_usable(assign_button):
 		assign_button.pressed.emit()
+		await _settle_ui()
+		var dispatch_popup := main.get("_fleet_roster_popup") as PopupMenu
+		if is_instance_valid(dispatch_popup):
+			for item_index in dispatch_popup.item_count:
+				if String(dispatch_popup.get_item_metadata(item_index)) == formation_id and not dispatch_popup.is_item_disabled(item_index):
+					dispatch_popup.id_pressed.emit(dispatch_popup.get_item_id(item_index))
+					break
+		await _settle_ui()
 	var assignment_notice := Game.last_notice
-	var assigned: bool = assignment_before != "expedition" and Game.state.ship_fleet_domain(ship_id) == "expedition" \
-		and Game.state.fleet_ship_ids("expedition").has(ship_id) and not Game.state.fleet_ship_ids("mining").has(ship_id)
+	var assigned := assignment_before != formation_id and Game.state.ship_formation_id(ship_id) == formation_id \
+		and Game.state.formation_ship_ids(formation_id).has(ship_id)
 	_record_quadrant("ASSIGN_SHIP", "success", assigned and assignment_notice != notice_before, {
-		"scenario":scenario_id, "controlName":"AssignExpedition_%s" % ship_id, "successNotice":assignment_notice
+		"scenario":scenario_id, "controlName":"FleetRosterDispatch", "successNotice":assignment_notice
 	})
 	_record_quadrant("ASSIGN_SHIP", "consequence", assigned, {
-		"shipId":ship_id, "exclusiveFleetDomain":Game.state.ship_fleet_domain(ship_id),
-		"expeditionRoster":Game.state.fleet_ship_ids("expedition"), "miningRoster":Game.state.fleet_ship_ids("mining")
+		"shipId":ship_id, "formationId":Game.state.ship_formation_id(ship_id),
+		"formationRoster":Game.state.formation_ship_ids(formation_id)
 	})
-	_record_quadrant("ASSIGN_SHIP", "persistence", _persisted_ship_fleet_assignment(ship_id, "expedition"), {
-		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "shipId":ship_id, "fleetDomain":"expedition"
+	_record_quadrant("ASSIGN_SHIP", "persistence", _persisted_ship_fleet_assignment(ship_id, formation_id), {
+		"tier":"DOMAIN_SERIALIZE_DESERIALIZE_ONLY", "shipId":ship_id, "formationId":formation_id
 	})
 	await _settle_ui()
 
@@ -1183,10 +1177,21 @@ func _verify_ship_assignment_and_expedition_actions() -> void:
 	if roster_tab != null and not roster_tab.disabled:
 		roster_tab.pressed.emit()
 		await _settle_ui()
-	var locked_assignment := main.find_child("AssignMining_%s" % ship_id, true, false) as Button
-	_record_quadrant("ASSIGN_SHIP", "failure", locked_assignment != null and locked_assignment.is_visible_in_tree() and locked_assignment.disabled, {
-		"scenario":scenario_id, "controlName":"AssignMining_%s" % ship_id, "mode":"VISIBLE_DISABLED_CONTROL",
-		"evidence":"Every fleet-assignment choice is visibly disabled while the physical ship is owned by an active Expedition runtime."
+	var active_dispatch := main.find_child("FleetRosterDispatch", true, false) as Button
+	var active_formation_before := Game.state.ship_formation_id(ship_id)
+	var failure_notice_before := Game.last_notice
+	if _button_usable(active_dispatch):
+		active_dispatch.pressed.emit()
+		await _settle_ui()
+		var active_popup := main.get("_fleet_roster_popup") as PopupMenu
+		if is_instance_valid(active_popup):
+			active_popup.id_pressed.emit(active_popup.get_item_id(0))
+		await _settle_ui()
+	var assignment_rejected := Game.state.ship_formation_id(ship_id) == active_formation_before \
+		and Game.last_notice != failure_notice_before
+	_record_quadrant("ASSIGN_SHIP", "failure", assignment_rejected, {
+		"scenario":scenario_id, "controlName":"FleetRosterDispatch", "mode":"DOMAIN_REJECTION",
+		"evidence":"The visible Dispatch menu routes an active-formation reassignment through the canonical availability guard without mutating the roster."
 	})
 
 	_check(await _press_named("ShipsMissions"), "Expedition Missions remains reachable for active-route Recall")
@@ -1923,7 +1928,7 @@ func _initialize_coverage() -> void:
 			"fourCaseVerified":false,
 			"reason":"Not exercised by this bounded runtime suite."
 		}
-	_check(coverage.size() == 57, "runtime evidence denominator is the fixed 57 core actions")
+	_check(coverage.size() == 48, "runtime evidence denominator matches the current 48-action core registry")
 
 
 func _record_quadrant(action_id: String, quadrant: String, verified: bool, evidence: Dictionary) -> void:
@@ -2082,28 +2087,6 @@ func _first_visible_button_text_prefix(button_text_prefix: String, require_disab
 		if button.disabled == require_disabled:
 			return button
 	return null
-
-
-func _active_mining_for_site(site_id: String) -> Dictionary:
-	for runtime_value in Game.state.mining_operations:
-		var runtime := runtime_value as Dictionary
-		if String(runtime.get("site_id", "")) == site_id and String(runtime.get("status", "")) in ["RUNNING", "BLOCKED"]:
-			return runtime
-	return {}
-
-
-func _mining_slot_is_released(slot: int, ship_ids: Array) -> bool:
-	if slot < 0 or slot >= Game.state.mining_operations.size():
-		return false
-	var runtime := Game.state.mining_operations[slot] as Dictionary
-	if String(runtime.get("status", "")) != "IDLE" or not String(runtime.get("site_id", "")).is_empty() \
-		or not (runtime.get("assigned_ship_ids", []) as Array).is_empty():
-		return false
-	for ship_id_value in ship_ids:
-		var ship := Game.state.ship_by_id(String(ship_id_value))
-		if String(ship.get("status", "")) != "DOCKED" or String(ship.get("assignment", {}).get("domain", "")) != "mining":
-			return false
-	return true
 
 
 func _industry_by_slot(slot: int) -> Dictionary:
@@ -2506,19 +2489,6 @@ func _roundtrip_state() -> SpaceGameState:
 	return SpaceGameState.from_dictionary(Game.state.to_dictionary(), Game.content.domains.keys(), Game.content.regions)
 
 
-func _site_integrated_with_network(state_value: SpaceGameState, site_id: String, network_id: String) -> bool:
-	if state_value == null:
-		return false
-	var site: Dictionary = state_value.mining_site_states.get(site_id, {})
-	var network: Dictionary = state_value.extraction_network_states.get(network_id, {})
-	return String(site.get("integrated_network_id", "")) == network_id \
-		and (network.get("integrated_site_ids", []) as Array).has(site_id)
-
-
-func _persisted_site_network_integration(site_id: String, network_id: String) -> bool:
-	return _site_integrated_with_network(_roundtrip_state(), site_id, network_id)
-
-
 func _expedition_is_recalled(ship_id: String, safe_node_index: int) -> bool:
 	var runtime: Dictionary = Game.state.active_expedition
 	var ship := Game.state.ship_by_id(ship_id)
@@ -2532,7 +2502,7 @@ func _expedition_is_recalled(ship_id: String, safe_node_index: int) -> bool:
 		and (runtime.get("assigned_ship_ids", []) as Array).is_empty() \
 		and (runtime.get("combat_state", {}) as Dictionary).is_empty() \
 		and String(ship.get("status", "")) == "DOCKED" \
-		and Game.state.ship_fleet_domain(ship_id) == "expedition"
+		and Game.state.ship_formation_id(ship_id) == SpaceGameState.DEFAULT_FORMATION_ID
 
 
 func _persisted_recalled_expedition(ship_id: String, safe_node_index: int) -> bool:
@@ -2551,7 +2521,7 @@ func _persisted_recalled_expedition(ship_id: String, safe_node_index: int) -> bo
 		and (runtime.get("assigned_ship_ids", []) as Array).is_empty() \
 		and (runtime.get("combat_state", {}) as Dictionary).is_empty() \
 		and String(ship.get("status", "")) == "DOCKED" \
-		and loaded.ship_fleet_domain(ship_id) == "expedition"
+		and loaded.ship_formation_id(ship_id) == SpaceGameState.DEFAULT_FORMATION_ID
 
 
 func _persisted_construction_support(ship_id: String, location_id: String, expected_assigned: bool) -> bool:
@@ -2587,40 +2557,6 @@ func _persisted_megastructure_site(megastructure_id: String, location_id: String
 		and int(project.get("phase_index", 0)) == 1 \
 		and (project.get("phase_history", []) as Array).size() == 1 \
 		and String(project.get("active_project_id", "")).is_empty()
-
-
-func _persisted_active_mining(site_id: String, ship_ids: Array) -> bool:
-	var loaded := _roundtrip_state()
-	if loaded == null or ship_ids.is_empty():
-		return false
-	for runtime_value in loaded.mining_operations:
-		var runtime := runtime_value as Dictionary
-		if String(runtime.get("site_id", "")) != site_id or String(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"]:
-			continue
-		var loaded_ship_ids: Array = runtime.get("assigned_ship_ids", [])
-		if loaded_ship_ids.size() != ship_ids.size():
-			return false
-		for ship_id_value in ship_ids:
-			var ship_id := String(ship_id_value)
-			if not loaded_ship_ids.has(ship_id) or String(loaded.ship_by_id(ship_id).get("status", "")) != "EXTRACTION_OPERATION":
-				return false
-		return true
-	return false
-
-
-func _persisted_mining_released(slot: int, ship_ids: Array) -> bool:
-	var loaded := _roundtrip_state()
-	if loaded == null or slot < 0 or slot >= loaded.mining_operations.size():
-		return false
-	var runtime := loaded.mining_operations[slot] as Dictionary
-	if String(runtime.get("status", "")) != "IDLE" or not String(runtime.get("site_id", "")).is_empty() \
-		or not (runtime.get("assigned_ship_ids", []) as Array).is_empty():
-		return false
-	for ship_id_value in ship_ids:
-		var ship := loaded.ship_by_id(String(ship_id_value))
-		if String(ship.get("status", "")) != "DOCKED" or String(ship.get("assignment", {}).get("domain", "")) != "mining":
-			return false
-	return true
 
 
 func _persisted_production_line(slot: int, activity_id: String, expected_status: String, control_mode: String, priority: int) -> bool:
@@ -2782,10 +2718,10 @@ func _persisted_shipyard_project_absent(project_id: String) -> bool:
 	return loaded != null and not project_id.is_empty() and not _shipyard_has_project(loaded, project_id)
 
 
-func _persisted_ship_fleet_assignment(ship_id: String, fleet_domain: String) -> bool:
+func _persisted_ship_fleet_assignment(ship_id: String, formation_id: String) -> bool:
 	var loaded := _roundtrip_state()
-	return loaded != null and loaded.ship_fleet_domain(ship_id) == fleet_domain \
-		and loaded.fleet_ship_ids(fleet_domain).has(ship_id)
+	return loaded != null and loaded.ship_formation_id(ship_id) == formation_id \
+		and loaded.formation_ship_ids(formation_id).has(ship_id)
 
 
 func _persisted_expedition(route_id: String, ship_id: String) -> bool:

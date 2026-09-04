@@ -2,3 +2,12 @@
 # Keep this project-local so other Codex projects retain their own policies.
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+
+# Keep one primary integration agent and allow up to three bounded workers.
+# The repository AGENTS.md defines when delegation is required and how write
+# ownership is assigned so parallelism does not turn into shared-file races.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "high"

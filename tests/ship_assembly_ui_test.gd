@@ -2,6 +2,7 @@ extends Node
 
 const MainScene = preload("res://src/ui/main.tscn")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
+const ShipDismantleModalScript = preload("res://src/ui/components/ship_dismantle_modal.gd")
 
 var failures: Array[String] = []
 
@@ -88,11 +89,11 @@ func _run() -> void:
 	_check(is_equal_approx(list_surface.size.y, inspector_surface.size.y) and list_surface.size.y > pioneer_list_item.size.y * 2.0, "both roster work surfaces expand through the remaining vertical workspace")
 	print("SHIP_ROSTER_STEP04_GEOMETRY viewport=%dx%d body_x=%.1f browser=%.1f gap=%.1f inspector=%.1f height=%.1f" % [get_viewport().get_visible_rect().size.x, get_viewport().get_visible_rect().size.y, list_surface.global_position.x, list_surface.size.x, measured_gap, inspector_surface.size.x, list_surface.size.y])
 	_check(ship_list.get_child_count() == 8 and pioneer_list_item != null and pioneer_hull_class != null and pioneer_hull_class.text == "护卫舰 · T1", "Ship Browser renders eight isolated fixture rows from real Hull Class and construction engineering tier data")
-	var expected_roster_row_height := float(maxi(UiTokens.layout_px(61), int(round(61.0 * UiTokens.ui_scale()))))
-	_check(pioneer_list_item.text.is_empty() and absf(pioneer_list_item.size.y - expected_roster_row_height) <= 1.0 and pioneer_list_item.find_child("FleetRosterLeftInfo_%s" % pioneer_id, true, false) is VBoxContainer and pioneer_list_item.find_child("FleetRosterRightInfo_%s" % pioneer_id, true, false) is VBoxContainer, "ShipRow follows the larger of the accepted layout scale and full typography scale")
-	_check(pioneer_selection_control != null and pioneer_selection_control.mouse_filter == Control.MOUSE_FILTER_IGNORE and select_filtered != null and select_filtered.mouse_filter == Control.MOUSE_FILTER_IGNORE, "real CheckBox controls reserve row and filtered-result selection structure without enabling STEP 10 behavior")
+	var expected_roster_row_height := float(UiTokens.full_scale_px(61.0 / 1.5))
+	_check(pioneer_list_item.text.is_empty() and absf(pioneer_list_item.size.y - expected_roster_row_height) <= 1.0 and pioneer_list_item.find_child("FleetRosterLeftInfo_%s" % pioneer_id, true, false) is VBoxContainer and pioneer_list_item.find_child("FleetRosterRightInfo_%s" % pioneer_id, true, false) is VBoxContainer, "ShipRow follows the canonical full-scale Golden density without an independent nested scale")
+	_check(pioneer_selection_control != null and pioneer_selection_control.mouse_filter == Control.MOUSE_FILTER_STOP and pioneer_selection_control.focus_mode == Control.FOCUS_ALL and select_filtered != null and select_filtered.mouse_filter == Control.MOUSE_FILTER_STOP and select_filtered.focus_mode == Control.FOCUS_ALL, "STEP 10 activates the real row and filtered-result CheckBox controls for mouse and keyboard input")
 	var pioneer_dot_style := pioneer_lifecycle_dot.get_theme_stylebox("panel") as StyleBoxFlat if pioneer_lifecycle_dot != null else null
-	_check(pioneer_lifecycle_dot != null and pioneer_lifecycle_dot.custom_minimum_size == UiTokens.layout_vector(Vector2(8, 8)) and pioneer_lifecycle != null and pioneer_lifecycle.text == "运行中" and not pioneer_lifecycle.text.contains("●") and pioneer_dot_style != null and pioneer_dot_style.bg_color.is_equal_approx(UiTokens.COLOR_RUNNING), "ACTIVE lifecycle uses a real 8 px UI circle at the 100% Golden pixel calibration and muted semantic green rather than a Unicode dot")
+	_check(pioneer_lifecycle_dot != null and pioneer_lifecycle_dot.custom_minimum_size == UiTokens.full_scale_vector(Vector2(8, 8) / 1.5) and pioneer_lifecycle != null and pioneer_lifecycle.text == "运行中" and not pioneer_lifecycle.text.contains("●") and pioneer_dot_style != null and pioneer_dot_style.bg_color.is_equal_approx(UiTokens.COLOR_RUNNING), "ACTIVE lifecycle uses a real 8 px UI circle at the 150% Golden calibration and muted semantic green rather than a Unicode dot")
 	var reserve_dot := main.find_child("FleetRosterLifecycleDot_%s" % String(reserve_ship.get("instance_id", "")), true, false) as PanelContainer
 	var mothballed_dot := main.find_child("FleetRosterLifecycleDot_%s" % String(mothballed_ship.get("instance_id", "")), true, false) as PanelContainer
 	var reserve_dot_style := reserve_dot.get_theme_stylebox("panel") as StyleBoxFlat if reserve_dot != null else null
@@ -110,12 +111,12 @@ func _run() -> void:
 	var selected_row_style := pioneer_list_item.get_theme_stylebox("normal") as StyleBoxFlat
 	var normal_row := main.find_child("FleetRosterShip_%s" % String(horizon_ship.get("instance_id", "")), true, false) as Button
 	var normal_row_style := normal_row.get_theme_stylebox("normal") as StyleBoxFlat if normal_row != null else null
-	_check(selected_ship_ids.size() == 1 and selected_ship_ids.has(pioneer_id) and selected_row_style.border_color.is_equal_approx(UiTokens.COLOR_FOCUS) and normal_row_style != null and normal_row_style.border_color.is_equal_approx(UiTokens.COLOR_BORDER), "first visible ship is selected by default with a teal surface border distinct from normal rows")
+	_check(selected_ship_ids.size() == 1 and selected_ship_ids.has(pioneer_id) and selected_row_style.border_color.is_equal_approx(UiTokens.COLOR_FOCUS) and normal_row_style != null and normal_row_style.border_color.is_equal_approx(UiTokens.COLOR_REGISTRY_SEPARATOR), "first visible ship is selected by default with a teal surface border distinct from normal rows")
 	var selected_row_content_inside := _ship_row_content_inside(pioneer_list_item, [pioneer_selection_control, main.find_child("FleetRosterShipName_%s" % pioneer_id, true, false), pioneer_hull_class, pioneer_lifecycle, pioneer_formation])
 	var horizon_id := String(horizon_ship.get("instance_id", ""))
 	var normal_row_content_inside := _ship_row_content_inside(normal_row, [main.find_child("FleetRosterSelectionControl_%s" % horizon_id, true, false), main.find_child("FleetRosterShipName_%s" % horizon_id, true, false), horizon_hull_class, main.find_child("FleetRosterLifecycle_%s" % horizon_id, true, false), horizon_formation])
 	_check(selected_row_content_inside and normal_row_content_inside, "selected and unselected ShipRows fully contain checkbox plus both left/right text lines at every tested UI scale")
-	_check((main.find_child("FleetRosterBrowserHeader", true, false) as Control).size.y == UiTokens.layout_px(46) and (main.find_child("FleetRosterBrowserFooter", true, false) as Control).size.y == UiTokens.layout_px(86), "ShipRow scaling leaves Browser metadata and footer geometry unchanged")
+	_check(absf((main.find_child("FleetRosterBrowserHeader", true, false) as Control).size.y - UiTokens.full_scale_px(46.0 / 1.5)) <= 1.0 and absf((main.find_child("FleetRosterBrowserFooter", true, false) as Control).size.y - UiTokens.full_scale_px(86.0 / 1.5)) <= 1.0, "Browser metadata, rows and footer share the canonical Golden full-scale path")
 	normal_row.pressed.emit()
 	await _redraw()
 	_check(_operational_value(main, "formation") == I18n.core("ships.formation.primary") and _operational_value(main, "combat_position") == I18n.core("ships.zone.FRONT") and (main.find_child("FleetRosterInspectorShipName", true, false) as Label).text == "ISS HORIZON", "Inspector follows the selected real ship and reads formation plus the existing default FRONT combat-position fallback")
@@ -143,7 +144,8 @@ func _run() -> void:
 		operational_values_aligned = operational_values_aligned and absf((main.find_child("FleetRosterOperationalValue_%s" % field_id, true, false) as Label).global_position.x - operational_value_x) <= 1.0
 	_check(operational_values_aligned, "all five Operational Status values share one aligned value column")
 	var inspector_dot_style := inspector_status_dot.get_theme_stylebox("panel") as StyleBoxFlat if inspector_status_dot != null else null
-	_check(inspector_status_dot != null and inspector_status_dot.custom_minimum_size == Vector2(8, 8) and inspector_dot_style != null and inspector_dot_style.bg_color.is_equal_approx(UiTokens.COLOR_RUNNING), "Inspector status reuses the accepted real 8 px lifecycle primitive and semantic color")
+	var inspector_scale_ratio := UiTokens.ui_scale() / 1.5
+	_check(inspector_status_dot != null and inspector_status_dot.custom_minimum_size.is_equal_approx(Vector2(8, 8) * inspector_scale_ratio) and inspector_dot_style != null and inspector_dot_style.bg_color.is_equal_approx(UiTokens.COLOR_RUNNING), "Inspector status reuses the scale-aware lifecycle primitive and semantic color")
 	var inspector_ship_art := main.find_child("FleetRosterShipVisual", true, false) as TextureRect
 	_check(inspector_ship_art != null and inspector_ship_art.texture != null and inspector_ship_art.texture.resource_path == "res://assets/ui/ship_registry/ships/patchwork_prospector_ship.png" and inspector_ship_art.stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_CENTERED, "patchwork_prospector Inspector uses only its approved aspect-preserving project-owned artwork")
 	var operational_icon_paths := {
@@ -158,18 +160,19 @@ func _run() -> void:
 		var field_id := String(field_id_value)
 		var operational_icon := main.find_child("FleetRosterOperationalIcon_%s" % field_id, true, false) as TextureRect
 		var operational_atlas := operational_icon.texture as AtlasTexture if operational_icon != null else null
-		operational_icons_valid = operational_icons_valid and operational_icon != null and operational_atlas != null and operational_atlas.atlas != null and operational_icon.custom_minimum_size == Vector2(16, 16) and operational_atlas.atlas.resource_path == String(operational_icon_paths[field_id])
-	_check(operational_icons_valid, "all five Operational Status rows use their approved 16 px project-owned texture assets")
+		operational_icons_valid = operational_icons_valid and operational_icon != null and operational_atlas != null and operational_atlas.atlas != null and operational_icon.custom_minimum_size.is_equal_approx(Vector2(16, 16) * inspector_scale_ratio) and operational_atlas.atlas.resource_path == String(operational_icon_paths[field_id])
+	_check(operational_icons_valid, "all five Operational Status rows use their approved scale-aware project-owned texture assets")
 	_check(main.find_child("SetShipActive_%s" % pioneer_id, true, false) == null and main.find_child("SetShipReadyReserve_%s" % pioneer_id, true, false) == null and main.find_child("MothballShip_%s" % pioneer_id, true, false) == null and main.find_child("AssignStandby_%s" % pioneer_id, true, false) == null and main.find_child("AssignFormation_%s" % pioneer_id, true, false) == null and main.find_child("ShipCombatZone_%s_FRONT" % pioneer_id, true, false) == null and not _has_button_text(roster_box, I18n.core("ships.action.scrap")), "legacy lifecycle, formation, combat-position, and dismantle controls are no longer rendered")
+	var inspector_host := main.find_child("FleetRosterInspectorHost", true, false) as Container
 	var inspector_scroll := main.find_child("FleetRosterInspectorScroll", true, false) as ScrollContainer
 	var lower_row := main.find_child("FleetRosterLowerInfoRow", true, false) as HBoxContainer
 	var basic_panel := main.find_child("FleetRosterBasicInformationPanel", true, false) as PanelContainer
 	var configuration_panel := main.find_child("FleetRosterConfigurationSummaryPanel", true, false) as PanelContainer
 	var readiness_panel := main.find_child("FleetRosterReadinessPanel", true, false) as PanelContainer
-	_check(inspector_scroll != null and inspector_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and inspector_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO, "the Inspector owns a vertical accessibility viewport while preserving the fixed Master–Detail work surface")
+	_check(inspector_host != null and inspector_scroll == null, "the fixed Inspector workspace uses its bounded non-scrolling Container host without horizontal or vertical scrollbars")
 	_check(lower_row != null and lower_row.get_child_count() == 3 and basic_panel != null and configuration_panel != null and readiness_panel != null and is_equal_approx(basic_panel.size_flags_stretch_ratio, 1.0) and is_equal_approx(configuration_panel.size_flags_stretch_ratio, 1.2) and is_equal_approx(readiness_panel.size_flags_stretch_ratio, 1.8), "STEP 07 lower region contains exactly the 1.0/1.2/1.8 Basic, Configuration, and Readiness panels")
-	var expected_lower_height := 238.0
-	var expected_lower_gap := 18.0
+	var expected_lower_height := float(roundi(266.0 * inspector_scale_ratio))
+	var expected_lower_gap := float(roundi(18.0 * inspector_scale_ratio))
 	var actual_lower_gap := lower_row.global_position.y - inspector_upper.get_global_rect().end.y
 	_check(absf(lower_row.size.y - expected_lower_height) <= 1.0 and absf(configuration_panel.global_position.x - basic_panel.get_global_rect().end.x - expected_lower_gap) <= 1.0 and absf(readiness_panel.global_position.x - configuration_panel.get_global_rect().end.x - expected_lower_gap) <= 1.0 and absf(actual_lower_gap - expected_lower_gap) <= 1.0, "lower panels preserve their Golden height and 18 px vertical/horizontal rhythm")
 	_check((main.find_child("FleetRosterBasicValue_ship_id", true, false) as Label).text == pioneer_id and (main.find_child("FleetRosterBasicValue_registry_code", true, false) as Label).text == "—" and (main.find_child("FleetRosterBasicValue_tonnage", true, false) as Label).text == "—" and (main.find_child("FleetRosterBasicValue_crew", true, false) as Label).text == "—" and (main.find_child("FleetRosterBasicValue_ship_class", true, false) as Label).text == "护卫舰 · T1" and (main.find_child("FleetRosterBasicValue_manufacturer", true, false) as Label).text == "—" and not (main.find_child("FleetRosterBasicValue_built_at", true, false) as Label).text.is_empty(), "Basic Information binds canonical identity/class/build time and exposes missing model concepts honestly")
@@ -209,8 +212,11 @@ func _run() -> void:
 	for asset_path_value in action_asset_paths:
 		var asset_path := String(asset_path_value)
 		var texture := load(asset_path) as Texture2D if ResourceLoader.exists(asset_path) else null
-		all_action_assets_valid = all_action_assets_valid and texture != null and texture.resource_path == asset_path and texture.get_width() <= 64 and texture.get_height() <= 64
-	_check(all_action_assets_valid, "all twelve supplied Ship Registry action assets resolve as runtime textures no larger than 64 px")
+		var source_image := Image.load_from_file(ProjectSettings.globalize_path(asset_path))
+		var used_rect := source_image.get_used_rect()
+		var import_text := FileAccess.get_file_as_string("%s.import" % asset_path)
+		all_action_assets_valid = all_action_assets_valid and texture != null and texture.resource_path == asset_path and texture.get_width() == 64 and texture.get_height() == 64 and source_image.get_size() == Vector2i(64, 64) and maxi(used_rect.size.x, used_rect.size.y) >= 56 and import_text.contains("mipmaps/generate=false")
+	_check(all_action_assets_valid, "all twelve supplied Ship Registry actions use crisp 64 px runtime derivatives with visible glyph area and mipmaps disabled")
 
 	var header_actions := main.find_child("FleetRosterHeaderActions", true, false) as HBoxContainer
 	var favorite_button := main.find_child("FleetRosterFavorite", true, false) as Button
@@ -222,15 +228,26 @@ func _run() -> void:
 	var dismantle_button := main.find_child("FleetRosterDismantle", true, false) as Button
 	_check(header_actions != null and header_actions.get_child_count() == 3 and header_actions.get_child(0) == favorite_button and header_actions.get_child(1) == lock_button and header_actions.get_child(2) == more_button, "STEP 08 header action order is Favorite, Lock, More")
 	_check(footer_actions != null and footer_actions.get_child_count() == 3 and footer_actions.get_child(0) == dispatch_button and footer_actions.get_child(1) == details_button and footer_actions.get_child(2) == dismantle_button, "STEP 08 footer action order is Dispatch, View Details, Dismantle Ship")
-	var step08_inspector_scroll := main.find_child("FleetRosterInspectorScroll", true, false) as ScrollContainer
+	_check(not favorite_button.text.contains("★") and not lock_button.text.contains("🔒") and not more_button.text.contains("…") and not more_button.text.contains("..."), "STEP 08 actions use supplied textures without Unicode or font-glyph icon fallbacks")
+	var favorite_domain_connections := favorite_button.get_signal_connection_list("toggled").filter(func(connection): return (connection.get("callable") as Callable).get_method() == "_set_fleet_roster_ship_favorite").size()
+	var lock_domain_connections := lock_button.get_signal_connection_list("toggled").filter(func(connection): return (connection.get("callable") as Callable).get_method() == "_set_fleet_roster_ship_locked").size()
+	_check(favorite_domain_connections == 1 and lock_domain_connections == 1, "Favorite and Lock each retain exactly one domain mutation signal connection")
+	var step08_inspector_host := main.find_child("FleetRosterInspectorHost", true, false) as Container
+	var step08_inspector_surface := main.find_child("FleetRosterInspectorSurface", true, false) as PanelContainer
 	var step08_identity := main.find_child("FleetRosterInspectorIdentityHeader", true, false) as HBoxContainer
 	var step08_lower_inset := main.find_child("FleetRosterLowerInfoInset", true, false) as MarginContainer
 	var step08_footer_inset := main.find_child("FleetRosterFooterInset", true, false) as MarginContainer
 	var step08_footer_gap := details_button.global_position.x - dispatch_button.get_global_rect().end.x if dispatch_button != null and details_button != null else -1.0
 	var step08_header_gap := lock_button.global_position.x - favorite_button.get_global_rect().end.x if favorite_button != null and lock_button != null else -1.0
-	var inspector_scroll_free := step08_inspector_scroll != null and step08_inspector_scroll.get_v_scroll_bar().max_value <= step08_inspector_scroll.get_v_scroll_bar().page + 1.0
-	_check(inspector_scroll_free and step08_inspector_scroll.get_global_rect().grow(1.0).encloses(footer_actions.get_global_rect()), "STEP 08 keeps the complete Inspector and footer visible without an active Inspector scrollbar")
-	print("SHIP_ROSTER_STEP08_ACTION_GEOMETRY scale=%d identity_h=%.1f header_h=%.1f header_gap=%.1f favorite_w=%.1f lock_w=%.1f more_w=%.1f upper_h=%.1f lower_inset_h=%.1f lower_h=%.1f lower_gap=%.1f footer_inset_h=%.1f footer_h=%.1f footer_gap=%.1f footer_widths=%.1f/%.1f/%.1f inspector_page=%.1f inspector_content=%.1f" % [UiTokens.ui_scale_percent(), step08_identity.size.y, favorite_button.size.y, step08_header_gap, favorite_button.size.x, lock_button.size.x, more_button.size.x, inspector_upper.size.y, step08_lower_inset.size.y, lower_row.size.y, actual_lower_gap, step08_footer_inset.size.y, dispatch_button.size.y, step08_footer_gap, dispatch_button.size.x, details_button.size.x, dismantle_button.size.x, step08_inspector_scroll.get_v_scroll_bar().page, step08_inspector_scroll.get_v_scroll_bar().max_value])
+	var inspector_content_visible := step08_inspector_host != null and step08_inspector_surface != null and step08_inspector_surface.get_global_rect().grow(3.0).encloses(footer_actions.get_global_rect())
+	_check(inspector_content_visible, "STEP 08 keeps the complete Inspector and footer inside the fixed work surface without introducing an Inspector scrollbar")
+	var expected_favorite_width := float(roundi(106.0 * inspector_scale_ratio))
+	var expected_more_width := float(roundi(44.0 * inspector_scale_ratio))
+	var expected_header_height := float(roundi(40.0 * inspector_scale_ratio))
+	var expected_footer_height := float(roundi(44.0 * inspector_scale_ratio))
+	_check(absf(favorite_button.size.x - expected_favorite_width) <= 1.0 and absf(lock_button.size.x - expected_favorite_width) <= 1.0 and absf(more_button.size.x - expected_more_width) <= 1.0 and absf(favorite_button.size.y - expected_header_height) <= 1.0 and absf(dispatch_button.size.y - expected_footer_height) <= 1.0, "STEP 08 header and footer actions derive from the canonical player-selected UI scale")
+	_check(UiTokens.ui_scale_percent() != 150 or (absf(inspector_upper.size.y - 211.0) <= 1.0 and absf(lower_row.size.y - 266.0) <= 1.0 and absf(dispatch_button.size.y - 44.0) <= 1.0), "150% calibration preserves the Golden Inspector dimensions")
+	print("SHIP_ROSTER_STEP08_ACTION_GEOMETRY scale=%d identity_h=%.1f header_h=%.1f header_gap=%.1f favorite_w=%.1f lock_w=%.1f more_w=%.1f upper_h=%.1f lower_inset_h=%.1f lower_h=%.1f lower_gap=%.1f footer_inset_h=%.1f footer_h=%.1f footer_gap=%.1f footer_widths=%.1f/%.1f/%.1f" % [UiTokens.ui_scale_percent(), step08_identity.size.y, favorite_button.size.y, step08_header_gap, favorite_button.size.x, lock_button.size.x, more_button.size.x, inspector_upper.size.y, step08_lower_inset.size.y, lower_row.size.y, actual_lower_gap, step08_footer_inset.size.y, dispatch_button.size.y, step08_footer_gap, dispatch_button.size.x, details_button.size.x, dismantle_button.size.x])
 	_check(details_button != null and details_button.disabled and details_button.tooltip_text == I18n.core("ships.roster.tooltip.details_unavailable"), "View Details truthfully reports the missing independent destination instead of opening a placeholder")
 	_check(favorite_button != null and lock_button != null and more_button != null and favorite_button.icon.resource_path.ends_with("star_normal.png") and lock_button.icon.resource_path.ends_with("lock_normal.png") and more_button.icon.resource_path.ends_with("more_normal.png"), "inactive header actions use the supplied normal Star, Lock, and More assets")
 	if more_button != null:
@@ -407,18 +424,36 @@ func _run() -> void:
 	if dismantle_button != null and not dismantle_button.disabled:
 		dismantle_button.pressed.emit()
 	await _redraw()
-	var dismantle_dialog := main.find_child("FleetRosterDismantleConfirmation", true, false) as ConfirmationDialog
+	var dismantle_dialog: Variant = main.find_child("FleetRosterDismantleConfirmation", true, false)
 	_check(dismantle_dialog != null and not Game.state.ship_by_id(dismantle_fixture_id).is_empty() and dismantle_dialog.dialog_text.contains("STEP 08 Dismantle Fixture") and dismantle_dialog.dialog_text.contains(dismantle_fixture_id) and dismantle_dialog.dialog_text.contains(expected_recovery_text), "Dismantle opens confirmation without mutation and displays canonical recovery data")
 	if dismantle_dialog != null:
-		dismantle_dialog.canceled.emit()
+		var modal_panel := dismantle_dialog.find_child("FleetRosterDismantlePanel", true, false) as Control
+		var modal_scrim := dismantle_dialog.find_child("FleetRosterDismantleScrim", true, false) as ColorRect
+		var confirm_button := dismantle_dialog.call("get_ok_button") as Button
+		var cancel_button := dismantle_dialog.call("get_cancel_button") as Button
+		var golden_ratio := UiTokens.ui_scale() / 1.5
+		_check(not dismantle_dialog is Window and modal_scrim != null and modal_scrim.size == main.size and modal_panel != null and is_equal_approx(modal_panel.size.x, round(690.0 * golden_ratio)) and is_equal_approx(modal_panel.size.y, round(300.0 * golden_ratio)) and confirm_button.size.y == round(44.0 * golden_ratio) and cancel_button.size.y == round(44.0 * golden_ratio), "Dismantle uses a full-screen themed in-application modal with Golden-scale panel and actions")
+		_check(get_viewport().gui_get_focus_owner() == cancel_button, "Dismantle modal starts on the non-destructive Cancel action")
+		var tab_event := InputEventKey.new()
+		tab_event.keycode = KEY_TAB
+		tab_event.pressed = true
+		dismantle_dialog.call("_input", tab_event)
+		_check(get_viewport().gui_get_focus_owner() == confirm_button, "Dismantle modal traps forward keyboard focus inside its two actions")
+		dismantle_dialog.call("_input", tab_event)
+		_check(get_viewport().gui_get_focus_owner() == cancel_button, "Dismantle modal cycles keyboard focus back to Cancel")
+	if dismantle_dialog != null:
+		var escape_event := InputEventKey.new()
+		escape_event.keycode = KEY_ESCAPE
+		escape_event.pressed = true
+		dismantle_dialog.call("_input", escape_event)
 	await _redraw()
-	_check(not Game.state.ship_by_id(dismantle_fixture_id).is_empty() and Game.state.ships.size() == before_cancel_ship_count and int(Game.state.statistics.get("ships_scrapped", 0)) == before_cancel_scrap_count and Game.state.naval_archive.size() == before_cancel_archive_count and Game.state.aggregate_inventory() == before_cancel_inventory, "Cancel closes the dismantle confirmation without mutating Ships, archive, counters, or inventory")
+	_check(not is_instance_valid(dismantle_dialog) and not Game.state.ship_by_id(dismantle_fixture_id).is_empty() and Game.state.ships.size() == before_cancel_ship_count and int(Game.state.statistics.get("ships_scrapped", 0)) == before_cancel_scrap_count and Game.state.naval_archive.size() == before_cancel_archive_count and Game.state.aggregate_inventory() == before_cancel_inventory, "Escape closes the dismantle confirmation without mutating Ships, archive, counters, or inventory")
 
 	dismantle_button = main.find_child("FleetRosterDismantle", true, false) as Button
 	if dismantle_button != null and not dismantle_button.disabled:
 		dismantle_button.pressed.emit()
 	await _redraw()
-	dismantle_dialog = main.find_child("FleetRosterDismantleConfirmation", true, false) as ConfirmationDialog
+	dismantle_dialog = main.find_child("FleetRosterDismantleConfirmation", true, false)
 	Game.set_ship_locked(dismantle_fixture_id, true)
 	if dismantle_dialog != null:
 		dismantle_dialog.confirmed.emit()
@@ -439,7 +474,7 @@ func _run() -> void:
 	if dismantle_button != null and not dismantle_button.disabled:
 		dismantle_button.pressed.emit()
 	await _redraw()
-	dismantle_dialog = main.find_child("FleetRosterDismantleConfirmation", true, false) as ConfirmationDialog
+	dismantle_dialog = main.find_child("FleetRosterDismantleConfirmation", true, false)
 	if dismantle_dialog != null:
 		dismantle_dialog.confirmed.emit()
 		dismantle_dialog.confirmed.emit()
@@ -482,7 +517,7 @@ func _run() -> void:
 	_check(all_filter != null and active_filter != null and reserve_filter != null and mothballed_filter != null and all_filter.text == "全部 8" and active_filter.text == "运行中 4" and reserve_filter.text == "战备储备 2" and mothballed_filter.text == "封存 2", "lifecycle filter counts are calculated from the eight-ship test fixture")
 	var all_filter_style := all_filter.get_theme_stylebox("normal") as StyleBoxFlat if all_filter != null else null
 	var active_filter_style := active_filter.get_theme_stylebox("normal") as StyleBoxFlat if active_filter != null else null
-	_check(String(main.get("_fleet_roster_filter")) == "ALL" and all_filter_style != null and active_filter_style != null and all_filter_style.bg_color == UiTokens.COLOR_CONTROL_ACTIVE and active_filter_style.bg_color == UiTokens.COLOR_CONTROL, "All is the default filter and uses the existing selected-button accent")
+	_check(String(main.get("_fleet_roster_filter")) == "ALL" and all_filter_style != null and active_filter_style != null and all_filter_style.bg_color == UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE and active_filter_style.bg_color == UiTokens.COLOR_REGISTRY_CONTROL, "All is the default filter and uses the centralized selected-button accent")
 	reserve_filter.pressed.emit()
 	await _redraw()
 	roster_box = _current_roster_box(main)
@@ -513,12 +548,13 @@ func _run() -> void:
 	selected_ship_ids = main.get("_selected_roster_ship_ids") as Dictionary
 	browser_summary = main.find_child("FleetRosterBrowserSummary", true, false) as Label
 	result_range = main.find_child("FleetRosterResultRange", true, false) as Label
-	_check(_has_exact_label(roster_box, "当前没有符合条件的舰船") and main.find_child("FleetRosterHeaderCount", true, false).text == "8 艘舰船" and browser_summary.text == "8 艘 · 当前显示 0 艘" and result_range.text == "显示 0–0 / 8" and selected_ship_ids.is_empty() and not _has_label_containing(main.find_child("FleetRosterDetail", true, false), "ISS Pioneer"), "zero-result filter clears selection and stale detail while all real count surfaces remain correct")
+	_check(_has_exact_label(roster_box, "未找到符合当前条件的舰船") and main.find_child("FleetRosterHeaderCount", true, false).text == "8 艘舰船" and browser_summary.text == "8 艘 · 当前显示 0 艘" and result_range.text == "显示 0–0 / 8" and selected_ship_ids.is_empty() and not _has_label_containing(main.find_child("FleetRosterDetail", true, false), "ISS Pioneer"), "zero-result filter clears selection and stale detail while all real count surfaces remain correct")
 	all_filter = main.find_child("FleetRosterFilter_ALL", true, false) as Button
 	all_filter.pressed.emit()
 	await _redraw()
 	var overflow_ships: Array[Dictionary] = []
-	for overflow_index in 5:
+	var overflow_count := 12
+	for overflow_index in overflow_count:
 		overflow_ships.append(Game.state._create_ship_instance("lunar_pathfinder", refit_modules, "Overflow Ship %d" % (overflow_index + 1)))
 	var overflow_target := overflow_ships.back() as Dictionary
 	main.call("_rebuild_active_page")
@@ -528,12 +564,12 @@ func _run() -> void:
 	list_scroll = main.find_child("FleetRosterListScroll", true, false) as ScrollContainer
 	var overflow_target_id := String(overflow_target.get("instance_id", ""))
 	var overflow_target_item := main.find_child("FleetRosterShip_%s" % overflow_target_id, true, false) as Button
-	_check(ship_list != null and ship_list.get_child_count() == 13 and overflow_target_item != null and list_scroll.get_v_scroll_bar().max_value > list_scroll.get_v_scroll_bar().page, "large real ship results remain inside the independently scrolling Browser viewport")
+	_check(ship_list != null and ship_list.get_child_count() == 8 + overflow_count and overflow_target_item != null and list_scroll.get_v_scroll_bar().max_value > list_scroll.get_v_scroll_bar().page, "large real ship results remain inside the independently scrolling Browser viewport")
 	overflow_target_item.pressed.emit()
 	await _redraw()
 	detail = main.find_child("FleetRosterDetail", true, false) as VBoxContainer
 	selected_ship_ids = main.get("_selected_roster_ship_ids") as Dictionary
-	_check(selected_ship_ids.size() == 1 and selected_ship_ids.has(overflow_target_id) and _has_label_containing(detail, "OVERFLOW SHIP 5") and not _has_label_containing(detail, "ISS PIONEER"), "clicking a different list record switches the Inspector to that real ship")
+	_check(selected_ship_ids.size() == 1 and selected_ship_ids.has(overflow_target_id) and _has_label_containing(detail, "OVERFLOW SHIP %d" % overflow_count) and not _has_label_containing(detail, "ISS PIONEER"), "clicking a different list record switches the Inspector to that real ship")
 	mothballed_filter = main.find_child("FleetRosterFilter_MOTHBALLED", true, false) as Button
 	mothballed_filter.pressed.emit()
 	await _redraw()

@@ -42,6 +42,18 @@ const COLOR_SHIP_GRID_MAJOR := Color("35443e")
 const COLOR_SHIP_FRAME_INNER := Color("26342f")
 const COLOR_SHIP_LINK_SHADOW := Color(0.0, 0.0, 0.0, 0.56)
 
+# Ship Registry surfaces are deliberately darker and slightly greener than the
+# general application cards. Keeping the relationship centralized prevents the
+# Browser, Inspector and transient controls from drifting into one-off grays.
+const COLOR_REGISTRY_CANVAS := Color("07100f")
+const COLOR_REGISTRY_SURFACE := Color("0b1513")
+const COLOR_REGISTRY_INSET := Color("07110f")
+const COLOR_REGISTRY_CONTROL := Color("0d1916")
+const COLOR_REGISTRY_CONTROL_HOVER := Color("13251f")
+const COLOR_REGISTRY_CONTROL_ACTIVE := Color("17352e")
+const COLOR_REGISTRY_BORDER := Color("233a34")
+const COLOR_REGISTRY_SEPARATOR := Color("1a302a")
+
 const SPACING_XS := 4
 const SPACING_SM := 8
 const SPACING_MD := 12
@@ -68,9 +80,21 @@ const NETWORK_GRID_MAJOR_EVERY := 5
 # interactive graph/canvas zoom. Fonts follow the selected scale directly;
 # shell geometry uses a moderated scale so the 1440x900 minimum layout remains
 # operable while larger windows gain a more readable desktop UI.
-const SUPPORTED_UI_SCALES := [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+const SUPPORTED_UI_SCALES := [0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
 const DEFAULT_UI_SCALE := 1.25
 const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"
+# Manual presets remain globally available, but each has one explicit minimum
+# usable viewport. This keeps compact windows honest without changing the saved
+# player preference or introducing a hidden automatic scale multiplier.
+const UI_SCALE_MINIMUM_VIEWPORTS := {
+	90:Vector2i(1280, 720),
+	100:Vector2i(1280, 720),
+	110:Vector2i(1280, 720),
+	125:Vector2i(1280, 720),
+	150:Vector2i(1600, 900),
+	175:Vector2i(1920, 1080),
+	200:Vector2i(2560, 1440)
+}
 const SHIP_ASSEMBLY_FONT_MULTIPLIER := 1.0
 const SHIP_ASSEMBLY_MIN_FONT_SIZE := 10
 
@@ -102,12 +126,34 @@ static func ui_scale_percent() -> int:
 	return int(round(_ui_scale * 100.0))
 
 
+static func minimum_viewport_for_ui_scale(value: float) -> Vector2i:
+	var percent := int(round(sanitize_ui_scale(value) * 100.0))
+	return UI_SCALE_MINIMUM_VIEWPORTS.get(percent, Vector2i(1280, 720)) as Vector2i
+
+
+static func ui_scale_supported_for_viewport(value: float, viewport_size: Vector2i) -> bool:
+	var minimum := minimum_viewport_for_ui_scale(value)
+	return viewport_size.x >= minimum.x and viewport_size.y >= minimum.y
+
+
+static func layout_scale_for(value: float) -> float:
+	return lerpf(1.0, sanitize_ui_scale(value), 0.5)
+
+
 static func layout_scale() -> float:
-	return lerpf(1.0, _ui_scale, 0.5)
+	return layout_scale_for(_ui_scale)
+
+
+static func full_scale_px(base_size: float) -> int:
+	return 0 if is_zero_approx(base_size) else maxi(1, int(round(base_size * _ui_scale)))
+
+
+static func full_scale_vector(base_size: Vector2) -> Vector2:
+	return base_size * _ui_scale
 
 
 static func font_size(base_size: int) -> int:
-	return maxi(1, int(round(float(base_size) * _ui_scale)))
+	return full_scale_px(float(base_size))
 
 
 static func ship_assembly_font_size(base_size: int) -> int:
@@ -155,7 +201,8 @@ static func control_style(background: Color, border: Color, radius := 4) -> Styl
 static func build_theme(scale_value: float = DEFAULT_UI_SCALE, exact_scale := false) -> Theme:
 	# Production shell preferences snap to the supported manual steps. Focused
 	# presentation surfaces may request an exact player-selected native scale.
-	# Resolution never changes this value; fonts are rerasterized, not stretched.
+	# ResponsiveUiPolicy resolves the effective value before this call; Theme
+	# construction itself stays geometry-agnostic and rerasterizes fonts.
 	if exact_scale:
 		_ui_scale = clampf(scale_value, 0.5, 4.0)
 	else:
@@ -185,6 +232,7 @@ static func build_theme(scale_value: float = DEFAULT_UI_SCALE, exact_scale := fa
 	result.set_stylebox("normal", "LineEdit", control_style(COLOR_CONTROL, COLOR_BORDER_STRONG))
 	result.set_stylebox("focus", "LineEdit", control_style(COLOR_CONTROL_ACTIVE, COLOR_FOCUS))
 	result.set_stylebox("panel", "PanelContainer", panel_style(COLOR_PANEL, COLOR_BORDER))
+	result.set_stylebox("panel", "TabContainer", panel_style(COLOR_CANVAS, COLOR_BORDER, 0))
 	result.set_color("font_color", "OptionButton", COLOR_TEXT_SECONDARY)
 	result.set_stylebox("normal", "OptionButton", control_style(COLOR_CONTROL, COLOR_BORDER))
 	result.set_stylebox("hover", "OptionButton", control_style(COLOR_CONTROL_HOVER, COLOR_BORDER_STRONG))

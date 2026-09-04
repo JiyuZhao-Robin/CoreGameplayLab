@@ -221,17 +221,12 @@ func stop_activity(domain_id: String) -> bool:
 
 
 func set_ship_maintenance_state(instance_id: String, maintenance_state: String) -> bool:
-	var normalized := maintenance_state.to_upper()
-	if normalized not in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
-		return _reject(I18n.t("notice.maintenance_state_invalid", "Invalid maintenance state"))
-	var ship := state.ship_by_id(instance_id)
-	if ship.is_empty() or str(ship.get("status", "")) != "DOCKED" or str(ship.get("condition", "")) != "OPERATIONAL":
-		return _reject(I18n.t("notice.maintenance_state_locked", "The ship must be operational and docked before changing maintenance state"))
-	var current := str(ship.get("maintenance_state", "ACTIVE"))
-	if current == normalized:
+	var availability := ship_maintenance_state_availability(instance_id, maintenance_state)
+	if not bool(availability.get("allowed", false)):
+		return _reject(str(availability.get("reason", I18n.t("notice.maintenance_state_locked", "The ship must be operational and docked before changing maintenance state"))))
+	if String(availability.get("reason_code", "")) == "ALREADY_TARGET_STATE":
 		return true
-	if current == "MOTHBALLED":
-		return _reject(I18n.t("notice.maintenance_reactivation_required", "A mothballed ship must complete a Starport reactivation project"))
+	var normalized := maintenance_state.to_upper()
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	for formation_id in transaction.working_state.formation_ids():
 		var roster := transaction.working_state.formation_ship_ids(formation_id)
@@ -244,6 +239,21 @@ func set_ship_maintenance_state(instance_id: String, maintenance_state: String) 
 	transaction.record({"type":"ShipMaintenanceStateChanged", "ship_id":instance_id, "maintenance_state":normalized})
 	_commit_transaction(transaction)
 	return true
+
+
+func ship_maintenance_state_availability(instance_id: String, maintenance_state: String) -> Dictionary:
+	var normalized := maintenance_state.to_upper()
+	if normalized not in ["ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
+		return {"allowed":false, "reason_code":"INVALID_TARGET_STATE", "reason":I18n.t("notice.maintenance_state_invalid", "Invalid maintenance state")}
+	var ship := state.ship_by_id(instance_id)
+	if ship.is_empty() or str(ship.get("status", "")) != "DOCKED" or str(ship.get("condition", "")) != "OPERATIONAL":
+		return {"allowed":false, "reason_code":"SHIP_NOT_ELIGIBLE", "reason":I18n.t("notice.maintenance_state_locked", "The ship must be operational and docked before changing maintenance state")}
+	var current := str(ship.get("maintenance_state", "ACTIVE"))
+	if current == normalized:
+		return {"allowed":true, "reason_code":"ALREADY_TARGET_STATE", "reason":""}
+	if current == "MOTHBALLED":
+		return {"allowed":false, "reason_code":"REACTIVATION_REQUIRED", "reason":I18n.t("notice.maintenance_reactivation_required", "A mothballed ship must complete a Starport reactivation project")}
+	return {"allowed":true, "reason_code":"READY", "reason":""}
 
 
 func start_ship_reactivation(instance_id: String) -> bool:

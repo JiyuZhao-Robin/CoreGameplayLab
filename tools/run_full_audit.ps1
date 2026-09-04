@@ -94,6 +94,9 @@ Add-AuditTest "playflow" "res://tests/playflow_test.tscn" $false @("--no-persist
 Add-AuditTest "location-ui" "res://tests/location_ui_smoke_test.tscn" $false @("--no-persistence", "--locale=zh_CN")
 Add-AuditTest "ui-playflow" "res://tests/ui_playflow_test.tscn" $false @("--no-persistence", "--locale=zh_CN")
 Add-AuditTest "localization-catalog" "res://tests/localization_catalog_test.tscn" $false @("--no-persistence", "--locale=zh_CN")
+Add-AuditTest "responsive-ui-policy" "res://tests/responsive_ui_policy_test.tscn" $false @("--no-persistence")
+Add-AuditTest "responsive-ui-matrix" "res://tests/responsive_ui_matrix_test.tscn" $false @("--no-persistence")
+Add-AuditTest "ui-scale-contract" "res://tests/ui_scale_contract_test.tscn" $false @("--no-persistence")
 Add-AuditTest "journey-registry" "res://tests/gameplay_journey_registry_test.tscn" $false @("--no-persistence")
 if (-not $SkipGolden) {
 	Add-AuditTest "golden-path" "res://tests/golden_path_test.tscn" $false @("--no-persistence", "--emit-scenarios") 1800

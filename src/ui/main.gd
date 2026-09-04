@@ -1,5 +1,7 @@
 extends Control
 
+signal layout_profile_changed(profile: String, logical_usable_size: Vector2)
+
 const SystemMapViewScript = preload("res://src/ui/components/system_map_view.gd")
 const MegastructureProgressViewScript = preload("res://src/ui/components/megastructure_progress_view.gd")
 const GameShellScript = preload("res://src/ui/components/game_shell.gd")
@@ -8,7 +10,14 @@ const IndustrialNetworkProjectionScript = preload("res://src/ui/view_models/indu
 const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_network_view.gd")
 const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
 const ShipAssemblyBlueprintEditorScript = preload("res://src/ui/components/ship_assembly_blueprint_editor.gd")
+const ShipRegistryPreviewGridScript = preload("res://src/ui/components/ship_registry_preview_grid.gd")
+const ShipRegistryInspectorHostScript = preload("res://src/ui/components/ship_registry_inspector_host.gd")
+const ShipDismantleModalScript = preload("res://src/ui/components/ship_dismantle_modal.gd")
+const ShipRegistryQueryScript = preload("res://src/ui/view_models/ship_registry_query.gd")
+const ShipRegistrySelectionScript = preload("res://src/ui/view_models/ship_registry_selection.gd")
+const ShipRegistrySelectionCheckboxScript = preload("res://src/ui/components/ship_registry_selection_checkbox.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
+const ResponsivePolicy = preload("res://src/ui/responsive_ui_policy.gd")
 
 const COLOR_BG := UiTokens.COLOR_CANVAS
 const COLOR_PANEL := UiTokens.COLOR_PANEL
@@ -75,6 +84,14 @@ const FLEET_ROSTER_MORE_REACTIVATE := 4
 const FLEET_ROSTER_DISPATCH_ZONE_FRONT := 101
 const FLEET_ROSTER_DISPATCH_ZONE_MID := 102
 const FLEET_ROSTER_DISPATCH_ZONE_REAR := 103
+const FLEET_ROSTER_BULK_ADD_FAVORITE := 201
+const FLEET_ROSTER_BULK_REMOVE_FAVORITE := 202
+const FLEET_ROSTER_BULK_LOCK := 203
+const FLEET_ROSTER_BULK_UNLOCK := 204
+const FLEET_ROSTER_BULK_READY_RESERVE := 205
+const FLEET_ROSTER_BULK_MOTHBALL := 206
+const FLEET_ROSTER_BULK_DISMANTLE := 207
+const FLEET_ROSTER_GOLDEN_SCALE := 1.5
 
 var _tabs: TabContainer
 var _shell
@@ -99,9 +116,23 @@ var _industry_section := "production"
 var _industry_view_mode := "network"
 var _fleet_section := "roster"
 var _fleet_roster_filter := "ALL"
-# A set-shaped selection state keeps STEP 04 single-selection behavior while
-# leaving the model ready for the roster's later bulk-selection work.
-var _selected_roster_ship_ids: Dictionary = {}
+var _fleet_roster_search_query := ""
+var _fleet_roster_ship_type_filter := ShipRegistryQueryScript.ALL_SHIP_TYPES
+var _fleet_roster_formation_filter := ShipRegistryQueryScript.ALL_FORMATIONS
+var _fleet_roster_sort_mode := ShipRegistryQueryScript.SORT_CANONICAL
+# Primary Inspector navigation and transient bulk membership are deliberately
+# separate. The selection state stores canonical Ship IDs only and is never
+# written to UI preferences or the game save.
+var _fleet_roster_selection_state = ShipRegistrySelectionScript.new()
+# Read-only compatibility projection for the older STEP 04–08 regression suite.
+# It is not a second state store: primary navigation remains owned exclusively
+# by ShipRegistrySelectionState.primary_ship_id.
+var _selected_roster_ship_ids: Dictionary:
+	get:
+		var projection := {}
+		if not _fleet_roster_selection_state.primary_ship_id.is_empty():
+			projection[_fleet_roster_selection_state.primary_ship_id] = true
+		return projection
 var _selected_formation_id := SpaceGameState.DEFAULT_FORMATION_ID
 var _logistics_item_selection := {}
 var _logistics_advanced := false
@@ -126,15 +157,41 @@ var _selected_research_project_id := ""
 var _ship_blueprint_editor: ShipAssemblyBlueprintEditor
 var _shipyard_handoff_content: VBoxContainer
 var _reduced_motion := false
+# `_ui_scale` remains the effective Theme scale so existing builders retain one
+# authoritative value. Preference, recommendation and safety projection are
+# separate presentation state and never enter Game/SpaceGameState.
+var _ui_scale_mode := ResponsivePolicy.DEFAULT_MODE
+var _manual_ui_scale := UiTokens.DEFAULT_UI_SCALE
+var _recommended_ui_scale := UiTokens.DEFAULT_UI_SCALE
 var _ui_scale := UiTokens.DEFAULT_UI_SCALE
 var _ui_scale_selector: OptionButton
+var _layout_profile := ResponsivePolicy.DEFAULT_PROFILE
+var _responsive_resize_timer: Timer
+var _responsive_state_initialized := false
+var _responsive_session_restored := false
+var _ui_scale_cli_override := false
+var _ui_scale_preference_source := "default"
 var _network_preferences_save_due_ms := 0
 var _audit_fast_refresh := false
 var _fleet_roster_popup: PopupMenu
-var _fleet_roster_dismantle_dialog: ConfirmationDialog
+var _fleet_roster_dismantle_dialog
+var _fleet_roster_bulk_dismantle_dialog
+var _fleet_roster_bulk_action_in_progress := false
+var _fleet_roster_query_popups: Array[PopupMenu] = []
+var _fleet_roster_query_popup_opening := false
+var _fleet_roster_query_popup_close_guards := 0
+var _fleet_roster_source_signature := ""
+var _fleet_roster_source_refresh_scheduled := false
+var _capture_validation_error := ""
+
+const MIN_PRODUCTION_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 
 func _ready() -> void:
+	# Evidence capture may use an exact application SubViewport, but normal play
+	# always lays out against the real Window and enforces the audited desktop
+	# minimum instead of trapping production inside the reviewer viewport.
+	get_window().min_size = MIN_PRODUCTION_VIEWPORT_SIZE
 	_load_ui_preferences()
 	for argument in OS.get_cmdline_user_args():
 		if String(argument).begins_with("--fleet-section="):
@@ -148,19 +205,35 @@ func _ready() -> void:
 		elif String(argument) == "--reduced-motion":
 			_reduced_motion = true
 		elif String(argument).begins_with("--ui-scale="):
-			_ui_scale = UiTokens.sanitize_ui_scale(float(String(argument).trim_prefix("--ui-scale=")))
+			var requested_scale := String(argument).trim_prefix("--ui-scale=").strip_edges()
+			if requested_scale.to_upper() == ResponsivePolicy.MODE_AUTO:
+				_ui_scale_mode = ResponsivePolicy.MODE_AUTO
+				_ui_scale_cli_override = true
+				_ui_scale_preference_source = "cli"
+			elif requested_scale.is_valid_float():
+				_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+				_manual_ui_scale = UiTokens.sanitize_ui_scale(float(requested_scale))
+				_ui_scale_cli_override = true
+				_ui_scale_preference_source = "cli"
 		elif String(argument) == "--ui-audit-fast-refresh":
 			# Test-only scheduling override. It changes neither simulation time nor
 			# command behavior; it only removes the production UI's normal redraw
 			# coalescing delay from long visible-control audits.
 			_audit_fast_refresh = true
+	_initialize_ui_scale_for_current_window()
 	_build_theme()
+	_store_responsive_session_state()
 	_build_shell()
+	_setup_responsive_timer()
 	resized.connect(_on_root_resized)
+	var application_window := get_window()
+	if is_instance_valid(application_window) and application_window.has_signal("dpi_changed"):
+		application_window.connect("dpi_changed", Callable(self, "_on_window_dpi_changed"))
 	_connect_game_signals()
 	_append_log(I18n.core("timeline.lab_started"))
 	_rebuild_all()
 	call_deferred("_focus_active_navigation_if_empty")
+	call_deferred("_reconcile_responsive_state_after_layout")
 	_record_telemetry("ScreenOpen", {"screen":_active_page_key, "initial":true})
 	var capture_requested := OS.get_cmdline_user_args().has("--capture-map") or OS.get_cmdline_user_args().has("--capture-location")
 	for argument in OS.get_cmdline_user_args():
@@ -181,7 +254,17 @@ func _process(_delta: float) -> void:
 	var editing_text := focused is LineEdit or focused is TextEdit
 	var refresh_interval := AUDIT_REFRESH_INTERVAL_MS if _audit_fast_refresh else (SIMULATION_REFRESH_INTERVAL_MS if Engine.time_scale >= 5.0 else INTERACTIVE_REFRESH_INTERVAL_MS)
 	var refresh_due := _immediate_refresh_requested or now - _last_refresh_ms >= refresh_interval
-	if not editing_text and _dirty and refresh_due and not _rebuild_in_progress:
+	# Query popup menus are transient child windows of controls that live in the
+	# rebuilt fleet toolbar.  Rebuilding while one is open destroys that popup
+	# before its first rendered frame (most visible with the Formation menu when
+	# the simulation emits a state change at the same time).  Defer the refresh
+	# until the popup closes so mouse and keyboard activation share one stable
+	# lifecycle.
+	var fleet_roster_transient_open := _fleet_roster_query_popup_is_open() \
+		or (is_instance_valid(_fleet_roster_popup) and _fleet_roster_popup.visible) \
+		or is_instance_valid(_fleet_roster_dismantle_dialog) \
+		or is_instance_valid(_fleet_roster_bulk_dismantle_dialog)
+	if not editing_text and not fleet_roster_transient_open and _dirty and refresh_due and not _rebuild_in_progress:
 		_immediate_refresh_requested = false
 		_rebuild_active_page()
 
@@ -201,6 +284,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if not event.is_action_pressed("ui_cancel"):
+		return
+	if _active_page_key == "fleet" and _fleet_section == "roster" \
+			and not _fleet_roster_selection_state.bulk_selected_ship_ids.is_empty() \
+			and not _fleet_roster_query_popup_is_open() \
+			and not (is_instance_valid(_fleet_roster_popup) and _fleet_roster_popup.visible) \
+			and not is_instance_valid(_fleet_roster_dismantle_dialog) \
+			and not is_instance_valid(_fleet_roster_bulk_dismantle_dialog):
+		_clear_fleet_roster_bulk_selection()
+		get_viewport().set_input_as_handled()
 		return
 	if is_instance_valid(_industrial_network_view) and _active_page_key == "industry" and _industry_section == "production" and _industry_view_mode == "network" and _industrial_network_view.clear_selection():
 		_selected_industrial_network_node.clear()
@@ -292,6 +384,7 @@ func _build_navigation_rail() -> Control:
 	panel.name = "WorkspaceNavigationBar"
 	panel.custom_minimum_size.y = UiTokens.workspace_navigation_height()
 	var margin := _margin(8, 6, 8, 6)
+	margin.name = "WorkspaceNavigationMargin"
 	panel.add_child(margin)
 	var rail := HFlowContainer.new()
 	rail.name = "WorkspaceNavigationFlow"
@@ -344,6 +437,7 @@ func _switch_page(key: String, record_history: bool = true) -> void:
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
 	_update_navigation_state()
+	_schedule_responsive_refresh()
 	_record_telemetry("ScreenOpen", {"screen":key})
 
 
@@ -361,15 +455,22 @@ func _update_navigation_state() -> void:
 			caption += " *"
 		button.text = caption
 		button.tooltip_text = I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize()) if bool(availability.get("unlocked", true)) else I18n.core(String(availability.get("condition_key", "")), "Progression requirement not met")
-		button.add_theme_color_override("font_color", COLOR_ACCENT if active else COLOR_TEXT)
-		button.add_theme_stylebox_override("normal", _button_style(UiTokens.COLOR_CONTROL_ACTIVE if active else UiTokens.COLOR_CONTROL, COLOR_ACCENT if active else COLOR_BORDER))
+		var compact_roster := _active_page_key == "fleet" and _fleet_section == "roster"
+		button.add_theme_color_override("font_color", COLOR_ACCENT if active else (COLOR_TEXT_SECONDARY if compact_roster else COLOR_TEXT))
+		button.add_theme_stylebox_override("normal", _fleet_roster_navigation_style(active, false) if compact_roster else _button_style(UiTokens.COLOR_CONTROL_ACTIVE if active else UiTokens.COLOR_CONTROL, COLOR_ACCENT if active else COLOR_BORDER))
+		if compact_roster:
+			button.add_theme_stylebox_override("hover", _fleet_roster_navigation_style(active, true))
+			button.add_theme_stylebox_override("pressed", _fleet_roster_navigation_style(true, true))
+			button.add_theme_stylebox_override("focus", _fleet_roster_navigation_style(true, true))
 
 
 func _build_header() -> Control:
 	var row := HBoxContainer.new()
+	row.name = "TopStatusBarControls"
 	row.add_theme_constant_override("separation", UiTokens.layout_px(6))
 
 	var title_box := VBoxContainer.new()
+	title_box.name = "ShellTitleBox"
 	title_box.custom_minimum_size.x = UiTokens.layout_px(190)
 	row.add_child(title_box)
 	var title := _label(I18n.core("shell.brand_short", "HELIOS"), 18, COLOR_TEXT)
@@ -411,10 +512,12 @@ func _build_header() -> Control:
 	_ui_scale_selector.custom_minimum_size.x = UiTokens.layout_px(92)
 	_ui_scale_selector.tooltip_text = I18n.core("shell.ui_scale_tooltip", "Scale interface text and controls without changing map or canvas zoom.")
 	_ui_scale_selector.accessibility_name = I18n.core("shell.ui_scale", "UI scale")
+	_ui_scale_selector.add_item(I18n.core("shell.ui_scale_auto", "AUTO"), ResponsivePolicy.AUTO_SELECTOR_ID)
 	for scale_value in UiTokens.SUPPORTED_UI_SCALES:
 		var percent := int(round(float(scale_value) * 100.0))
 		_ui_scale_selector.add_item("%d%%" % percent, percent)
-	_ui_scale_selector.select(_ui_scale_selector.get_item_index(int(round(_ui_scale * 100.0))))
+	_select_ui_scale_preference()
+	_sync_ui_scale_selector_availability()
 	_ui_scale_selector.item_selected.connect(_on_ui_scale_selected)
 	row.add_child(_ui_scale_selector)
 	var save_button := _button(I18n.core("shell.save"), _save_game)
@@ -1656,11 +1759,28 @@ func _capture_requested_view() -> void:
 	var file_name := "lab_system_map.png"
 	var requested_view := ""
 	var requested_output := ""
+	var requested_roster_state := ""
+	var requested_locale := ""
+	var requested_viewport := Vector2i.ZERO
 	for argument in args:
 		if String(argument).begins_with("--capture-view="):
 			requested_view = String(argument).trim_prefix("--capture-view=")
 		elif String(argument).begins_with("--capture-output="):
 			requested_output = String(argument).trim_prefix("--capture-output=")
+		elif String(argument).begins_with("--capture-roster-state="):
+			requested_roster_state = String(argument).trim_prefix("--capture-roster-state=")
+		elif String(argument).begins_with("--capture-locale="):
+			requested_locale = String(argument).trim_prefix("--capture-locale=")
+		elif String(argument).begins_with("--capture-viewport="):
+			var dimensions := String(argument).trim_prefix("--capture-viewport=").split("x")
+			if dimensions.size() == 2:
+				requested_viewport = Vector2i(int(dimensions[0]), int(dimensions[1]))
+	if requested_viewport.x > 0 and requested_viewport.y > 0:
+		await _set_capture_viewport_size(requested_viewport)
+	if not requested_locale.is_empty() and requested_locale != I18n.current_locale:
+		I18n.set_locale(requested_locale)
+		await get_tree().process_frame
+		await get_tree().process_frame
 	var requested_page := "fleet" if requested_view == "ships" else ("frontier" if requested_view == "survey" else requested_view)
 	if not requested_page.is_empty() and _page_controls.has(requested_page):
 		_switch_page(requested_page)
@@ -1692,8 +1812,30 @@ func _capture_requested_view() -> void:
 			_industrial_network_view.focus_production_method(String(argument).trim_prefix("--network-focus-activity="), false)
 	if args.has("--network-focus-bottleneck") and is_instance_valid(_industrial_network_view):
 		_industrial_network_view.focus_bottleneck(false)
-	RenderingServer.force_draw(false)
-	await get_tree().process_frame
+	if requested_view == "ships" and not requested_roster_state.is_empty():
+		await _prepare_fleet_roster_capture_state(requested_roster_state)
+	if requested_view == "ships" and args.has("--capture-inspector-scroll-bottom"):
+		var inspector_host := find_child("FleetRosterInspectorHost", true, false) as ScrollContainer
+		if is_instance_valid(inspector_host):
+			inspector_host.scroll_vertical = int(inspector_host.get_v_scroll_bar().max_value)
+			await _await_capture_render_frames(2)
+	if not _capture_validation_error.is_empty():
+		print("CAPTURE_FAILED: %s" % _capture_validation_error)
+		get_tree().quit(1)
+		return
+	if requested_view == "ships":
+		_print_fleet_roster_capture_metrics()
+	# Popup capture states already waited for two completed rendered frames in
+	# _activate_fleet_roster_query_control_for_capture(). Reading immediately
+	# preserves that composed frame instead of advancing the transient popup.
+	if not _fleet_roster_query_popup_is_open():
+		await _await_capture_render_frames(2)
+	if requested_viewport.x > 0 and requested_viewport.y > 0:
+		var actual_viewport := Vector2i(get_viewport().get_visible_rect().size.round())
+		if actual_viewport != requested_viewport:
+			print("CAPTURE_FAILED: requested viewport %s, actual viewport %s" % [requested_viewport, actual_viewport])
+			get_tree().quit(1)
+			return
 	var directory := ProjectSettings.globalize_path("res://artifacts/ui")
 	DirAccess.make_dir_recursive_absolute(directory)
 	var output_path := requested_output if not requested_output.is_empty() else "res://artifacts/ui/%s" % file_name
@@ -1701,9 +1843,397 @@ func _capture_requested_view() -> void:
 		DirAccess.make_dir_recursive_absolute(output_path.get_base_dir())
 	else:
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(output_path.get_base_dir()))
-	var error := get_viewport().get_texture().get_image().save_png(ProjectSettings.globalize_path(output_path))
-	print("CAPTURE_SAVED: %s" % output_path if error == OK else "CAPTURE_FAILED: %s" % error_string(error))
-	get_tree().quit(0 if error == OK else 1)
+	var absolute_output_path := ProjectSettings.globalize_path(output_path)
+	var captured_image := get_viewport().get_texture().get_image()
+	var error := captured_image.save_png(absolute_output_path)
+	if error != OK:
+		print("CAPTURE_FAILED: %s" % error_string(error))
+		get_tree().quit(1)
+		return
+	var saved_image := Image.load_from_file(absolute_output_path)
+	var expected_size := requested_viewport if requested_viewport.x > 0 and requested_viewport.y > 0 else captured_image.get_size()
+	if saved_image == null or saved_image.is_empty() or saved_image.get_size() != expected_size:
+		var saved_size := Vector2i.ZERO if saved_image == null or saved_image.is_empty() else saved_image.get_size()
+		print("CAPTURE_FAILED: saved PNG metadata expected=%s actual=%s path=%s" % [expected_size, saved_size, output_path])
+		get_tree().quit(1)
+		return
+	print("CAPTURE_SAVED: path=%s dimensions=%dx%d" % [output_path, saved_image.get_width(), saved_image.get_height()])
+	get_tree().quit(0)
+
+
+func _set_capture_viewport_size(target: Vector2i) -> void:
+	# On macOS the decorated window client area can differ from a requested
+	# window size by one physical pixel. Audit captures are viewport-direct, so
+	# converge on the requested client area instead of resizing the saved PNG.
+	# A borderless audit window removes that decoration quantization and still
+	# renders the complete application shell.
+	get_window().borderless = true
+	await get_tree().process_frame
+	var requested_window_size := target
+	for _attempt in range(4):
+		get_window().size = requested_window_size
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var actual := Vector2i(get_viewport().get_visible_rect().size.round())
+		if actual == target:
+			return
+		requested_window_size += target - actual
+	# Some macOS display modes quantize a decorated client area to even pixel
+	# heights. Render the live scene through an exact-size application viewport
+	# in that case; this is still a direct viewport capture, never an image resize.
+	var audit_viewport := SubViewport.new()
+	audit_viewport.name = "AuditCaptureViewport"
+	audit_viewport.size = target
+	audit_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	audit_viewport.gui_embed_subwindows = true
+	get_tree().root.add_child(audit_viewport)
+	reparent(audit_viewport)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+func _prepare_fleet_roster_capture_state(state_name: String) -> void:
+	get_viewport().gui_embed_subwindows = true
+	if state_name.begins_with("step11_"):
+		await _prepare_fleet_roster_step11_capture_state(state_name)
+		return
+	if state_name.begins_with("step10_"):
+		await _prepare_fleet_roster_step10_capture_state(state_name)
+		return
+	if state_name.begins_with("step09_"):
+		await _prepare_fleet_roster_step09_capture_state(state_name)
+		return
+	var favorite_button := find_child("FleetRosterFavorite", true, false) as Button
+	var lock_button := find_child("FleetRosterLock", true, false) as Button
+	var more_button := find_child("FleetRosterMore", true, false) as Button
+	var dismantle_button := find_child("FleetRosterDismantle", true, false) as Button
+	match state_name:
+		"favorite_hover":
+			if is_instance_valid(favorite_button):
+				var hover_position := favorite_button.get_global_rect().get_center()
+				Input.warp_mouse(hover_position)
+				var motion := InputEventMouseMotion.new()
+				motion.position = hover_position
+				motion.global_position = hover_position
+				get_viewport().push_input(motion)
+				await get_tree().process_frame
+				_refresh_fleet_roster_action_icon(favorite_button)
+		"favorite_active":
+			if is_instance_valid(favorite_button) and not favorite_button.button_pressed:
+				favorite_button.button_pressed = true
+				favorite_button.toggled.emit(true)
+				_rebuild_active_page()
+		"lock_active":
+			if is_instance_valid(lock_button) and not lock_button.button_pressed:
+				lock_button.button_pressed = true
+				lock_button.toggled.emit(true)
+				_rebuild_active_page()
+		"more_menu":
+			if is_instance_valid(more_button):
+				more_button.pressed.emit()
+		"dismantle_confirmation":
+			if is_instance_valid(dismantle_button) and not dismantle_button.disabled:
+				dismantle_button.pressed.emit()
+	if state_name not in ["step09_ship_type_open", "step09_formation_open", "step09_sort_open"]:
+		await get_tree().process_frame
+		await get_tree().process_frame
+
+
+func _prepare_fleet_roster_step11_capture_state(state_name: String) -> void:
+	_fleet_roster_filter = "ALL"
+	_fleet_roster_search_query = ""
+	_fleet_roster_ship_type_filter = ShipRegistryQueryScript.ALL_SHIP_TYPES
+	_fleet_roster_formation_filter = ShipRegistryQueryScript.ALL_FORMATIONS
+	_fleet_roster_sort_mode = ShipRegistryQueryScript.SORT_CANONICAL
+	_fleet_roster_selection_state.clear_bulk()
+	_rebuild_active_page()
+	await _await_capture_render_frames(2)
+	if state_name in ["step11_reference_alignment", "step11_default", "step11_english"]:
+		return
+	var primary_id := _fleet_roster_selected_ship_id()
+	if primary_id.is_empty() and state_name != "step11_zero_results":
+		_capture_validation_error = "step11_capture_requires_real_ship"
+		return
+	match state_name:
+		"step11_lifecycle_search_filters":
+			_fleet_roster_filter = "ACTIVE"
+			_fleet_roster_search_query = String(Game.state.ship_by_id(primary_id).get("name", ""))
+			var definition := Game.content.ships.get(String(Game.state.ship_by_id(primary_id).get("blueprint_id", "")), {}) as Dictionary
+			_fleet_roster_ship_type_filter = String(definition.get("class", "")).to_upper()
+			_fleet_roster_formation_filter = Game.state.ship_formation_id(primary_id) if not Game.state.ship_formation_id(primary_id).is_empty() else ShipRegistryQueryScript.UNASSIGNED_FORMATION
+			_rebuild_active_page()
+		"step11_dropdown_open":
+			var formation_filter := find_child("FleetRosterFormationFilter", true, false) as MenuButton
+			if not is_instance_valid(formation_filter) or not await _activate_fleet_roster_query_control_for_capture(formation_filter):
+				_capture_validation_error = "step11_dropdown_not_visible"
+		"step11_multiselect_contextual", "step11_bulk_actions_open", "step11_bulk_dismantle_modal":
+			var checkbox := find_child("FleetRosterSelectionControl_%s" % primary_id, true, false) as CheckBox
+			if is_instance_valid(checkbox):
+				checkbox.button_pressed = true
+				checkbox.toggled.emit(true)
+			await _await_capture_render_frames(2)
+			if state_name == "step11_bulk_actions_open":
+				if not await _activate_fleet_roster_bulk_actions_for_capture():
+					_capture_validation_error = "step11_bulk_actions_popup_not_visible"
+			elif state_name == "step11_bulk_dismantle_modal":
+				Game.set_ship_locked(primary_id, false)
+				_request_fleet_roster_bulk_dismantle()
+				await _await_capture_render_frames(2)
+				if not is_instance_valid(_fleet_roster_bulk_dismantle_dialog):
+					_capture_validation_error = "step11_bulk_dismantle_dialog_not_visible"
+		"step11_favorite_lock_active":
+			Game.set_ship_favorite(primary_id, true)
+			Game.set_ship_locked(primary_id, true)
+			_rebuild_active_page()
+		"step11_more_open":
+			var more_button := find_child("FleetRosterMore", true, false) as Button
+			if is_instance_valid(more_button):
+				more_button.pressed.emit()
+			await _await_capture_render_frames(2)
+			if not is_instance_valid(_fleet_roster_popup) or not _fleet_roster_popup.visible:
+				_capture_validation_error = "step11_more_popup_not_visible"
+		"step11_dismantle_modal":
+			Game.set_ship_locked(primary_id, false)
+			_rebuild_active_page()
+			await _await_capture_render_frames(2)
+			var dismantle := find_child("FleetRosterDismantle", true, false) as Button
+			if is_instance_valid(dismantle) and not dismantle.disabled:
+				dismantle.pressed.emit()
+			await _await_capture_render_frames(2)
+			if not is_instance_valid(_fleet_roster_dismantle_dialog):
+				_capture_validation_error = "step11_dismantle_dialog_not_visible"
+		"step11_zero_results":
+			_fleet_roster_search_query = "NO-SUCH-SHIP"
+			_rebuild_active_page()
+	await _await_capture_render_frames(2)
+
+
+func _prepare_fleet_roster_step10_capture_state(state_name: String) -> void:
+	_fleet_roster_filter = "ALL"
+	_fleet_roster_search_query = ""
+	_fleet_roster_ship_type_filter = ShipRegistryQueryScript.ALL_SHIP_TYPES
+	_fleet_roster_formation_filter = ShipRegistryQueryScript.ALL_FORMATIONS
+	_fleet_roster_sort_mode = ShipRegistryQueryScript.SORT_CANONICAL
+	_fleet_roster_selection_state.clear_bulk()
+	_rebuild_active_page()
+	await _await_capture_render_frames(2)
+	if state_name == "step10_default":
+		return
+	var primary_id := _fleet_roster_selected_ship_id()
+	if primary_id.is_empty():
+		_capture_validation_error = "step10_capture_requires_real_ship"
+		return
+	if state_name in ["step10_combined_filter_selection"]:
+		_fleet_roster_search_query = String(Game.state.ship_by_id(primary_id).get("name", ""))
+		var definition := Game.content.ships.get(String(Game.state.ship_by_id(primary_id).get("blueprint_id", "")), {}) as Dictionary
+		_fleet_roster_ship_type_filter = String(definition.get("class", "")).to_upper()
+		_fleet_roster_formation_filter = Game.state.ship_formation_id(primary_id) if not Game.state.ship_formation_id(primary_id).is_empty() else ShipRegistryQueryScript.UNASSIGNED_FORMATION
+		_rebuild_active_page()
+		await _await_capture_render_frames(2)
+	var checkbox := find_child("FleetRosterSelectionControl_%s" % primary_id, true, false) as CheckBox
+	if state_name == "step10_select_filtered_checked":
+		var select_filtered := find_child("FleetRosterSelectFiltered", true, false) as CheckBox
+		if is_instance_valid(select_filtered):
+			select_filtered.button_pressed = true
+			select_filtered.toggled.emit(true)
+	elif is_instance_valid(checkbox):
+		checkbox.button_pressed = true
+		checkbox.toggled.emit(true)
+	await _await_capture_render_frames(2)
+	match state_name:
+		"step10_bulk_actions_open", "step10_english":
+			var bulk_actions := find_child("FleetRosterBulkActions", true, false) as Button
+			if is_instance_valid(bulk_actions):
+				if not await _activate_fleet_roster_bulk_actions_for_capture():
+					_capture_validation_error = "step10_bulk_actions_popup_not_visible"
+		"step10_lock_protection":
+			Game.set_ship_locked(primary_id, true)
+			_rebuild_active_page()
+			await _await_capture_render_frames(2)
+			var protected_actions := find_child("FleetRosterBulkActions", true, false) as Button
+			if is_instance_valid(protected_actions):
+				if not await _activate_fleet_roster_bulk_actions_for_capture():
+					_capture_validation_error = "step10_lock_protection_popup_not_visible"
+		"step10_bulk_dismantle_dialog":
+			Game.set_ship_locked(primary_id, false)
+			_request_fleet_roster_bulk_dismantle()
+			await _await_capture_render_frames(2)
+			if not is_instance_valid(_fleet_roster_bulk_dismantle_dialog):
+				_capture_validation_error = "step10_bulk_dismantle_dialog_not_visible"
+
+
+func _activate_fleet_roster_bulk_actions_for_capture() -> bool:
+	# Exercise the same Button signal and popup path as real input. Off-screen
+	# macOS capture windows can transiently lose subwindow focus, so retry the
+	# actual interaction rather than constructing screenshot-only UI.
+	for _attempt in range(4):
+		var button := find_child("FleetRosterBulkActions", true, false) as Button
+		if not is_instance_valid(button):
+			await get_tree().process_frame
+			continue
+		button.grab_focus()
+		button.pressed.emit()
+		for _frame in range(8):
+			await get_tree().process_frame
+			if is_instance_valid(_fleet_roster_popup) and _fleet_roster_popup.visible:
+				break
+		if not is_instance_valid(_fleet_roster_popup) or not _fleet_roster_popup.visible:
+			continue
+		await _await_capture_render_frames(2)
+		if is_instance_valid(_fleet_roster_popup) and _fleet_roster_popup.visible:
+			return true
+	return false
+
+
+func _prepare_fleet_roster_step09_capture_state(state_name: String) -> void:
+	_fleet_roster_filter = "ALL"
+	_fleet_roster_search_query = ""
+	_fleet_roster_ship_type_filter = ShipRegistryQueryScript.ALL_SHIP_TYPES
+	_fleet_roster_formation_filter = ShipRegistryQueryScript.ALL_FORMATIONS
+	_fleet_roster_sort_mode = ShipRegistryQueryScript.SORT_CANONICAL
+	match state_name:
+		"step09_search_active":
+			_fleet_roster_search_query = "Pioneer"
+		"step09_combined_filters":
+			_fleet_roster_search_query = "Pioneer"
+			_fleet_roster_ship_type_filter = "FRIGATE"
+			_fleet_roster_formation_filter = ShipRegistryQueryScript.UNASSIGNED_FORMATION
+			_fleet_roster_sort_mode = ShipRegistryQueryScript.SORT_NAME_ASCENDING
+		"step09_no_results":
+			_fleet_roster_search_query = "NO-SUCH-SHIP"
+	_rebuild_active_page()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	match state_name:
+		"step09_search_active":
+			var search := find_child("FleetRosterSearch", true, false) as LineEdit
+			if is_instance_valid(search):
+				search.grab_focus()
+				search.caret_column = search.text.length()
+		"step09_ship_type_open":
+			var type_filter := find_child("FleetRosterShipTypeFilter", true, false) as MenuButton
+			if is_instance_valid(type_filter):
+				await _activate_fleet_roster_query_control_for_capture(type_filter)
+		"step09_formation_open":
+			var formation_filter := find_child("FleetRosterFormationFilter", true, false) as MenuButton
+			if is_instance_valid(formation_filter):
+				await _activate_fleet_roster_query_control_for_capture(formation_filter)
+		"step09_sort_open":
+			var sort_control := find_child("FleetRosterSort", true, false) as MenuButton
+			if is_instance_valid(sort_control):
+				await _activate_fleet_roster_query_control_for_capture(sort_control)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+func _activate_fleet_roster_query_control_for_capture(button: MenuButton) -> bool:
+	# Open the live MenuButton's actual PopupMenu; the interaction test separately
+	# proves both pointer-equivalent selection signals and ui_accept activation.
+	# No screenshot-only menu exists. An off-screen macOS capture window can lose
+	# popup focus while it is being promoted; retrying the same native interaction
+	# is preferable to capturing a false closed state.
+	var popup := button.get_popup()
+	for _attempt in range(4):
+		button.grab_focus()
+		button.show_popup()
+		for _frame in range(8):
+			await get_tree().process_frame
+			if popup.visible:
+				break
+		if not popup.visible:
+			continue
+		# Two completed rendered frames (not merely two process ticks) are required
+		# before the viewport is read so embedded PopupMenu composition is stable.
+		await _await_capture_render_frames(2)
+		if not popup.visible:
+			continue
+		var option_ids: Array[String] = []
+		for item_index in popup.item_count:
+			option_ids.append(String(popup.get_item_metadata(item_index)))
+		print("CAPTURE_SAVED: popup_visible control=%s visible=%s ids=%s rect=%s origin=%s" % [
+			button.name,
+			popup.visible,
+			option_ids,
+			Rect2i(popup.position, popup.size),
+			button.get_global_rect()
+		])
+		return true
+	_capture_validation_error = "fleet_roster_popup_not_stable:%s:button_valid=%s:dirty=%s:opening=%s:guards=%d" % [button.name, is_instance_valid(button), _dirty, _fleet_roster_query_popup_opening, _fleet_roster_query_popup_close_guards]
+	push_error(_capture_validation_error)
+	return false
+
+
+func _await_capture_render_frames(frame_count: int) -> void:
+	for _frame in range(maxi(1, frame_count)):
+		await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+
+
+func _position_fleet_roster_query_popup(button: MenuButton, popup: PopupMenu) -> void:
+	if not is_instance_valid(button) or not is_instance_valid(popup) or not popup.visible:
+		return
+	var popup_width := maxi(roundi(button.size.x), _fleet_roster_px(220.0))
+	var viewport_size := get_viewport().get_visible_rect().size
+	var position := button.global_position + Vector2(0.0, button.size.y)
+	position.x = clampf(position.x, 0.0, maxf(0.0, viewport_size.x - popup_width))
+	var popup_height := maxi(1, popup.size.y)
+	position.y = clampf(position.y, 0.0, maxf(0.0, viewport_size.y - popup_height))
+	# Position the already-open embedded Window, then explicitly raise it above
+	# the Inspector. Calling popup(rect) a second time here can toggle the native
+	# PopupMenu closed on a later frame, which caused the Formation evidence race.
+	popup.position = Vector2i(roundi(position.x), roundi(position.y))
+	popup.size = Vector2i(popup_width, popup_height)
+	popup.always_on_top = true
+	popup.grab_focus()
+
+
+func _print_fleet_roster_capture_metrics() -> void:
+	var application_window := get_window()
+	var inherited_theme := get_theme()
+	var screen_scale := DisplayServer.screen_get_scale(application_window.current_screen)
+	print("CAPTURE_SAVED: scale_contract window=%s viewport=%s root=%s root_scale=%s content_scale=%.3f effective_ui_scale=%.3f theme_font=%d os_display_scale=%.3f" % [
+		application_window.size,
+		get_viewport().get_visible_rect().size,
+		size,
+		scale,
+		application_window.content_scale_factor,
+		UiTokens.ui_scale(),
+		inherited_theme.default_font_size if inherited_theme != null else -1,
+		screen_scale
+	])
+	var names := [
+		"TopStatusBar", "TopStatusBarControls", "WorkspaceNavigationBar",
+		"WorkspaceNavigationFlow", "FleetSectionTabs", "FleetRosterHeader",
+		"FleetRosterHeaderTitle", "FleetRosterHeaderCount", "FleetRosterBrowserHeader",
+		"FleetRosterFilters", "FleetRosterQueryControls", "FleetRosterSearch",
+		"FleetRosterShipTypeFilter", "FleetRosterFormationFilter", "FleetRosterSort",
+		"FleetRosterBodyMargin", "FleetRosterMasterDetail", "FleetRosterListSurface",
+		"FleetRosterInspectorSurface", "FleetRosterInspectorMargin", "FleetRosterDetail",
+		"FleetRosterInspectorIdentityHeader",
+		"FleetRosterInspectorUpperContent", "FleetRosterShipVisualPanel", "FleetRosterShipVisual",
+		"FleetRosterOperationalStatusPanel", "FleetRosterBasicInformationPanel",
+		"FleetRosterConfigurationSummaryPanel", "FleetRosterReadinessPanel",
+		"FleetRosterFavorite", "FleetRosterLock", "FleetRosterMore",
+		"FleetRosterBrowserFooter", "FleetRosterFooterActions",
+		"FleetRosterDispatch", "FleetRosterViewDetails", "FleetRosterDismantle"
+	]
+	var first_ship_row := find_child("FleetRosterShip_*", true, false) as Control
+	if is_instance_valid(first_ship_row):
+		var row_scale := first_ship_row.get_global_transform_with_canvas().get_scale()
+		print("CAPTURE_SAVED: roster_metric FleetRosterFirstShipRow=(%.0f,%.0f %.0fx%.0f @%.3fx%.3f)" % [first_ship_row.global_position.x, first_ship_row.global_position.y, first_ship_row.size.x, first_ship_row.size.y, row_scale.x, row_scale.y])
+	for control_name in names:
+		var control := find_child(control_name, true, false) as Control
+		if is_instance_valid(control):
+			var transform_scale := control.get_global_transform_with_canvas().get_scale()
+			print("CAPTURE_SAVED: roster_metric %s=(%.0f,%.0f %.0fx%.0f @%.3fx%.3f)" % [control_name, control.global_position.x, control.global_position.y, control.size.x, control.size.y, transform_scale.x, transform_scale.y])
+	var fleet_page := _page_controls.get("fleet") as ScrollContainer
+	if is_instance_valid(fleet_page):
+		print("CAPTURE_SAVED: roster_metric FleetPageScroll=v:%.0f/%.0f visible=%s h:%.0f/%.0f visible=%s" % [fleet_page.get_v_scroll_bar().page, fleet_page.get_v_scroll_bar().max_value, fleet_page.get_v_scroll_bar().visible, fleet_page.get_h_scroll_bar().page, fleet_page.get_h_scroll_bar().max_value, fleet_page.get_h_scroll_bar().visible])
+	var inspector_host := find_child("FleetRosterInspectorHost", true, false) as ScrollContainer
+	if is_instance_valid(inspector_host):
+		print("CAPTURE_SAVED: roster_metric InspectorScroll=v:%.0f/%.0f visible=%s h:%.0f/%.0f visible=%s" % [inspector_host.get_v_scroll_bar().page, inspector_host.get_v_scroll_bar().max_value, inspector_host.get_v_scroll_bar().visible, inspector_host.get_h_scroll_bar().page, inspector_host.get_h_scroll_bar().max_value, inspector_host.get_h_scroll_bar().visible])
+	print("CAPTURE_SAVED: roster_metrics viewport=%s root=%s scale=%d" % [get_viewport().get_visible_rect().size, size, UiTokens.ui_scale_percent()])
 
 
 func _build_capture_ship_design(plan_id: String) -> void:
@@ -3017,19 +3547,20 @@ func _rebuild_fleet() -> void:
 
 func _build_fleet_section_tabs() -> Control:
 	var section_tabs := HFlowContainer.new()
-	section_tabs.add_theme_constant_override("h_separation", 6)
-	section_tabs.add_theme_constant_override("v_separation", 6)
+	section_tabs.name = "FleetSectionTabs"
+	section_tabs.add_theme_constant_override("h_separation", _fleet_roster_px(10.0) if _fleet_section == "roster" else 6)
+	section_tabs.add_theme_constant_override("v_separation", _fleet_roster_px(4.0) if _fleet_section == "roster" else 6)
 	for entry in [["roster", I18n.core("ships.tab.roster")], ["readiness", I18n.core("ships.tab.readiness")], ["shipyard", I18n.core("ships.tab.shipyard")], ["archive", I18n.core("ships.tab.archive")]]:
 		var section_id := String(entry[0])
 		var section_button := _button(String(entry[1]), _select_fleet_section.bind(section_id), section_id == _fleet_section, COLOR_ACCENT)
 		section_button.name = "FleetSection_%s" % section_id
 		if _fleet_section == "roster":
-			_apply_fleet_roster_compact_button_style(section_button)
+			_apply_fleet_roster_section_tab_style(section_button, section_id == _fleet_section)
 		section_tabs.add_child(section_button)
 	var missions_button := _button(I18n.core("ships.missions", "Missions"), _switch_page.bind("expedition"), false, COLOR_ACCENT)
 	missions_button.name = "ShipsMissions"
 	if _fleet_section == "roster":
-		_apply_fleet_roster_compact_button_style(missions_button)
+		_apply_fleet_roster_section_tab_style(missions_button, false)
 	section_tabs.add_child(missions_button)
 	return section_tabs
 
@@ -3039,6 +3570,7 @@ func _select_fleet_section(section: String) -> void:
 	_sync_blueprint_workspace_chrome()
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
+	_schedule_responsive_refresh()
 
 
 func _sync_blueprint_workspace_chrome() -> void:
@@ -3051,15 +3583,134 @@ func _sync_blueprint_workspace_chrome() -> void:
 	var top_bar := find_child("TopStatusBar", true, false) as Control
 	var workspace_navigation := find_child("WorkspaceNavigationBar", true, false) as Control
 	if top_bar != null:
-		top_bar.custom_minimum_size.y = float(UiTokens.TOP_BAR_HEIGHT if roster_workspace else UiTokens.layout_px(UiTokens.TOP_BAR_HEIGHT))
+		top_bar.custom_minimum_size.y = float(_fleet_roster_px(UiTokens.TOP_BAR_HEIGHT) if roster_workspace else UiTokens.layout_px(UiTokens.TOP_BAR_HEIGHT))
 	if workspace_navigation != null:
-		workspace_navigation.custom_minimum_size.y = float(UiTokens.WORKSPACE_NAV_HEIGHT if roster_workspace else UiTokens.workspace_navigation_height())
+		workspace_navigation.custom_minimum_size.y = float(_fleet_roster_px(UiTokens.WORKSPACE_NAV_HEIGHT) if roster_workspace else UiTokens.workspace_navigation_height())
+	_apply_fleet_roster_shell_chrome(roster_workspace)
 	var fleet_content := _pages.get("fleet") as Control
 	var fleet_margin := fleet_content.get_parent() as MarginContainer if is_instance_valid(fleet_content) else null
 	if fleet_margin != null:
-		for side in ["left", "top", "right"]:
-			fleet_margin.add_theme_constant_override("margin_%s" % side, 14 if roster_workspace else UiTokens.layout_px(14))
-		fleet_margin.add_theme_constant_override("margin_bottom", 20 if roster_workspace else UiTokens.layout_px(20))
+		fleet_margin.add_theme_constant_override("margin_left", _fleet_roster_px(18.0) if roster_workspace else UiTokens.layout_px(14))
+		fleet_margin.add_theme_constant_override("margin_top", _fleet_roster_px(11.0) if roster_workspace else UiTokens.layout_px(14))
+		fleet_margin.add_theme_constant_override("margin_right", _fleet_roster_px(14.0) if roster_workspace else UiTokens.layout_px(14))
+		fleet_margin.add_theme_constant_override("margin_bottom", _fleet_roster_px(20.0) if roster_workspace else UiTokens.layout_px(20))
+
+
+func _apply_fleet_roster_shell_chrome(compact: bool) -> void:
+	var header_margin := find_child("TopStatusBarMargin", true, false) as MarginContainer
+	var header_controls := find_child("TopStatusBarControls", true, false) as HBoxContainer
+	var title_box := find_child("ShellTitleBox", true, false) as VBoxContainer
+	var shell_title := find_child("ShellTitle", true, false) as Label
+	var shell_subtitle := find_child("ShellSubtitle", true, false) as Label
+	var navigation_margin := find_child("WorkspaceNavigationMargin", true, false) as MarginContainer
+	var navigation_flow := find_child("WorkspaceNavigationFlow", true, false) as HFlowContainer
+	var operations_title := find_child("OperationsTitle", true, false) as Label
+	if is_instance_valid(header_margin):
+		var compact_header_values := [20.0, 8.0, 15.0, 9.0]
+		var normal_header_values := [float(UiTokens.SPACING_LG), 5.0, float(UiTokens.SPACING_MD), 5.0]
+		var header_values := compact_header_values if compact else normal_header_values
+		for index in 4:
+			var side: String = ["left", "top", "right", "bottom"][index]
+			var value := _fleet_roster_px(float(header_values[index])) if compact else UiTokens.layout_px(float(header_values[index]))
+			header_margin.add_theme_constant_override("margin_%s" % side, value)
+	if is_instance_valid(header_controls):
+		header_controls.add_theme_constant_override("separation", _fleet_roster_px(8.0) if compact else UiTokens.layout_px(6.0))
+	if is_instance_valid(title_box):
+		title_box.custom_minimum_size.x = _fleet_roster_px(168.0) if compact else UiTokens.layout_px(190.0)
+	if is_instance_valid(shell_title):
+		shell_title.add_theme_font_size_override("font_size", _fleet_roster_px(14.0) if compact else UiTokens.font_size(18))
+		shell_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	if is_instance_valid(shell_subtitle):
+		shell_subtitle.visible = not compact
+	if is_instance_valid(_header_status):
+		_header_status.visible = not compact and _ui_scale <= 1.25
+	var header_widths := {
+		"SpeedPause":48.0, "Speed1":40.0, "Speed2":34.0, "Speed5":36.0,
+		"Speed10":44.0, "Speed100":48.0, "ToggleLocale":70.0,
+		"SaveButton":54.0, "RestartButton":50.0
+	}
+	for control_name_value in header_widths.keys():
+		var control_name := String(control_name_value)
+		var button := find_child(control_name, true, false) as Button
+		if not is_instance_valid(button):
+			continue
+		if compact:
+			button.custom_minimum_size = Vector2(_fleet_roster_px(float(header_widths[control_name_value])), _fleet_roster_px(34.0))
+			button.add_theme_font_size_override("font_size", _fleet_roster_px(14.0))
+			_apply_fleet_roster_compact_button_style(button)
+		else:
+			var normal_width := 48.0 if control_name == "Speed100" else (42.0 if control_name.begins_with("Speed") else 0.0)
+			button.custom_minimum_size = Vector2(UiTokens.layout_px(normal_width), UiTokens.layout_px(34.0))
+			button.remove_theme_font_size_override("font_size")
+			for style_name in ["normal", "hover", "pressed", "focus", "disabled"]:
+				button.remove_theme_stylebox_override(style_name)
+	if is_instance_valid(_ui_scale_selector):
+		_ui_scale_selector.custom_minimum_size = Vector2(_fleet_roster_px(76.0), _fleet_roster_px(34.0)) if compact else Vector2(UiTokens.layout_px(92.0), UiTokens.layout_px(34.0))
+		if compact:
+			_ui_scale_selector.add_theme_font_size_override("font_size", _fleet_roster_px(14.0))
+			_ui_scale_selector.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL, UiTokens.COLOR_REGISTRY_BORDER))
+		else:
+			_ui_scale_selector.remove_theme_font_size_override("font_size")
+			_ui_scale_selector.remove_theme_stylebox_override("normal")
+	if is_instance_valid(navigation_margin):
+		var compact_navigation_values := [18.0, 6.0, 18.0, 6.0]
+		var normal_navigation_values := [8.0, 6.0, 8.0, 6.0]
+		var navigation_values := compact_navigation_values if compact else normal_navigation_values
+		for index in 4:
+			var side: String = ["left", "top", "right", "bottom"][index]
+			var value := _fleet_roster_px(float(navigation_values[index])) if compact else UiTokens.layout_px(float(navigation_values[index]))
+			navigation_margin.add_theme_constant_override("margin_%s" % side, value)
+	if is_instance_valid(navigation_flow):
+		navigation_flow.add_theme_constant_override("h_separation", _fleet_roster_px(8.0) if compact else UiTokens.layout_px(4.0))
+		navigation_flow.add_theme_constant_override("v_separation", _fleet_roster_px(4.0) if compact else UiTokens.layout_px(4.0))
+	if is_instance_valid(operations_title):
+		operations_title.visible = not compact and _ui_scale <= 1.0
+	for key_value in _nav_buttons.keys():
+		var navigation_button := _nav_buttons[key_value] as Button
+		if not is_instance_valid(navigation_button):
+			continue
+		navigation_button.custom_minimum_size = Vector2(_fleet_roster_px(98.0), _fleet_roster_px(40.0)) if compact else UiTokens.layout_vector(Vector2(58, 34))
+		navigation_button.add_theme_font_size_override("font_size", _fleet_roster_px(16.0) if compact else UiTokens.font_size(12))
+		if not compact:
+			for style_name in ["hover", "pressed", "focus"]:
+				navigation_button.remove_theme_stylebox_override(style_name)
+
+
+func _fleet_roster_navigation_style(active: bool, hovered: bool) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE if active else (UiTokens.COLOR_REGISTRY_CONTROL_HOVER if hovered else UiTokens.COLOR_REGISTRY_CANVAS)
+	style.border_color = COLOR_ACCENT if active else (UiTokens.COLOR_REGISTRY_BORDER if hovered else UiTokens.COLOR_REGISTRY_SEPARATOR)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(_fleet_roster_px(3.0))
+	style.content_margin_left = _fleet_roster_px(8.0)
+	style.content_margin_right = _fleet_roster_px(8.0)
+	style.content_margin_top = _fleet_roster_px(4.0)
+	style.content_margin_bottom = _fleet_roster_px(4.0)
+	return style
+
+
+func _apply_fleet_roster_section_tab_style(button: Button, selected: bool) -> void:
+	button.custom_minimum_size.y = _fleet_roster_px(38.0)
+	button.add_theme_font_size_override("font_size", _fleet_roster_px(16.0))
+	button.add_theme_color_override("font_color", COLOR_TEXT if selected else COLOR_MUTED)
+	button.add_theme_color_override("font_disabled_color", COLOR_TEXT if selected else COLOR_MUTED)
+	button.add_theme_stylebox_override("normal", _fleet_roster_section_tab_box(selected, false))
+	button.add_theme_stylebox_override("hover", _fleet_roster_section_tab_box(selected, true))
+	button.add_theme_stylebox_override("pressed", _fleet_roster_section_tab_box(true, true))
+	button.add_theme_stylebox_override("focus", _fleet_roster_section_tab_box(true, true))
+	button.add_theme_stylebox_override("disabled", _fleet_roster_section_tab_box(selected, false))
+
+
+func _fleet_roster_section_tab_box(selected: bool, hovered: bool) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = UiTokens.COLOR_REGISTRY_CONTROL_HOVER if hovered else Color.TRANSPARENT
+	style.border_color = COLOR_ACCENT if selected else Color.TRANSPARENT
+	style.border_width_bottom = _fleet_roster_px(3.0) if selected else 0
+	style.content_margin_left = _fleet_roster_px(10.0)
+	style.content_margin_right = _fleet_roster_px(10.0)
+	style.content_margin_top = _fleet_roster_px(4.0)
+	style.content_margin_bottom = _fleet_roster_px(4.0)
+	return style
 
 
 func _ensure_selected_formation() -> void:
@@ -3160,15 +3811,22 @@ func _save_fleet_supply_plan(item_id: String, input: SpinBox) -> void:
 func _build_fleet_roster(box: VBoxContainer) -> void:
 	box.add_child(_build_fleet_roster_header())
 	box.add_child(_build_fleet_roster_filters())
-	var visible_ships: Array = Game.state.ships.filter(_fleet_roster_ship_matches_filter)
-	_reconcile_fleet_roster_selection(visible_ships)
+	_sanitize_fleet_roster_query_state()
+	var visible_ships := _fleet_roster_visible_ships()
+	_reconcile_fleet_roster_selection(visible_ships, true)
+	box.add_child(_build_fleet_roster_body(visible_ships))
+	_fleet_roster_source_signature = _fleet_roster_query_source_signature()
+	call_deferred("_wire_fleet_roster_focus_order")
+
+
+func _build_fleet_roster_body(visible_ships: Array) -> MarginContainer:
 	var selected_ship_id := _fleet_roster_selected_ship_id()
 
 	# The page already owns a 14 px margin. This second body-only inset produces
 	# the Golden Reference's 28 px body edge at 100% UI scale without moving the
 	# previously approved tabs, header, or lifecycle filter.
-	var body_margin := _margin(14, 0, 16, 8)
-	body_margin.add_theme_constant_override("margin_left", 14)
+	var body_margin := _margin(9, 0, 16, 8)
+	body_margin.add_theme_constant_override("margin_left", _fleet_roster_px(9.0))
 	body_margin.add_theme_constant_override("margin_right", 16)
 	body_margin.add_theme_constant_override("margin_bottom", 8)
 	body_margin.name = "FleetRosterBodyMargin"
@@ -3182,35 +3840,38 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 	body_margin.add_child(master_detail)
 	master_detail.add_child(_build_fleet_roster_browser(visible_ships, selected_ship_id))
 
-	var inspector_surface := _panel(COLOR_PANEL_ALT)
+	var inspector_surface := _panel(UiTokens.COLOR_REGISTRY_SURFACE)
 	inspector_surface.name = "FleetRosterInspectorSurface"
 	inspector_surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inspector_surface.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	inspector_surface.size_flags_stretch_ratio = 0.639
-	# STEP 06 Golden geometry: the work surface stays fixed, while the rebuilt
-	# Inspector content uses the reference's 16 px internal presentation inset.
-	var inspector_margin := _margin(16, 16, 16, 16)
-	for side in ["left", "top", "right", "bottom"]:
-		inspector_margin.add_theme_constant_override("margin_%s" % side, 16)
+	inspector_surface.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_SURFACE))
+	# STEP 08 geometry is authored at the 150% Golden calibration and converted
+	# through the same player-selected scale as fonts and controls. Zero vertical
+	# inset preserves the fixed, non-scrolling work surface at every scale.
+	var inspector_left_inset := _fleet_roster_px(18.0)
+	var inspector_right_inset := _fleet_roster_px(14.0)
+	var inspector_top_inset := _fleet_roster_px(15.0)
+	var inspector_margin := _margin(inspector_left_inset, inspector_top_inset, inspector_right_inset, 0)
+	inspector_margin.add_theme_constant_override("margin_left", inspector_left_inset)
+	inspector_margin.add_theme_constant_override("margin_top", inspector_top_inset)
+	inspector_margin.add_theme_constant_override("margin_right", inspector_right_inset)
+	inspector_margin.add_theme_constant_override("margin_bottom", 0)
 	inspector_margin.name = "FleetRosterInspectorMargin"
-	inspector_surface.add_child(inspector_margin)
-	# Keep the Inspector bounded to the fixed Master–Detail work surface. The
-	# scroll container is retained as an accessibility fallback for unusually
-	# small windows, but the accepted 1672x941 layouts do not activate it.
-	var inspector_scroll := ScrollContainer.new()
-	inspector_scroll.name = "FleetRosterInspectorScroll"
-	inspector_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	inspector_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	inspector_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	inspector_scroll.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
-	inspector_margin.add_child(inspector_scroll)
+	inspector_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	var inspector_host := ShipRegistryInspectorHostScript.new() as Container
+	inspector_host.name = "FleetRosterInspectorHost"
+	inspector_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inspector_surface.add_child(inspector_host)
+	inspector_host.add_child(inspector_margin)
 	var detail_column := VBoxContainer.new()
 	detail_column.name = "FleetRosterDetail"
 	detail_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	detail_column.add_theme_constant_override("separation", 5)
-	inspector_scroll.add_child(detail_column)
+	detail_column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	detail_column.add_theme_constant_override("separation", _fleet_roster_px(3.0))
+	inspector_margin.add_child(detail_column)
 	master_detail.add_child(inspector_surface)
 	for ship_value in visible_ships:
 		var ship := ship_value as Dictionary
@@ -3222,41 +3883,58 @@ func _build_fleet_roster(box: VBoxContainer) -> void:
 		detail_column.add_child(_build_fleet_roster_inspector_lower(ship, blueprint))
 		detail_column.add_child(_build_fleet_roster_footer_actions(ship))
 	if selected_ship_id.is_empty():
-		detail_column.add_child(_label(I18n.core("ships.roster.select_ship"), 13, COLOR_MUTED))
-	box.add_child(body_margin)
+		var empty_key := "ships.roster.no_results" if visible_ships.is_empty() and not Game.state.ships.is_empty() else "ships.roster.select_ship"
+		detail_column.add_child(_label(I18n.core(empty_key), 13, COLOR_MUTED))
+	return body_margin
+
+
+func _refresh_fleet_roster_results(prune_hidden_bulk_selection := true) -> void:
+	if _active_page_key != "fleet" or _fleet_section != "roster":
+		return
+	var body := find_child("FleetRosterBodyMargin", true, false) as Control
+	if not is_instance_valid(body) or not is_instance_valid(body.get_parent()):
+		_request_active_page_refresh(true)
+		return
+	_sanitize_fleet_roster_query_state()
+	var visible_ships := _fleet_roster_visible_ships()
+	_reconcile_fleet_roster_selection(visible_ships, prune_hidden_bulk_selection)
+	var parent := body.get_parent()
+	var index := body.get_index()
+	parent.remove_child(body)
+	body.queue_free()
+	var replacement := _build_fleet_roster_body(visible_ships)
+	parent.add_child(replacement)
+	parent.move_child(replacement, index)
+	call_deferred("_wire_fleet_roster_focus_order")
 
 
 func _build_fleet_roster_inspector_upper(detail_column: VBoxContainer, ship: Dictionary, blueprint: Dictionary) -> void:
 	var ship_id := String(ship.get("instance_id", ""))
 	var identity_header := HBoxContainer.new()
 	identity_header.name = "FleetRosterInspectorIdentityHeader"
+	identity_header.custom_minimum_size.y = _fleet_roster_px(59.0)
 	identity_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	identity_header.add_theme_constant_override("separation", 8)
-	var identity_inset := _margin(6, 0, 0, 0)
+	identity_header.add_theme_constant_override("separation", _fleet_roster_px(8.0))
+	var identity_left_inset := _fleet_roster_px(6.0)
+	var identity_inset := _margin(identity_left_inset, 0, 0, 0)
+	identity_inset.add_theme_constant_override("margin_left", identity_left_inset)
 	identity_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# At 150% the two identity labels share the title line so the established
-	# accessibility typography remains intact without stealing space from the
-	# information panels or footer actions.
-	var identity_text: BoxContainer
-	if UiTokens.ui_scale_percent() >= 150:
-		identity_text = HBoxContainer.new()
-		identity_text.add_theme_constant_override("separation", 12)
-	else:
-		identity_text = VBoxContainer.new()
-		# The system CJK font carries generous line metrics. Zero container spacing
-		# reproduces the Golden's actual 4–6 px visible glyph gap without overlap.
-		identity_text.add_theme_constant_override("separation", 0)
+	var identity_text := VBoxContainer.new()
+	# System-font line boxes are taller than their visible glyphs. A small
+	# negative separation preserves the Golden title/subtitle rhythm while both
+	# lines remain real layout children at every UI scale.
+	identity_text.add_theme_constant_override("separation", -_fleet_roster_px(8.0))
 	identity_text.name = "FleetRosterInspectorIdentityText"
 	identity_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var ship_name := _label(String(ship.get("name", ship_id)).to_upper(), 26, COLOR_TEXT)
+	var ship_name := _fleet_roster_label(String(ship.get("name", ship_id)).to_upper(), 24, COLOR_TEXT)
 	ship_name.name = "FleetRosterInspectorShipName"
 	ship_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ship_name.autowrap_mode = TextServer.AUTOWRAP_OFF
 	ship_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	identity_text.add_child(ship_name)
-	var hull_class := _label(_fleet_roster_hull_class_and_tier(blueprint), 16, COLOR_MUTED)
+	var hull_class := _fleet_roster_label(_fleet_roster_hull_class_and_tier(blueprint), 14, COLOR_MUTED)
 	hull_class.name = "FleetRosterInspectorHullClass"
-	hull_class.size_flags_horizontal = Control.SIZE_SHRINK_END
+	hull_class.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	hull_class.autowrap_mode = TextServer.AUTOWRAP_OFF
 	hull_class.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	identity_text.add_child(hull_class)
@@ -3267,9 +3945,9 @@ func _build_fleet_roster_inspector_upper(detail_column: VBoxContainer, ship: Dic
 
 	var upper_content := HBoxContainer.new()
 	upper_content.name = "FleetRosterInspectorUpperContent"
-	upper_content.custom_minimum_size.y = 214
+	upper_content.custom_minimum_size.y = _fleet_roster_px(211.0)
 	upper_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	upper_content.add_theme_constant_override("separation", 18)
+	upper_content.add_theme_constant_override("separation", _fleet_roster_px(18.0))
 	upper_content.add_child(_build_fleet_roster_ship_visual_panel(blueprint))
 	upper_content.add_child(_build_fleet_roster_operational_status_panel(ship))
 	detail_column.add_child(upper_content)
@@ -3281,8 +3959,8 @@ func _build_fleet_roster_header_actions(ship: Dictionary) -> HBoxContainer:
 	var locked := bool(ship.get("locked", false))
 	var actions := HBoxContainer.new()
 	actions.name = "FleetRosterHeaderActions"
-	actions.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	actions.add_theme_constant_override("separation", 8)
+	actions.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	actions.add_theme_constant_override("separation", _fleet_roster_px(18.0))
 
 	var favorite_button := _fleet_roster_action_button(
 		I18n.core("ships.roster.action.remove_favorite") if favorite else I18n.core("ships.roster.action.favorite"),
@@ -3291,7 +3969,7 @@ func _build_fleet_roster_header_actions(ship: Dictionary) -> HBoxContainer:
 		favorite
 	)
 	favorite_button.name = "FleetRosterFavorite"
-	favorite_button.custom_minimum_size.x = 104
+	favorite_button.custom_minimum_size.x = _fleet_roster_px(106.0)
 	favorite_button.tooltip_text = I18n.core("ships.roster.tooltip.remove_favorite") if favorite else I18n.core("ships.roster.tooltip.favorite")
 	favorite_button.accessibility_name = favorite_button.tooltip_text
 	favorite_button.toggled.connect(_set_fleet_roster_ship_favorite.bind(ship_id))
@@ -3304,7 +3982,7 @@ func _build_fleet_roster_header_actions(ship: Dictionary) -> HBoxContainer:
 		locked
 	)
 	lock_button.name = "FleetRosterLock"
-	lock_button.custom_minimum_size.x = 92
+	lock_button.custom_minimum_size.x = _fleet_roster_px(106.0)
 	lock_button.tooltip_text = I18n.core("ships.roster.tooltip.unlock") if locked else I18n.core("ships.roster.tooltip.lock")
 	lock_button.accessibility_name = lock_button.tooltip_text
 	lock_button.toggled.connect(_set_fleet_roster_ship_locked.bind(ship_id))
@@ -3312,7 +3990,7 @@ func _build_fleet_roster_header_actions(ship: Dictionary) -> HBoxContainer:
 
 	var more_button := _fleet_roster_action_button("", "more")
 	more_button.name = "FleetRosterMore"
-	more_button.custom_minimum_size.x = 40
+	more_button.custom_minimum_size.x = _fleet_roster_px(44.0)
 	more_button.tooltip_text = I18n.core("ships.roster.tooltip.more")
 	more_button.accessibility_name = more_button.tooltip_text
 	more_button.pressed.connect(_open_fleet_roster_more_menu.bind(more_button, ship_id))
@@ -3326,12 +4004,15 @@ func _fleet_roster_action_button(text_value: String, icon_group: String, toggle_
 	button.toggle_mode = toggle_mode
 	button.button_pressed = active
 	button.focus_mode = Control.FOCUS_ALL
-	button.custom_minimum_size.y = 40
+	button.flat = false
+	button.custom_minimum_size.y = _fleet_roster_px(40.0)
+	button.add_theme_font_size_override("font_size", _fleet_roster_px(15.0))
 	button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	button.expand_icon = false
-	button.add_theme_constant_override("icon_max_width", 16)
-	button.add_theme_constant_override("icon_separation", 8)
+	button.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	button.add_theme_constant_override("icon_max_width", _fleet_roster_px(16.0))
+	button.add_theme_constant_override("icon_separation", _fleet_roster_px(8.0))
 	_apply_fleet_roster_compact_button_style(button)
 	button.set_meta("ship_registry_icon_group", icon_group)
 	button.set_meta("ship_registry_pointer_down", false)
@@ -3345,6 +4026,32 @@ func _fleet_roster_action_button(text_value: String, icon_group: String, toggle_
 		button.toggled.connect(func(_pressed: bool): _refresh_fleet_roster_action_icon(button))
 	_refresh_fleet_roster_action_icon(button)
 	return button
+
+
+func _update_fleet_roster_dropdown_style(button: MenuButton, active: bool) -> void:
+	if not is_instance_valid(button):
+		return
+	button.add_theme_stylebox_override("normal", _fleet_roster_button_style(
+		UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE if active else UiTokens.COLOR_REGISTRY_CONTROL,
+		COLOR_ACCENT if active else UiTokens.COLOR_REGISTRY_BORDER
+	))
+	button.add_theme_color_override("font_color", COLOR_TEXT if active else COLOR_TEXT_SECONDARY)
+
+
+func _fleet_roster_label(text_value: String, rendered_size: int, color: Color) -> Label:
+	# Inspector typography shares the canonical player-selected scale. Callers
+	# express the approved 150% Golden size; _label then rasterizes its 100% base
+	# at the current UI scale, keeping both 100% and 150% sharp.
+	var base_size := maxi(1, int(round(float(rendered_size) / FLEET_ROSTER_GOLDEN_SCALE)))
+	return _label(text_value, base_size, color)
+
+
+func _fleet_roster_px(golden_pixels: float) -> int:
+	return UiTokens.full_scale_px(golden_pixels / FLEET_ROSTER_GOLDEN_SCALE)
+
+
+func _fleet_roster_vector(golden_size: Vector2) -> Vector2:
+	return UiTokens.full_scale_vector(golden_size / FLEET_ROSTER_GOLDEN_SCALE)
 
 
 func _set_fleet_roster_action_pointer_down(button: Button, pressed: bool) -> void:
@@ -3381,13 +4088,17 @@ func _set_fleet_roster_ship_locked(locked: bool, ship_id: String) -> void:
 
 
 func _build_fleet_roster_ship_visual_panel(blueprint: Dictionary) -> PanelContainer:
-	var visual_panel := _panel(UiTokens.COLOR_INSET)
+	var visual_panel := _panel(UiTokens.COLOR_REGISTRY_INSET)
 	visual_panel.name = "FleetRosterShipVisualPanel"
-	visual_panel.custom_minimum_size.y = 214
+	visual_panel.custom_minimum_size.y = _fleet_roster_px(211.0)
 	visual_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	visual_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	visual_panel.size_flags_stretch_ratio = 0.555
-	visual_panel.add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_INSET, COLOR_BORDER, 4))
+	visual_panel.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_INSET))
+	var grid := ShipRegistryPreviewGridScript.new() as Control
+	grid.name = "FleetRosterShipVisualGrid"
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	visual_panel.add_child(grid)
 	var ui_visual := blueprint.get("ui_visual", {}) as Dictionary
 	var texture_path := String(ui_visual.get("topdown_texture", ""))
 	if texture_path.is_empty() or not ResourceLoader.exists(texture_path):
@@ -3395,7 +4106,13 @@ func _build_fleet_roster_ship_visual_panel(blueprint: Dictionary) -> PanelContai
 	var texture := load(texture_path) as Texture2D
 	if texture == null:
 		return visual_panel
-	var art_margin := _margin(18, 9, 18, 9)
+	var art_horizontal_inset := _fleet_roster_px(12.0)
+	var art_vertical_inset := _fleet_roster_px(4.0)
+	var art_margin := _margin(art_horizontal_inset, art_vertical_inset, art_horizontal_inset, art_vertical_inset)
+	art_margin.add_theme_constant_override("margin_left", art_horizontal_inset)
+	art_margin.add_theme_constant_override("margin_top", art_vertical_inset)
+	art_margin.add_theme_constant_override("margin_right", art_horizontal_inset)
+	art_margin.add_theme_constant_override("margin_bottom", art_vertical_inset)
 	art_margin.name = "FleetRosterShipVisualMargin"
 	var art := TextureRect.new()
 	art.name = "FleetRosterShipVisual"
@@ -3417,17 +4134,21 @@ func _build_fleet_roster_operational_status_panel(ship: Dictionary) -> PanelCont
 	var location_id := String(ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
 	var location_name := "—" if location_id.is_empty() else _location_name(location_id)
 
-	var status_panel := _panel(UiTokens.COLOR_INSET)
+	var status_panel := _panel(UiTokens.COLOR_REGISTRY_INSET)
 	status_panel.name = "FleetRosterOperationalStatusPanel"
-	status_panel.custom_minimum_size.y = 214
+	status_panel.custom_minimum_size.y = _fleet_roster_px(211.0)
 	status_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	status_panel.size_flags_stretch_ratio = 0.445
-	status_panel.add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_INSET, COLOR_BORDER, 4))
+	status_panel.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_INSET))
 	# The 214 px Golden panel uses five 35 px property bands. Its system-font
 	# glyph metrics need a 3 px edge inset rather than generic card padding.
-	var status_margin := _margin(18, 0, 16, 0)
+	var status_left_inset := _fleet_roster_px(18.0)
+	var status_right_inset := _fleet_roster_px(16.0)
+	var status_margin := _margin(status_left_inset, 0, status_right_inset, 0)
+	status_margin.add_theme_constant_override("margin_left", status_left_inset)
 	status_margin.add_theme_constant_override("margin_top", 0)
+	status_margin.add_theme_constant_override("margin_right", status_right_inset)
 	status_margin.add_theme_constant_override("margin_bottom", 0)
 	status_panel.add_child(status_margin)
 	var status_column := VBoxContainer.new()
@@ -3435,9 +4156,9 @@ func _build_fleet_roster_operational_status_panel(ship: Dictionary) -> PanelCont
 	status_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_column.add_theme_constant_override("separation", 0)
 	status_margin.add_child(status_column)
-	var title := _label(I18n.core("ships.roster.inspector.operational_status"), 17, COLOR_ACCENT)
+	var title := _fleet_roster_label(I18n.core("ships.roster.inspector.operational_status"), 17, COLOR_ACCENT)
 	title.name = "FleetRosterOperationalStatusTitle"
-	title.custom_minimum_size.y = 32
+	title.custom_minimum_size.y = _fleet_roster_px(29.0)
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	status_column.add_child(title)
 	var title_separator := HSeparator.new()
@@ -3456,16 +4177,16 @@ func _build_fleet_roster_operational_status_panel(ship: Dictionary) -> PanelCont
 func _add_fleet_roster_operational_row(parent: VBoxContainer, field_id: String, caption: String, value_text: String, lifecycle_state := "", last := false) -> void:
 	var row := HBoxContainer.new()
 	row.name = "FleetRosterOperationalRow_%s" % field_id
-	row.custom_minimum_size.y = 34
+	row.custom_minimum_size.y = _fleet_roster_px(35.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_theme_constant_override("separation", 14)
+	row.add_theme_constant_override("separation", _fleet_roster_px(14.0))
 	var icon_center := CenterContainer.new()
 	icon_center.name = "FleetRosterOperationalIconColumn_%s" % field_id
-	icon_center.custom_minimum_size.x = 20
+	icon_center.custom_minimum_size.x = _fleet_roster_px(20.0)
 	icon_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var icon := TextureRect.new()
 	icon.name = "FleetRosterOperationalIcon_%s" % field_id
-	icon.custom_minimum_size = Vector2(16, 16)
+	icon.custom_minimum_size = _fleet_roster_vector(Vector2(16, 16))
 	var icon_atlas := AtlasTexture.new()
 	icon_atlas.atlas = FLEET_ROSTER_OPERATIONAL_ICONS[field_id] as Texture2D
 	icon_atlas.region = FLEET_ROSTER_OPERATIONAL_ICON_REGIONS[field_id] as Rect2
@@ -3479,7 +4200,7 @@ func _add_fleet_roster_operational_row(parent: VBoxContainer, field_id: String, 
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon_center.add_child(icon)
 	row.add_child(icon_center)
-	var caption_label := _label(caption, 14, COLOR_MUTED)
+	var caption_label := _fleet_roster_label(caption, 15, COLOR_MUTED)
 	caption_label.name = "FleetRosterOperationalLabel_%s" % field_id
 	caption_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -3487,27 +4208,27 @@ func _add_fleet_roster_operational_row(parent: VBoxContainer, field_id: String, 
 	row.add_child(caption_label)
 	var value_row := HBoxContainer.new()
 	value_row.name = "FleetRosterOperationalValueGroup_%s" % field_id
-	value_row.custom_minimum_size.x = 142
+	value_row.custom_minimum_size.x = _fleet_roster_px(142.0)
 	value_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	value_row.add_theme_constant_override("separation", 13)
+	value_row.add_theme_constant_override("separation", _fleet_roster_px(13.0))
 	var value_color := COLOR_TEXT
 	# Reserve the lifecycle marker column for every property so all five value
 	# strings share one physical X coordinate in the Golden property table.
 	var indicator_slot := CenterContainer.new()
-	indicator_slot.custom_minimum_size.x = 8
+	indicator_slot.custom_minimum_size.x = _fleet_roster_px(8.0)
 	indicator_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if not lifecycle_state.is_empty():
 		value_color = _fleet_roster_lifecycle_color(lifecycle_state)
 		var status_dot := PanelContainer.new()
 		status_dot.name = "FleetRosterInspectorLifecycleDot"
-		status_dot.custom_minimum_size = Vector2(8, 8)
+		status_dot.custom_minimum_size = _fleet_roster_vector(Vector2(8, 8))
 		status_dot.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		status_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		status_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		status_dot.add_theme_stylebox_override("panel", UiTokens.panel_style(value_color, value_color, 4))
 		indicator_slot.add_child(status_dot)
 	value_row.add_child(indicator_slot)
-	var value_label := _label(value_text, 14, value_color)
+	var value_label := _fleet_roster_label(value_text, 15, value_color)
 	value_label.name = "FleetRosterOperationalValue_%s" % field_id
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -3536,15 +4257,16 @@ func _fleet_roster_inspector_zone(ship_id: String, formation_id: String) -> Stri
 func _build_fleet_roster_inspector_lower(ship: Dictionary, blueprint: Dictionary) -> MarginContainer:
 	# The parent VBox contributes 5 px of separation. This 13 px inset completes
 	# the Golden Reference's 18 px gap without altering the frozen upper layout.
-	var lower_inset := _margin(0, 13, 0, 0)
-	lower_inset.add_theme_constant_override("margin_top", 13)
+	var lower_top_inset := _fleet_roster_px(16.0)
+	var lower_inset := _margin(0, lower_top_inset, 0, 0)
+	lower_inset.add_theme_constant_override("margin_top", lower_top_inset)
 	lower_inset.name = "FleetRosterLowerInfoInset"
 	lower_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var lower_row := HBoxContainer.new()
 	lower_row.name = "FleetRosterLowerInfoRow"
-	lower_row.custom_minimum_size.y = 238
+	lower_row.custom_minimum_size.y = _fleet_roster_px(266.0)
 	lower_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lower_row.add_theme_constant_override("separation", 18)
+	lower_row.add_theme_constant_override("separation", _fleet_roster_px(18.0))
 	lower_row.add_child(_build_fleet_roster_basic_information_panel(ship, blueprint))
 	lower_row.add_child(_build_fleet_roster_configuration_panel(ship))
 	lower_row.add_child(_build_fleet_roster_readiness_panel(ship))
@@ -3554,15 +4276,16 @@ func _build_fleet_roster_inspector_lower(ship: Dictionary, blueprint: Dictionary
 
 func _build_fleet_roster_footer_actions(ship: Dictionary) -> MarginContainer:
 	var ship_id := String(ship.get("instance_id", ""))
-	var footer_inset := _margin(0, 8, 0, 0)
-	footer_inset.add_theme_constant_override("margin_top", 8)
+	var footer_top_inset := _fleet_roster_px(10.0)
+	var footer_inset := _margin(0, footer_top_inset, 0, 0)
+	footer_inset.add_theme_constant_override("margin_top", footer_top_inset)
 	footer_inset.name = "FleetRosterFooterInset"
 	footer_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var actions := HBoxContainer.new()
 	actions.name = "FleetRosterFooterActions"
-	actions.custom_minimum_size.y = 40
+	actions.custom_minimum_size.y = _fleet_roster_px(44.0)
 	actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	actions.add_theme_constant_override("separation", 12)
+	actions.add_theme_constant_override("separation", _fleet_roster_px(15.0))
 	footer_inset.add_child(actions)
 
 	var dispatch_available := Game.has_method("set_ship_formation_assignment") and not Game.state.formation_ids().is_empty()
@@ -3570,7 +4293,8 @@ func _build_fleet_roster_footer_actions(ship: Dictionary) -> MarginContainer:
 	dispatch_button.name = "FleetRosterDispatch"
 	dispatch_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	dispatch_button.size_flags_stretch_ratio = 1.0
-	dispatch_button.custom_minimum_size.y = 40
+	dispatch_button.custom_minimum_size.y = _fleet_roster_px(44.0)
+	dispatch_button.add_theme_font_size_override("font_size", _fleet_roster_px(15.0))
 	_apply_fleet_roster_compact_button_style(dispatch_button)
 	dispatch_button.tooltip_text = I18n.core("ships.roster.tooltip.dispatch") if dispatch_available else I18n.core("ships.roster.tooltip.dispatch_unavailable")
 	dispatch_button.accessibility_name = dispatch_button.tooltip_text
@@ -3584,7 +4308,8 @@ func _build_fleet_roster_footer_actions(ship: Dictionary) -> MarginContainer:
 	details_button.name = "FleetRosterViewDetails"
 	details_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details_button.size_flags_stretch_ratio = 1.0
-	details_button.custom_minimum_size.y = 40
+	details_button.custom_minimum_size.y = _fleet_roster_px(44.0)
+	details_button.add_theme_font_size_override("font_size", _fleet_roster_px(15.0))
 	_apply_fleet_roster_compact_button_style(details_button)
 	details_button.tooltip_text = I18n.core("ships.roster.tooltip.details_unavailable")
 	details_button.accessibility_name = details_button.tooltip_text
@@ -3595,7 +4320,8 @@ func _build_fleet_roster_footer_actions(ship: Dictionary) -> MarginContainer:
 	dismantle_button.name = "FleetRosterDismantle"
 	dismantle_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	dismantle_button.size_flags_stretch_ratio = 1.0
-	dismantle_button.custom_minimum_size.y = 40
+	dismantle_button.custom_minimum_size.y = _fleet_roster_px(44.0)
+	dismantle_button.add_theme_font_size_override("font_size", _fleet_roster_px(15.0))
 	_apply_destructive_button_style(dismantle_button)
 	if dismantle_button.disabled:
 		dismantle_button.tooltip_text = str(scrap_availability.get("reason", I18n.core("ships.roster.tooltip.dismantle_unavailable")))
@@ -3618,11 +4344,11 @@ func _apply_destructive_button_style(button: Button) -> void:
 
 
 func _apply_fleet_roster_compact_button_style(button: Button) -> void:
-	button.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_CONTROL, COLOR_BORDER))
-	button.add_theme_stylebox_override("hover", _fleet_roster_button_style(UiTokens.COLOR_CONTROL_HOVER, UiTokens.COLOR_BORDER_STRONG))
-	button.add_theme_stylebox_override("pressed", _fleet_roster_button_style(UiTokens.COLOR_CONTROL_ACTIVE, COLOR_ACCENT))
-	button.add_theme_stylebox_override("focus", _fleet_roster_button_style(UiTokens.COLOR_CONTROL_ACTIVE, COLOR_ACCENT))
-	button.add_theme_stylebox_override("disabled", _fleet_roster_button_style(UiTokens.COLOR_INSET, COLOR_BORDER))
+	button.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL, UiTokens.COLOR_REGISTRY_BORDER))
+	button.add_theme_stylebox_override("hover", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_HOVER, UiTokens.COLOR_REGISTRY_BORDER.lightened(0.12)))
+	button.add_theme_stylebox_override("pressed", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE, COLOR_ACCENT))
+	button.add_theme_stylebox_override("focus", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE, COLOR_ACCENT))
+	button.add_theme_stylebox_override("disabled", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_INSET, UiTokens.COLOR_REGISTRY_SEPARATOR))
 
 
 func _fleet_roster_button_style(background: Color, border: Color) -> StyleBoxFlat:
@@ -3630,11 +4356,20 @@ func _fleet_roster_button_style(background: Color, border: Color) -> StyleBoxFla
 	style.bg_color = background
 	style.border_color = border
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(3)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 3
-	style.content_margin_bottom = 3
+	style.set_corner_radius_all(_fleet_roster_px(3.0))
+	style.content_margin_left = _fleet_roster_px(10.0)
+	style.content_margin_right = _fleet_roster_px(10.0)
+	style.content_margin_top = _fleet_roster_px(3.0)
+	style.content_margin_bottom = _fleet_roster_px(3.0)
+	return style
+
+
+func _fleet_roster_surface_style(background: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.border_color = UiTokens.COLOR_REGISTRY_BORDER
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(_fleet_roster_px(3.0))
 	return style
 
 
@@ -3731,7 +4466,158 @@ func _run_fleet_roster_more_action(item_id: int, popup: PopupMenu, ship_id: Stri
 			_command(I18n.core("command.ships.reactivate"), Game.start_ship_reactivation.bind(ship_id))
 
 
-func _new_fleet_roster_popup(control_name: String) -> PopupMenu:
+func _open_fleet_roster_bulk_actions_from_header() -> void:
+	var button := find_child("FleetRosterBulkActions", true, false) as Button
+	if is_instance_valid(button):
+		_open_fleet_roster_bulk_actions(button)
+
+
+func _open_fleet_roster_bulk_actions(button: Button) -> void:
+	if not is_instance_valid(button) or _fleet_roster_selection_state.bulk_selected_ship_ids.is_empty():
+		return
+	for query_popup in _fleet_roster_query_popups:
+		if is_instance_valid(query_popup) and query_popup.visible:
+			query_popup.hide()
+	var popup := _new_fleet_roster_popup("FleetRosterBulkActionsMenu", button)
+	var action_rows := [
+		[FLEET_ROSTER_BULK_ADD_FAVORITE, "ships.roster.bulk.add_favorite"],
+		[FLEET_ROSTER_BULK_REMOVE_FAVORITE, "ships.roster.bulk.remove_favorite"],
+		[FLEET_ROSTER_BULK_LOCK, "ships.roster.bulk.lock"],
+		[FLEET_ROSTER_BULK_UNLOCK, "ships.roster.bulk.unlock"],
+		[FLEET_ROSTER_BULK_READY_RESERVE, "ships.roster.bulk.ready_reserve"],
+		[FLEET_ROSTER_BULK_MOTHBALL, "ships.roster.bulk.mothball"],
+		[FLEET_ROSTER_BULK_DISMANTLE, "ships.roster.bulk.dismantle"]
+	]
+	for row_value in action_rows:
+		var action_id := int(row_value[0])
+		popup.add_item(I18n.core(String(row_value[1])), action_id)
+		var item_index := popup.item_count - 1
+		popup.set_item_metadata(item_index, action_id)
+		popup.set_item_disabled(item_index, not _fleet_roster_bulk_action_available(action_id))
+	popup.id_pressed.connect(_run_fleet_roster_bulk_action.bind(popup))
+	_popup_fleet_roster_menu_at_button(popup, button, true)
+
+
+func _fleet_roster_bulk_action_available(action_id: int) -> bool:
+	for ship_id in _fleet_roster_bulk_selection_snapshot():
+		var ship := Game.state.ship_by_id(ship_id)
+		if ship.is_empty():
+			continue
+		match action_id:
+			FLEET_ROSTER_BULK_ADD_FAVORITE:
+				if not bool(ship.get("favorite", false)): return true
+			FLEET_ROSTER_BULK_REMOVE_FAVORITE:
+				if bool(ship.get("favorite", false)): return true
+			FLEET_ROSTER_BULK_LOCK:
+				if not bool(ship.get("locked", false)): return true
+			FLEET_ROSTER_BULK_UNLOCK:
+				if bool(ship.get("locked", false)): return true
+			FLEET_ROSTER_BULK_READY_RESERVE:
+				var reserve_availability := Game.ship_maintenance_state_availability(ship_id, "READY_RESERVE")
+				if bool(reserve_availability.get("allowed", false)) and String(reserve_availability.get("reason_code", "")) != "ALREADY_TARGET_STATE": return true
+			FLEET_ROSTER_BULK_MOTHBALL:
+				var mothball_availability := Game.ship_maintenance_state_availability(ship_id, "MOTHBALLED")
+				if bool(mothball_availability.get("allowed", false)) and String(mothball_availability.get("reason_code", "")) != "ALREADY_TARGET_STATE": return true
+			FLEET_ROSTER_BULK_DISMANTLE:
+				if bool(Game.ship_scrap_availability(ship_id).get("allowed", false)): return true
+	return false
+
+
+func _run_fleet_roster_bulk_action(item_id: int, popup: PopupMenu) -> void:
+	if _fleet_roster_bulk_action_in_progress or not is_instance_valid(popup):
+		return
+	var item_index := popup.get_item_index(item_id)
+	if item_index < 0 or popup.is_item_disabled(item_index):
+		return
+	popup.hide()
+	if item_id == FLEET_ROSTER_BULK_DISMANTLE:
+		_request_fleet_roster_bulk_dismantle()
+		return
+	_fleet_roster_bulk_action_in_progress = true
+	var result := {}
+	var action_label := ""
+	match item_id:
+		FLEET_ROSTER_BULK_ADD_FAVORITE:
+			action_label = I18n.core("ships.roster.bulk.add_favorite")
+			result = _execute_fleet_roster_bulk_boolean("favorite", true)
+		FLEET_ROSTER_BULK_REMOVE_FAVORITE:
+			action_label = I18n.core("ships.roster.bulk.remove_favorite")
+			result = _execute_fleet_roster_bulk_boolean("favorite", false)
+		FLEET_ROSTER_BULK_LOCK:
+			action_label = I18n.core("ships.roster.bulk.lock")
+			result = _execute_fleet_roster_bulk_boolean("locked", true)
+		FLEET_ROSTER_BULK_UNLOCK:
+			action_label = I18n.core("ships.roster.bulk.unlock")
+			result = _execute_fleet_roster_bulk_boolean("locked", false)
+		FLEET_ROSTER_BULK_READY_RESERVE:
+			action_label = I18n.core("ships.roster.bulk.ready_reserve")
+			result = _execute_fleet_roster_bulk_lifecycle("READY_RESERVE")
+		FLEET_ROSTER_BULK_MOTHBALL:
+			action_label = I18n.core("ships.roster.bulk.mothball")
+			result = _execute_fleet_roster_bulk_lifecycle("MOTHBALLED")
+	_fleet_roster_bulk_action_in_progress = false
+	_report_fleet_roster_bulk_result(action_label, result)
+	_refresh_fleet_roster_results(true)
+
+
+func _execute_fleet_roster_bulk_boolean(field_name: String, target_value: bool) -> Dictionary:
+	var result := _new_fleet_roster_bulk_result()
+	for ship_id in _fleet_roster_bulk_selection_snapshot():
+		var ship := Game.state.ship_by_id(ship_id)
+		if ship.is_empty():
+			result.skipped += 1
+			continue
+		if bool(ship.get(field_name, false)) == target_value:
+			result.no_op += 1
+			continue
+		var succeeded := Game.set_ship_favorite(ship_id, target_value) if field_name == "favorite" else Game.set_ship_locked(ship_id, target_value)
+		if succeeded:
+			result.applied += 1
+		else:
+			result.failed += 1
+	return result
+
+
+func _execute_fleet_roster_bulk_lifecycle(target_state: String) -> Dictionary:
+	var result := _new_fleet_roster_bulk_result()
+	for ship_id in _fleet_roster_bulk_selection_snapshot():
+		var availability := Game.ship_maintenance_state_availability(ship_id, target_state)
+		if String(availability.get("reason_code", "")) == "ALREADY_TARGET_STATE":
+			result.no_op += 1
+			continue
+		if not bool(availability.get("allowed", false)):
+			result.skipped += 1
+			continue
+		if Game.set_ship_maintenance_state(ship_id, target_state):
+			result.applied += 1
+		else:
+			result.failed += 1
+	return result
+
+
+func _new_fleet_roster_bulk_result() -> Dictionary:
+	return {"applied":0, "no_op":0, "skipped":0, "failed":0}
+
+
+func _report_fleet_roster_bulk_result(action_label: String, result: Dictionary) -> void:
+	var total_changes := int(result.get("applied", 0))
+	var message_key := "ships.roster.bulk.result" if total_changes > 0 else "ships.roster.bulk.result_no_change"
+	var message := I18n.core(message_key) % [
+		action_label,
+		int(result.get("applied", 0)),
+		int(result.get("no_op", 0)),
+		int(result.get("skipped", 0)),
+		int(result.get("failed", 0))
+	]
+	_append_log(message)
+	_record_telemetry("FleetRosterBulkAction", {"action":action_label, "result":result.duplicate(true)})
+
+
+func _fleet_roster_bulk_selection_snapshot() -> Array[String]:
+	return _fleet_roster_selection_state.selected_ids_in_canonical_order(_fleet_roster_ship_ids(Game.state.ships))
+
+
+func _new_fleet_roster_popup(control_name: String, return_focus: Control = null) -> PopupMenu:
 	if is_instance_valid(_fleet_roster_popup):
 		_fleet_roster_popup.queue_free()
 	var popup := PopupMenu.new()
@@ -3743,19 +4629,26 @@ func _new_fleet_roster_popup(control_name: String) -> PopupMenu:
 	popup.add_theme_color_override("font_color", COLOR_TEXT_SECONDARY)
 	popup.add_theme_color_override("font_hover_color", COLOR_TEXT)
 	popup.add_theme_color_override("font_disabled_color", COLOR_MUTED)
-	popup.add_theme_stylebox_override("panel", UiTokens.panel_style(COLOR_PANEL_ALT, UiTokens.COLOR_BORDER_STRONG, 4))
-	popup.add_theme_stylebox_override("hover", _button_style(UiTokens.COLOR_CONTROL_ACTIVE, COLOR_ACCENT))
-	popup.popup_hide.connect(_release_fleet_roster_popup.bind(popup), CONNECT_ONE_SHOT)
+	popup.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_SURFACE))
+	popup.add_theme_stylebox_override("hover", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE, COLOR_ACCENT))
+	popup.popup_hide.connect(_release_fleet_roster_popup.bind(popup, return_focus), CONNECT_ONE_SHOT)
 	add_child(popup)
 	_fleet_roster_popup = popup
 	return popup
 
 
-func _release_fleet_roster_popup(popup: PopupMenu) -> void:
+func _release_fleet_roster_popup(popup: PopupMenu, return_focus: Control = null) -> void:
 	if _fleet_roster_popup == popup:
 		_fleet_roster_popup = null
 	if is_instance_valid(popup):
 		popup.queue_free()
+	if is_instance_valid(return_focus):
+		call_deferred("_restore_fleet_roster_popup_focus", return_focus)
+
+
+func _restore_fleet_roster_popup_focus(control: Control) -> void:
+	if is_instance_valid(control) and control.is_inside_tree() and control.is_visible_in_tree():
+		control.grab_focus()
 
 
 func _popup_fleet_roster_menu_at_button(popup: PopupMenu, button: Button, align_right: bool) -> void:
@@ -3764,8 +4657,24 @@ func _popup_fleet_roster_menu_at_button(popup: PopupMenu, button: Button, align_
 	var anchor_position := button.global_position + Vector2(button.size.x - width if align_right else 0.0, button.size.y)
 	anchor_position.x = clampf(anchor_position.x, 0.0, maxf(0.0, viewport_size.x - width))
 	anchor_position.y = clampf(anchor_position.y, 0.0, maxf(0.0, viewport_size.y - UiTokens.layout_px(180)))
+	popup.set_meta("fleet_roster_anchor", button)
+	popup.set_meta("fleet_roster_align_right", align_right)
 	popup.popup(Rect2i(Vector2i(roundi(anchor_position.x), roundi(anchor_position.y)), Vector2i(width, 1)))
-	popup.call_deferred("grab_focus")
+	call_deferred("_position_fleet_roster_menu_popup", popup, button, align_right)
+
+
+func _position_fleet_roster_menu_popup(popup: PopupMenu, button: Control, align_right: bool) -> void:
+	if not is_instance_valid(popup) or not popup.visible or not is_instance_valid(button):
+		return
+	var width := UiTokens.layout_px(250)
+	var viewport_size := get_viewport().get_visible_rect().size
+	var position := button.global_position + Vector2(button.size.x - width if align_right else 0.0, button.size.y)
+	position.x = clampf(position.x, 0.0, maxf(0.0, viewport_size.x - width))
+	position.y = clampf(position.y, 0.0, maxf(0.0, viewport_size.y - popup.size.y))
+	popup.position = Vector2i(roundi(position.x), roundi(position.y))
+	popup.size = Vector2i(width, popup.size.y)
+	popup.always_on_top = true
+	popup.grab_focus()
 
 
 func _request_fleet_roster_dismantle(ship_id: String) -> void:
@@ -3779,38 +4688,145 @@ func _request_fleet_roster_dismantle(ship_id: String) -> void:
 	var recovered: Dictionary = availability.get("recovery", {})
 	var recovery_text := "—" if recovered.is_empty() else _resource_dictionary(recovered)
 	var warning := I18n.core("ships.roster.dismantle.warning") % [str(ship.get("name", ship_id)), ship_id]
-	var base_text := "%s\n\n%s" % [warning, I18n.core("ships.roster.dismantle.recoverable") % recovery_text]
-	var dialog := ConfirmationDialog.new()
-	dialog.name = "FleetRosterDismantleConfirmation"
-	dialog.title = I18n.core("ships.roster.dismantle.confirmation_title")
-	dialog.dialog_text = base_text
-	dialog.ok_button_text = I18n.core("ships.roster.dismantle.confirm")
-	dialog.cancel_button_text = I18n.core("common.cancel")
-	dialog.exclusive = true
+	var recovery_line := I18n.core("ships.roster.dismantle.recoverable") % recovery_text
+	var dialog = ShipDismantleModalScript.new()
+	add_child(dialog)
+	dialog.configure(
+		I18n.core("ships.roster.dismantle.confirmation_title"),
+		warning,
+		recovery_line,
+		I18n.core("common.cancel"),
+		I18n.core("ships.roster.dismantle.confirm")
+	)
 	dialog.set_meta("ship_id", ship_id)
 	dialog.set_meta("recovery", recovered.duplicate(true))
-	dialog.set_meta("base_text", base_text)
 	dialog.set_meta("transaction_committed", false)
 	dialog.confirmed.connect(_confirm_fleet_roster_dismantle.bind(dialog, ship_id))
 	dialog.canceled.connect(_close_fleet_roster_dismantle_dialog.bind(dialog))
-	add_child(dialog)
 	_fleet_roster_dismantle_dialog = dialog
-	var confirm_button := dialog.get_ok_button()
-	confirm_button.name = "FleetRosterConfirmDismantle"
-	_apply_destructive_button_style(confirm_button)
-	dialog.get_cancel_button().name = "FleetRosterCancelDismantle"
-	dialog.popup_centered(Vector2i(UiTokens.layout_px(620), UiTokens.layout_px(280)))
-	dialog.get_cancel_button().call_deferred("grab_focus")
 
 
-func _close_fleet_roster_dismantle_dialog(dialog: ConfirmationDialog) -> void:
+func _request_fleet_roster_bulk_dismantle() -> void:
+	var snapshot := _fleet_roster_bulk_selection_snapshot()
+	var classification := _classify_fleet_roster_bulk_dismantle(snapshot)
+	if int(classification.get("eligible_count", 0)) <= 0:
+		_append_log(I18n.core("ships.roster.bulk.dismantle_none") % [int(classification.get("locked_count", 0)), int(classification.get("other_skipped_count", 0))])
+		return
+	if is_instance_valid(_fleet_roster_bulk_dismantle_dialog):
+		_fleet_roster_bulk_dismantle_dialog.queue_free()
+	var recovery: Dictionary = classification.get("recovery", {})
+	var recovery_text := "—" if recovery.is_empty() else _resource_dictionary(recovery)
+	var summary_text := I18n.core("ships.roster.bulk.dismantle_summary") % [
+		int(classification.get("selected_count", 0)),
+		int(classification.get("eligible_count", 0)),
+		int(classification.get("locked_count", 0)),
+		int(classification.get("other_skipped_count", 0))
+	]
+	var dialog = ShipDismantleModalScript.new()
+	add_child(dialog)
+	dialog.configure_bulk(
+		I18n.core("ships.roster.bulk.dismantle_title"),
+		I18n.core("ships.roster.bulk.dismantle_warning"),
+		summary_text,
+		I18n.core("ships.roster.dismantle.recoverable") % recovery_text,
+		I18n.core("common.cancel"),
+		I18n.core("ships.roster.bulk.dismantle_confirm") % int(classification.get("eligible_count", 0))
+	)
+	dialog.set_meta("ship_ids", snapshot.duplicate())
+	dialog.set_meta("recovery", recovery.duplicate(true))
+	dialog.set_meta("transaction_committed", false)
+	dialog.confirmed.connect(_confirm_fleet_roster_bulk_dismantle.bind(dialog))
+	dialog.canceled.connect(_close_fleet_roster_bulk_dismantle_dialog.bind(dialog))
+	_fleet_roster_bulk_dismantle_dialog = dialog
+
+
+func _classify_fleet_roster_bulk_dismantle(ship_ids: Array[String]) -> Dictionary:
+	var eligible_ids: Array[String] = []
+	var locked_ids: Array[String] = []
+	var other_skipped_ids: Array[String] = []
+	var recovery := {}
+	for ship_id in ship_ids:
+		var ship := Game.state.ship_by_id(ship_id)
+		if ship.is_empty():
+			other_skipped_ids.append(ship_id)
+			continue
+		if bool(ship.get("locked", false)):
+			locked_ids.append(ship_id)
+			continue
+		var availability := Game.ship_scrap_availability(ship_id)
+		if not bool(availability.get("allowed", false)):
+			other_skipped_ids.append(ship_id)
+			continue
+		eligible_ids.append(ship_id)
+		for item_id_value in (availability.get("recovery", {}) as Dictionary).keys():
+			var item_id := String(item_id_value)
+			recovery[item_id] = int(recovery.get(item_id, 0)) + int((availability.get("recovery", {}) as Dictionary).get(item_id, 0))
+	return {
+		"selected_count":ship_ids.size(),
+		"eligible_count":eligible_ids.size(),
+		"locked_count":locked_ids.size(),
+		"other_skipped_count":other_skipped_ids.size(),
+		"eligible_ids":eligible_ids,
+		"locked_ids":locked_ids,
+		"other_skipped_ids":other_skipped_ids,
+		"recovery":recovery
+	}
+
+
+func _close_fleet_roster_bulk_dismantle_dialog(dialog) -> void:
+	if _fleet_roster_bulk_dismantle_dialog == dialog:
+		_fleet_roster_bulk_dismantle_dialog = null
+	if is_instance_valid(dialog):
+		dialog.queue_free()
+	var bulk_actions := find_child("FleetRosterBulkActions", true, false) as Button
+	if is_instance_valid(bulk_actions):
+		bulk_actions.call_deferred("grab_focus")
+
+
+func _confirm_fleet_roster_bulk_dismantle(dialog) -> void:
+	if not is_instance_valid(dialog) or bool(dialog.get_meta("transaction_committed", false)) or _fleet_roster_bulk_action_in_progress:
+		return
+	var snapshot_value: Variant = dialog.get_meta("ship_ids", [])
+	var snapshot: Array[String] = []
+	if snapshot_value is Array:
+		for ship_id_value in snapshot_value:
+			snapshot.append(String(ship_id_value))
+	var classification := _classify_fleet_roster_bulk_dismantle(snapshot)
+	if int(classification.get("eligible_count", 0)) <= 0:
+		dialog.show_error(I18n.core("ships.roster.bulk.dismantle_became_ineligible"))
+		dialog.set_confirm_enabled(false)
+		return
+	dialog.set_meta("transaction_committed", true)
+	dialog.get_ok_button().disabled = true
+	_fleet_roster_bulk_action_in_progress = true
+	var result := _new_fleet_roster_bulk_result()
+	result.skipped = int(classification.get("locked_count", 0)) + int(classification.get("other_skipped_count", 0))
+	for ship_id_value in classification.get("eligible_ids", []):
+		var ship_id := String(ship_id_value)
+		# The canonical domain guard runs once more immediately before each commit.
+		if not bool(Game.ship_scrap_availability(ship_id).get("allowed", false)):
+			result.skipped += 1
+			continue
+		if Game.scrap_ship(ship_id):
+			result.applied += 1
+			_fleet_roster_selection_state.bulk_selected_ship_ids.erase(ship_id)
+		else:
+			result.failed += 1
+	_fleet_roster_bulk_action_in_progress = false
+	_close_fleet_roster_bulk_dismantle_dialog(dialog)
+	_reconcile_fleet_roster_selection(_fleet_roster_visible_ships(), true)
+	_report_fleet_roster_bulk_result(I18n.core("ships.roster.bulk.dismantle"), result)
+	_request_active_page_refresh(true)
+
+
+func _close_fleet_roster_dismantle_dialog(dialog) -> void:
 	if _fleet_roster_dismantle_dialog == dialog:
 		_fleet_roster_dismantle_dialog = null
 	if is_instance_valid(dialog):
 		dialog.queue_free()
 
 
-func _confirm_fleet_roster_dismantle(dialog: ConfirmationDialog, ship_id: String) -> void:
+func _confirm_fleet_roster_dismantle(dialog, ship_id: String) -> void:
 	if not is_instance_valid(dialog) or bool(dialog.get_meta("transaction_committed", false)):
 		return
 	if String(dialog.get_meta("ship_id", "")) != ship_id or _fleet_roster_selected_ship_id() != ship_id:
@@ -3821,7 +4837,7 @@ func _confirm_fleet_roster_dismantle(dialog: ConfirmationDialog, ship_id: String
 		_show_fleet_roster_dismantle_error(dialog, str(availability.get("reason", I18n.core("ships.roster.tooltip.dismantle_unavailable"))))
 		return
 	var previous_visible_ids: Array[String] = []
-	for ship_value in Game.state.ships.filter(_fleet_roster_ship_matches_filter):
+	for ship_value in _fleet_roster_visible_ships():
 		previous_visible_ids.append(String((ship_value as Dictionary).get("instance_id", "")))
 	dialog.set_meta("transaction_committed", true)
 	dialog.get_ok_button().disabled = true
@@ -3835,21 +4851,21 @@ func _confirm_fleet_roster_dismantle(dialog: ConfirmationDialog, ship_id: String
 	_request_active_page_refresh(true)
 
 
-func _show_fleet_roster_dismantle_error(dialog: ConfirmationDialog, reason: String) -> void:
+func _show_fleet_roster_dismantle_error(dialog, reason: String) -> void:
 	if not is_instance_valid(dialog):
 		return
-	dialog.dialog_text = "%s\n\n%s" % [String(dialog.get_meta("base_text", "")), I18n.core("ships.roster.dismantle.failure") % reason]
-	dialog.call_deferred("popup_centered", Vector2i(UiTokens.layout_px(620), UiTokens.layout_px(300)))
+	dialog.show_error(I18n.core("ships.roster.dismantle.failure") % reason)
 
 
 func _select_fleet_roster_after_dismantle(ship_id: String, previous_visible_ids: Array[String]) -> void:
 	var former_index := previous_visible_ids.find(ship_id)
-	var visible_ships: Array = Game.state.ships.filter(_fleet_roster_ship_matches_filter)
-	_selected_roster_ship_ids.clear()
+	var visible_ships := _fleet_roster_visible_ships()
+	_fleet_roster_selection_state.bulk_selected_ship_ids.erase(ship_id)
+	_fleet_roster_selection_state.primary_ship_id = ""
 	if visible_ships.is_empty():
 		return
 	var next_index := clampi(former_index if former_index >= 0 else 0, 0, visible_ships.size() - 1)
-	_selected_roster_ship_ids[String((visible_ships[next_index] as Dictionary).get("instance_id", ""))] = true
+	_fleet_roster_selection_state.primary_ship_id = String((visible_ships[next_index] as Dictionary).get("instance_id", ""))
 
 
 func _build_fleet_roster_basic_information_panel(ship: Dictionary, blueprint: Dictionary) -> PanelContainer:
@@ -3858,15 +4874,16 @@ func _build_fleet_roster_basic_information_panel(ship: Dictionary, blueprint: Di
 	var built_at_available := ship.has("built_at_ms")
 	var fields := [
 		["ship_id", I18n.core("ships.roster.inspector.ship_id"), String(ship.get("instance_id", "—"))],
-		["registry_code", I18n.core("ships.roster.inspector.registry_code"), "—"],
+		["registry_code", I18n.core("ships.roster.inspector.registry_code"), String(ship.get("registry_code", "—"))],
 		["tonnage", I18n.core("ships.roster.inspector.tonnage"), "—"],
 		["crew", I18n.core("ships.roster.inspector.crew"), "—"],
 		["ship_class", I18n.core("ships.roster.inspector.ship_class"), _fleet_roster_hull_class_and_tier(blueprint)],
 		["manufacturer", I18n.core("ships.roster.inspector.manufacturer"), "—"],
 		["built_at", I18n.core("ships.roster.inspector.built_at"), _fleet_roster_simulation_timestamp(int(ship.get("built_at_ms", 0))) if built_at_available else "—"]
 	]
+	var caption_width := 78 if I18n.current_locale == "zh_CN" else 96
 	for field_value in fields:
-		_add_fleet_roster_metadata_row(column, "basic", String(field_value[0]), String(field_value[1]), String(field_value[2]), 88)
+		_add_fleet_roster_metadata_row(column, "basic", String(field_value[0]), String(field_value[1]), String(field_value[2]), caption_width)
 	return panel
 
 
@@ -3883,7 +4900,7 @@ func _build_fleet_roster_configuration_panel(ship: Dictionary) -> PanelContainer
 	]
 	for field_value in fields:
 		var field_id := String(field_value[0])
-		_add_fleet_roster_metadata_row(column, "configuration", field_id, String(field_value[1]), String(summaries.get(field_id, "—")), 82)
+		_add_fleet_roster_metadata_row(column, "configuration", field_id, String(field_value[1]), String(summaries.get(field_id, "—")), 96)
 	return panel
 
 
@@ -3904,28 +4921,32 @@ func _build_fleet_roster_readiness_panel(ship: Dictionary) -> PanelContainer:
 
 
 func _fleet_roster_lower_panel(control_name: String, stretch_ratio: float) -> PanelContainer:
-	var panel := _panel(UiTokens.COLOR_INSET)
+	var panel := _panel(UiTokens.COLOR_REGISTRY_INSET)
 	panel.name = control_name
-	panel.custom_minimum_size.y = 238
+	panel.custom_minimum_size.y = _fleet_roster_px(266.0)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.size_flags_stretch_ratio = stretch_ratio
-	panel.add_theme_stylebox_override("panel", UiTokens.panel_style(UiTokens.COLOR_INSET, COLOR_BORDER, 4))
+	panel.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_INSET))
 	return panel
 
 
 func _fleet_roster_lower_panel_column(panel: PanelContainer, title_text: String, title_name: String) -> VBoxContainer:
-	var content_margin := _margin(14, 1, 14, 1)
-	content_margin.add_theme_constant_override("margin_top", 1)
-	content_margin.add_theme_constant_override("margin_bottom", 1)
+	var horizontal_inset := _fleet_roster_px(14.0)
+	var vertical_inset := _fleet_roster_px(6.0)
+	var content_margin := _margin(horizontal_inset, vertical_inset, horizontal_inset, vertical_inset)
+	content_margin.add_theme_constant_override("margin_left", horizontal_inset)
+	content_margin.add_theme_constant_override("margin_top", vertical_inset)
+	content_margin.add_theme_constant_override("margin_right", horizontal_inset)
+	content_margin.add_theme_constant_override("margin_bottom", vertical_inset)
 	panel.add_child(content_margin)
 	var column := VBoxContainer.new()
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	column.add_theme_constant_override("separation", 0)
 	content_margin.add_child(column)
-	var title := _label(title_text, 17, COLOR_ACCENT)
+	var title := _fleet_roster_label(title_text, 17, COLOR_ACCENT)
 	title.name = title_name
-	title.custom_minimum_size.y = 32
+	title.custom_minimum_size.y = _fleet_roster_px(32.0)
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	column.add_child(title)
 	var separator := HSeparator.new()
@@ -3937,20 +4958,23 @@ func _fleet_roster_lower_panel_column(panel: PanelContainer, title_text: String,
 func _add_fleet_roster_metadata_row(parent: VBoxContainer, group_id: String, field_id: String, caption: String, value_text: String, caption_width: int) -> void:
 	var row := HBoxContainer.new()
 	row.name = "FleetRoster%sRow_%s" % [group_id.capitalize(), field_id]
-	row.custom_minimum_size.y = 27
+	var configuration_row := group_id == "configuration"
+	row.custom_minimum_size.y = _fleet_roster_px(42.0 if configuration_row else 30.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_theme_constant_override("separation", UiTokens.layout_px(10))
-	var caption_label := _label(caption, 14, COLOR_MUTED)
-	caption_label.custom_minimum_size.x = UiTokens.layout_px(caption_width)
+	row.add_theme_constant_override("separation", _fleet_roster_px(8.0 if configuration_row else 6.0))
+	var caption_label := _fleet_roster_label(caption, 14 if group_id == "basic" else 15, COLOR_MUTED)
+	caption_label.custom_minimum_size.x = _fleet_roster_px(float(caption_width))
 	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	caption_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	caption_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if configuration_row else TextServer.AUTOWRAP_OFF
+	caption_label.max_lines_visible = 2 if configuration_row else 1
 	caption_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	row.add_child(caption_label)
-	var value_label := _label(value_text, 14, COLOR_TEXT)
+	var value_label := _fleet_roster_label(value_text, 15, COLOR_TEXT)
 	value_label.name = "FleetRoster%sValue_%s" % [group_id.capitalize(), field_id]
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	value_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	value_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if configuration_row else TextServer.AUTOWRAP_OFF
+	value_label.max_lines_visible = 2 if configuration_row else 1
 	value_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	value_label.tooltip_text = value_text if value_text != "—" else ""
 	row.add_child(value_label)
@@ -3962,17 +4986,17 @@ func _add_fleet_roster_readiness_row(parent: VBoxContainer, field_id: String, ca
 	var percent := clampf(float(metric.get("value", 0.0)), 0.0, 100.0)
 	var row := HBoxContainer.new()
 	row.name = "FleetRosterReadinessRow_%s" % field_id
-	row.custom_minimum_size.y = 44
+	row.custom_minimum_size.y = _fleet_roster_px(50.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_theme_constant_override("separation", UiTokens.layout_px(12))
-	var caption_label := _label(caption, 14, COLOR_MUTED)
-	caption_label.custom_minimum_size.x = UiTokens.layout_px(104)
+	row.add_theme_constant_override("separation", _fleet_roster_px(12.0))
+	var caption_label := _fleet_roster_label(caption, 15, COLOR_MUTED)
+	caption_label.custom_minimum_size.x = _fleet_roster_px(104.0)
 	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	caption_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	row.add_child(caption_label)
 	var progress := ProgressBar.new()
 	progress.name = "FleetRosterReadinessBar_%s" % field_id
-	progress.custom_minimum_size.y = 8
+	progress.custom_minimum_size.y = _fleet_roster_px(10.0)
 	progress.max_value = 100.0
 	progress.value = percent if available else 0.0
 	progress.show_percentage = false
@@ -3981,9 +5005,9 @@ func _add_fleet_roster_readiness_row(parent: VBoxContainer, field_id: String, ca
 	progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	progress.set_meta("canonical_value_available", available)
 	row.add_child(progress)
-	var value_label := _label("%d%%" % int(round(percent)) if available else "—", 14, COLOR_TEXT if available else COLOR_MUTED)
+	var value_label := _fleet_roster_label("%d%%" % int(round(percent)) if available else "—", 15, COLOR_TEXT if available else COLOR_MUTED)
 	value_label.name = "FleetRosterReadinessValue_%s" % field_id
-	value_label.custom_minimum_size.x = UiTokens.layout_px(48)
+	value_label.custom_minimum_size.x = _fleet_roster_px(48.0)
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	value_label.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -4066,11 +5090,12 @@ func _fleet_roster_readiness_values(ship: Dictionary) -> Dictionary:
 
 
 func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String) -> PanelContainer:
-	var browser := _panel(COLOR_PANEL_ALT)
+	var browser := _panel(UiTokens.COLOR_REGISTRY_SURFACE)
 	browser.name = "FleetRosterListSurface"
 	browser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	browser.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	browser.size_flags_stretch_ratio = 0.341
+	browser.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_SURFACE))
 	var browser_column := VBoxContainer.new()
 	browser_column.name = "FleetRosterBrowser"
 	browser_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4080,27 +5105,34 @@ func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String)
 
 	var header_margin := _margin(20, 6, 16, 6)
 	header_margin.name = "FleetRosterBrowserHeader"
-	header_margin.custom_minimum_size.y = UiTokens.layout_px(46)
+	header_margin.custom_minimum_size.y = _fleet_roster_px(46.0)
+	header_margin.add_theme_constant_override("margin_top", _fleet_roster_px(6.0))
+	header_margin.add_theme_constant_override("margin_bottom", _fleet_roster_px(6.0))
 	var header_row := HBoxContainer.new()
 	header_row.add_theme_constant_override("separation", UiTokens.layout_px(8))
 	header_margin.add_child(header_row)
-	var summary := _label(I18n.core("ships.roster.browser_summary") % [Game.state.ships.size(), visible_ships.size()], 14, COLOR_MUTED)
+	var bulk_selected_count: int = _fleet_roster_selection_state.bulk_selected_ship_ids.size()
+	var summary_text := I18n.core("ships.roster.bulk.selected_count") % bulk_selected_count if bulk_selected_count > 0 else I18n.core("ships.roster.browser_summary") % [Game.state.ships.size(), visible_ships.size()]
+	var summary := _fleet_roster_label(summary_text, 14, COLOR_TEXT_SECONDARY if bulk_selected_count > 0 else COLOR_MUTED)
 	summary.name = "FleetRosterBrowserSummary"
 	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	summary.autowrap_mode = TextServer.AUTOWRAP_OFF
 	summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header_row.add_child(summary)
-	# STEP 05 reserves the Golden Reference control with a real CheckBox. It is
-	# intentionally non-interactive until STEP 10 defines bulk-selection rules.
-	var select_filtered_group := HBoxContainer.new()
-	select_filtered_group.name = "FleetRosterSelectFilteredGroup"
-	select_filtered_group.add_theme_constant_override("separation", UiTokens.layout_px(7))
-	var select_filtered := _fleet_roster_selection_checkbox("FleetRosterSelectFiltered")
-	select_filtered_group.add_child(select_filtered)
-	var select_filtered_label := _label(I18n.core("ships.roster.select_filtered"), 14, COLOR_MUTED)
-	select_filtered_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-	select_filtered_group.add_child(select_filtered_label)
-	header_row.add_child(select_filtered_group)
+	header_row.add_child(_build_fleet_roster_select_filtered_group(visible_ships, bulk_selected_count > 0))
+	if bulk_selected_count > 0:
+		var clear_button := _button(I18n.core("ships.roster.bulk.clear"), _clear_fleet_roster_bulk_selection, false, COLOR_MUTED)
+		clear_button.name = "FleetRosterBulkClear"
+		clear_button.custom_minimum_size.y = _fleet_roster_px(30.0)
+		clear_button.add_theme_font_size_override("font_size", _fleet_roster_px(12.0))
+		_apply_fleet_roster_compact_button_style(clear_button)
+		header_row.add_child(clear_button)
+		var bulk_actions := _button(I18n.core("ships.roster.bulk.actions"), _open_fleet_roster_bulk_actions_from_header, false, COLOR_ACCENT)
+		bulk_actions.name = "FleetRosterBulkActions"
+		bulk_actions.custom_minimum_size.y = _fleet_roster_px(30.0)
+		bulk_actions.add_theme_font_size_override("font_size", _fleet_roster_px(12.0))
+		_apply_fleet_roster_compact_button_style(bulk_actions)
+		header_row.add_child(bulk_actions)
 	browser_column.add_child(header_margin)
 	var header_separator := HSeparator.new()
 	header_separator.add_theme_constant_override("separation", 1)
@@ -4126,10 +5158,11 @@ func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String)
 	list_scroll.add_child(ship_list)
 	for ship_value in visible_ships:
 		var ship := ship_value as Dictionary
-		ship_list.add_child(_build_fleet_roster_ship_row(ship, String(ship.get("instance_id", "")) == selected_ship_id))
+		var ship_id := String(ship.get("instance_id", ""))
+		ship_list.add_child(_build_fleet_roster_ship_row(ship, ship_id == selected_ship_id, _fleet_roster_selection_state.is_bulk_selected(ship_id)))
 	if visible_ships.is_empty():
 		var empty_margin := _margin(14, 14, 14, 14)
-		empty_margin.add_child(_label(I18n.core("ships.roster.filtered_empty"), 13, COLOR_MUTED))
+		empty_margin.add_child(_label(I18n.core("ships.roster.no_results"), 13, COLOR_MUTED))
 		ship_list.add_child(empty_margin)
 	browser_column.add_child(list_margin)
 	var footer_separator := HSeparator.new()
@@ -4140,10 +5173,10 @@ func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String)
 	footer_margin.name = "FleetRosterBrowserFooter"
 	# Match the Golden footer band now so STEP 09 pagination can be added beside
 	# the range without changing the Browser's vertical geometry again.
-	footer_margin.custom_minimum_size.y = UiTokens.layout_px(86)
+	footer_margin.custom_minimum_size.y = _fleet_roster_px(86.0)
 	var range_start := 1 if not visible_ships.is_empty() else 0
 	var range_end := visible_ships.size()
-	var result_range := _label(I18n.core("ships.roster.result_range") % [range_start, range_end, Game.state.ships.size()], 14, COLOR_MUTED)
+	var result_range := _fleet_roster_label(I18n.core("ships.roster.result_range") % [range_start, range_end, Game.state.ships.size()], 14, COLOR_MUTED)
 	result_range.name = "FleetRosterResultRange"
 	result_range.autowrap_mode = TextServer.AUTOWRAP_OFF
 	result_range.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -4152,7 +5185,30 @@ func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String)
 	return browser
 
 
-func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool) -> Button:
+func _build_fleet_roster_select_filtered_group(visible_ships: Array, compact_label: bool) -> HBoxContainer:
+	var visible_ids := _fleet_roster_ship_ids(visible_ships)
+	var header_state := _fleet_roster_selection_state.header_state(visible_ids)
+	var group := HBoxContainer.new()
+	group.name = "FleetRosterSelectFilteredGroup"
+	group.add_theme_constant_override("separation", UiTokens.layout_px(7))
+	var checkbox: ShipRegistrySelectionCheckbox = _fleet_roster_selection_checkbox("FleetRosterSelectFiltered")
+	checkbox.focus_mode = Control.FOCUS_ALL
+	checkbox.mouse_filter = Control.MOUSE_FILTER_STOP
+	checkbox.disabled = visible_ids.is_empty()
+	checkbox.button_pressed = header_state == ShipRegistrySelectionScript.HEADER_CHECKED
+	checkbox.set_indeterminate_state(header_state == ShipRegistrySelectionScript.HEADER_INDETERMINATE)
+	checkbox.accessibility_name = I18n.core("ships.roster.select_filtered")
+	checkbox.toggled.connect(_toggle_fleet_roster_filtered_selection.bind(header_state))
+	group.add_child(checkbox)
+	var label_key := "ships.roster.bulk.select_all" if compact_label else "ships.roster.select_filtered"
+	var select_filtered_label := _fleet_roster_label(I18n.core(label_key), 14 if not compact_label else 12, COLOR_MUTED)
+	select_filtered_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	select_filtered_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	group.add_child(select_filtered_label)
+	return group
+
+
+func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool, bulk_selected: bool) -> Button:
 	var ship_id := String(ship.get("instance_id", ""))
 	var blueprint := Game.content.ships.get(String(ship.get("blueprint_id", "")), {}) as Dictionary
 	var maintenance_state := String(ship.get("maintenance_state", "ACTIVE"))
@@ -4163,22 +5219,22 @@ func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool) -> Button:
 	var row := Button.new()
 	row.name = "FleetRosterShip_%s" % ship_id
 	row.text = ""
-	# Fonts follow the player's full accessibility scale while general layout
-	# geometry uses a moderated scale. A Button does not include child Control
-	# minimum sizes in its own minimum, so the old layout-scaled 61 px row let the
-	# two Label lines escape at 150%. Track the larger of the layout and font
-	# scales: 100% remains the accepted 61 px, while 150% safely becomes 92 px.
-	row.custom_minimum_size.y = maxi(UiTokens.layout_px(61), int(round(61.0 * UiTokens.ui_scale())))
+	# This list is calibrated as a dense 61 px asset row at the canonical 150%
+	# viewport. Typography uses the same Golden-to-base conversion, so both text
+	# lines remain contained without the former independent 92 px row inflation.
+	row.custom_minimum_size.y = _fleet_roster_px(61.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.focus_mode = Control.FOCUS_ALL
 	row.accessibility_name = I18n.core("ships.roster.accessibility_summary", "%s, %s, %s, %s") % [String(ship.get("name", ship_id)), _fleet_roster_hull_class_and_tier(blueprint), _fleet_roster_lifecycle_text(maintenance_state), formation_name]
 	row.pressed.connect(_select_fleet_roster_ship.bind(ship_id))
-	row.add_theme_stylebox_override("normal", _fleet_roster_row_style(selected, false))
-	row.add_theme_stylebox_override("hover", _fleet_roster_row_style(selected, true))
-	row.add_theme_stylebox_override("pressed", _fleet_roster_row_style(true, true))
-	row.add_theme_stylebox_override("focus", _fleet_roster_row_style(true, false))
+	row.add_theme_stylebox_override("normal", _fleet_roster_row_style(selected, bulk_selected, false))
+	row.add_theme_stylebox_override("hover", _fleet_roster_row_style(selected, bulk_selected, true))
+	row.add_theme_stylebox_override("pressed", _fleet_roster_row_style(true, bulk_selected, true))
+	row.add_theme_stylebox_override("focus", _fleet_roster_row_style(true, bulk_selected, false))
 
 	var row_margin := _margin(14, 10, 14, 10)
+	row_margin.add_theme_constant_override("margin_top", _fleet_roster_px(6.0))
+	row_margin.add_theme_constant_override("margin_bottom", _fleet_roster_px(12.0))
 	row_margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	row.add_child(row_margin)
 	var row_content := HBoxContainer.new()
@@ -4189,20 +5245,26 @@ func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool) -> Button:
 	var selection_area := CenterContainer.new()
 	selection_area.custom_minimum_size.x = UiTokens.layout_px(20)
 	selection_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	selection_area.add_child(_fleet_roster_selection_checkbox("FleetRosterSelectionControl_%s" % ship_id))
+	var selection_checkbox: ShipRegistrySelectionCheckbox = _fleet_roster_selection_checkbox("FleetRosterSelectionControl_%s" % ship_id)
+	selection_checkbox.button_pressed = bulk_selected
+	selection_checkbox.focus_mode = Control.FOCUS_ALL
+	selection_checkbox.mouse_filter = Control.MOUSE_FILTER_STOP
+	selection_checkbox.accessibility_name = I18n.core("ships.roster.bulk.row_accessibility") % String(ship.get("name", ship_id))
+	selection_checkbox.toggled.connect(_toggle_fleet_roster_ship_bulk_selection.bind(ship_id))
+	selection_area.add_child(selection_checkbox)
 	row_content.add_child(selection_area)
 
 	var left_info := VBoxContainer.new()
 	left_info.name = "FleetRosterLeftInfo_%s" % ship_id
 	left_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	left_info.add_theme_constant_override("separation", UiTokens.layout_px(2))
-	var ship_name := _label(String(ship.get("name", ship_id)), 17, COLOR_TEXT)
+	left_info.add_theme_constant_override("separation", _fleet_roster_px(2.0))
+	var ship_name := _fleet_roster_label(String(ship.get("name", ship_id)), 17, COLOR_TEXT)
 	ship_name.name = "FleetRosterShipName_%s" % ship_id
 	ship_name.autowrap_mode = TextServer.AUTOWRAP_OFF
 	ship_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	left_info.add_child(ship_name)
-	var hull_class := _label(_fleet_roster_hull_class_and_tier(blueprint), 14, COLOR_MUTED)
+	var hull_class := _fleet_roster_label(_fleet_roster_hull_class_and_tier(blueprint), 14, COLOR_MUTED)
 	hull_class.name = "FleetRosterHullClass_%s" % ship_id
 	hull_class.autowrap_mode = TextServer.AUTOWRAP_OFF
 	left_info.add_child(hull_class)
@@ -4210,25 +5272,25 @@ func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool) -> Button:
 
 	var right_info := VBoxContainer.new()
 	right_info.name = "FleetRosterRightInfo_%s" % ship_id
-	right_info.custom_minimum_size.x = UiTokens.layout_px(142)
+	right_info.custom_minimum_size.x = _fleet_roster_px(136.0)
 	right_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	right_info.add_theme_constant_override("separation", UiTokens.layout_px(2))
+	right_info.add_theme_constant_override("separation", _fleet_roster_px(2.0))
 	var lifecycle_row := HBoxContainer.new()
-	lifecycle_row.add_theme_constant_override("separation", UiTokens.layout_px(7))
+	lifecycle_row.add_theme_constant_override("separation", _fleet_roster_px(7.0))
 	var status_dot := PanelContainer.new()
 	status_dot.name = "FleetRosterLifecycleDot_%s" % ship_id
-	status_dot.custom_minimum_size = UiTokens.layout_vector(Vector2(8, 8))
+	status_dot.custom_minimum_size = _fleet_roster_vector(Vector2(8, 8))
 	status_dot.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	status_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	status_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	status_dot.add_theme_stylebox_override("panel", UiTokens.panel_style(lifecycle_color, lifecycle_color, 4))
 	lifecycle_row.add_child(status_dot)
-	var lifecycle := _label(_fleet_roster_lifecycle_text(maintenance_state), 14, lifecycle_color)
+	var lifecycle := _fleet_roster_label(_fleet_roster_lifecycle_text(maintenance_state), 14, lifecycle_color)
 	lifecycle.name = "FleetRosterLifecycle_%s" % ship_id
 	lifecycle.autowrap_mode = TextServer.AUTOWRAP_OFF
 	lifecycle_row.add_child(lifecycle)
 	right_info.add_child(lifecycle_row)
-	var fleet_name := _label(formation_name, 14, COLOR_MUTED)
+	var fleet_name := _fleet_roster_label(formation_name, 14, COLOR_MUTED)
 	fleet_name.name = "FleetRosterFormation_%s" % ship_id
 	fleet_name.autowrap_mode = TextServer.AUTOWRAP_OFF
 	fleet_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -4237,46 +5299,29 @@ func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool) -> Button:
 	return row
 
 
-func _fleet_roster_row_style(selected: bool, hovered: bool) -> StyleBoxFlat:
+func _fleet_roster_row_style(selected: bool, bulk_selected: bool, hovered: bool) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = UiTokens.COLOR_CONTROL_HOVER if hovered else (UiTokens.COLOR_CONTROL_ACTIVE if selected else COLOR_PANEL_ALT)
-	style.border_color = COLOR_ACCENT if selected else COLOR_BORDER
+	var selected_surface := UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE
+	var bulk_surface := UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE.darkened(0.22)
+	style.bg_color = UiTokens.COLOR_REGISTRY_CONTROL_HOVER if hovered else (selected_surface if selected else (bulk_surface if bulk_selected else UiTokens.COLOR_REGISTRY_SURFACE))
+	style.border_color = COLOR_ACCENT if selected else (UiTokens.COLOR_FOCUS.darkened(0.38) if bulk_selected else UiTokens.COLOR_REGISTRY_SEPARATOR)
 	if selected:
 		style.set_border_width_all(1)
 		style.set_corner_radius_all(UiTokens.layout_px(3))
+	elif bulk_selected:
+		style.border_width_left = 2
+		style.border_width_bottom = 1
 	else:
 		style.border_width_bottom = 1
 	return style
 
 
-func _fleet_roster_selection_checkbox(control_name: String) -> CheckBox:
-	var checkbox := CheckBox.new()
+func _fleet_roster_selection_checkbox(control_name: String) -> ShipRegistrySelectionCheckbox:
+	var checkbox := ShipRegistrySelectionCheckboxScript.new() as ShipRegistrySelectionCheckbox
 	checkbox.name = control_name
-	checkbox.text = ""
-	checkbox.button_pressed = false
-	checkbox.focus_mode = Control.FOCUS_NONE
-	checkbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	checkbox.custom_minimum_size = UiTokens.layout_vector(Vector2(16, 16))
+	checkbox.custom_minimum_size = _fleet_roster_vector(Vector2(18, 18))
 	checkbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	checkbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	# Empty CheckBox text still contributes the theme's normal line height unless
-	# collapsed explicitly, which would turn the Golden 16 px square into a pill.
-	checkbox.add_theme_font_size_override("font_size", 1)
-	for state_name in ["normal", "hover", "pressed", "focus"]:
-		checkbox.add_theme_stylebox_override(state_name, StyleBoxEmpty.new())
-	# The project theme intentionally has no bitmap checkbox icon. Keep the real
-	# CheckBox as the future state owner and render its empty mark from a centered
-	# Godot Panel primitive, never from Unicode or placeholder artwork.
-	var indicator_center := CenterContainer.new()
-	indicator_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	indicator_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var indicator := PanelContainer.new()
-	indicator.name = "%sIndicator" % control_name
-	indicator.custom_minimum_size = UiTokens.layout_vector(Vector2(15, 15))
-	indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	indicator.add_theme_stylebox_override("panel", UiTokens.panel_style(Color(0.0, 0.0, 0.0, 0.0), UiTokens.COLOR_BORDER_STRONG, 2))
-	indicator_center.add_child(indicator)
-	checkbox.add_child(indicator_center)
 	return checkbox
 
 
@@ -4296,8 +5341,11 @@ func _fleet_roster_lifecycle_text(maintenance_state: String) -> String:
 func _build_fleet_roster_header() -> HBoxContainer:
 	var header := HBoxContainer.new()
 	header.name = "FleetRosterHeader"
-	header.custom_minimum_size.y = 40
-	var title := _label(I18n.core("ships.roster.title"), 21, COLOR_TEXT)
+	header.custom_minimum_size.y = _fleet_roster_px(40.0)
+	var left_inset := Control.new()
+	left_inset.custom_minimum_size.x = _fleet_roster_px(4.0)
+	header.add_child(left_inset)
+	var title := _fleet_roster_label(I18n.core("ships.roster.title"), 26, COLOR_TEXT)
 	title.name = "FleetRosterHeaderTitle"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -4305,66 +5353,424 @@ func _build_fleet_roster_header() -> HBoxContainer:
 	header.add_child(title)
 	var ship_count := Game.state.ships.size()
 	var count_key := "ships.roster.count_one" if ship_count == 1 else "ships.roster.count_many"
-	var count_label := _label(I18n.core(count_key) % ship_count, 13, COLOR_MUTED)
+	var count_label := _fleet_roster_label(I18n.core(count_key) % ship_count, 14, COLOR_MUTED)
 	count_label.name = "FleetRosterHeaderCount"
 	count_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(count_label)
+	var right_inset := Control.new()
+	right_inset.custom_minimum_size.x = _fleet_roster_px(10.0)
+	header.add_child(right_inset)
 	return header
 
 
-func _build_fleet_roster_filters() -> HFlowContainer:
+func _build_fleet_roster_filters() -> HBoxContainer:
 	var counts := {"ALL":Game.state.ships.size(), "ACTIVE":0, "READY_RESERVE":0, "MOTHBALLED":0}
 	for ship_value in Game.state.ships:
 		var maintenance_state := String((ship_value as Dictionary).get("maintenance_state", "ACTIVE"))
 		if counts.has(maintenance_state):
 			counts[maintenance_state] = int(counts[maintenance_state]) + 1
-	var filters := HFlowContainer.new()
+	var filters := HBoxContainer.new()
 	filters.name = "FleetRosterFilters"
-	filters.add_theme_constant_override("h_separation", UiTokens.layout_px(6))
-	filters.add_theme_constant_override("v_separation", UiTokens.layout_px(4))
+	filters.custom_minimum_size.y = _fleet_roster_px(36.0)
+	filters.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	filters.add_theme_constant_override("separation", _fleet_roster_px(10.0))
+	var left_inset := Control.new()
+	left_inset.custom_minimum_size.x = 0.0
+	filters.add_child(left_inset)
 	for filter_id in ["ALL", "ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
 		var caption := I18n.core("ships.roster.filter.%s" % String(filter_id).to_lower())
 		var button := _button(I18n.core("format.caption_count", "%s %d") % [caption, int(counts[filter_id])], _select_fleet_roster_filter.bind(filter_id), false, COLOR_MUTED)
 		button.name = "FleetRosterFilter_%s" % filter_id
+		button.custom_minimum_size.y = _fleet_roster_px(36.0)
+		button.add_theme_font_size_override("font_size", _fleet_roster_px(15.0))
 		_apply_fleet_roster_compact_button_style(button)
 		if filter_id == _fleet_roster_filter:
-			button.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_CONTROL_ACTIVE, COLOR_ACCENT))
+			button.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE, COLOR_ACCENT))
 			button.add_theme_color_override("font_color", COLOR_TEXT)
 		filters.add_child(button)
+	var flexible_space := Control.new()
+	flexible_space.name = "FleetRosterToolbarSpacer"
+	flexible_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	filters.add_child(flexible_space)
+	filters.add_child(_build_fleet_roster_query_controls())
+	var right_inset := Control.new()
+	right_inset.custom_minimum_size.x = _fleet_roster_px(12.0)
+	filters.add_child(right_inset)
 	return filters
+
+
+func _build_fleet_roster_query_controls() -> HBoxContainer:
+	_fleet_roster_query_popups.clear()
+	var controls := HBoxContainer.new()
+	controls.name = "FleetRosterQueryControls"
+	controls.size_flags_horizontal = Control.SIZE_SHRINK_END
+	controls.add_theme_constant_override("separation", _fleet_roster_px(12.0))
+
+	var search := LineEdit.new()
+	search.name = "FleetRosterSearch"
+	search.custom_minimum_size = Vector2(_fleet_roster_px(302.0), _fleet_roster_px(36.0))
+	search.placeholder_text = I18n.core("ships.roster.search.placeholder")
+	search.accessibility_name = search.placeholder_text
+	search.text = _fleet_roster_search_query
+	search.max_length = 128
+	search.clear_button_enabled = false
+	search.add_theme_font_size_override("font_size", UiTokens.font_size(9))
+	search.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL, UiTokens.COLOR_REGISTRY_BORDER))
+	search.add_theme_stylebox_override("focus", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE, COLOR_ACCENT))
+	search.mouse_entered.connect(_set_fleet_roster_search_hover.bind(search, true))
+	search.mouse_exited.connect(_set_fleet_roster_search_hover.bind(search, false))
+	search.text_changed.connect(_on_fleet_roster_search_changed)
+	search.gui_input.connect(_on_fleet_roster_search_gui_input.bind(search))
+	controls.add_child(search)
+
+	var type_options: Array[Dictionary] = [{"id":ShipRegistryQueryScript.ALL_SHIP_TYPES, "label":I18n.core("ships.roster.type.all"), "control_label":I18n.core("ships.roster.type.control")}]
+	for type_id in _fleet_roster_available_ship_types():
+		type_options.append({"id":type_id, "label":_fleet_roster_ship_type_name(type_id)})
+	controls.add_child(_build_fleet_roster_dropdown(
+		"FleetRosterShipTypeFilter",
+		_fleet_roster_ship_type_filter,
+		type_options,
+		150.0,
+		_on_fleet_roster_ship_type_selected
+	))
+
+	var formation_options: Array[Dictionary] = [{"id":ShipRegistryQueryScript.ALL_FORMATIONS, "label":I18n.core("ships.roster.formation.all"), "control_label":I18n.core("ships.roster.formation.control")}]
+	for formation_id_value in Game.state.formation_ids():
+		var formation_id := String(formation_id_value)
+		formation_options.append({"id":formation_id, "label":_formation_name(formation_id)})
+	formation_options.append({"id":ShipRegistryQueryScript.UNASSIGNED_FORMATION, "label":I18n.core("ships.roster.formation.unassigned")})
+	controls.add_child(_build_fleet_roster_dropdown(
+		"FleetRosterFormationFilter",
+		_fleet_roster_formation_filter,
+		formation_options,
+		141.0,
+		_on_fleet_roster_formation_selected
+	))
+
+	var sort_options: Array[Dictionary] = []
+	for sort_id in ShipRegistryQueryScript.SORT_MODES:
+		var sort_option := {"id":sort_id, "label":I18n.core("ships.roster.sort.%s" % String(sort_id).to_lower())}
+		if sort_id == ShipRegistryQueryScript.SORT_CANONICAL:
+			sort_option["control_label"] = I18n.core("ships.roster.sort.control")
+		sort_options.append(sort_option)
+	controls.add_child(_build_fleet_roster_dropdown(
+		"FleetRosterSort",
+		_fleet_roster_sort_mode,
+		sort_options,
+		146.0,
+		_on_fleet_roster_sort_selected
+	))
+	return controls
+
+
+func _set_fleet_roster_search_hover(search: LineEdit, hovered: bool) -> void:
+	if not is_instance_valid(search):
+		return
+	search.add_theme_stylebox_override("normal", _fleet_roster_button_style(
+		UiTokens.COLOR_REGISTRY_CONTROL_HOVER if hovered else UiTokens.COLOR_REGISTRY_CONTROL,
+		UiTokens.COLOR_REGISTRY_BORDER
+	))
+
+
+func _build_fleet_roster_dropdown(control_name: String, selected_id: String, options: Array[Dictionary], golden_width: float, selected_handler: Callable) -> MenuButton:
+	var button := MenuButton.new()
+	button.name = control_name
+	button.custom_minimum_size = Vector2(_fleet_roster_px(golden_width), _fleet_roster_px(36.0))
+	button.focus_mode = Control.FOCUS_ALL
+	button.flat = false
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.clip_text = true
+	button.add_theme_font_size_override("font_size", UiTokens.font_size(9))
+	_apply_fleet_roster_compact_button_style(button)
+	_update_fleet_roster_dropdown_style(button, selected_id != String(options[0].get("id", "")) if not options.is_empty() else false)
+	var popup := button.get_popup()
+	popup.name = "%sPopup" % control_name
+	popup.transparent_bg = true
+	popup.add_theme_font_size_override("font_size", UiTokens.font_size(10))
+	popup.add_theme_color_override("font_color", COLOR_TEXT_SECONDARY)
+	popup.add_theme_color_override("font_hover_color", COLOR_TEXT)
+	popup.add_theme_color_override("font_disabled_color", COLOR_MUTED)
+	popup.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_SURFACE))
+	popup.add_theme_stylebox_override("hover", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE, COLOR_ACCENT))
+	var selected_index := 0
+	var control_labels := {}
+	for option_index in options.size():
+		var option := options[option_index]
+		popup.add_item(String(option.get("label", "")), option_index)
+		var option_id := String(option.get("id", ""))
+		popup.set_item_metadata(option_index, option_id)
+		control_labels[option_id] = String(option.get("control_label", option.get("label", "")))
+		var is_selected := option_id == selected_id
+		if is_selected:
+			selected_index = option_index
+	button.set_meta("ship_registry_option_labels", control_labels)
+	button.text = String(options[selected_index].get("control_label", options[selected_index].get("label", ""))) if not options.is_empty() else ""
+	button.accessibility_name = button.text
+	if not options.is_empty() and String(options[selected_index].get("id", "")) != selected_id:
+		selected_id = String(options[selected_index].get("id", ""))
+	popup.id_pressed.connect(selected_handler.bind(popup, button))
+	button.about_to_popup.connect(_on_fleet_roster_dropdown_about_to_open.bind(button, popup))
+	popup.popup_hide.connect(_on_fleet_roster_dropdown_closed.bind(button))
+	_fleet_roster_query_popups.append(popup)
+	return button
+
+
+func _on_fleet_roster_dropdown_about_to_open(origin: MenuButton, opening_popup: PopupMenu) -> void:
+	_fleet_roster_query_popup_opening = true
+	if is_instance_valid(_fleet_roster_popup) and _fleet_roster_popup.visible:
+		_fleet_roster_popup.hide()
+	for popup in _fleet_roster_query_popups:
+		if is_instance_valid(popup) and popup != opening_popup and popup.visible:
+			popup.hide()
+	# MenuButton computes the popup's natural content height first. Re-anchor on
+	# the following frame so embedded and ordinary windows use the same in-app
+	# viewport coordinates and the popup always renders above the Inspector.
+	call_deferred("_position_fleet_roster_query_popup", origin, opening_popup)
+	call_deferred("_finish_fleet_roster_query_popup_opening", opening_popup)
+
+
+func _finish_fleet_roster_query_popup_opening(opening_popup: PopupMenu) -> void:
+	# Keep the toolbar alive across the subwindow's hide/show transition when a
+	# player moves directly from one dropdown to another.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_fleet_roster_query_popup_opening = false
+
+
+func _on_fleet_roster_dropdown_closed(origin: MenuButton) -> void:
+	# Focus normally moves before the next MenuButton emits about_to_popup.
+	# Protect that brief close/open gap from a pending periodic toolbar rebuild.
+	_fleet_roster_query_popup_close_guards += 1
+	call_deferred("_finish_fleet_roster_query_popup_close_guard")
+	if not _fleet_roster_query_popup_opening and is_instance_valid(origin) and origin.is_visible_in_tree():
+		origin.call_deferred("grab_focus")
+
+
+func _finish_fleet_roster_query_popup_close_guard() -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_fleet_roster_query_popup_close_guards = maxi(0, _fleet_roster_query_popup_close_guards - 1)
+
+
+func _fleet_roster_query_popup_is_open() -> bool:
+	if _fleet_roster_query_popup_opening:
+		return true
+	if _fleet_roster_query_popup_close_guards > 0:
+		return true
+	for popup in _fleet_roster_query_popups:
+		if is_instance_valid(popup) and popup.visible:
+			return true
+	return false
+
+
+func _on_fleet_roster_search_changed(query: String) -> void:
+	_fleet_roster_search_query = query
+	_save_ui_preferences()
+	_refresh_fleet_roster_results()
+
+
+func _on_fleet_roster_search_gui_input(event: InputEvent, search: LineEdit) -> void:
+	if event.is_action_pressed("ui_cancel") and search.has_focus() and not search.text.is_empty():
+		search.text = ""
+		_on_fleet_roster_search_changed("")
+		search.accept_event()
+
+
+func _on_fleet_roster_ship_type_selected(item_id: int, popup: PopupMenu, button: MenuButton) -> void:
+	var item_index := popup.get_item_index(item_id)
+	if item_index < 0:
+		return
+	_fleet_roster_ship_type_filter = String(popup.get_item_metadata(item_index))
+	button.text = _fleet_roster_dropdown_label(button, _fleet_roster_ship_type_filter)
+	button.accessibility_name = button.text
+	_update_fleet_roster_dropdown_style(button, not _fleet_roster_ship_type_filter.is_empty())
+	_save_ui_preferences()
+	_refresh_fleet_roster_results()
+
+
+func _on_fleet_roster_formation_selected(item_id: int, popup: PopupMenu, button: MenuButton) -> void:
+	var item_index := popup.get_item_index(item_id)
+	if item_index < 0:
+		return
+	_fleet_roster_formation_filter = String(popup.get_item_metadata(item_index))
+	button.text = _fleet_roster_dropdown_label(button, _fleet_roster_formation_filter)
+	button.accessibility_name = button.text
+	_update_fleet_roster_dropdown_style(button, not _fleet_roster_formation_filter.is_empty())
+	_save_ui_preferences()
+	_refresh_fleet_roster_results()
+
+
+func _on_fleet_roster_sort_selected(item_id: int, popup: PopupMenu, button: MenuButton) -> void:
+	var item_index := popup.get_item_index(item_id)
+	if item_index < 0:
+		return
+	_fleet_roster_sort_mode = String(popup.get_item_metadata(item_index))
+	button.text = _fleet_roster_dropdown_label(button, _fleet_roster_sort_mode)
+	button.accessibility_name = button.text
+	_update_fleet_roster_dropdown_style(button, _fleet_roster_sort_mode != ShipRegistryQueryScript.SORT_CANONICAL)
+	_save_ui_preferences()
+	_refresh_fleet_roster_results(false)
+
+
+func _fleet_roster_dropdown_label(button: MenuButton, option_id: String) -> String:
+	var labels := button.get_meta("ship_registry_option_labels", {}) as Dictionary
+	return String(labels.get(option_id, option_id))
+
+
+func _fleet_roster_visible_ships() -> Array:
+	return ShipRegistryQueryScript.derive(
+		Game.state.ships,
+		_fleet_roster_filter,
+		_fleet_roster_search_query,
+		_fleet_roster_ship_type_filter,
+		_fleet_roster_formation_filter,
+		_fleet_roster_sort_mode,
+		Game.content.ships,
+		Callable(Game.state, "ship_formation_id")
+	)
+
+
+func _fleet_roster_query_source_signature() -> String:
+	var ship_records: Array[Dictionary] = []
+	for ship_value in Game.state.ships:
+		var ship := ship_value as Dictionary
+		ship_records.append({
+			"id":String(ship.get("instance_id", "")),
+			"name":String(ship.get("name", "")),
+			"registry_code":String(ship.get("registry_code", "")),
+			"blueprint_id":String(ship.get("blueprint_id", "")),
+			"maintenance_state":String(ship.get("maintenance_state", "ACTIVE")),
+			"formation_id":Game.state.ship_formation_id(String(ship.get("instance_id", "")))
+		})
+	var formations: Array[Dictionary] = []
+	for formation_id_value in Game.state.formation_ids():
+		var formation_id := String(formation_id_value)
+		formations.append({"id":formation_id, "name":String(Game.state.formation_runtime(formation_id).get("name", formation_id))})
+	return JSON.stringify({"ships":ship_records, "formations":formations})
+
+
+func _fleet_roster_available_ship_types() -> Array[String]:
+	return ShipRegistryQueryScript.ship_type_ids(Game.state.ships, Game.content.ships)
+
+
+func _fleet_roster_ship_type_name(type_id: String) -> String:
+	var canonical_name := type_id.to_lower().capitalize()
+	return I18n.t("ships.class.%s" % type_id.to_lower(), canonical_name)
+
+
+func _sanitize_fleet_roster_query_state() -> void:
+	if _fleet_roster_filter not in ["ALL", "ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
+		_fleet_roster_filter = "ALL"
+	if not _fleet_roster_available_ship_types().has(_fleet_roster_ship_type_filter):
+		_fleet_roster_ship_type_filter = ShipRegistryQueryScript.ALL_SHIP_TYPES
+	if _fleet_roster_formation_filter not in [ShipRegistryQueryScript.ALL_FORMATIONS, ShipRegistryQueryScript.UNASSIGNED_FORMATION] \
+			and not Game.state.formation_ids().has(_fleet_roster_formation_filter):
+		_fleet_roster_formation_filter = ShipRegistryQueryScript.ALL_FORMATIONS
+	if _fleet_roster_sort_mode not in ShipRegistryQueryScript.SORT_MODES:
+		_fleet_roster_sort_mode = ShipRegistryQueryScript.SORT_CANONICAL
+
+
+func _wire_fleet_roster_focus_order() -> void:
+	var search := find_child("FleetRosterSearch", true, false) as LineEdit
+	var type_filter := find_child("FleetRosterShipTypeFilter", true, false) as MenuButton
+	var formation_filter := find_child("FleetRosterFormationFilter", true, false) as MenuButton
+	var sort_control := find_child("FleetRosterSort", true, false) as MenuButton
+	var ship_list := find_child("FleetRosterShipList", true, false) as VBoxContainer
+	var header_checkbox := find_child("FleetRosterSelectFiltered", true, false) as Control
+	var clear_button := find_child("FleetRosterBulkClear", true, false) as Button
+	var bulk_actions := find_child("FleetRosterBulkActions", true, false) as Button
+	if not is_instance_valid(search) or not is_instance_valid(type_filter) or not is_instance_valid(formation_filter) or not is_instance_valid(sort_control):
+		return
+	var row_focus_chain: Array[Control] = []
+	if is_instance_valid(ship_list):
+		for row_value in ship_list.get_children():
+			if not row_value is Button:
+				continue
+			var row := row_value as Button
+			var checkbox := row.find_child("FleetRosterSelectionControl_*", true, false) as Control
+			if is_instance_valid(checkbox):
+				row_focus_chain.append(checkbox)
+			row_focus_chain.append(row)
+	search.focus_next = search.get_path_to(type_filter)
+	type_filter.focus_next = type_filter.get_path_to(formation_filter)
+	formation_filter.focus_next = formation_filter.get_path_to(sort_control)
+	var after_sort: Control = header_checkbox if is_instance_valid(header_checkbox) else (row_focus_chain[0] if not row_focus_chain.is_empty() else null)
+	if is_instance_valid(after_sort):
+		sort_control.focus_next = sort_control.get_path_to(after_sort)
+		after_sort.focus_previous = after_sort.get_path_to(sort_control)
+	var header_chain: Array[Control] = []
+	if is_instance_valid(header_checkbox): header_chain.append(header_checkbox)
+	if is_instance_valid(clear_button): header_chain.append(clear_button)
+	if is_instance_valid(bulk_actions): header_chain.append(bulk_actions)
+	for control in row_focus_chain:
+		header_chain.append(control)
+	for index in range(header_chain.size() - 1):
+		header_chain[index].focus_next = header_chain[index].get_path_to(header_chain[index + 1])
+		header_chain[index + 1].focus_previous = header_chain[index + 1].get_path_to(header_chain[index])
 
 
 func _select_fleet_roster_filter(filter_id: String) -> void:
 	if filter_id not in ["ALL", "ACTIVE", "READY_RESERVE", "MOTHBALLED"]:
 		return
 	_fleet_roster_filter = filter_id
-	_request_active_page_refresh(true)
+	_save_ui_preferences()
+	_refresh_fleet_roster_results(true)
 
 
 func _select_fleet_roster_ship(ship_id: String) -> void:
 	var ship := Game.state.ship_by_id(ship_id)
 	if ship.is_empty() or not _fleet_roster_ship_matches_filter(ship):
 		return
-	_selected_roster_ship_ids.clear()
-	_selected_roster_ship_ids[ship_id] = true
+	_fleet_roster_selection_state.set_primary(ship_id)
 	_request_active_page_refresh(true)
 
 
 func _fleet_roster_selected_ship_id() -> String:
-	if _selected_roster_ship_ids.size() != 1:
-		return ""
-	return String(_selected_roster_ship_ids.keys()[0])
+	return String(_fleet_roster_selection_state.primary_ship_id)
 
 
-func _reconcile_fleet_roster_selection(visible_ships: Array) -> void:
-	var selected_ship_id := _fleet_roster_selected_ship_id()
-	if not selected_ship_id.is_empty() and visible_ships.any(func(ship): return String((ship as Dictionary).get("instance_id", "")) == selected_ship_id):
+func _reconcile_fleet_roster_selection(visible_ships: Array, prune_hidden_bulk_selection := true) -> void:
+	_fleet_roster_selection_state.reconcile(
+		_fleet_roster_ship_ids(visible_ships),
+		_fleet_roster_ship_ids(Game.state.ships),
+		prune_hidden_bulk_selection
+	)
+
+
+func _fleet_roster_ship_ids(ships: Array) -> Array[String]:
+	var result: Array[String] = []
+	for ship_value in ships:
+		var ship_id := String((ship_value as Dictionary).get("instance_id", ""))
+		if not ship_id.is_empty():
+			result.append(ship_id)
+	return result
+
+
+func _toggle_fleet_roster_ship_bulk_selection(selected: bool, ship_id: String) -> void:
+	if Game.state.ship_by_id(ship_id).is_empty() or not _fleet_roster_ship_ids(_fleet_roster_visible_ships()).has(ship_id):
 		return
-	_selected_roster_ship_ids.clear()
-	if not visible_ships.is_empty():
-		_selected_roster_ship_ids[String((visible_ships[0] as Dictionary).get("instance_id", ""))] = true
+	_fleet_roster_selection_state.set_bulk_selected(ship_id, selected)
+	if selected:
+		_fleet_roster_selection_state.set_primary(ship_id)
+	_refresh_fleet_roster_results(false)
+
+
+func _toggle_fleet_roster_filtered_selection(_pressed: bool, previous_header_state: String) -> void:
+	var visible_ids := _fleet_roster_ship_ids(_fleet_roster_visible_ships())
+	if visible_ids.is_empty():
+		return
+	if previous_header_state == ShipRegistrySelectionScript.HEADER_CHECKED:
+		_fleet_roster_selection_state.deselect_all_visible(visible_ids)
+	else:
+		_fleet_roster_selection_state.select_all_visible(visible_ids)
+	_refresh_fleet_roster_results(false)
+
+
+func _clear_fleet_roster_bulk_selection() -> void:
+	_fleet_roster_selection_state.clear_bulk()
+	_refresh_fleet_roster_results(false)
 
 
 func _fleet_roster_hull_class_and_tier(blueprint: Dictionary) -> String:
@@ -4382,7 +5788,16 @@ func _fleet_roster_hull_class_and_tier(blueprint: Dictionary) -> String:
 
 
 func _fleet_roster_ship_matches_filter(ship: Dictionary) -> bool:
-	return _fleet_roster_filter == "ALL" or String(ship.get("maintenance_state", "ACTIVE")) == _fleet_roster_filter
+	return not ShipRegistryQueryScript.derive(
+		[ship],
+		_fleet_roster_filter,
+		_fleet_roster_search_query,
+		_fleet_roster_ship_type_filter,
+		_fleet_roster_formation_filter,
+		ShipRegistryQueryScript.SORT_CANONICAL,
+		Game.content.ships,
+		Callable(Game.state, "ship_formation_id")
+	).is_empty()
 
 
 func _build_fleet_archive(box: VBoxContainer) -> void:
@@ -5115,7 +6530,25 @@ func _update_bottom_bar() -> void:
 
 
 func _on_state_changed() -> void:
+	if _active_page_key == "fleet" and _fleet_section == "roster":
+		var focused := get_viewport().gui_get_focus_owner()
+		if focused is LineEdit and focused.name == "FleetRosterSearch" and _fleet_roster_query_source_signature() != _fleet_roster_source_signature and not _fleet_roster_source_refresh_scheduled:
+			_fleet_roster_source_refresh_scheduled = true
+			call_deferred("_refresh_fleet_roster_source_while_searching")
+			return
 	_request_active_page_refresh(false)
+
+
+func _refresh_fleet_roster_source_while_searching() -> void:
+	_fleet_roster_source_refresh_scheduled = false
+	if _active_page_key != "fleet" or _fleet_section != "roster":
+		return
+	_rebuild_active_page()
+	await get_tree().process_frame
+	var search := find_child("FleetRosterSearch", true, false) as LineEdit
+	if is_instance_valid(search):
+		search.grab_focus()
+		search.caret_column = search.text.length()
 
 
 func _on_domain_event(event: Dictionary) -> void:
@@ -5130,9 +6563,9 @@ func _on_command_rejected(reason: String) -> void:
 
 
 func _load_ui_preferences() -> void:
-	var has_session_scale := get_tree().root.has_meta(UiTokens.UI_SCALE_SESSION_META)
-	_ui_scale = UiTokens.sanitize_ui_scale(float(get_tree().root.get_meta(UiTokens.UI_SCALE_SESSION_META, UiTokens.DEFAULT_UI_SCALE)))
-	if Game.persistence_enabled and _ui_config.load(_ui_config_path()) == OK:
+	_responsive_session_restored = _restore_responsive_session_state()
+	var config_loaded := Game.persistence_enabled and _ui_config.load(_ui_config_path()) == OK
+	if config_loaded:
 		_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
 		_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
 		_location_section = String(_ui_config.get_value("navigation", "location_section", "overview"))
@@ -5140,14 +6573,41 @@ func _load_ui_preferences() -> void:
 		_industry_view_mode = String(_ui_config.get_value("navigation", "industry_view_mode", "network"))
 		_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
 		_selected_formation_id = String(_ui_config.get_value("navigation", "formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
+		_fleet_roster_filter = String(_ui_config.get_value("ship_registry", "lifecycle_filter", "ALL"))
+		_fleet_roster_search_query = String(_ui_config.get_value("ship_registry", "search_query", ""))
+		_fleet_roster_ship_type_filter = String(_ui_config.get_value("ship_registry", "ship_type_filter", ShipRegistryQueryScript.ALL_SHIP_TYPES))
+		_fleet_roster_formation_filter = String(_ui_config.get_value("ship_registry", "formation_filter", ShipRegistryQueryScript.ALL_FORMATIONS))
+		_fleet_roster_sort_mode = String(_ui_config.get_value("ship_registry", "sort_mode", ShipRegistryQueryScript.SORT_CANONICAL))
 		_developer_details = bool(_ui_config.get_value("display", "developer_details", false))
 		_reduced_motion = bool(_ui_config.get_value("display", "reduced_motion", false))
-		if not has_session_scale:
-			_ui_scale = UiTokens.sanitize_ui_scale(float(_ui_config.get_value("display", "ui_scale", _ui_scale)))
+		if not _responsive_session_restored:
+			var scale_values := {}
+			if _ui_config.has_section_key("display", "ui_scale_mode"):
+				scale_values["preferred_mode"] = _ui_config.get_value("display", "ui_scale_mode")
+			if _ui_config.has_section_key("display", "manual_ui_scale"):
+				scale_values["manual_scale"] = _ui_config.get_value("display", "manual_ui_scale")
+			if _ui_config.has_section_key("display", "ui_scale"):
+				scale_values["legacy_scale"] = _ui_config.get_value("display", "ui_scale")
+			var migrated := ResponsivePolicy.migrate_preference_state(scale_values)
+			_ui_scale_mode = String(migrated.get("preferred_mode", ResponsivePolicy.DEFAULT_MODE))
+			_manual_ui_scale = float(migrated.get("manual_scale", UiTokens.DEFAULT_UI_SCALE))
+			_ui_scale_preference_source = String(migrated.get("source", "default"))
+			if bool(migrated.get("migration_required", false)):
+				# Complete the device-local migration immediately. Recommended and
+				# effective values remain session-only because they depend on geometry.
+				_ui_config.set_value("display", "ui_scale_mode", _ui_scale_mode.to_lower())
+				_ui_config.set_value("display", "manual_ui_scale", _manual_ui_scale)
+				_ui_config.set_value("display", "ui_scale", _manual_ui_scale)
+				_ui_config.save(_ui_config_path())
 		_ui_state.left_rail_collapsed = bool(_ui_config.get_value("display", "resource_rail_collapsed", false))
 		_ui_state.right_inspector_collapsed = bool(_ui_config.get_value("display", "context_inspector_collapsed", false))
 		var network_preferences = _ui_config.get_value("industrial_network", "workspace", {})
 		_industrial_network_preferences = network_preferences.duplicate(true) if network_preferences is Dictionary else {}
+	elif not _responsive_session_restored:
+		var defaults := ResponsivePolicy.migrate_preference_state({})
+		_ui_scale_mode = String(defaults.get("preferred_mode", ResponsivePolicy.DEFAULT_MODE))
+		_manual_ui_scale = float(defaults.get("manual_scale", UiTokens.DEFAULT_UI_SCALE))
+		_ui_scale_preference_source = "default"
 	if _active_page_key == "overview":
 		_active_page_key = "system_map"
 	elif _active_page_key == "ships":
@@ -5162,6 +6622,46 @@ func _load_ui_preferences() -> void:
 	_ui_state.select_context("location", _selected_location_id)
 
 
+func _restore_responsive_session_state() -> bool:
+	var root := get_tree().root
+	var has_legacy_scale := root.has_meta(UiTokens.UI_SCALE_SESSION_META)
+	var legacy_value: Variant = root.get_meta(UiTokens.UI_SCALE_SESSION_META, UiTokens.DEFAULT_UI_SCALE)
+	if root.has_meta(ResponsivePolicy.SESSION_STATE_META):
+		var session_value: Variant = root.get_meta(ResponsivePolicy.SESSION_STATE_META)
+		if session_value is Dictionary:
+			var session := session_value as Dictionary
+			var session_effective := ResponsivePolicy.scale_from_variant(session.get("effective_scale", UiTokens.DEFAULT_UI_SCALE))
+			# Legacy fixtures and capture tools still set the scalar meta directly.
+			# A value different from our atomic shadow is an explicit legacy override.
+			if has_legacy_scale and ResponsivePolicy.scale_value_is_valid(legacy_value) \
+					and not is_equal_approx(ResponsivePolicy.scale_from_variant(legacy_value), session_effective):
+				_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+				_manual_ui_scale = ResponsivePolicy.scale_from_variant(legacy_value)
+				_recommended_ui_scale = _manual_ui_scale
+				_ui_scale = _manual_ui_scale
+				_ui_scale_cli_override = true
+				_ui_scale_preference_source = "legacy_session"
+				return true
+			_ui_scale_mode = ResponsivePolicy.normalize_mode(session.get("preferred_mode", ResponsivePolicy.DEFAULT_MODE))
+			_manual_ui_scale = ResponsivePolicy.scale_from_variant(session.get("manual_scale", UiTokens.DEFAULT_UI_SCALE))
+			_recommended_ui_scale = ResponsivePolicy.scale_from_variant(session.get("recommended_scale", session_effective))
+			_ui_scale = session_effective
+			_layout_profile = ResponsivePolicy.normalize_profile(session.get("layout_profile", ResponsivePolicy.DEFAULT_PROFILE))
+			_ui_scale_cli_override = not bool(session.get("persist", true))
+			_ui_scale_preference_source = String(session.get("source", "session"))
+			_responsive_state_initialized = true
+			return true
+	if has_legacy_scale and ResponsivePolicy.scale_value_is_valid(legacy_value):
+		_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+		_manual_ui_scale = ResponsivePolicy.scale_from_variant(legacy_value)
+		_recommended_ui_scale = _manual_ui_scale
+		_ui_scale = _manual_ui_scale
+		_ui_scale_cli_override = true
+		_ui_scale_preference_source = "legacy_session"
+		return true
+	return false
+
+
 func _save_ui_preferences() -> void:
 	if not Game.persistence_enabled:
 		return
@@ -5174,9 +6674,19 @@ func _save_ui_preferences() -> void:
 	_ui_config.set_value("navigation", "industry_view_mode", _industry_view_mode)
 	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
 	_ui_config.set_value("navigation", "formation_id", _selected_formation_id)
+	_ui_config.set_value("ship_registry", "lifecycle_filter", _fleet_roster_filter)
+	_ui_config.set_value("ship_registry", "search_query", _fleet_roster_search_query)
+	_ui_config.set_value("ship_registry", "ship_type_filter", _fleet_roster_ship_type_filter)
+	_ui_config.set_value("ship_registry", "formation_filter", _fleet_roster_formation_filter)
+	_ui_config.set_value("ship_registry", "sort_mode", _fleet_roster_sort_mode)
 	_ui_config.set_value("display", "developer_details", _developer_details)
 	_ui_config.set_value("display", "reduced_motion", _reduced_motion)
-	_ui_config.set_value("display", "ui_scale", _ui_scale)
+	if not _ui_scale_cli_override:
+		_ui_config.set_value("display", "ui_scale_mode", _ui_scale_mode.to_lower())
+		_ui_config.set_value("display", "manual_ui_scale", _manual_ui_scale)
+		# Rollback shadow for older builds. This is the stable player preference,
+		# never the environment-dependent recommendation or safety fallback.
+		_ui_config.set_value("display", "ui_scale", _manual_ui_scale)
 	_ui_config.set_value("display", "resource_rail_collapsed", _ui_state.left_rail_collapsed)
 	_ui_config.set_value("display", "context_inspector_collapsed", _ui_state.right_inspector_collapsed)
 	_ui_config.set_value("industrial_network", "workspace", _industrial_network_preferences)
@@ -5191,6 +6701,132 @@ func _ui_config_path() -> String:
 			if candidate.is_absolute_path() and candidate.get_file().begins_with("helios-ui-persistence-audit-"):
 				return candidate.path_join("core_gameplay_ui.cfg")
 	return UI_CONFIG_PATH
+
+
+func _initialize_ui_scale_for_current_window() -> void:
+	var window_size := _responsive_window_size()
+	var raw_recommendation := ResponsivePolicy.recommend_ui_scale(window_size, window_size, _responsive_dpi_hint())
+	if _ui_scale_mode == ResponsivePolicy.MODE_AUTO:
+		if not _responsive_session_restored or not ResponsivePolicy.candidate_is_auto_safe(_recommended_ui_scale, window_size, window_size):
+			_recommended_ui_scale = raw_recommendation
+		_ui_scale = _recommended_ui_scale
+	else:
+		_recommended_ui_scale = raw_recommendation
+		_ui_scale = ResponsivePolicy.safe_manual_effective_scale(_manual_ui_scale, window_size)
+
+
+func _setup_responsive_timer() -> void:
+	_responsive_resize_timer = Timer.new()
+	_responsive_resize_timer.name = "ResponsiveUiDebounce"
+	_responsive_resize_timer.one_shot = true
+	_responsive_resize_timer.wait_time = ResponsivePolicy.RESIZE_DEBOUNCE_SECONDS
+	_responsive_resize_timer.ignore_time_scale = true
+	_responsive_resize_timer.process_callback = Timer.TIMER_PROCESS_IDLE
+	_responsive_resize_timer.timeout.connect(_on_responsive_debounce_timeout)
+	add_child(_responsive_resize_timer)
+
+
+func _responsive_window_size() -> Vector2:
+	if size.x > 0.0 and size.y > 0.0:
+		return size
+	var visible_size := get_viewport().get_visible_rect().size
+	return visible_size if visible_size.x > 0.0 and visible_size.y > 0.0 else Vector2(MIN_PRODUCTION_VIEWPORT_SIZE)
+
+
+func _responsive_usable_size() -> Vector2:
+	var active_page := _page_controls.get(_active_page_key) as Control
+	if is_instance_valid(active_page) and active_page.size.x > 1.0 and active_page.size.y > 1.0:
+		return active_page.size
+	if is_instance_valid(_tabs) and _tabs.size.x > 1.0 and _tabs.size.y > 1.0:
+		return _tabs.size
+	return _responsive_window_size()
+
+
+func _responsive_dpi_hint() -> float:
+	var application_window := get_window()
+	if not is_instance_valid(application_window):
+		return 1.0
+	return ResponsivePolicy.dpi_hint(DisplayServer.screen_get_scale(application_window.current_screen))
+
+
+func _store_responsive_session_state() -> void:
+	var root := get_tree().root
+	root.set_meta(UiTokens.UI_SCALE_SESSION_META, _ui_scale)
+	root.set_meta(ResponsivePolicy.SESSION_STATE_META, {
+		"preferred_mode":_ui_scale_mode,
+		"manual_scale":_manual_ui_scale,
+		"recommended_scale":_recommended_ui_scale,
+		"effective_scale":_ui_scale,
+		"layout_profile":_layout_profile,
+		"persist":not _ui_scale_cli_override,
+		"source":_ui_scale_preference_source
+	})
+
+
+func _select_ui_scale_preference() -> void:
+	if not is_instance_valid(_ui_scale_selector):
+		return
+	var item_id := ResponsivePolicy.AUTO_SELECTOR_ID if _ui_scale_mode == ResponsivePolicy.MODE_AUTO else int(round(_manual_ui_scale * 100.0))
+	var item_index := _ui_scale_selector.get_item_index(item_id)
+	if item_index >= 0:
+		_ui_scale_selector.select(item_index)
+
+
+func _schedule_responsive_refresh() -> void:
+	if is_instance_valid(_responsive_resize_timer):
+		_responsive_resize_timer.start(ResponsivePolicy.RESIZE_DEBOUNCE_SECONDS)
+
+
+func _on_responsive_debounce_timeout() -> void:
+	await get_tree().process_frame
+	_apply_responsive_state(true)
+
+
+func _reconcile_responsive_state_after_layout() -> void:
+	await get_tree().process_frame
+	_apply_responsive_state(true)
+
+
+func _apply_responsive_state(allow_theme_reload := true, bypass_scale_hysteresis := false) -> bool:
+	var window_size := _responsive_window_size()
+	var usable_size := _responsive_usable_size()
+	var dpi_value := _responsive_dpi_hint()
+	var raw_recommendation := ResponsivePolicy.recommend_ui_scale(window_size, usable_size, dpi_value)
+	var next_recommendation := raw_recommendation
+	if _responsive_state_initialized and not bypass_scale_hysteresis:
+		next_recommendation = ResponsivePolicy.stabilize_auto_scale(_recommended_ui_scale, raw_recommendation, window_size, usable_size, dpi_value)
+	_recommended_ui_scale = next_recommendation
+	var next_effective := _recommended_ui_scale if _ui_scale_mode == ResponsivePolicy.MODE_AUTO else ResponsivePolicy.safe_manual_effective_scale(_manual_ui_scale, window_size)
+	var scale_changed := not is_equal_approx(next_effective, _ui_scale)
+	_ui_scale = next_effective
+	var logical_size := ResponsivePolicy.logical_usable_size(usable_size, _ui_scale)
+	var previous_profile := _layout_profile
+	_layout_profile = ResponsivePolicy.resolve_profile(logical_size, _layout_profile if _responsive_state_initialized else "")
+	_responsive_state_initialized = true
+	_store_responsive_session_state()
+	_select_ui_scale_preference()
+	if _layout_profile != previous_profile:
+		layout_profile_changed.emit(_layout_profile, logical_size)
+	if scale_changed and allow_theme_reload:
+		call_deferred("_reload_ui_for_scale")
+	return scale_changed
+
+
+func ui_responsive_snapshot() -> Dictionary:
+	var usable_size := _responsive_usable_size()
+	return {
+		"preferred_mode":_ui_scale_mode,
+		"manual_scale":_manual_ui_scale,
+		"recommended_scale":_recommended_ui_scale,
+		"effective_scale":_ui_scale,
+		"layout_profile":_layout_profile,
+		"window_size":_responsive_window_size(),
+		"usable_size":usable_size,
+		"logical_usable_size":ResponsivePolicy.logical_usable_size(usable_size, _ui_scale),
+		"dpi_hint":_responsive_dpi_hint(),
+		"debounce_seconds":ResponsivePolicy.RESIZE_DEBOUNCE_SECONDS,
+		"preference_source":_ui_scale_preference_source
+	}
 
 
 func _on_context_location_selected(index: int, location_ids: Array[String]) -> void:
@@ -5209,6 +6845,7 @@ func _on_left_rail_toggled(collapsed: bool) -> void:
 		_ui_state.right_inspector_collapsed = true
 		_shell.set_right_collapsed(true)
 	_save_ui_preferences()
+	_schedule_responsive_refresh()
 
 
 func _on_right_inspector_toggled(collapsed: bool) -> void:
@@ -5217,6 +6854,7 @@ func _on_right_inspector_toggled(collapsed: bool) -> void:
 		_ui_state.left_rail_collapsed = true
 		_shell.set_left_collapsed(true)
 	_save_ui_preferences()
+	_schedule_responsive_refresh()
 
 
 func _requires_single_sidebar() -> bool:
@@ -5233,23 +6871,79 @@ func _requires_single_sidebar() -> bool:
 
 
 func _on_root_resized() -> void:
-	if not is_instance_valid(_shell) or not _requires_single_sidebar():
-		return
-	if not _ui_state.left_rail_collapsed and not _ui_state.right_inspector_collapsed:
-		_ui_state.right_inspector_collapsed = true
-		_shell.set_right_collapsed(true)
+	call_deferred("_reposition_fleet_roster_transients")
+	_sync_ui_scale_selector_availability()
+	if is_instance_valid(_shell) and _requires_single_sidebar():
+		if not _ui_state.left_rail_collapsed and not _ui_state.right_inspector_collapsed:
+			_ui_state.right_inspector_collapsed = true
+			_shell.set_right_collapsed(true)
+	var viewport_size := Vector2i(_responsive_window_size().round())
+	if not UiTokens.ui_scale_supported_for_viewport(_ui_scale, viewport_size):
+		# An unsafe Theme scale must not survive the debounce interval. Preserve the
+		# preference, then project an effective fallback on the next layout frame.
+		call_deferred("_apply_responsive_state", true, true)
+	else:
+		_schedule_responsive_refresh()
+
+
+func _on_window_dpi_changed() -> void:
+	_schedule_responsive_refresh()
+
+
+func _reposition_fleet_roster_transients() -> void:
+	# PopupWindows keep their own native/subwindow rectangles. Re-anchor every
+	# open roster transient after the viewport settles so a live resize cannot
+	# strand an actionable menu outside the usable application viewport.
+	for control_name in ["FleetRosterShipTypeFilter", "FleetRosterFormationFilter", "FleetRosterSort"]:
+		var origin := find_child(control_name, true, false) as MenuButton
+		if not is_instance_valid(origin):
+			continue
+		var popup := origin.get_popup()
+		if is_instance_valid(popup) and popup.visible:
+			_position_fleet_roster_query_popup(origin, popup)
+	if is_instance_valid(_fleet_roster_popup) and _fleet_roster_popup.visible:
+		var anchor := _fleet_roster_popup.get_meta("fleet_roster_anchor", null) as Control
+		if is_instance_valid(anchor):
+			_position_fleet_roster_menu_popup(
+				_fleet_roster_popup,
+				anchor,
+				bool(_fleet_roster_popup.get_meta("fleet_roster_align_right", false))
+			)
 
 
 func _on_ui_scale_selected(index: int) -> void:
 	if not is_instance_valid(_ui_scale_selector) or index < 0:
 		return
-	var next_scale := UiTokens.sanitize_ui_scale(float(_ui_scale_selector.get_item_id(index)))
-	if is_equal_approx(next_scale, _ui_scale):
-		return
-	_ui_scale = next_scale
-	get_tree().root.set_meta(UiTokens.UI_SCALE_SESSION_META, _ui_scale)
+	var selected_id := _ui_scale_selector.get_item_id(index)
+	if selected_id == ResponsivePolicy.AUTO_SELECTOR_ID:
+		_ui_scale_mode = ResponsivePolicy.MODE_AUTO
+	else:
+		var next_scale := UiTokens.sanitize_ui_scale(float(selected_id))
+		if not UiTokens.ui_scale_supported_for_viewport(next_scale, Vector2i(_responsive_window_size().round())):
+			_select_ui_scale_preference()
+			return
+		_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+		_manual_ui_scale = next_scale
+	_ui_scale_cli_override = false
+	_ui_scale_preference_source = "user"
+	var scale_changed := _apply_responsive_state(false, true)
 	_save_ui_preferences()
-	call_deferred("_reload_ui_for_scale")
+	if scale_changed:
+		call_deferred("_reload_ui_for_scale")
+
+
+func _sync_ui_scale_selector_availability() -> void:
+	if not is_instance_valid(_ui_scale_selector):
+		return
+	var viewport_size := Vector2i(size.round())
+	for item_index in _ui_scale_selector.item_count:
+		var item_id := _ui_scale_selector.get_item_id(item_index)
+		if item_id == ResponsivePolicy.AUTO_SELECTOR_ID:
+			_ui_scale_selector.set_item_disabled(item_index, false)
+			continue
+		var factor := float(item_id) / 100.0
+		_ui_scale_selector.set_item_disabled(item_index, not UiTokens.ui_scale_supported_for_viewport(factor, viewport_size))
+	_select_ui_scale_preference()
 
 
 func _reload_ui_for_scale() -> void:
@@ -5269,6 +6963,7 @@ func _on_locale_changed(_locale: String) -> void:
 	_industrial_network_view = null
 	_industrial_network_projection = null
 	_request_active_page_refresh(true)
+	_schedule_responsive_refresh()
 
 
 func _refresh_shell_locale() -> void:
@@ -5304,6 +6999,9 @@ func _refresh_shell_locale() -> void:
 	if is_instance_valid(_ui_scale_selector):
 		_ui_scale_selector.tooltip_text = I18n.core("shell.ui_scale_tooltip", "Scale interface text and controls without changing map or canvas zoom.")
 		_ui_scale_selector.accessibility_name = I18n.core("shell.ui_scale", "UI scale")
+		var auto_index := _ui_scale_selector.get_item_index(ResponsivePolicy.AUTO_SELECTOR_ID)
+		if auto_index >= 0:
+			_ui_scale_selector.set_item_text(auto_index, I18n.core("shell.ui_scale_auto", "AUTO"))
 	var dock_title := find_child("CommandDockTitle", true, false) as Label
 	if is_instance_valid(dock_title):
 		dock_title.text = I18n.core("shell.command_dock", "COMMAND DOCK")
