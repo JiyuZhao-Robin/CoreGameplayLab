@@ -10,6 +10,7 @@ const SIMULATION_STEP_MS := 100.0
 const MAX_TIME_ORCHESTRATION_STEPS := 500000
 const MAX_ONLINE_FRAME_SIMULATION_MS := 15000.0
 const MIN_TIME_ORCHESTRATION_STEP_MS := 0.01
+const FACTORY_WORKSPACE_PROTOCOL_VERSION := 1
 
 var content := ContentDatabase.new()
 var state: SpaceGameState
@@ -160,6 +161,180 @@ func factory_world_summary(world_id: String) -> Dictionary:
 	if not state.factory_worlds.has(world_id):
 		return {}
 	return simulation.factory_grid.world_summary(state.factory_worlds[world_id])
+
+
+func factory_workspace_snapshot(world_id: String) -> Dictionary:
+	if not state.factory_worlds.has(world_id):
+		return {
+			"valid":false,
+			"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
+			"world_id":world_id,
+			"reason_code":"UNKNOWN_FACTORY_WORLD"
+		}
+	var snapshot: Dictionary = simulation.factory_grid.workspace_snapshot(state.factory_worlds[world_id])
+	snapshot["valid"] = true
+	return snapshot
+
+
+## Versioned intent boundary used by the mining/production workspace. The UI
+## never receives mutable state and never calls FactoryGridSimulation directly.
+func execute_factory_command(intent: Dictionary) -> Dictionary:
+	var protocol_version := int(intent.get("protocol_version", 0))
+	var command_id := str(intent.get("command_id", ""))
+	var command_kind := str(intent.get("kind", "")).to_upper()
+	var world_id := str(intent.get("world_id", ""))
+	if protocol_version != FACTORY_WORKSPACE_PROTOCOL_VERSION:
+		return _factory_command_rejection(command_id, command_kind, world_id, "UNSUPPORTED_PROTOCOL", "Unsupported Factory workspace protocol")
+	if command_id.is_empty():
+		return _factory_command_rejection(command_id, command_kind, world_id, "MISSING_COMMAND_ID", "Factory command requires a stable command id")
+	if not state.factory_worlds.has(world_id):
+		return _factory_command_rejection(command_id, command_kind, world_id, "UNKNOWN_FACTORY_WORLD", "Unknown factory world")
+	var current_world: Dictionary = state.factory_worlds.get(world_id, {})
+	var previous_receipt_value = current_world.get("command_receipts", {}).get(command_id, null)
+	if previous_receipt_value is Dictionary:
+		var previous_receipt := (previous_receipt_value as Dictionary).duplicate(true)
+		if str(previous_receipt.get("command_kind", "")) != command_kind:
+			return _factory_command_rejection(command_id, command_kind, world_id, "COMMAND_ID_CONFLICT", "Factory command id was already used for another action")
+		previous_receipt["replayed"] = true
+		return previous_receipt
+	var current_topology_revision := maxi(0, int(current_world.get("topology_revision", 0)))
+	if int(intent.get("base_topology_revision", -1)) != current_topology_revision:
+		return _factory_command_rejection(command_id, command_kind, world_id, "STALE_TOPOLOGY", "Factory layout changed; refresh the workspace before retrying")
+	var payload_value = intent.get("payload", {})
+	if not payload_value is Dictionary:
+		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", "Factory command payload must be an object")
+	var payload := payload_value as Dictionary
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var world: Dictionary = transaction.working_state.factory_worlds.get(world_id, {})
+	var operation_result: Dictionary
+	var event := {
+		"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
+		"command_id":command_id,
+		"command_kind":command_kind,
+		"world_id":world_id
+	}
+	match command_kind:
+		"QUEUE_CONSTRUCTION":
+			var origin_data: Dictionary = payload.get("origin", {})
+			var definition_id := str(payload.get("definition_id", ""))
+			operation_result = simulation.factory_grid.queue_construction(
+				world,
+				definition_id,
+				Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0))),
+				str(payload.get("recipe_id", "")),
+				int(payload.get("priority", 50))
+			)
+			event.merge({
+				"type":"FactoryConstructionQueued",
+				"order_id":str(operation_result.get("order_id", "")),
+				"entity_id":str(operation_result.get("entity_id", "")),
+				"definition_id":definition_id,
+				"origin":{"x":int(origin_data.get("x", 0)), "y":int(origin_data.get("y", 0))}
+			})
+		"FUND_CONSTRUCTION":
+			var order_id := str(payload.get("order_id", ""))
+			var storage_id := str(payload.get("storage_id", ""))
+			operation_result = simulation.factory_grid.fund_construction_from_storage(world, order_id, storage_id)
+			event.merge({
+				"type":"FactoryConstructionFunded",
+				"order_id":order_id,
+				"storage_id":storage_id,
+				"moved":operation_result.get("moved", {}).duplicate(true)
+			})
+		"CONNECT_ENTITIES":
+			var link_kind := str(payload.get("link_kind", "")).to_upper()
+			var source_id := str(payload.get("source_id", ""))
+			var target_id := str(payload.get("target_id", ""))
+			var item_id := str(payload.get("item_id", ""))
+			operation_result = simulation.factory_grid.connect_entities(
+				world,
+				link_kind,
+				source_id,
+				target_id,
+				item_id,
+				float(payload.get("capacity_per_second", 1.0)),
+				int(payload.get("priority", 1))
+			)
+			event.merge({
+				"type":"FactoryEntitiesConnected",
+				"link_id":str(operation_result.get("link_id", "")),
+				"kind":link_kind,
+				"source_id":source_id,
+				"target_id":target_id,
+				"item_id":item_id
+			})
+		"REMOVE_LINK":
+			var link_id := str(payload.get("link_id", ""))
+			var removed: bool = simulation.factory_grid.remove_link(world, link_id)
+			operation_result = {"ok":removed, "link_id":link_id}
+			if not removed:
+				operation_result.merge({"reason_code":"UNKNOWN_LINK", "reason":"Unknown factory link"})
+			event.merge({"type":"FactoryLinkRemoved", "link_id":link_id})
+		_:
+			operation_result = {"ok":false, "reason_code":"UNKNOWN_COMMAND", "reason":"Unknown Factory workspace command"}
+	if not bool(operation_result.get("ok", false)):
+		transaction.rollback()
+		return _factory_command_rejection(
+			command_id,
+			command_kind,
+			world_id,
+			str(operation_result.get("reason_code", "COMMAND_REJECTED")),
+			str(operation_result.get("reason", "Factory command rejected"))
+		)
+	event["topology_revision"] = int(world.get("topology_revision", 0))
+	event["runtime_revision"] = int(world.get("runtime_revision", 0))
+	transaction.record(event)
+	match command_kind:
+		"QUEUE_CONSTRUCTION": last_notice = "Factory construction queued"
+		"FUND_CONSTRUCTION": last_notice = "Factory construction materials delivered"
+		"CONNECT_ENTITIES": last_notice = "Factory connection created"
+		"REMOVE_LINK": last_notice = "Factory connection removed"
+	var accepted_events := transaction.events.duplicate(true)
+	var response := {
+		"accepted":true,
+		"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
+		"command_id":command_id,
+		"command_kind":command_kind,
+		"world_id":world_id,
+		"reason_code":"",
+		"message":last_notice,
+		"topology_revision":int(world.get("topology_revision", 0)),
+		"runtime_revision":int(world.get("runtime_revision", 0)),
+		"events":accepted_events,
+		"result":operation_result.duplicate(true),
+		"replayed":false
+	}
+	world["command_receipts"][command_id] = response.duplicate(true)
+	world["command_receipt_order"].append(command_id)
+	while world["command_receipt_order"].size() > 128:
+		var expired_command_id := str(world["command_receipt_order"].pop_front())
+		world["command_receipts"].erase(expired_command_id)
+	_commit_transaction(transaction)
+	return response
+
+
+func _factory_command_rejection(command_id: String, command_kind: String, world_id: String, reason_code: String, message: String) -> Dictionary:
+	last_notice = message
+	command_rejected.emit(message)
+	state_changed.emit()
+	var topology_revision := -1
+	var runtime_revision := -1
+	if state != null and state.factory_worlds.has(world_id):
+		var world: Dictionary = state.factory_worlds.get(world_id, {})
+		topology_revision = int(world.get("topology_revision", 0))
+		runtime_revision = int(world.get("runtime_revision", 0))
+	return {
+		"accepted":false,
+		"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
+		"command_id":command_id,
+		"command_kind":command_kind,
+		"world_id":world_id,
+		"reason_code":reason_code,
+		"message":message,
+		"topology_revision":topology_revision,
+		"runtime_revision":runtime_revision,
+		"events":[]
+	}
 
 
 func _reject_removed_aggregate_industry() -> bool:

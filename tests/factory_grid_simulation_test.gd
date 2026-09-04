@@ -53,7 +53,7 @@ func _test_sparse_square_world_and_tile_resources() -> void:
 	legacy_world.erase("resource_fields")
 	legacy_world["entities"]["legacy-iron"] = {"id":"legacy-iron", "kind":"DEPOSIT", "resource_id":"iron_ore", "resource_category":"solid", "footprint":{"origin":{"x":32, "y":32}, "size":{"x":3, "y":3}}, "grade":1.0, "potential_density":1.0}
 	var migrated := factory.normalize_world(legacy_world)
-	_check(int(migrated.get("schema_version", 0)) == 2 and migrated.get("resource_fields", {}).has("legacy-iron") and not migrated.get("entities", {}).has("legacy-iron"), "World Schema 1 deposit entities migrate into the Schema 2 tile resource layer")
+	_check(int(migrated.get("schema_version", 0)) == 3 and migrated.get("resource_fields", {}).has("legacy-iron") and not migrated.get("entities", {}).has("legacy-iron"), "World Schema 1 deposit entities migrate into the Schema 3 tile resource layer")
 
 
 func _test_resource_field_exclusion_and_coverage() -> void:

@@ -7,7 +7,8 @@ extends RefCounted
 ## orders and modified tiles are persisted. Terrain and resources are tile
 ## attributes; they are never physical entities or network endpoints.
 
-const WORLD_SCHEMA_VERSION := 2
+const WORLD_SCHEMA_VERSION := 3
+const WORKSPACE_PROTOCOL_VERSION := 1
 const DEFAULT_CHUNK_SIZE := 64
 const DEFAULT_STEP_SECONDS := 1.0
 const EPSILON := 0.000001
@@ -45,10 +46,14 @@ func create_world(world_id: String, location_id: String, size_tiles: Vector2i, s
 		"bounds":{"origin":{"x":0, "y":0}, "size":{"x":maxi(1, size_tiles.x), "y":maxi(1, size_tiles.y)}},
 		"chunk_size_tiles":maxi(1, int(rules.get("chunk_size_tiles", DEFAULT_CHUNK_SIZE))),
 		"elapsed_ms":0.0,
+		"topology_revision":0,
+		"runtime_revision":0,
 		"resource_fields":{},
 		"entities":{},
 		"links":{},
 		"construction_orders":{},
+		"command_receipts":{},
+		"command_receipt_order":[],
 		"tile_deltas":{},
 		"revealed_chunks":{},
 		"next_entity_serial":1,
@@ -73,9 +78,13 @@ func normalize_world(source: Dictionary) -> Dictionary:
 	normalized["bounds"]["origin"] = {"x":int(origin.get("x", 0)), "y":int(origin.get("y", 0))}
 	normalized["chunk_size_tiles"] = maxi(1, int(source.get("chunk_size_tiles", normalized["chunk_size_tiles"])))
 	normalized["elapsed_ms"] = maxf(0.0, float(source.get("elapsed_ms", 0.0)))
-	for field in ["resource_fields", "entities", "links", "construction_orders", "tile_deltas", "revealed_chunks", "statistics"]:
+	normalized["topology_revision"] = maxi(0, int(source.get("topology_revision", 0)))
+	normalized["runtime_revision"] = maxi(0, int(source.get("runtime_revision", 0)))
+	for field in ["resource_fields", "entities", "links", "construction_orders", "command_receipts", "tile_deltas", "revealed_chunks", "statistics"]:
 		if source.get(field, null) is Dictionary:
 			normalized[field] = source.get(field, {}).duplicate(true)
+	if source.get("command_receipt_order", null) is Array:
+		normalized["command_receipt_order"] = source.get("command_receipt_order", []).duplicate(true)
 	for field in ["next_entity_serial", "next_link_serial", "next_construction_serial"]:
 		normalized[field] = maxi(1, int(source.get(field, 1)))
 	_normalize_runtime_records(normalized)
@@ -278,6 +287,7 @@ func add_resource_field(world: Dictionary, resource_field_id: String, resource_i
 		if str(existing.get("resource_id", "")) != resource_id and _resource_fields_share_extractor_span(candidate, existing):
 			return _failure("RESOURCE_FIELD_EXCLUSION", "Different resources are too close for the available extractor footprints")
 	world["resource_fields"][resource_field_id] = candidate
+	_bump_topology_revision(world)
 	return {"ok":true, "resource_field_id":resource_field_id}
 
 
@@ -293,6 +303,7 @@ func place_entity_immediate(world: Dictionary, definition_id: String, origin: Ve
 	var entity := _create_entity(entity_id, definition_id, origin, recipe_id)
 	_apply_extractor_resource_profile(entity, placement.get("resource_profile", {}))
 	world["entities"][entity_id] = entity
+	_bump_topology_revision(world)
 	return {"ok":true, "entity_id":entity_id}
 
 
@@ -359,6 +370,7 @@ func queue_construction(world: Dictionary, definition_id: String, origin: Vector
 		"blocked_reason":"MISSING_MATERIALS" if not costs.is_empty() else "",
 		"queued_at_ms":float(world.get("elapsed_ms", 0.0))
 	}
+	_bump_topology_revision(world)
 	return {"ok":true, "order_id":order_id, "entity_id":entity_id}
 
 
@@ -369,6 +381,7 @@ func fund_construction_from_storage(world: Dictionary, order_id: String, storage
 		return _failure("INVALID_CONSTRUCTION_ORDER", "Construction order is not fundable")
 	if str(storage.get("kind", "")) != "STORAGE" or str(storage.get("status", "")) == "UNDER_CONSTRUCTION":
 		return _failure("INVALID_STORAGE", "Construction materials must come from operational storage")
+	var previous_status := str(order.get("status", ""))
 	var inventory: Dictionary = storage.get("inventory", {})
 	var delivered: Dictionary = order.get("delivered_items", {})
 	var moved := {}
@@ -391,6 +404,8 @@ func fund_construction_from_storage(world: Dictionary, order_id: String, storage
 	else:
 		order["status"] = "WAITING_MATERIALS"
 		order["blocked_reason"] = "MISSING_MATERIALS"
+	if not moved.is_empty() or previous_status != str(order.get("status", "")):
+		_bump_runtime_revision(world)
 	return {"ok":true, "moved":moved, "fully_funded":_construction_funded(order)}
 
 
@@ -430,11 +445,15 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 		"last_flow":0.0,
 		"total_transferred":0
 	}
+	_bump_topology_revision(world)
 	return {"ok":true, "link_id":link_id}
 
 
 func remove_link(world: Dictionary, link_id: String) -> bool:
-	return world.get("links", {}).erase(link_id)
+	var removed: bool = bool(world.get("links", {}).erase(link_id))
+	if removed:
+		_bump_topology_revision(world)
+	return removed
 
 
 func advance_world(world: Dictionary, elapsed_ms: float) -> Dictionary:
@@ -448,6 +467,10 @@ func advance_world(world: Dictionary, elapsed_ms: float) -> Dictionary:
 		remaining_seconds -= step_seconds
 		steps += 1
 	world["elapsed_ms"] = float(world.get("elapsed_ms", 0.0)) + maxf(0.0, elapsed_ms)
+	if elapsed_ms > 0.0:
+		_bump_runtime_revision(world)
+		if events.any(func(event): return str((event as Dictionary).get("type", "")) == "FactoryConstructionCompleted"):
+			_bump_topology_revision(world)
 	return {"simulated_ms":maxf(0.0, elapsed_ms), "steps":steps, "events":events}
 
 
@@ -751,6 +774,8 @@ func world_summary(world: Dictionary) -> Dictionary:
 	return {
 		"world_id":world.get("world_id", ""),
 		"location_id":world.get("location_id", ""),
+		"topology_revision":int(world.get("topology_revision", 0)),
+		"runtime_revision":int(world.get("runtime_revision", 0)),
 		"resource_field_count":world.get("resource_fields", {}).size(),
 		"entity_counts":entity_counts,
 		"link_count":world.get("links", {}).size(),
@@ -758,6 +783,243 @@ func world_summary(world: Dictionary) -> Dictionary:
 		"statuses":statuses,
 		"statistics":world.get("statistics", {}).duplicate(true)
 	}
+
+
+## Versioned, presentation-safe contract for the mining/production workspace.
+## Arrays are identifier-sorted so a renderer never depends on Dictionary order.
+## Resource fields intentionally have is_entity=false and expose no ports.
+func workspace_snapshot(world: Dictionary) -> Dictionary:
+	var resource_fields: Array = []
+	for field_id_value in _sorted_keys(world.get("resource_fields", {})):
+		var field_id := str(field_id_value)
+		var resource_field: Dictionary = world.get("resource_fields", {}).get(field_id, {})
+		var resource_id := str(resource_field.get("resource_id", ""))
+		resource_fields.append({
+			"id":field_id,
+			"node_kind":"RESOURCE_FIELD",
+			"is_entity":false,
+			"resource_id":resource_id,
+			"resource_category":str(resource_field.get("resource_category", "solid")),
+			"resource_color":str(rules.get("resource_colors", {}).get(resource_id, "#FFFFFF")),
+			"footprint":resource_field.get("footprint", {}).duplicate(true),
+			"grade":float(resource_field.get("grade", 1.0)),
+			"potential_density":float(resource_field.get("potential_density", 1.0)),
+			"ports":{"inputs":[], "outputs":[], "accepts_power":false}
+		})
+
+	var entities: Array = []
+	for entity_id_value in _sorted_keys(world.get("entities", {})):
+		var entity_id := str(entity_id_value)
+		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
+		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+		var status := str(entity.get("status", "IDLE"))
+		entities.append({
+			"id":entity_id,
+			"node_kind":str(entity.get("kind", "UNKNOWN")),
+			"is_entity":true,
+			"definition_id":str(entity.get("definition_id", "")),
+			"name":str(definition.get("name", entity.get("definition_id", entity_id))),
+			"recipe_id":str(entity.get("recipe_id", "")),
+			"footprint":entity.get("footprint", {}).duplicate(true),
+			"status":status,
+			"status_tone":_status_tone(status),
+			"blocker_code":_entity_blocker_code(status),
+			"inputs":entity.get("inputs", {}).duplicate(true),
+			"outputs":entity.get("outputs", {}).duplicate(true),
+			"inventory":entity.get("inventory", {}).duplicate(true),
+			"progress":maxf(0.0, float(entity.get("progress", 0.0))),
+			"power_factor":clampf(float(entity.get("power_factor", 1.0)), 0.0, 1.0),
+			"actual_rate":maxf(0.0, float(entity.get("actual_rate", 0.0))),
+			"input_capacity":maxi(0, int(definition.get("input_capacity", 0))),
+			"output_capacity":maxi(0, int(definition.get("output_capacity", 0))),
+			"inventory_capacity":maxi(0, int(definition.get("inventory_capacity", 0))),
+			"power_generation_kw":maxf(0.0, float(definition.get("power_generation_kw", 0.0))),
+			"power_demand_kw":maxf(0.0, float(definition.get("power_demand_kw", 0.0))),
+			"resource_id":str(entity.get("resource_id", "")),
+			"coverage_efficiency":clampf(float(entity.get("coverage_efficiency", 0.0)), 0.0, 1.0),
+			"ports":_entity_port_snapshot(entity)
+		})
+
+	var links: Array = []
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link_id := str(link_id_value)
+		var link: Dictionary = world.get("links", {}).get(link_id, {})
+		var capacity := maxf(0.0, float(link.get("capacity_per_second", 0.0)))
+		var last_flow := maxf(0.0, float(link.get("last_flow", 0.0)))
+		var link_status := _link_status(world, link)
+		links.append({
+			"id":link_id,
+			"kind":str(link.get("kind", "")),
+			"source_id":str(link.get("source_id", "")),
+			"target_id":str(link.get("target_id", "")),
+			"item_id":str(link.get("item_id", "")),
+			"capacity_per_second":capacity,
+			"last_flow":last_flow,
+			"utilization":0.0 if capacity <= EPSILON else clampf(last_flow / capacity, 0.0, 1.0),
+			"priority":clampi(int(link.get("priority", 1)), 0, 2),
+			"total_transferred":maxi(0, int(link.get("total_transferred", 0))),
+			"status":link_status,
+			"status_tone":_status_tone(link_status)
+		})
+
+	var construction_orders: Array = []
+	for order_id_value in _sorted_keys(world.get("construction_orders", {})):
+		var order_id := str(order_id_value)
+		var order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+		var work_required := maxf(EPSILON, float(order.get("work_required", 1.0)))
+		var order_status := str(order.get("status", "WAITING_MATERIALS"))
+		construction_orders.append({
+			"id":order_id,
+			"entity_id":str(order.get("entity_id", "")),
+			"definition_id":str(order.get("definition_id", "")),
+			"recipe_id":str(order.get("recipe_id", "")),
+			"footprint":order.get("footprint", {}).duplicate(true),
+			"required_items":order.get("required_items", {}).duplicate(true),
+			"delivered_items":order.get("delivered_items", {}).duplicate(true),
+			"work_required":work_required,
+			"work_done":maxf(0.0, float(order.get("work_done", 0.0))),
+			"progress":clampf(float(order.get("work_done", 0.0)) / work_required, 0.0, 1.0),
+			"priority":clampi(int(order.get("priority", 50)), 0, 100),
+			"status":order_status,
+			"status_tone":_status_tone(order_status),
+			"blocker_code":str(order.get("blocked_reason", ""))
+		})
+
+	return {
+		"protocol_version":WORKSPACE_PROTOCOL_VERSION,
+		"world_schema_version":int(world.get("schema_version", WORLD_SCHEMA_VERSION)),
+		"world_id":str(world.get("world_id", "")),
+		"location_id":str(world.get("location_id", "")),
+		"topology_revision":maxi(0, int(world.get("topology_revision", 0))),
+		"runtime_revision":maxi(0, int(world.get("runtime_revision", 0))),
+		"elapsed_ms":maxf(0.0, float(world.get("elapsed_ms", 0.0))),
+		"tile_size_m":maxi(1, int(world.get("tile_size_m", 1))),
+		"bounds":world.get("bounds", {}).duplicate(true),
+		"resource_fields":resource_fields,
+		"entities":entities,
+		"links":links,
+		"construction_orders":construction_orders,
+		"palette":_workspace_palette_snapshot(),
+		"power":_workspace_power_snapshot(world),
+		"statistics":world.get("statistics", {}).duplicate(true),
+		"summary":world_summary(world)
+	}
+
+
+func _workspace_palette_snapshot() -> Dictionary:
+	var buildings: Array = []
+	for definition_id_value in _sorted_keys(building_definitions):
+		var definition_id := str(definition_id_value)
+		var definition: Dictionary = building_definitions.get(definition_id, {})
+		buildings.append({
+			"id":definition_id,
+			"name":str(definition.get("name", definition_id)),
+			"kind":str(definition.get("kind", "")),
+			"footprint":definition.get("footprint", {}).duplicate(true),
+			"recipe_ids":definition.get("recipe_ids", []).duplicate(true),
+			"resource_categories":definition.get("resource_categories", []).duplicate(true),
+			"construction_cost":definition.get("construction_cost", []).duplicate(true),
+			"construction_work":maxf(0.0, float(definition.get("construction_work", 0.0))),
+			"power_generation_kw":maxf(0.0, float(definition.get("power_generation_kw", 0.0))),
+			"power_demand_kw":maxf(0.0, float(definition.get("power_demand_kw", 0.0)))
+		})
+	var recipes: Array = []
+	for recipe_id_value in _sorted_keys(recipe_definitions):
+		var recipe_id := str(recipe_id_value)
+		var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
+		recipes.append({
+			"id":recipe_id,
+			"name":str(recipe.get("name", recipe_id)),
+			"duration_seconds":maxf(EPSILON, float(recipe.get("duration_seconds", 1.0))),
+			"inputs":recipe.get("inputs", []).duplicate(true),
+			"outputs":recipe.get("outputs", []).duplicate(true)
+		})
+	return {"buildings":buildings, "recipes":recipes}
+
+
+func _workspace_power_snapshot(world: Dictionary) -> Dictionary:
+	var generation_kw := 0.0
+	var demand_kw := 0.0
+	var served_kw := 0.0
+	for entity_value in world.get("entities", {}).values():
+		var entity := entity_value as Dictionary
+		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+		generation_kw += maxf(0.0, float(definition.get("power_generation_kw", 0.0)))
+		var entity_demand := maxf(0.0, float(definition.get("power_demand_kw", 0.0)))
+		demand_kw += entity_demand
+		served_kw += entity_demand * clampf(float(entity.get("power_factor", 1.0)), 0.0, 1.0)
+	return {
+		"generation_kw":generation_kw,
+		"demand_kw":demand_kw,
+		"served_kw":served_kw,
+		"satisfaction":1.0 if demand_kw <= EPSILON else clampf(served_kw / demand_kw, 0.0, 1.0)
+	}
+
+
+func _entity_port_snapshot(entity: Dictionary) -> Dictionary:
+	var kind := str(entity.get("kind", ""))
+	var input_ids: Array = []
+	var output_ids: Array = []
+	match kind:
+		"EXTRACTOR":
+			var resource_id := str(entity.get("resource_id", ""))
+			if not resource_id.is_empty():
+				output_ids.append(resource_id)
+		"MACHINE":
+			var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
+			input_ids = _item_entry_ids(recipe.get("inputs", []))
+			output_ids = _item_entry_ids(recipe.get("outputs", []))
+		"STORAGE":
+			input_ids = ["*"]
+			output_ids = ["*"]
+	return {
+		"inputs":input_ids,
+		"outputs":output_ids,
+		"accepts_power":maxf(0.0, float(building_definitions.get(str(entity.get("definition_id", "")), {}).get("power_demand_kw", 0.0))) > 0.0,
+		"provides_power":maxf(0.0, float(building_definitions.get(str(entity.get("definition_id", "")), {}).get("power_generation_kw", 0.0))) > 0.0
+	}
+
+
+func _item_entry_ids(entries: Array) -> Array:
+	var ids: Array = []
+	for entry_value in entries:
+		var item_id := str((entry_value as Dictionary).get("item", ""))
+		if not item_id.is_empty() and not ids.has(item_id):
+			ids.append(item_id)
+	ids.sort()
+	return ids
+
+
+func _entity_blocker_code(status: String) -> String:
+	match status:
+		"NO_RESOURCE", "NO_POWER", "INPUT_SHORTAGE", "OUTPUT_FULL", "NO_RECIPE":
+			return status
+	return ""
+
+
+func _link_status(world: Dictionary, link: Dictionary) -> String:
+	if str(link.get("kind", "")) == "POWER":
+		return "CONNECTED"
+	if float(link.get("last_flow", 0.0)) > EPSILON:
+		return "FLOWING"
+	var source: Dictionary = world.get("entities", {}).get(str(link.get("source_id", "")), {})
+	var target: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
+	var item_id := str(link.get("item_id", ""))
+	if _source_quantity(source, item_id) <= 0:
+		return "SOURCE_EMPTY"
+	if _target_free_capacity(target, item_id) <= 0:
+		return "TARGET_FULL"
+	return "IDLE"
+
+
+func _status_tone(status: String) -> String:
+	if status in ["RUNNING", "FLOWING", "CONNECTED", "COMPLETE"]:
+		return "positive"
+	if status in ["NO_RESOURCE", "NO_POWER", "OUTPUT_FULL", "FAILED"]:
+		return "danger"
+	if status in ["POWER_LIMITED", "PARTIAL_COVERAGE", "INPUT_SHORTAGE", "NO_RECIPE", "WAITING_MATERIALS", "SOURCE_EMPTY", "TARGET_FULL"]:
+		return "warning"
+	return "muted"
 
 
 func _create_entity(entity_id: String, definition_id: String, origin: Vector2i, recipe_id: String) -> Dictionary:
@@ -987,6 +1249,14 @@ func _next_id(world: Dictionary, field: String, prefix: String) -> String:
 	var serial := maxi(1, int(world.get(field, 1)))
 	world[field] = serial + 1
 	return "%s%06d" % [prefix, serial]
+
+
+func _bump_topology_revision(world: Dictionary) -> void:
+	world["topology_revision"] = maxi(0, int(world.get("topology_revision", 0))) + 1
+
+
+func _bump_runtime_revision(world: Dictionary) -> void:
+	world["runtime_revision"] = maxi(0, int(world.get("runtime_revision", 0))) + 1
 
 
 func _sorted_keys(dictionary: Dictionary) -> Array:
