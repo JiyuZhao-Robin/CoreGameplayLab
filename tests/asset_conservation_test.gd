@@ -14,11 +14,34 @@ func _run() -> void:
 	database = ContentDatabase.new()
 	_check(database.load_from_file("res://data/content.json"), "core content loads for asset-conservation tests")
 	if failures.is_empty():
+		_test_starter_factory_bootstrap_is_movement_neutral()
 		_test_survey_ship_claim_survives_transaction_and_roundtrip()
 		_test_fleet_resupply_is_reserve_safe_and_movement_neutral()
 		_test_shipment_roundtrip_arrives_exactly_once()
 		_test_nonproduction_ingress_respects_storage_capacity()
 	_finish()
+
+
+func _test_starter_factory_bootstrap_is_movement_neutral() -> void:
+	var simulation := SimulationEngine.new(database)
+	var state := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	var expected := {"scrap_metal":44, "electronics":16}
+	for item_id_value in expected.keys():
+		var item_id := str(item_id_value)
+		_check(state.item_quantity(item_id, MAIN_LOCATION) == int(expected[item_id]), "fresh state initially owns the canonical %s bootstrap quantity in Location custody" % item_id)
+		_check(_consumed_quantity(state, item_id) == 0, "fresh %s bootstrap cargo starts outside the Consumed ledger" % item_id)
+	simulation.ensure_frontier_state(state)
+	for item_id_value in expected.keys():
+		var item_id := str(item_id_value)
+		var live_after_bootstrap := state.item_quantity(item_id, MAIN_LOCATION) + _factory_inventory_quantity(state, item_id)
+		_check(live_after_bootstrap == int(expected[item_id]), "starter Factory bootstrap preserves total live %s across Location and depot custody" % item_id)
+		_check(_consumed_quantity(state, item_id) == 0, "starter Factory bootstrap does not misclassify %s as Consumed" % item_id)
+	var first_roundtrip := state.to_dictionary()
+	simulation.ensure_frontier_state(state)
+	_check(state.to_dictionary() == first_roundtrip, "repeated starter-world reconciliation is idempotent and moves no additional assets")
+	for item_id_value in expected.keys():
+		var item_id := str(item_id_value)
+		_check(_consumed_quantity(state, item_id) == 0, "repeated starter reconciliation leaves %s consumption at zero" % item_id)
 
 
 func _test_survey_ship_claim_survives_transaction_and_roundtrip() -> void:
@@ -31,13 +54,20 @@ func _test_survey_ship_claim_survives_transaction_and_roundtrip() -> void:
 	var ship_id := str(survey_ship.get("instance_id", ""))
 	state.set_formation_ship_ids(SpaceGameState.DEFAULT_FORMATION_ID, [ship_id])
 	survey_ship["assignment"] = {"formation_id":SpaceGameState.DEFAULT_FORMATION_ID}
-	for item_id_value in simulation.survey_mission_costs(LocationState.SURVEYED):
+	var survey_costs: Dictionary = simulation.survey_mission_costs(LocationState.SURVEYED)
+	for item_id_value in survey_costs:
 		var item_id := str(item_id_value)
-		state.add_item(item_id, int(simulation.survey_mission_costs(LocationState.SURVEYED).get(item_id, 0)), MAIN_LOCATION)
+		state.add_item(item_id, int(survey_costs.get(item_id, 0)), MAIN_LOCATION)
 	state.regions["asteroid_belt"] = true
 	simulation.ensure_frontier_state(state)
+	var stock_before := {}
+	for item_id_value in survey_costs:
+		stock_before[str(item_id_value)] = state.item_quantity(str(item_id_value), MAIN_LOCATION)
 
 	_check(simulation.start_survey_mission(state, "asteroid_belt", LocationState.SURVEYED, [ship_id], MAIN_LOCATION), "a Survey Mission starts through normal Simulation validation")
+	for item_id_value in survey_costs:
+		var item_id := str(item_id_value)
+		_check(state.item_quantity(item_id, MAIN_LOCATION) == int(stock_before.get(item_id, 0)) - int(survey_costs.get(item_id_value, 0)), "Survey Mission consumes its %s deployment BOM exactly once at launch" % item_id)
 	_assert_running_survey_owns_ship(state, ship_id, "immediately after mission start")
 
 	var transaction := GameStateTransaction.new(state, database.domains.keys())
@@ -46,8 +76,23 @@ func _test_survey_ship_claim_survives_transaction_and_roundtrip() -> void:
 
 	var save_roundtrip := SpaceGameState.from_dictionary(transaction_clone.to_dictionary(), database.domains.keys(), database.regions)
 	_assert_running_survey_owns_ship(save_roundtrip, ship_id, "after save/load roundtrip")
+	for item_id_value in survey_costs:
+		var item_id := str(item_id_value)
+		_check(save_roundtrip.item_quantity(item_id, MAIN_LOCATION) == int(stock_before.get(item_id, 0)) - int(survey_costs.get(item_id_value, 0)), "running-mission roundtrip does not charge the %s deployment BOM again" % item_id)
 	_check(not save_roundtrip.ship_can_refit(ship_id), "a running Survey vessel cannot be double-spent by refit")
 	_check(not save_roundtrip.ship_is_unassigned_docked(ship_id), "a running Survey vessel cannot re-enter the unassigned docked pool")
+	var mission_duration := float(save_roundtrip.survey_mission.get("duration_ms", 1.0))
+	var completion_report: Dictionary = simulation.advance(save_roundtrip, mission_duration + 0.01)
+	_check((completion_report.get("events", []) as Array).any(func(event): return str((event as Dictionary).get("type", "")) == "SurveyMissionCompleted"), "the restored Survey Mission completes through deterministic time advancement")
+	var completed_roundtrip := SpaceGameState.from_dictionary(save_roundtrip.to_dictionary(), database.domains.keys(), database.regions)
+	simulation.ensure_frontier_state(completed_roundtrip)
+	var completed_site: Dictionary = completed_roundtrip.location_state("asteroid_belt")
+	_check(
+		bool(completed_site.get("survey_staging_installed", false))
+		and float(completed_site.get("industry", {}).get("structural_capacity", 0.0)) == 5.0
+		and float(completed_site.get("construction", {}).get("capacity", 0.0)) == 1.0,
+		"completed non-route Survey staging survives save/load and deterministic re-projection"
+	)
 
 
 func _assert_running_survey_owns_ship(state: SpaceGameState, ship_id: String, context: String) -> void:
@@ -170,6 +215,14 @@ func _new_state(simulation: SimulationEngine) -> SpaceGameState:
 
 func _consumed_quantity(state: SpaceGameState, item_id: String) -> int:
 	return int(state.statistics.get("item_consumed_totals", {}).get(item_id, 0))
+
+
+func _factory_inventory_quantity(state: SpaceGameState, item_id: String) -> int:
+	var total := 0
+	for world_value in state.factory_worlds.values():
+		for entity_value in (world_value as Dictionary).get("entities", {}).values():
+			total += int((entity_value as Dictionary).get("inventory", {}).get(item_id, 0))
+	return total
 
 
 func _storage_within_capacity(state: SpaceGameState, simulation: SimulationEngine, location_id: String) -> bool:

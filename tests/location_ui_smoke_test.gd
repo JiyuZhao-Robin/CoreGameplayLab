@@ -28,7 +28,7 @@ func _run() -> void:
 	var resources_tab := main.find_child("LocationTab_resources", true, false) as Button
 	resources_tab.pressed.emit()
 	await _redraw()
-	_check(_has_text_fragment(main, "已知资源点"), "Resources tab reads known Resource Site state")
+	_check(_has_text_fragment(main, I18n.core("location.resources.known_sites", "Mapped tile resource fields")), "Resources tab reads mapped physical Factory resource fields")
 	var logistics_tab := main.find_child("LocationTab_logistics", true, false) as Button
 	logistics_tab.pressed.emit()
 	await _redraw()

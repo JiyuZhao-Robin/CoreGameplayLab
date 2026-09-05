@@ -225,7 +225,7 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	state.unlocked_ship_plans["construct_patchwork_prospector"] = true
 	# The founding stockpile prevents an early circular dependency before basic
 	# electronics production comes online.
-	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":12, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}
+	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":44, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}
 	state.saved_at_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	return state
 
@@ -2051,6 +2051,8 @@ static func _normalized_megastructure_projects(source: Dictionary, completed: Di
 		runtime["phase_index"] = maxi(0, int(runtime.get("phase_index", runtime.get("stage_index", 0))))
 		runtime["stage_index"] = int(runtime["phase_index"])
 		runtime["delivered_materials"] = runtime.get("delivered_materials", {}).duplicate(true)
+		runtime["phase_runtime"] = runtime.get("phase_runtime", {}).duplicate(true)
+		runtime["site_effects"] = runtime.get("site_effects", {}).duplicate(true)
 		runtime["phase_history"] = runtime.get("phase_history", []).duplicate(true)
 		runtime["total_materials_consumed"] = runtime.get("total_materials_consumed", {}).duplicate(true)
 		runtime["total_capital_goods"] = runtime.get("total_capital_goods", {}).duplicate(true)
@@ -2066,7 +2068,7 @@ static func _normalized_megastructure_projects(source: Dictionary, completed: Di
 	for project_id in completed:
 		if not bool(completed.get(project_id, false)) or result.has(project_id):
 			continue
-		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "phase_index":8, "stage_index":8, "stage_name":"COMPLETE", "delivered_materials":{}, "phase_history":[], "total_materials_consumed":{}, "total_capital_goods":{}, "supplier_locations":{}, "total_cargo_transported":0.0, "peak_construction_throughput":0.0, "peak_power_demand":0.0, "started_at_ms":0, "completed_at_ms":0, "site_location_id":MAIN_BASE_LOCATION_ID, "status":"COMPLETE"}
+		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "phase_index":8, "stage_index":8, "stage_name":"COMPLETE", "delivered_materials":{}, "phase_runtime":{}, "site_effects":{}, "phase_history":[], "total_materials_consumed":{}, "total_capital_goods":{}, "supplier_locations":{}, "total_cargo_transported":0.0, "peak_construction_throughput":0.0, "peak_power_demand":0.0, "started_at_ms":0, "completed_at_ms":0, "site_location_id":MAIN_BASE_LOCATION_ID, "status":"COMPLETE"}
 	return result
 
 

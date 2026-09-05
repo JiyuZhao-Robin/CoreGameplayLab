@@ -489,7 +489,7 @@ func _dispatch(state: SpaceGameState) -> Array[Dictionary]:
 		var destination := str(demand.get("location_id", ""))
 		var item_id := str(demand.get("item_id", ""))
 		var deficit := maxi(0, int(demand.get("target", 0)) - state.item_quantity(item_id, destination) - incoming_quantity(state, destination, item_id))
-		var destination_free := _destination_free_capacity(state, destination, item_id)
+		var destination_free := destination_free_capacity(state, destination, item_id)
 		deficit = mini(deficit, destination_free)
 		if deficit <= 0:
 			_set_demand_blocker(state, demand, {})
@@ -614,7 +614,9 @@ func _supply_available(state: SpaceGameState, location_id: String, item_id: Stri
 	return mini(above_policy_reserve, state.available_item_quantity(item_id, location_id))
 
 
-func _destination_free_capacity(state: SpaceGameState, location_id: String, item_id: String) -> int:
+func destination_free_capacity(state: SpaceGameState, location_id: String, item_id: String) -> int:
+	if not state.has_location(location_id):
+		return 0
 	var profile := content.item_storage_profile(item_id)
 	var storage_class := str(profile.get("storage_class", "SPECIAL"))
 	var units_per_item := maxf(0.001, float(profile.get("storage_units", 1.0)))
@@ -635,6 +637,10 @@ func _destination_free_capacity(state: SpaceGameState, location_id: String, item
 			if str(cargo_profile.get("storage_class", "SPECIAL")) == storage_class:
 				used += float(shipment.get("cargo", {}).get(cargo_item, 0)) * float(cargo_profile.get("storage_units", 1.0))
 	return maxi(0, int(floor((float(capacities.get(storage_class, 0)) - used) / units_per_item)))
+
+
+func _destination_free_capacity(state: SpaceGameState, location_id: String, item_id: String) -> int:
+	return destination_free_capacity(state, location_id, item_id)
 
 
 func _create_shipment(state: SpaceGameState, origin: String, destination: String, item_id: String, quantity: int, path: Dictionary, costs: Dictionary) -> Dictionary:

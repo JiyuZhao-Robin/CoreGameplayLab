@@ -11,6 +11,40 @@ const MAX_TIME_ORCHESTRATION_STEPS := 500000
 const MAX_ONLINE_FRAME_SIMULATION_MS := 15000.0
 const MIN_TIME_ORCHESTRATION_STEP_MS := 0.01
 const FACTORY_WORKSPACE_PROTOCOL_VERSION := 1
+const FACTORY_COMMAND_COMMON_FAILURE_REASONS := [
+	"UNSUPPORTED_PROTOCOL", "MISSING_COMMAND_ID", "INVALID_PAYLOAD",
+	"UNKNOWN_FACTORY_WORLD", "COMMAND_ID_CONFLICT", "STALE_TOPOLOGY"
+]
+const FACTORY_COMMAND_KIND_FAILURE_REASONS := {
+	"QUEUE_CONSTRUCTION":["BUILDING_LOCKED", "RECIPE_LOCKED", "INCOMPATIBLE_RECIPE", "OUT_OF_BOUNDS", "FOOTPRINT_OCCUPIED", "CONSTRUCTION_OCCUPIED", "RESOURCE_REQUIRED", "MIXED_RESOURCE_COVERAGE", "RESOURCE_INCOMPATIBLE"],
+	"FUND_CONSTRUCTION":["INVALID_CONSTRUCTION_ORDER", "INVALID_STORAGE", "INPUT_SHORTAGE"],
+	"FUND_CONSTRUCTION_FROM_LOCATION":["INVALID_TRANSFER_TARGET", "INVALID_CONSTRUCTION_ORDER", "INPUT_SHORTAGE"],
+	"SET_RECIPE":["RECIPE_LOCKED", "UNKNOWN_ENTITY", "INVALID_MACHINE", "INCOMPATIBLE_RECIPE"],
+	"CONNECT_ENTITIES":["INVALID_LINK", "MISSING_ENDPOINT", "DUPLICATE_LINK", "INVALID_CARGO_LINK", "CARGO_INCOMPATIBLE", "CARGO_INPUT_OCCUPIED"],
+	"REMOVE_LINK":["UNKNOWN_LINK"],
+	"IMPORT_FROM_LOCATION":["INVALID_TRANSFER_TARGET", "LOCATION_INVENTORY_EMPTY", "INVALID_STORAGE", "STORAGE_FULL"],
+	"EXPORT_TO_LOCATION":["INVALID_TRANSFER_TARGET", "INVALID_TRANSFER", "INVALID_STORAGE", "STORAGE_EMPTY", "STORAGE_FULL"]
+}
+const FACTORY_COMMAND_SUCCESS_KEYS := {
+	"QUEUE_CONSTRUCTION":"factory.success.queue_construction",
+	"FUND_CONSTRUCTION":"factory.success.fund_construction",
+	"FUND_CONSTRUCTION_FROM_LOCATION":"factory.success.fund_construction_from_location",
+	"SET_RECIPE":"factory.success.set_recipe",
+	"CONNECT_ENTITIES":"factory.success.connect_entities",
+	"REMOVE_LINK":"factory.success.remove_link",
+	"IMPORT_FROM_LOCATION":"factory.success.import_from_location",
+	"EXPORT_TO_LOCATION":"factory.success.export_to_location"
+}
+const FACTORY_COMMAND_SUCCESS_FALLBACKS := {
+	"QUEUE_CONSTRUCTION":"Factory construction queued",
+	"FUND_CONSTRUCTION":"Factory construction materials delivered",
+	"FUND_CONSTRUCTION_FROM_LOCATION":"Location materials delivered to Factory construction",
+	"SET_RECIPE":"Factory machine recipe changed",
+	"CONNECT_ENTITIES":"Factory connection created",
+	"REMOVE_LINK":"Factory connection removed",
+	"IMPORT_FROM_LOCATION":"Cargo transferred into Factory storage",
+	"EXPORT_TO_LOCATION":"Cargo transferred to Location inventory"
+}
 
 var content := ContentDatabase.new()
 var state: SpaceGameState
@@ -93,6 +127,73 @@ func initialize_factory_world(world_id: String, location_id: String, size_tiles:
 	return true
 
 
+func factory_world_ids_for_location(location_id: String) -> Array[String]:
+	var result: Array[String] = []
+	for world_id_value in state.factory_worlds.keys():
+		var world_id := str(world_id_value)
+		if str(state.factory_worlds.get(world_id_value, {}).get("location_id", "")) == location_id:
+			result.append(world_id)
+	result.sort()
+	return result
+
+
+## Creates the canonical sparse grid for a surveyed Location and projects its
+## revealed resource regions into non-depleting, throughput-limited fields.
+## Survey knowledge is not free infrastructure: the world starts empty and must
+## be bootstrapped from physically delivered same-location cargo.
+func initialize_surveyed_factory_world(location_id: String) -> bool:
+	if not state.has_location(location_id) or not content.regions.has(location_id):
+		return _reject(I18n.t("notice.unknown_location", "Unknown location"))
+	if not factory_world_ids_for_location(location_id).is_empty():
+		return _reject(I18n.t("notice.factory_world_exists", "Factory grid already exists"))
+	var survey_state := str(state.location_state(location_id).get("survey_state", LocationState.UNKNOWN))
+	if location_id != SpaceGameState.MAIN_BASE_LOCATION_ID and simulation.survey_state_rank(survey_state) < simulation.survey_state_rank(LocationState.SURVEYED):
+		return _reject(I18n.t("notice.factory_world_requires_survey", "Complete the Location survey before opening a factory grid"))
+	var starter: Dictionary = content.factory_grid_rules.get("starter_world", {})
+	var starter_size: Dictionary = starter.get("size_tiles", {})
+	var world_id := "%s-grid" % location_id.replace("_", "-")
+	var seed := posmod(location_id.hash(), 2147483646) + 1
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var world := simulation.factory_grid.create_world(
+		world_id,
+		location_id,
+		Vector2i(maxi(1, int(starter_size.get("x", 20_000_000))), maxi(1, int(starter_size.get("y", 20_000_000)))),
+		seed
+	)
+	var resource_ids: Array[String] = []
+	for region_value in content.resource_regions.values():
+		var region := region_value as Dictionary
+		if str(region.get("region", "")) != location_id:
+			continue
+		for resource_id_value in region.get("resources", []):
+			var resource_id := str(resource_id_value)
+			if content.items.has(resource_id) and not resource_ids.has(resource_id):
+				resource_ids.append(resource_id)
+	resource_ids.sort()
+	for index in resource_ids.size():
+		var resource_id := resource_ids[index]
+		var origin := Vector2i(32 + (index % 4) * 64, 32 + (index / 4) * 64)
+		var category := "gas" if resource_id in ["helium_3", "methane"] else ("exotic" if resource_id in ["exotic_crystal", "dark_matter"] else "solid")
+		var field_result := simulation.factory_grid.add_resource_field(
+			world,
+			"%s-field-%02d" % [location_id.replace("_", "-"), index + 1],
+			resource_id,
+			origin,
+			Vector2i(24, 24),
+			1.0,
+			0.25,
+			category
+		)
+		if not bool(field_result.get("ok", false)):
+			transaction.rollback()
+			return _reject(str(field_result.get("reason", I18n.t("notice.factory_resource_failed", "Resource-field generation failed"))))
+	transaction.working_state.factory_worlds[world_id] = world
+	last_notice = I18n.t("notice.factory_world_initialized", "Factory grid initialized: %s") % world_id
+	transaction.record({"type":"FactoryWorldInitialized", "world_id":world_id, "location_id":location_id, "resource_ids":resource_ids.duplicate()})
+	_commit_transaction(transaction)
+	return true
+
+
 func register_factory_resource_field(world_id: String, resource_field_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> bool:
 	if not state.factory_worlds.has(world_id) or not content.items.has(resource_id):
 		return _reject(I18n.t("notice.factory_resource_unknown", "Unknown factory world or resource"))
@@ -100,6 +201,7 @@ func register_factory_resource_field(world_id: String, resource_field_id: String
 	var result: Dictionary = simulation.factory_grid.add_resource_field(transaction.working_state.factory_worlds[world_id], resource_field_id, resource_id, origin, size, grade, potential_density, resource_category)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_resource_failed", "Resource-field generation failed"))))
+	simulation.refresh_factory_dependent_runtime_state(transaction.working_state)
 	transaction.record({"type":"FactoryResourceFieldRegistered", "world_id":world_id, "resource_field_id":resource_field_id, "resource_id":resource_id})
 	last_notice = I18n.t("notice.factory_resource_registered", "Tile resource field registered: %s") % resource_field_id
 	_commit_transaction(transaction)
@@ -109,6 +211,10 @@ func register_factory_resource_field(world_id: String, resource_field_id: String
 func queue_factory_construction(world_id: String, definition_id: String, origin: Vector2i, recipe_id: String = "", priority: int = 50) -> bool:
 	if not state.factory_worlds.has(world_id) or not content.factory_buildings.has(definition_id):
 		return _reject(I18n.t("notice.factory_building_unknown", "Unknown factory world or building"))
+	if not _factory_definition_available(content.factory_buildings[definition_id]):
+		return _reject(I18n.t("notice.factory_building_locked", "Factory building requirements are not met"))
+	if not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id])):
+		return _reject(I18n.t("notice.factory_recipe_locked", "Factory recipe requirements are not met"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var result: Dictionary = simulation.factory_grid.queue_construction(transaction.working_state.factory_worlds[world_id], definition_id, origin, recipe_id, priority)
 	if not bool(result.get("ok", false)):
@@ -139,6 +245,7 @@ func connect_factory_entities(world_id: String, kind: String, source_id: String,
 	var result: Dictionary = simulation.factory_grid.connect_entities(transaction.working_state.factory_worlds[world_id], kind, source_id, target_id, item_id, capacity_per_second, priority)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_connection_rejected", "Factory connection rejected"))))
+	simulation.refresh_factory_dependent_runtime_state(transaction.working_state)
 	transaction.record({"type":"FactoryEntitiesConnected", "world_id":world_id, "link_id":result.get("link_id", ""), "kind":kind, "source_id":source_id, "target_id":target_id, "item_id":item_id})
 	last_notice = I18n.t("notice.factory_connection_created", "Factory connection created")
 	_commit_transaction(transaction)
@@ -173,7 +280,83 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 		}
 	var snapshot: Dictionary = simulation.factory_grid.workspace_snapshot(state.factory_worlds[world_id])
 	snapshot["valid"] = true
+	var location_id := str(snapshot.get("location_id", ""))
+	var unlocked_recipe_ids := {}
+	var unlocked_recipes: Array = []
+	for recipe_value in snapshot.get("palette", {}).get("recipes", []):
+		var recipe := (recipe_value as Dictionary).duplicate(true)
+		var recipe_id := str(recipe.get("id", ""))
+		if content.factory_recipes.has(recipe_id) and _factory_definition_available(content.factory_recipes[recipe_id]):
+			var activity_id := str(content.factory_recipes[recipe_id].get("activity_id", ""))
+			if content.activities.has(activity_id):
+				recipe["name"] = I18n.content(content.activities[activity_id])
+			unlocked_recipe_ids[recipe_id] = true
+			unlocked_recipes.append(recipe)
+	var unlocked_buildings: Array = []
+	for building_value in snapshot.get("palette", {}).get("buildings", []):
+		var building := (building_value as Dictionary).duplicate(true)
+		var building_id := str(building.get("id", ""))
+		if not content.factory_buildings.has(building_id) or not _factory_definition_available(content.factory_buildings[building_id]):
+			continue
+		building["name"] = I18n.t("factory.building.%s" % building_id, str(building.get("name", building_id)))
+		var recipe_ids: Array = []
+		for recipe_id_value in building.get("recipe_ids", []):
+			if unlocked_recipe_ids.has(str(recipe_id_value)):
+				recipe_ids.append(str(recipe_id_value))
+		building["recipe_ids"] = recipe_ids
+		if str(building.get("kind", "")) != "MACHINE" or not recipe_ids.is_empty():
+			unlocked_buildings.append(building)
+	snapshot["palette"] = {"buildings":unlocked_buildings, "recipes":unlocked_recipes}
+	var item_names := {}
+	for item_id_value in content.items.keys():
+		var item_id := str(item_id_value)
+		item_names[item_id] = I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id.replace("_", " ").capitalize()}))
+	for field_value in snapshot.get("resource_fields", []):
+		var field := field_value as Dictionary
+		var resource_id := str(field.get("resource_id", ""))
+		field["resource_name"] = str(item_names.get(resource_id, resource_id.replace("_", " ").capitalize()))
+	for entity_value in snapshot.get("entities", []):
+		var entity := entity_value as Dictionary
+		var definition_id := str(entity.get("definition_id", ""))
+		entity["name"] = I18n.t("factory.building.%s" % definition_id, str(entity.get("name", definition_id)))
+	for order_value in snapshot.get("construction_orders", []):
+		var order := order_value as Dictionary
+		var order_definition_id := str(order.get("definition_id", ""))
+		order["building_name"] = I18n.t("factory.building.%s" % order_definition_id, order_definition_id.replace("_", " ").capitalize())
+	snapshot["item_names"] = item_names
+	snapshot["location_inventory"] = state.location_inventory(location_id).duplicate(true) if state.has_location(location_id) else {}
+	var available_inventory := {}
+	if state.has_location(location_id):
+		for item_id_value in state.location_inventory(location_id).keys():
+			var item_id := str(item_id_value)
+			var available := state.available_item_quantity(item_id, location_id)
+			if available > 0:
+				available_inventory[item_id] = available
+	snapshot["location_available_inventory"] = available_inventory
+	snapshot["transfer_contract"] = {
+		"same_location_only":true,
+		"import_command":"IMPORT_FROM_LOCATION",
+		"export_command":"EXPORT_TO_LOCATION"
+	}
 	return snapshot
+
+
+func _factory_definition_available(definition: Dictionary) -> bool:
+	if definition.is_empty() or not simulation.definition_revealed(state, definition):
+		return false
+	for requirement_value in definition.get("requirements", []):
+		if not simulation.requirement_met(state, requirement_value as Dictionary):
+			return false
+	return true
+
+
+func factory_command_failure_reasons(command_kind: String) -> Array[String]:
+	var result: Array[String] = []
+	for reason_value in FACTORY_COMMAND_COMMON_FAILURE_REASONS:
+		result.append(str(reason_value))
+	for reason_value in FACTORY_COMMAND_KIND_FAILURE_REASONS.get(command_kind.to_upper(), ["UNKNOWN_COMMAND"]):
+		result.append(str(reason_value))
+	return result
 
 
 ## Versioned intent boundary used by the mining/production workspace. The UI
@@ -184,26 +367,39 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 	var command_kind := str(intent.get("kind", "")).to_upper()
 	var world_id := str(intent.get("world_id", ""))
 	if protocol_version != FACTORY_WORKSPACE_PROTOCOL_VERSION:
-		return _factory_command_rejection(command_id, command_kind, world_id, "UNSUPPORTED_PROTOCOL", "Unsupported Factory workspace protocol")
+		return _factory_command_rejection(command_id, command_kind, world_id, "UNSUPPORTED_PROTOCOL", I18n.t("factory.reason.unsupported_protocol", "This Factory workspace protocol is not supported."))
 	if command_id.is_empty():
-		return _factory_command_rejection(command_id, command_kind, world_id, "MISSING_COMMAND_ID", "Factory command requires a stable command id")
+		return _factory_command_rejection(command_id, command_kind, world_id, "MISSING_COMMAND_ID", I18n.t("factory.reason.missing_command_id", "The Factory command needs a stable command ID."))
+	var payload_value = intent.get("payload", {})
+	if not payload_value is Dictionary:
+		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", I18n.t("factory.reason.invalid_payload", "The Factory command payload is invalid."))
+	var payload := (payload_value as Dictionary).duplicate(true)
+	if not _factory_command_payload_shape_valid(command_kind, payload):
+		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", I18n.t("factory.reason.invalid_payload", "The Factory command payload is invalid."))
+	# A POWER edge has no cargo channel. Normalize the public request before its
+	# fingerprint, Domain call, event and durable receipt are created so retries
+	# cannot disagree over an ignored item_id or link-kind casing.
+	if command_kind == "CONNECT_ENTITIES":
+		payload["link_kind"] = str(payload.get("link_kind", "")).to_upper()
+		if str(payload.get("link_kind", "")) == "POWER":
+			payload["item_id"] = ""
+	var request_fingerprint := _factory_command_request_fingerprint(protocol_version, command_kind, world_id, payload)
 	if not state.factory_worlds.has(world_id):
-		return _factory_command_rejection(command_id, command_kind, world_id, "UNKNOWN_FACTORY_WORLD", "Unknown factory world")
+		return _factory_command_rejection(command_id, command_kind, world_id, "UNKNOWN_FACTORY_WORLD", I18n.t("factory.reason.unknown_factory_world", "The selected Factory world no longer exists."))
 	var current_world: Dictionary = state.factory_worlds.get(world_id, {})
 	var previous_receipt_value = current_world.get("command_receipts", {}).get(command_id, null)
 	if previous_receipt_value is Dictionary:
 		var previous_receipt := (previous_receipt_value as Dictionary).duplicate(true)
-		if str(previous_receipt.get("command_kind", "")) != command_kind:
-			return _factory_command_rejection(command_id, command_kind, world_id, "COMMAND_ID_CONFLICT", "Factory command id was already used for another action")
+		if str(previous_receipt.get("command_kind", "")) != command_kind or str(previous_receipt.get("request_fingerprint", "")) != request_fingerprint:
+			return _factory_command_rejection(command_id, command_kind, world_id, "COMMAND_ID_CONFLICT", I18n.t("factory.reason.command_id_conflict", "This Factory command ID was already used for another action."))
+		var replay_message_key := str(previous_receipt.get("message_key", FACTORY_COMMAND_SUCCESS_KEYS.get(command_kind, "")))
+		previous_receipt["message_key"] = replay_message_key
+		previous_receipt["message"] = I18n.t(replay_message_key, str(FACTORY_COMMAND_SUCCESS_FALLBACKS.get(command_kind, "Factory command accepted")))
 		previous_receipt["replayed"] = true
 		return previous_receipt
 	var current_topology_revision := maxi(0, int(current_world.get("topology_revision", 0)))
 	if int(intent.get("base_topology_revision", -1)) != current_topology_revision:
-		return _factory_command_rejection(command_id, command_kind, world_id, "STALE_TOPOLOGY", "Factory layout changed; refresh the workspace before retrying")
-	var payload_value = intent.get("payload", {})
-	if not payload_value is Dictionary:
-		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", "Factory command payload must be an object")
-	var payload := payload_value as Dictionary
+		return _factory_command_rejection(command_id, command_kind, world_id, "STALE_TOPOLOGY", I18n.t("factory.reason.stale_topology", "The Factory layout changed; refresh before retrying."))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var world: Dictionary = transaction.working_state.factory_worlds.get(world_id, {})
 	var operation_result: Dictionary
@@ -211,19 +407,26 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 		"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
 		"command_id":command_id,
 		"command_kind":command_kind,
+		"request_fingerprint":request_fingerprint,
 		"world_id":world_id
 	}
 	match command_kind:
 		"QUEUE_CONSTRUCTION":
 			var origin_data: Dictionary = payload.get("origin", {})
 			var definition_id := str(payload.get("definition_id", ""))
-			operation_result = simulation.factory_grid.queue_construction(
-				world,
-				definition_id,
-				Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0))),
-				str(payload.get("recipe_id", "")),
-				int(payload.get("priority", 50))
-			)
+			var recipe_id := str(payload.get("recipe_id", ""))
+			if not content.factory_buildings.has(definition_id) or not _factory_definition_available(content.factory_buildings[definition_id]):
+				operation_result = {"ok":false, "reason_code":"BUILDING_LOCKED", "reason":I18n.t("factory.reason.building_locked", "This Factory building is still locked.")}
+			elif not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id])):
+				operation_result = {"ok":false, "reason_code":"RECIPE_LOCKED", "reason":I18n.t("factory.reason.recipe_locked", "This Factory recipe is still locked.")}
+			else:
+				operation_result = simulation.factory_grid.queue_construction(
+					world,
+					definition_id,
+					Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0))),
+					recipe_id,
+					int(payload.get("priority", 50))
+				)
 			event.merge({
 				"type":"FactoryConstructionQueued",
 				"order_id":str(operation_result.get("order_id", "")),
@@ -240,6 +443,45 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 				"order_id":order_id,
 				"storage_id":storage_id,
 				"moved":operation_result.get("moved", {}).duplicate(true)
+			})
+		"FUND_CONSTRUCTION_FROM_LOCATION":
+			var location_order_id := str(payload.get("order_id", ""))
+			var construction_location_id := str(world.get("location_id", ""))
+			if not transaction.working_state.has_location(construction_location_id):
+				operation_result = {"ok":false, "reason_code":"INVALID_TRANSFER_TARGET", "reason":I18n.t("factory.reason.invalid_transfer_target", "Factory transfers must use known same-location inventory.")}
+			else:
+				var available_for_construction := {}
+				for item_id_value in transaction.working_state.location_inventory(construction_location_id).keys():
+					var item_id := str(item_id_value)
+					var available := transaction.working_state.available_item_quantity(item_id, construction_location_id)
+					if available > 0:
+						available_for_construction[item_id] = available
+				operation_result = simulation.factory_grid.fund_construction_from_external(world, location_order_id, available_for_construction)
+				if bool(operation_result.get("ok", false)):
+					var construction_inventory: Dictionary = transaction.working_state.location_inventory(construction_location_id)
+					for item_id_value in operation_result.get("moved", {}).keys():
+						var item_id := str(item_id_value)
+						construction_inventory[item_id] = int(construction_inventory.get(item_id, 0)) - int(operation_result.get("moved", {}).get(item_id_value, 0))
+			event.merge({
+				"type":"FactoryConstructionFunded",
+				"order_id":location_order_id,
+				"storage_id":"",
+				"location_id":construction_location_id,
+				"moved":operation_result.get("moved", {}).duplicate(true)
+			})
+		"SET_RECIPE":
+			var recipe_entity_id := str(payload.get("entity_id", ""))
+			var configured_recipe_id := str(payload.get("recipe_id", ""))
+			if not content.factory_recipes.has(configured_recipe_id) or not _factory_definition_available(content.factory_recipes[configured_recipe_id]):
+				operation_result = {"ok":false, "reason_code":"RECIPE_LOCKED", "reason":I18n.t("factory.reason.recipe_locked", "This Factory recipe is still locked.")}
+			else:
+				operation_result = simulation.factory_grid.set_entity_recipe(world, recipe_entity_id, configured_recipe_id)
+			event.merge({
+				"type":"FactoryRecipeChanged",
+				"entity_id":recipe_entity_id,
+				"previous_recipe_id":str(operation_result.get("previous_recipe_id", "")),
+				"recipe_id":configured_recipe_id,
+				"removed_link_ids":operation_result.get("removed_link_ids", []).duplicate(true)
 			})
 		"CONNECT_ENTITIES":
 			var link_kind := str(payload.get("link_kind", "")).to_upper()
@@ -268,10 +510,57 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 			var removed: bool = simulation.factory_grid.remove_link(world, link_id)
 			operation_result = {"ok":removed, "link_id":link_id}
 			if not removed:
-				operation_result.merge({"reason_code":"UNKNOWN_LINK", "reason":"Unknown factory link"})
+				operation_result.merge({"reason_code":"UNKNOWN_LINK", "reason":I18n.t("factory.reason.unknown_link", "The selected Factory link no longer exists.")})
 			event.merge({"type":"FactoryLinkRemoved", "link_id":link_id})
+		"IMPORT_FROM_LOCATION":
+			var import_storage_id := str(payload.get("storage_id", ""))
+			var import_item_id := str(payload.get("item_id", ""))
+			var import_requested := int(payload.get("quantity", 0))
+			var import_location_id := str(world.get("location_id", ""))
+			if not content.items.has(import_item_id) or not transaction.working_state.has_location(import_location_id):
+				operation_result = {"ok":false, "reason_code":"INVALID_TRANSFER_TARGET", "reason":I18n.t("factory.reason.invalid_transfer_target", "Factory transfers must use known same-location inventory.")}
+			else:
+				var import_available := transaction.working_state.available_item_quantity(import_item_id, import_location_id)
+				if import_requested <= 0 or import_available < import_requested:
+					operation_result = {"ok":false, "reason_code":"LOCATION_INVENTORY_EMPTY", "reason":I18n.t("factory.reason.location_inventory_empty", "There is not enough unreserved same-location inventory for this transfer.")}
+				else:
+					operation_result = simulation.factory_grid.deposit_storage_inventory(world, import_storage_id, import_item_id, import_requested)
+					if bool(operation_result.get("ok", false)):
+						var imported := int(operation_result.get("moved", 0))
+						var location_inventory: Dictionary = transaction.working_state.location_inventory(import_location_id)
+						location_inventory[import_item_id] = int(location_inventory.get(import_item_id, 0)) - imported
+			event.merge({
+				"type":"FactoryCargoImported",
+				"storage_id":import_storage_id,
+				"item_id":import_item_id,
+				"quantity":int(operation_result.get("moved", 0)),
+				"location_id":import_location_id
+			})
+		"EXPORT_TO_LOCATION":
+			var export_storage_id := str(payload.get("storage_id", ""))
+			var export_item_id := str(payload.get("item_id", ""))
+			var export_requested := int(payload.get("quantity", 0))
+			var export_location_id := str(world.get("location_id", ""))
+			if not content.items.has(export_item_id) or not transaction.working_state.has_location(export_location_id):
+				operation_result = {"ok":false, "reason_code":"INVALID_TRANSFER_TARGET", "reason":I18n.t("factory.reason.invalid_transfer_target", "Factory transfers must use known same-location inventory.")}
+			else:
+				operation_result = simulation.factory_grid.withdraw_storage_inventory(world, export_storage_id, export_item_id, export_requested)
+				if bool(operation_result.get("ok", false)):
+					var exported := int(operation_result.get("moved", 0))
+					if exported > simulation.location_storage_free_quantity_for_item(transaction.working_state, export_location_id, export_item_id):
+						operation_result = {"ok":false, "reason_code":"STORAGE_FULL", "reason":I18n.t("factory.reason.storage_full", "The destination storage has insufficient capacity for this transfer.")}
+					else:
+						var destination_inventory: Dictionary = transaction.working_state.location_inventory(export_location_id)
+						destination_inventory[export_item_id] = int(destination_inventory.get(export_item_id, 0)) + exported
+			event.merge({
+				"type":"FactoryCargoExported",
+				"storage_id":export_storage_id,
+				"item_id":export_item_id,
+				"quantity":int(operation_result.get("moved", 0)),
+				"location_id":export_location_id
+			})
 		_:
-			operation_result = {"ok":false, "reason_code":"UNKNOWN_COMMAND", "reason":"Unknown Factory workspace command"}
+			operation_result = {"ok":false, "reason_code":"UNKNOWN_COMMAND", "reason":I18n.t("factory.reason.unknown_command", "Unknown Factory workspace command.")}
 	if not bool(operation_result.get("ok", false)):
 		transaction.rollback()
 		return _factory_command_rejection(
@@ -279,24 +568,27 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 			command_kind,
 			world_id,
 			str(operation_result.get("reason_code", "COMMAND_REJECTED")),
-			str(operation_result.get("reason", "Factory command rejected"))
+			str(operation_result.get("reason", I18n.t("factory.feedback.rejected", "Factory command was rejected.")))
 		)
+	# Factory commands take effect while the game clock is paused. Recompute
+	# physical services and every dependent Research/Megastructure blocker inside
+	# this transaction so the UI and the next command cannot observe stale state.
+	simulation.refresh_factory_dependent_runtime_state(transaction.working_state)
 	event["topology_revision"] = int(world.get("topology_revision", 0))
 	event["runtime_revision"] = int(world.get("runtime_revision", 0))
 	transaction.record(event)
-	match command_kind:
-		"QUEUE_CONSTRUCTION": last_notice = "Factory construction queued"
-		"FUND_CONSTRUCTION": last_notice = "Factory construction materials delivered"
-		"CONNECT_ENTITIES": last_notice = "Factory connection created"
-		"REMOVE_LINK": last_notice = "Factory connection removed"
+	var success_message_key := str(FACTORY_COMMAND_SUCCESS_KEYS.get(command_kind, ""))
+	last_notice = I18n.t(success_message_key, str(FACTORY_COMMAND_SUCCESS_FALLBACKS.get(command_kind, "Factory command accepted")))
 	var accepted_events := transaction.events.duplicate(true)
 	var response := {
 		"accepted":true,
 		"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
 		"command_id":command_id,
 		"command_kind":command_kind,
+		"request_fingerprint":request_fingerprint,
 		"world_id":world_id,
 		"reason_code":"",
+		"message_key":success_message_key,
 		"message":last_notice,
 		"topology_revision":int(world.get("topology_revision", 0)),
 		"runtime_revision":int(world.get("runtime_revision", 0)),
@@ -304,16 +596,77 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 		"result":operation_result.duplicate(true),
 		"replayed":false
 	}
-	world["command_receipts"][command_id] = response.duplicate(true)
+	var durable_receipt := response.duplicate(true)
+	# Presentation is resolved at response time. Persist only the stable key so
+	# locale choice cannot alter authoritative state or freeze replay feedback in
+	# the language that happened to be active when the command first ran.
+	durable_receipt.erase("message")
+	world["command_receipts"][command_id] = durable_receipt
 	world["command_receipt_order"].append(command_id)
-	while world["command_receipt_order"].size() > 128:
-		var expired_command_id := str(world["command_receipt_order"].pop_front())
-		world["command_receipts"].erase(expired_command_id)
 	_commit_transaction(transaction)
 	return response
 
 
+func _factory_command_payload_shape_valid(command_kind: String, payload: Dictionary) -> bool:
+	var required_string_fields: Array = {
+		"QUEUE_CONSTRUCTION":["definition_id"],
+		"FUND_CONSTRUCTION":["order_id", "storage_id"],
+		"FUND_CONSTRUCTION_FROM_LOCATION":["order_id"],
+		"SET_RECIPE":["entity_id", "recipe_id"],
+		"CONNECT_ENTITIES":["link_kind", "source_id", "target_id"],
+		"REMOVE_LINK":["link_id"],
+		"IMPORT_FROM_LOCATION":["storage_id", "item_id"],
+		"EXPORT_TO_LOCATION":["storage_id", "item_id"]
+	}.get(command_kind, [])
+	for field_value in required_string_fields:
+		var field := str(field_value)
+		if not payload.has(field) or payload.get(field) is not String:
+			return false
+	for optional_string_field in ["recipe_id", "item_id"]:
+		if payload.has(optional_string_field) and payload.get(optional_string_field) is not String:
+			return false
+	for numeric_field in ["priority", "capacity_per_second", "quantity"]:
+		if payload.has(numeric_field) and typeof(payload.get(numeric_field)) not in [TYPE_INT, TYPE_FLOAT]:
+			return false
+	if command_kind == "QUEUE_CONSTRUCTION":
+		var origin_value = payload.get("origin", null)
+		if origin_value is not Dictionary:
+			return false
+		var origin := origin_value as Dictionary
+		for coordinate in ["x", "y"]:
+			if not origin.has(coordinate) or typeof(origin.get(coordinate)) not in [TYPE_INT, TYPE_FLOAT]:
+				return false
+	return true
+
+
+func _factory_command_request_fingerprint(protocol_version: int, command_kind: String, world_id: String, payload: Dictionary) -> String:
+	return JSON.stringify({
+		"protocol_version":protocol_version,
+		"command_kind":command_kind,
+		"world_id":world_id,
+		"payload":_factory_canonical_value(payload)
+	})
+
+
+func _factory_canonical_value(value: Variant) -> Variant:
+	if value is Dictionary:
+		var result := {}
+		var keys: Array = (value as Dictionary).keys()
+		keys.sort_custom(func(left, right): return str(left) < str(right))
+		for key_value in keys:
+			var key := str(key_value)
+			result[key] = _factory_canonical_value((value as Dictionary).get(key_value))
+		return result
+	if value is Array:
+		var result: Array = []
+		for entry in value as Array:
+			result.append(_factory_canonical_value(entry))
+		return result
+	return value
+
+
 func _factory_command_rejection(command_id: String, command_kind: String, world_id: String, reason_code: String, message: String) -> Dictionary:
+	message = I18n.t("factory.reason.%s" % reason_code.to_lower(), message)
 	last_notice = message
 	command_rejected.emit(message)
 	state_changed.emit()
@@ -717,9 +1070,9 @@ func auto_resupply_fleet(fleet_id: String = SpaceGameState.DEFAULT_FORMATION_ID,
 	if selected.is_empty():
 		selected = state.formation_ship_ids(fleet_id)
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
-	_auto_resupply_state(transaction.working_state, fleet_id, selected)
+	var moved := _auto_resupply_state(transaction.working_state, fleet_id, selected)
 	last_notice = I18n.t("notice.fleet_resupplied", "Available supplies loaded according to the saved fleet plan")
-	transaction.record({"type":"FleetResupplied", "fleet_id":fleet_id, "ship_ids":selected})
+	transaction.record({"type":"FleetResupplied", "fleet_id":fleet_id, "ship_ids":selected, "moved":moved.duplicate(true)})
 	_commit_transaction(transaction)
 	return true
 
@@ -739,18 +1092,24 @@ func start_survey_mission(target_location_id: String, target_state: String, ship
 	return true
 
 
-func _auto_resupply_state(working: SpaceGameState, fleet_id: String, ship_ids: Array) -> void:
+func _auto_resupply_state(working: SpaceGameState, fleet_id: String, ship_ids: Array) -> Dictionary:
 	var logistics := working.fleet_logistics_runtime(fleet_id)
 	var available_space := maxi(0, simulation.fleet_cargo_capacity(working, ship_ids) - simulation.fleet_cargo_used(working, fleet_id))
-	for item_id in logistics.get("supply_plan", {}):
+	var moved := {}
+	var item_ids: Array = logistics.get("supply_plan", {}).keys()
+	item_ids.sort()
+	for item_id_value in item_ids:
 		if available_space <= 0:
 			break
+		var item_id := str(item_id_value)
 		var desired := maxi(0, int(logistics["supply_plan"].get(item_id, 0)))
-		var missing := maxi(0, desired - working.fleet_supply_quantity(str(item_id), fleet_id))
-		var transfer := working.transfer_inventory_to_fleet_supply(str(item_id), mini(missing, available_space), fleet_id)
+		var missing := maxi(0, desired - working.fleet_supply_quantity(item_id, fleet_id))
+		var transfer := working.transfer_inventory_to_fleet_supply(item_id, mini(missing, available_space), fleet_id)
 		if transfer <= 0:
 			continue
+		moved[item_id] = int(moved.get(item_id, 0)) + transfer
 		available_space -= transfer
+	return moved
 
 
 func stop_industry_operation(slot: int) -> bool:
@@ -876,6 +1235,7 @@ func select_megastructure_site(megastructure_id: String, location_id: String) ->
 		"phase_index":1, "stage_index":1, "stage_name":str((phases[1] as Dictionary).get("name", "READY")),
 		"progress_percent":int(floor(100.0 / float(phases.size()))), "status":"READY", "material_flow_status":"AWAITING_NEXT_PHASE",
 		"activity_id":"", "active_project_id":"", "delivered_materials":{}, "phase_history":[{"phase_index":0, "phase_id":(phases[0] as Dictionary).get("id", ""), "completed_at_ms":int(transaction.working_state.total_elapsed_ms), "materials_consumed":{}}],
+		"site_effects":{},
 		"total_materials_consumed":{}, "total_capital_goods":{}, "total_cargo_transported":0.0,
 		"peak_construction_throughput":0.0, "peak_power_demand":0.0, "supplier_locations":{},
 		"started_at_ms":int(transaction.working_state.total_elapsed_ms), "completed_at_ms":0
@@ -887,7 +1247,104 @@ func select_megastructure_site(megastructure_id: String, location_id: String) ->
 
 
 func start_megastructure_phase(megastructure_id: String, priority: int = 90) -> bool:
-	return _reject_removed_aggregate_industry()
+	var definition: Dictionary = content.megastructures.get(megastructure_id, {})
+	var project: Dictionary = state.megastructure_projects.get(megastructure_id, {})
+	var phases: Array = definition.get("phases", [])
+	var phase_index := int(project.get("phase_index", -1))
+	if definition.is_empty() or project.is_empty() or phase_index <= 0 or phase_index >= phases.size():
+		return _reject(I18n.t("notice.megastructure_phase_invalid", "Select a valid Megastructure site and phase first."))
+	if str(project.get("status", "READY")) == "BUILDING":
+		return _reject(I18n.t("notice.megastructure_phase_active", "This Megastructure phase is already building."))
+	var phase := phases[phase_index] as Dictionary
+	var activity: Dictionary = content.activities.get(str(phase.get("activity_id", "")), {})
+	if activity.is_empty():
+		return _reject(I18n.t("notice.megastructure_phase_missing", "Megastructure phase content is missing."))
+	var site_location_id := str(project.get("site_location_id", ""))
+	var blocker := simulation.megastructure_phase_start_blocker(state, activity, site_location_id)
+	if not blocker.is_empty():
+		return _reject(str(blocker.get("primary_reason", blocker.get("code", I18n.t("notice.requirements_not_met", "Requirements are not met.")))).replace("_", " ").capitalize())
+	for requirement_value in activity.get("requirements", []):
+		if not simulation.requirement_met(state, requirement_value as Dictionary):
+			return _reject(I18n.t("notice.requirements_not_met", "Requirements are not met."))
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var working_project: Dictionary = transaction.working_state.megastructure_projects[megastructure_id]
+	var consumed := {}
+	var source_breakdown := {}
+	for cost_value in activity.get("costs", []):
+		var cost := cost_value as Dictionary
+		var item_id := str(cost.get("item", ""))
+		var quantity := maxi(0, int(cost.get("quantity", 0)))
+		if simulation.megastructure_site_available_item_quantity(transaction.working_state, item_id, site_location_id) < quantity:
+			return _reject(I18n.t("notice.megastructure_materials_missing", "Megastructure site materials are insufficient: %s x %d") % [I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), quantity])
+		consumed[item_id] = quantity
+	var consumed_item_ids: Array = consumed.keys()
+	consumed_item_ids.sort()
+	for item_id_value in consumed_item_ids:
+		var item_id := str(item_id_value)
+		var consumption := _consume_megastructure_site_item(transaction.working_state, site_location_id, item_id, int(consumed[item_id_value]))
+		if not bool(consumption.get("ok", false)):
+			return _reject(I18n.t("notice.megastructure_materials_missing", "Megastructure site materials are insufficient: %s x %d") % [I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), int(consumed[item_id_value])])
+		source_breakdown[item_id] = consumption.get("sources", []).duplicate(true)
+	working_project["status"] = "BUILDING"
+	working_project["material_flow_status"] = "STAGED"
+	working_project["activity_id"] = str(activity.get("id", ""))
+	working_project["active_project_id"] = "MEGA-%s-%02d" % [megastructure_id, phase_index]
+	working_project["delivered_materials"] = consumed.duplicate(true)
+	working_project["phase_runtime"] = {
+		"phase_index":phase_index,
+		"phase_id":str(phase.get("id", "")),
+		"activity_id":str(activity.get("id", "")),
+		"status":"BUILDING",
+		"progress_ms":0.0,
+		"duration_ms":maxf(1.0, float(activity.get("duration_ms", 1.0))),
+		"consumed":consumed.duplicate(true),
+		"source_breakdown":source_breakdown.duplicate(true),
+		"priority":clampi(priority, 0, 100),
+		"started_at_ms":int(transaction.working_state.total_elapsed_ms)
+	}
+	last_notice = I18n.t("notice.megastructure_phase_started", "Megastructure phase started: %s") % I18n.content(phase)
+	transaction.record({"type":"MegastructurePhaseStarted", "megastructure_id":megastructure_id, "phase_index":phase_index, "phase_id":phase.get("id", ""), "location_id":site_location_id, "consumed":consumed.duplicate(true), "source_breakdown":source_breakdown.duplicate(true)})
+	_commit_transaction(transaction)
+	return true
+
+
+func _consume_megastructure_site_item(working: SpaceGameState, location_id: String, item_id: String, requested: int) -> Dictionary:
+	var remaining := maxi(0, requested)
+	var sources: Array = []
+	var location_quantity := mini(remaining, working.available_item_quantity(item_id, location_id))
+	if location_quantity > 0:
+		if not working.remove_item(item_id, location_quantity, location_id):
+			return {"ok":false, "sources":[]}
+		sources.append({"custody":"LOCATION", "location_id":location_id, "quantity":location_quantity})
+		remaining -= location_quantity
+	var world_ids: Array = working.factory_worlds.keys()
+	world_ids.sort()
+	for world_id_value in world_ids:
+		if remaining <= 0:
+			break
+		var world_id := str(world_id_value)
+		var world: Dictionary = working.factory_worlds.get(world_id, {})
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		var storage_ids: Array = world.get("entities", {}).keys()
+		storage_ids.sort()
+		for storage_id_value in storage_ids:
+			if remaining <= 0:
+				break
+			var storage_id := str(storage_id_value)
+			var storage: Dictionary = world.get("entities", {}).get(storage_id, {})
+			if str(storage.get("kind", "")) != "STORAGE" or str(storage.get("status", "")) == "UNDER_CONSTRUCTION":
+				continue
+			var moved := mini(remaining, maxi(0, int(storage.get("inventory", {}).get(item_id, 0))))
+			if moved <= 0:
+				continue
+			var result: Dictionary = simulation.factory_grid.consume_storage_inventory(world, storage_id, item_id, moved)
+			if not bool(result.get("ok", false)):
+				return {"ok":false, "sources":sources}
+			working._record_item_consumed(item_id, moved)
+			sources.append({"custody":"FACTORY_STORAGE", "location_id":location_id, "world_id":world_id, "storage_id":storage_id, "quantity":moved})
+			remaining -= moved
+	return {"ok":remaining <= 0, "sources":sources, "moved":requested - remaining}
 
 
 func start_construction_project(activity_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID, priority: int = 50) -> bool:
@@ -980,6 +1437,10 @@ func start_research_project(project_id: String, route_id: String = "") -> bool:
 		if not str(existing.get("project_id", "")).is_empty():
 			return _reject(I18n.t("notice.research_committed", "Pause does not cancel committed research; resume the current project"))
 		simulation.initialize_research_program(transaction.working_state, project, selected_route, bool(transaction.working_state.completed_projects.get(project_id, false)))
+	# Starting or resuming Research is a paused-clock command. Publish the actual
+	# Factory-backed eligibility in the same transaction instead of exposing a
+	# transient RUNNING state until the first simulation tick.
+	simulation.refresh_factory_dependent_runtime_state(transaction.working_state)
 	last_notice = I18n.t("notice.research_started", "Research started: %s") % I18n.content(project)
 	transaction.record({"type":"ResearchStarted", "project_id":project_id, "route_id":selected_route, "supplemental_route":bool(transaction.working_state.research.get("supplemental_route", false))})
 	_commit_transaction(transaction)
@@ -992,6 +1453,8 @@ func stop_research() -> bool:
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	# Already consumed materials remain committed to this project attempt.
 	transaction.working_state.research["status"] = "PAUSED"
+	transaction.working_state.research["blocked_reason"] = "MANUALLY_PAUSED"
+	simulation.refresh_factory_dependent_runtime_state(transaction.working_state)
 	last_notice = I18n.t("notice.research_paused", "Research paused")
 	transaction.record({"type":"ResearchPaused", "project_id":transaction.working_state.research.get("project_id", "")})
 	_commit_transaction(transaction)
@@ -1773,6 +2236,117 @@ func runtime_for_domain(domain_id: String) -> Dictionary:
 	return simulation.runtime_for_domain(state, domain_id)
 
 
+## Read-only projection of the physical maintenance reserve required to keep a
+## requested quantity spendable across a future simulation window. Callers use
+## the gross target to stage cargo without reading authoritative maintenance
+## debt or demand registries directly.
+func maintenance_recovery_snapshot(location_id: String, item_id: String, spendable_target: int, horizon_ms: float = 0.0) -> Dictionary:
+	return simulation.maintenance_recovery_requirement(
+		state,
+		location_id,
+		item_id,
+		maxi(0, spendable_target),
+		maxf(0.0, horizon_ms)
+	).duplicate(true)
+
+
+## Read-only projection for multi-stage Research UI, diagnostics and runtime
+## journey verification. Never return the authoritative state Dictionary.
+func research_runtime_snapshot() -> Dictionary:
+	var runtime: Dictionary = state.research
+	var project_id := str(runtime.get("project_id", ""))
+	var stage_index := int(runtime.get("stage_index", 0))
+	var route_id := str(runtime.get("route_id", ""))
+	var project: Dictionary = content.research_projects.get(project_id, {})
+	var stage: Dictionary = simulation.research_stage_definition(state, project, stage_index, route_id) if not project.is_empty() else {}
+	return {
+		"project_id":project_id,
+		"status":str(runtime.get("status", "IDLE")),
+		"stage_index":stage_index,
+		"stage_id":str(runtime.get("stage_id", stage.get("id", ""))),
+		"stage_kind":str(runtime.get("stage_kind", stage.get("kind", ""))),
+		"route_id":route_id,
+		"location_id":str(runtime.get("location_id", "")),
+		"progress_ms":float(runtime.get("progress_ms", 0.0)),
+		"stage_progress_ms":float(runtime.get("stage_progress_ms", 0.0)),
+		"duration_ms":float(runtime.get("duration_ms", stage.get("work_required", 0.0))),
+		"blocked_reason":str(runtime.get("blocked_reason", "")),
+		"blocker":(runtime.get("blocker", {}) as Dictionary).duplicate(true) if runtime.get("blocker", null) is Dictionary else {}
+	}
+
+
+## Read-only projection for Megastructure UI, diagnostics and runtime journey
+## verification. It exposes copied observables and never returns the
+## authoritative project Dictionary.
+func megastructure_runtime_snapshot(megastructure_id: String) -> Dictionary:
+	var definition: Dictionary = content.megastructures.get(megastructure_id, {})
+	if definition.is_empty():
+		return {"valid":false, "megastructure_id":megastructure_id, "reason_code":"UNKNOWN_MEGASTRUCTURE"}
+	var project: Dictionary = state.megastructure_projects.get(megastructure_id, {})
+	var completed := bool(state.megastructures.get(megastructure_id, false))
+	if project.is_empty():
+		return {
+			"valid":true,
+			"megastructure_id":megastructure_id,
+			"selected":false,
+			"completed":completed,
+			"game_complete":bool(state.game_complete),
+			"status":"COMPLETE" if completed else "UNSELECTED",
+			"gameplay_state":simulation.megastructure_gameplay_state(state, megastructure_id),
+			"phase_index":int((definition.get("phases", []) as Array).size()) if completed else 0,
+			"phase_id":"",
+			"phase_history_count":0,
+			"material_flow_status":"COMPLETE" if completed else "UNSELECTED",
+			"phase_start_blocker":{},
+			"phase_runtime":{}
+		}
+	var phases: Array = definition.get("phases", [])
+	var phase_index := int(project.get("phase_index", 0))
+	var phase_runtime_source: Dictionary = project.get("phase_runtime", {})
+	var phase_id := str(phase_runtime_source.get("phase_id", ""))
+	if phase_id.is_empty() and phase_index >= 0 and phase_index < phases.size():
+		phase_id = str((phases[phase_index] as Dictionary).get("id", ""))
+	var phase_runtime := {}
+	if not phase_runtime_source.is_empty():
+		phase_runtime = {
+			"phase_index":int(phase_runtime_source.get("phase_index", phase_index)),
+			"phase_id":str(phase_runtime_source.get("phase_id", phase_id)),
+			"activity_id":str(phase_runtime_source.get("activity_id", "")),
+			"status":str(phase_runtime_source.get("status", "")),
+			"progress_ms":float(phase_runtime_source.get("progress_ms", 0.0)),
+			"duration_ms":float(phase_runtime_source.get("duration_ms", 0.0)),
+			"consumed":(phase_runtime_source.get("consumed", {}) as Dictionary).duplicate(true),
+			"source_breakdown":(phase_runtime_source.get("source_breakdown", {}) as Dictionary).duplicate(true),
+			"blocker":(phase_runtime_source.get("blocker", {}) as Dictionary).duplicate(true),
+			"priority":int(phase_runtime_source.get("priority", 0)),
+			"started_at_ms":int(phase_runtime_source.get("started_at_ms", 0))
+		}
+	var phase_start_blocker := {}
+	if str(project.get("status", "READY")) == "READY" and phase_index > 0 and phase_index < phases.size():
+		var phase: Dictionary = phases[phase_index]
+		var activity: Dictionary = content.activities.get(str(phase.get("activity_id", "")), {})
+		if not activity.is_empty():
+			phase_start_blocker = simulation.megastructure_phase_start_blocker(state, activity, str(project.get("site_location_id", ""))).duplicate(true)
+	return {
+		"valid":true,
+		"megastructure_id":megastructure_id,
+		"selected":true,
+		"completed":completed or str(project.get("status", "")) == "COMPLETE",
+		"game_complete":bool(state.game_complete),
+		"site_location_id":str(project.get("site_location_id", "")),
+		"status":str(project.get("status", "READY")),
+		"gameplay_state":simulation.megastructure_gameplay_state(state, megastructure_id),
+		"phase_index":phase_index,
+		"phase_id":phase_id,
+		"phase_history_count":int((project.get("phase_history", []) as Array).size()),
+		"material_flow_status":str(project.get("material_flow_status", "")),
+		"phase_start_blocker":phase_start_blocker,
+		"phase_runtime":phase_runtime,
+		"started_at_ms":int(project.get("started_at_ms", 0)),
+		"completed_at_ms":int(project.get("completed_at_ms", 0))
+	}
+
+
 func activity_progress(domain_id: String) -> float:
 	return simulation.progress_for_domain(state, domain_id)
 
@@ -1865,23 +2439,24 @@ func _bootstrap_guidance_snapshot() -> Dictionary:
 	}
 	if not _factory_grid_has_produced("iron_ore"):
 		return _guidance_result(base, "operate_factory_grid", "industry", "factory", "earth_orbit", I18n.core("guidance.operate_factory_grid", "Build and connect the starter factory grid. Surface mines collect resources; factory machines handle every production step."))
-	if int(state.completed_activities.get("assemble_frame", 0)) <= 0:
-		var frame_progress := _guidance_material_progress("assemble_frame")
-		if not _guidance_activity_materials_available("assemble_frame"):
-			return _guidance_result(base, "prepare_first_frame", "industry", "production", "assemble_frame", I18n.core("guidance.prepare_first_frame", "3. Prepare 2 Iron Ingots and 1 Copper Ingot for the first Structural Frame.\nCurrent: %s\n\nThe workshop runs one method at a time; stop a completed separation or refining run before switching.") % frame_progress)
-		return _guidance_result(base, "assemble_first_frame", "industry", "production", "assemble_frame", I18n.core("guidance.assemble_first_frame", "4. Materials are ready: %s. Start Structural Frame assembly in Production, then stop repeat production after one unit.") % frame_progress)
-	if "orbital_foundry" not in state.facilities:
-		var foundry_runtime := _guidance_construction_runtime("build_orbital_foundry")
-		var foundry_progress := _guidance_material_progress("build_orbital_foundry", foundry_runtime)
+	if not _factory_grid_has_produced("structural_frame"):
+		var frame_inputs: Array = content.factory_recipes.get("grid_assemble_frame", {}).get("inputs", [])
+		var frame_progress := _guidance_factory_material_progress(frame_inputs)
+		if not _guidance_factory_materials_available(frame_inputs):
+			return _guidance_result(base, "prepare_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.prepare_first_frame", "3. In the Factory grid, refine 2 Iron Ingots and 1 Copper Ingot for the first Structural Frame.\nCurrent Factory custody: %s\n\nConnect the physical outputs to a compatible engineering machine or depot.") % frame_progress)
+		return _guidance_result(base, "assemble_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.assemble_first_frame", "4. Materials are ready in Factory custody: %s. Select Structural Frame assembly on a connected engineering machine.") % frame_progress)
+	if not _factory_has_completed_definition("grid_arc_smelter"):
+		var foundry_runtime := _factory_construction_order("grid_arc_smelter")
+		var foundry_costs: Array = content.factory_buildings.get("grid_arc_smelter", {}).get("construction_cost", [])
+		var foundry_progress := _guidance_factory_material_progress(foundry_costs, foundry_runtime.get("delivered_items", {}))
 		if not foundry_runtime.is_empty():
-			var section := "production" if str(foundry_runtime.get("status", "")) == "BLOCKED" else "construction"
-			return _guidance_result(base, "commission_foundry", "industry", section, "build_orbital_foundry", I18n.core("guidance.foundry_queued", "5. The Orbital Foundry is in the Construction queue (%s).\nMaterial progress: %s\n\nIf blocked, replenish the shortage in Production; Construction resumes automatically.") % [I18n.status(str(foundry_runtime.get("status", "QUEUED"))), foundry_progress])
-		if not _guidance_activity_materials_available("build_orbital_foundry"):
-			return _guidance_result(base, "supply_foundry", "industry", "production", "build_orbital_foundry", I18n.core("guidance.supply_foundry", "5. The Orbital Foundry needs 1 Structural Frame, 4 Iron Ingots and 2 Electronic Components.\nCurrent: %s\n\nKeep the completed frame, stop repeat assembly and refine the remaining inputs.") % foundry_progress)
-		return _guidance_result(base, "commission_foundry", "industry", "construction", "build_orbital_foundry", I18n.core("guidance.commission_foundry", "5. Orbital Foundry materials are ready: %s. Open Construction and queue the facility.") % foundry_progress)
+			return _guidance_result(base, "commission_foundry", "industry", "factory", str(foundry_runtime.get("entity_id", "grid_arc_smelter")), I18n.core("guidance.foundry_queued", "5. The Macro Arc Smelter is in the Factory construction queue (%s).\nDelivered/available material progress: %s\n\nFund its physical order from the same-location depot; Factory construction then resumes automatically.") % [I18n.status(str(foundry_runtime.get("status", "QUEUED"))), foundry_progress])
+		if not _guidance_factory_materials_available(foundry_costs):
+			return _guidance_result(base, "supply_foundry", "industry", "factory", "grid_arc_smelter", I18n.core("guidance.supply_foundry", "5. The Macro Arc Smelter needs 1 Structural Frame, 4 Iron Ingots and 2 Electronic Components.\nCurrent Factory custody: %s\n\nKeep the completed frame and route the remaining refined inputs into storage.") % foundry_progress)
+		return _guidance_result(base, "commission_foundry", "industry", "factory", "grid_arc_smelter", I18n.core("guidance.commission_foundry", "5. Macro Arc Smelter materials are ready in Factory custody: %s. Queue and fund it on the Factory canvas.") % foundry_progress)
 	var has_blocked_research := not str(state.research.get("project_id", "")).is_empty() and str(state.research.get("status", "")) == "BLOCKED"
-	if ("electronics_facility" not in state.facilities or "research_complex" not in state.facilities) and not has_blocked_research:
-		return _guidance_result(base, "commission_research", "industry", "construction", "build_research_complex", I18n.core("guidance.commission_research", "6. Build the High-Energy Systems Facility and Research Complex to open the industrial R&D chain."))
+	if (not _factory_has_completed_definition("grid_electronics_works") or not _factory_has_completed_definition("grid_research_complex")) and not has_blocked_research:
+		return _guidance_result(base, "commission_research", "industry", "factory", "grid_research_complex", I18n.core("guidance.commission_research", "6. Build, fund and power the High-Energy Electronics Works and Grid Research Complex on the Factory canvas to open the industrial R&D chain."))
 	if has_blocked_research:
 		var blocker: Dictionary = state.research.get("blocker", {})
 		if blocker.is_empty():
@@ -1893,7 +2468,7 @@ func _bootstrap_guidance_snapshot() -> Dictionary:
 			page = "expedition"
 		elif str(blocker.get("primary_reason", "")) in ["INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD", "MISSING_FACILITY", "OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE"] or str(requirement.get("type", "")) in ["activity_complete", "own_facility", "manufacturing_module_installed"]:
 			page = "industry"
-			section = "facilities" if str(requirement.get("type", "")) == "manufacturing_module_installed" else "production"
+			section = "factory"
 		var project_id := str(state.research.get("project_id", ""))
 		var resolution := _guidance_research_blocker_resolution(blocker)
 		var result := _guidance_result(base, "research_blocker", page, section, str(requirement.get("id", project_id)), I18n.core("guidance.research_blocker", "%s · %s\nNext step: %s") % [I18n.content(content.research_projects.get(project_id, {"id":project_id, "name":project_id})), requirement_text(requirement), resolution])
@@ -1931,25 +2506,63 @@ func _factory_grid_has_produced(item_id: String) -> bool:
 	return false
 
 
-func _guidance_activity_materials_available(activity_id: String) -> bool:
-	var activity: Dictionary = content.activities.get(activity_id, {})
-	return not activity.is_empty() and simulation.costs_available(state, activity)
+func _factory_has_completed_definition(definition_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> bool:
+	for world_value in state.factory_worlds.values():
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		for entity_value in world.get("entities", {}).values():
+			var entity := entity_value as Dictionary
+			if str(entity.get("definition_id", "")) == definition_id and str(entity.get("status", "")) != "UNDER_CONSTRUCTION":
+				return true
+	return false
 
 
-func _guidance_construction_runtime(activity_id: String) -> Dictionary:
+func _factory_construction_order(definition_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
+	var world_ids: Array = state.factory_worlds.keys()
+	world_ids.sort()
+	for world_id_value in world_ids:
+		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		var order_ids: Array = world.get("construction_orders", {}).keys()
+		order_ids.sort()
+		for order_id_value in order_ids:
+			var order: Dictionary = world.get("construction_orders", {}).get(order_id_value, {})
+			if str(order.get("definition_id", "")) == definition_id and str(order.get("status", "")) not in ["COMPLETE", "CANCELLED", "FAILED"]:
+				return order.duplicate(true)
 	return {}
 
 
-func _guidance_material_progress(activity_id: String, runtime: Dictionary = {}) -> String:
-	var activity: Dictionary = content.activities.get(activity_id, {})
-	var consumed: Dictionary = runtime.get("consumed", {})
+func _guidance_factory_item_quantity(item_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> int:
+	var result := state.available_item_quantity(item_id, location_id)
+	for world_value in state.factory_worlds.values():
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		for entity_value in world.get("entities", {}).values():
+			var entity := entity_value as Dictionary
+			if str(entity.get("kind", "")) == "STORAGE" and str(entity.get("status", "")) != "UNDER_CONSTRUCTION":
+				result += maxi(0, int(entity.get("inventory", {}).get(item_id, 0)))
+	return result
+
+
+func _guidance_factory_materials_available(costs: Array, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> bool:
+	for cost_value in costs:
+		var cost := cost_value as Dictionary
+		if _guidance_factory_item_quantity(str(cost.get("item", "")), location_id) < int(cost.get("quantity", 0)):
+			return false
+	return not costs.is_empty()
+
+
+func _guidance_factory_material_progress(costs: Array, delivered: Dictionary = {}, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> String:
 	var parts: Array[String] = []
-	for cost_value in activity.get("costs", []):
+	for cost_value in costs:
 		var cost := cost_value as Dictionary
 		var item_id := str(cost.get("item", ""))
 		var required := int(cost.get("quantity", 0))
-		var available := state.item_quantity(item_id, SpaceGameState.MAIN_BASE_LOCATION_ID)
-		parts.append(I18n.t("format.item_progress", "%s %d/%d") % [I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), mini(required, int(consumed.get(item_id, 0)) + available), required])
+		var available := _guidance_factory_item_quantity(item_id, location_id)
+		parts.append(I18n.t("format.item_progress", "%s %d/%d") % [I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id})), mini(required, int(delivered.get(item_id, 0)) + available), required])
 	return ", ".join(parts)
 
 
@@ -1958,23 +2571,23 @@ func _guidance_research_blocker_resolution(blocker: Dictionary) -> String:
 	match str(requirement.get("type", "")):
 		"activity_complete":
 			var activity_id := str(requirement.get("id", ""))
-			return I18n.core("guidance.research.activity_complete", "Manufacture %s in Production; the prototype must come from a real industrial line.") % I18n.content(content.activities.get(activity_id, {"id":activity_id, "name":activity_id}))
+			return I18n.core("guidance.research.activity_complete", "Manufacture %s on the Factory grid; the prototype must come from a real physical recipe.") % I18n.content(content.activities.get(activity_id, {"id":activity_id, "name":activity_id}))
 		"manufacturing_module_installed":
 			var module_id := str(requirement.get("id", ""))
 			var module: Dictionary = content.process_modules.get(module_id, content.universal_industry_plugins.get(module_id, {}))
-			return I18n.core("guidance.research.install_module", "Install %s on the specified facility in Facility Configuration.") % I18n.content(module)
+			return I18n.core("guidance.research.install_module", "Build and power the Factory provider that installs %s.") % I18n.content(module)
 	match str(blocker.get("primary_reason", "")):
 		"INPUT_SHORTAGE", "MISSING_CAPITAL_GOOD":
 			var item_id := str(blocker.get("item_id", ""))
-			return I18n.core("guidance.research.input_shortage", "Manufacture %s in Production; it is a physical industrial input.") % I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id}))
+			return I18n.core("guidance.research.input_shortage", "Manufacture %s on the Factory grid; it is a physical industrial input.") % I18n.content(content.items.get(item_id, {"id":item_id, "name":item_id}))
 		"FIELD_TEST_REQUIRED":
 			if str(requirement.get("type", "")) == "route_complete":
 				var route_id := str(requirement.get("id", ""))
 				return I18n.core("guidance.research.field_test", "Run %s from Missions; elapsed time cannot substitute for this Field Test.") % I18n.content(content.expedition_routes.get(route_id, {"id":route_id, "name":route_id}))
 			if str(requirement.get("type", "")) == "own_facility":
 				var facility_id := str(requirement.get("id", ""))
-				return I18n.core("guidance.research.build_facility", "Build and commission %s through Construction.") % I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))
-		"MISSING_FACILITY": return I18n.core("guidance.research.missing_facility", "Install the required experimental or test module in Facility Configuration.")
+				return I18n.core("guidance.research.build_facility", "Build and commission the physical Factory provider for %s.") % I18n.content(content.facilities.get(facility_id, {"id":facility_id, "name":facility_id}))
+		"MISSING_FACILITY": return I18n.core("guidance.research.missing_facility", "Build and power the required experimental or test provider on the Factory grid.")
 		"OPERATING_CONDITION", "RESEARCH_CAPACITY_SHORTAGE": return I18n.core("guidance.research.operating_condition", "Expand research, power, cooling or Location logistics; the program resumes automatically.")
 	return I18n.core("guidance.research.default", "Resolve the single primary requirement shown for this milestone; the program then resumes automatically.")
 

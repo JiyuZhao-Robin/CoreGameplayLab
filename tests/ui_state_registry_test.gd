@@ -5,13 +5,19 @@ const REQUIRED_FIELDS := [
 	"stateId", "domainSource", "affectedScreens", "playerMeaning",
 	"requiredVisualFeedback", "requiredExplanation", "requiredPossibleAction"
 ]
-const REQUIRED_SYSTEMS := ["production", "construction", "research", "logistics", "survey", "megastructure"]
+const REQUIRED_SYSTEMS := ["factory_entity", "factory_link", "factory_construction", "research", "logistics", "survey", "megastructure"]
+const ACTIVE_SCREEN_IDS := [
+	"alerts", "construction", "diagnostics", "expedition", "guidance", "header",
+	"industry.factory", "inventory", "location", "location.logistics", "location.overview",
+	"location.resources", "logistics", "megastructure", "research", "ships", "survey", "system"
+]
 const REQUIRED_CORE_STATES := [
-	"PRODUCTION.RUNNING", "PRODUCTION.BLOCKED_INPUT", "PRODUCTION.BLOCKED_OUTPUT",
-	"PRODUCTION.POWER_LIMITED", "PRODUCTION.COOLING_LIMITED", "PRODUCTION.LOGISTICS_LIMITED",
-	"PRODUCTION.PAUSED", "PRODUCTION.BUILDING", "PRODUCTION.DISABLED",
-	"CONSTRUCTION.WAITING_MATERIAL", "CONSTRUCTION.WAITING_CAPACITY", "CONSTRUCTION.BUILDING",
-	"CONSTRUCTION.PAUSED", "CONSTRUCTION.COMPLETED", "CONSTRUCTION.CANCELLED",
+	"FACTORY_ENTITY.IDLE", "FACTORY_ENTITY.RUNNING", "FACTORY_ENTITY.NO_RESOURCE",
+	"FACTORY_ENTITY.NO_POWER", "FACTORY_ENTITY.POWER_LIMITED", "FACTORY_ENTITY.PARTIAL_COVERAGE",
+	"FACTORY_ENTITY.INPUT_SHORTAGE", "FACTORY_ENTITY.OUTPUT_FULL", "FACTORY_ENTITY.NO_RECIPE",
+	"FACTORY_LINK.IDLE", "FACTORY_LINK.CONNECTED", "FACTORY_LINK.FLOWING",
+	"FACTORY_LINK.SOURCE_EMPTY", "FACTORY_LINK.TARGET_FULL",
+	"FACTORY_CONSTRUCTION.WAITING_MATERIALS", "FACTORY_CONSTRUCTION.READY", "FACTORY_CONSTRUCTION.BUILDING",
 	"RESEARCH.AVAILABLE", "RESEARCH.LOCKED", "RESEARCH.ACTIVE", "RESEARCH.WAITING_MATERIAL",
 	"RESEARCH.WAITING_FACILITY", "RESEARCH.WAITING_PROTOTYPE",
 	"RESEARCH.WAITING_FIELD_TEST", "RESEARCH.PAUSED", "RESEARCH.COMPLETED",
@@ -20,7 +26,7 @@ const REQUIRED_CORE_STATES := [
 	"LOGISTICS.PAUSED",
 	"SURVEY.UNKNOWN", "SURVEY.DETECTED", "SURVEY.SURVEYED", "SURVEY.DEEP_SURVEYED",
 	"MEGASTRUCTURE.LOCKED", "MEGASTRUCTURE.RESEARCH_REQUIRED", "MEGASTRUCTURE.SITE_PREPARATION",
-	"MEGASTRUCTURE.WAITING_MATERIAL", "MEGASTRUCTURE.BUILDING", "MEGASTRUCTURE.INTEGRATION",
+	"MEGASTRUCTURE.WAITING_MATERIAL", "MEGASTRUCTURE.READY", "MEGASTRUCTURE.WAITING_SITE_SERVICE", "MEGASTRUCTURE.BUILDING", "MEGASTRUCTURE.INTEGRATION",
 	"MEGASTRUCTURE.COMMISSIONING", "MEGASTRUCTURE.COMPLETED"
 ]
 
@@ -43,6 +49,7 @@ func _ready() -> void:
 		return
 	var definitions: Array = definitions_value
 	var seen := {}
+	var definitions_by_id := {}
 	var actual_state_ids: Array[String] = []
 	var covered_systems := {}
 	for definition_value in definitions:
@@ -54,6 +61,7 @@ func _ready() -> void:
 		_check(not state_id.is_empty(), "every registry entry has a stateId")
 		_check(not seen.has(state_id), "core state is unique: %s" % state_id)
 		seen[state_id] = true
+		definitions_by_id[state_id] = definition
 		actual_state_ids.append(state_id)
 		var system_id := str(definition.get("systemId", ""))
 		_check(system_id in REQUIRED_SYSTEMS, "state has a core systemId: %s" % state_id)
@@ -64,6 +72,9 @@ func _ready() -> void:
 		_check(not str(definition.get("playerMeaning", "")).strip_edges().is_empty(), "%s has playerMeaning text" % state_id)
 		for array_field in ["affectedScreens", "requiredVisualFeedback", "requiredExplanation", "requiredPossibleAction"]:
 			_validate_non_empty_string_array(state_id, array_field, definition.get(array_field, null))
+		for screen_id_value in definition.get("affectedScreens", []):
+			var screen_id := str(screen_id_value)
+			_check(screen_id in ACTIVE_SCREEN_IDS, "%s references an active player-facing screen: %s" % [state_id, screen_id])
 		_check(str(definition.get("runtimeCoverage", "")) == "UNVERIFIED", "%s does not claim runtime verification" % state_id)
 	for system_id in REQUIRED_SYSTEMS:
 		_check(covered_systems.has(system_id), "registry covers core system: %s" % system_id)
@@ -73,6 +84,12 @@ func _ready() -> void:
 	actual_state_ids.sort()
 	expected_state_ids.sort()
 	_check(actual_state_ids == expected_state_ids, "registry contains exactly the declared core states")
+	var waiting_facility: Dictionary = definitions_by_id.get("RESEARCH.WAITING_FACILITY", {})
+	var waiting_facility_selector := str(waiting_facility.get("domainSource", {}).get("selector", ""))
+	_check(
+		"MISSING_FACILITY" in waiting_facility_selector and "RESEARCH_CAPACITY_SHORTAGE" in waiting_facility_selector,
+		"RESEARCH.WAITING_FACILITY declares both runtime reasons mapped to WAITING_FACILITY"
+	)
 	_finish()
 
 

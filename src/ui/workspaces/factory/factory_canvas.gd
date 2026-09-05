@@ -8,7 +8,9 @@ extends Control
 signal entity_selected(entity: Dictionary)
 signal resource_field_selected(field: Dictionary)
 signal link_selected(link: Dictionary)
+signal construction_order_selected(order: Dictionary)
 signal tile_selected(tile: Vector2i)
+signal tile_hovered(tile: Vector2i)
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const CANVAS_COLOR := Color("0b100e")
@@ -18,6 +20,9 @@ const HEADER_COLOR := Color("171e1b")
 const FOCUS_COLOR := Color("62b5ae")
 const CARGO_COLOR := Color("d5a45c")
 const POWER_COLOR := Color("62b5ae")
+
+## Keep the canvas independently loadable by SceneTree-based component tests.
+@onready var I18n = get_node("/root/I18n")
 
 var _view_model := ViewModelScript.new()
 var _snapshot: Dictionary = {}
@@ -31,6 +36,10 @@ var _dragging := false
 var _last_pointer := Vector2.ZERO
 var _node_rects := {}
 var _link_hit_rects := {}
+var _construction_order_rects := {}
+var _placement_preview: Dictionary = {}
+var _connection_preview := {"source_id":"", "target_id":"", "kind":""}
+var _keyboard_tile := Vector2i.ZERO
 
 
 func _ready() -> void:
@@ -63,8 +72,33 @@ func selected_link_id() -> String:
 
 
 func focus_tile(tile: Vector2i) -> void:
+	_keyboard_tile = tile
 	var tile_position := _world_to_screen(Vector2(tile))
 	_camera += size * 0.5 - tile_position
+	queue_redraw()
+
+
+func reset_camera() -> void:
+	_camera = Vector2.ZERO
+	_zoom = 1.0
+	_keyboard_tile = Vector2i.ZERO
+	queue_redraw()
+
+
+## The workspace provides this presentation-only preview after checking its
+## immutable snapshot. The canvas never validates or mutates factory state.
+func set_placement_preview(preview: Dictionary) -> void:
+	_placement_preview = preview.duplicate(true)
+	queue_redraw()
+
+
+func clear_placement_preview() -> void:
+	_placement_preview.clear()
+	queue_redraw()
+
+
+func set_connection_preview(source_id: String, target_id: String, kind: String) -> void:
+	_connection_preview = {"source_id":source_id, "target_id":target_id, "kind":kind.to_upper()}
 	queue_redraw()
 
 
@@ -82,7 +116,10 @@ func _draw() -> void:
 	_draw_grid()
 	_node_rects.clear()
 	_link_hit_rects.clear()
+	_construction_order_rects.clear()
+	_draw_placement_preview()
 	_draw_links()
+	_draw_connection_preview()
 	_draw_resource_fields()
 	_draw_entities()
 	_draw_construction_orders()
@@ -90,7 +127,7 @@ func _draw() -> void:
 
 func _draw_empty() -> void:
 	var font := get_theme_default_font()
-	draw_string(font, Vector2(20, 34), "Factory telemetry unavailable", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("9aa6a1"))
+	draw_string(font, Vector2(20, 34), I18n.t("factory.canvas.unavailable"), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("9aa6a1"))
 
 
 func _draw_grid() -> void:
@@ -112,7 +149,8 @@ func _draw_resource_fields() -> void:
 		draw_rect(rect, Color(color, 0.18), true)
 		draw_rect(rect, FOCUS_COLOR if selected else Color(color, 0.72), false, 1.4)
 		var font := get_theme_default_font()
-		var label := "%s  ×%.2f" % [str(field.get("resource_id", "RESOURCE")).to_upper(), float(field.get("grade", 1.0))]
+		var resource_id := str(field.get("resource_id", ""))
+		var label := str(field.get("resource_name", _item_name(resource_id))) + " ×" + ("%.2f" % float(field.get("grade", 1.0)))
 		draw_string(font, rect.position + Vector2(5, 15), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(0.0, rect.size.x - 8.0), 10, Color("d5ddd8"))
 
 
@@ -129,7 +167,8 @@ func _draw_entities() -> void:
 		draw_rect(header_rect, HEADER_COLOR, true)
 		draw_circle(header_rect.position + Vector2(9, 11), 3.0, tone)
 		var font := get_theme_default_font()
-		var kind := str(entity.get("node_kind", "UNIT")).replace("_", " ")
+		var kind_id := str(entity.get("node_kind", "UNIT"))
+		var kind: String = str(I18n.t("factory.kind.%s" % kind_id.to_lower()))
 		draw_string(font, header_rect.position + Vector2(16, 14), kind, HORIZONTAL_ALIGNMENT_LEFT, header_rect.size.x - 18, 9, Color("a5b2ac"))
 		draw_string(font, rect.position + Vector2(8, minf(39.0, rect.size.y - 8.0)), str(entity.get("name", entity.get("id", "Unit"))), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 11, Color("e6eeea"))
 		var progress := clampf(float(entity.get("progress", 0.0)), 0.0, 1.0)
@@ -145,13 +184,49 @@ func _draw_construction_orders() -> void:
 	for order_value in _snapshot.get("construction_orders", []):
 		var order := order_value as Dictionary
 		var rect := _footprint_rect(order.get("footprint", {}), 4.0)
+		_construction_order_rects[str(order.get("id", ""))] = {"rect":rect, "data":order}
 		var tone := _status_color(str(order.get("status", "WAITING_MATERIALS")))
 		draw_dashed_line(rect.position, Vector2(rect.end.x, rect.position.y), tone, 1.0, 4.0)
 		draw_dashed_line(Vector2(rect.end.x, rect.position.y), rect.end, tone, 1.0, 4.0)
 		draw_dashed_line(rect.end, Vector2(rect.position.x, rect.end.y), tone, 1.0, 4.0)
 		draw_dashed_line(Vector2(rect.position.x, rect.end.y), rect.position, tone, 1.0, 4.0)
 		var font := get_theme_default_font()
-		draw_string(font, rect.position + Vector2(5, 14), "BUILD %d%%" % roundi(float(order.get("progress", 0.0)) * 100.0), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 8, 9, tone)
+		draw_string(font, rect.position + Vector2(5, 14), I18n.t("factory.canvas.build_progress") % roundi(float(order.get("progress", 0.0)) * 100.0), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 8, 9, tone)
+
+
+func _draw_placement_preview() -> void:
+	if _placement_preview.is_empty():
+		return
+	var footprint_value: Variant = _placement_preview.get("footprint", {})
+	if not footprint_value is Dictionary:
+		return
+	var rect := _footprint_rect(footprint_value, 2.0)
+	var is_valid := bool(_placement_preview.get("valid", false))
+	var tone := Color("6fbf92") if is_valid else Color("d86e63")
+	draw_rect(rect, Color(tone, 0.20), true)
+	draw_dashed_line(rect.position, Vector2(rect.end.x, rect.position.y), tone, 2.0, 5.0)
+	draw_dashed_line(Vector2(rect.end.x, rect.position.y), rect.end, tone, 2.0, 5.0)
+	draw_dashed_line(rect.end, Vector2(rect.position.x, rect.end.y), tone, 2.0, 5.0)
+	draw_dashed_line(Vector2(rect.position.x, rect.end.y), rect.position, tone, 2.0, 5.0)
+	var status := _status_name("READY" if is_valid else str(_placement_preview.get("reason_code", "BLOCKED")))
+	draw_string(get_theme_default_font(), rect.position + Vector2(4, -4), status, HORIZONTAL_ALIGNMENT_LEFT, 160, 10, tone)
+
+
+func _draw_connection_preview() -> void:
+	var source_id := str(_connection_preview.get("source_id", ""))
+	var target_id := str(_connection_preview.get("target_id", ""))
+	if source_id.is_empty() or target_id.is_empty() or source_id == target_id:
+		return
+	var source := _entity_by_id(source_id)
+	var target := _entity_by_id(target_id)
+	if source.is_empty() or target.is_empty():
+		return
+	var from := _footprint_rect(source.get("footprint", {}), 4.0).get_center()
+	var to := _footprint_rect(target.get("footprint", {}), 4.0).get_center()
+	var kind := str(_connection_preview.get("kind", "CARGO"))
+	var tone := POWER_COLOR if kind == "POWER" else CARGO_COLOR
+	draw_dashed_line(from, to, tone, 2.0, 5.0)
+	_draw_link_arrow(from, to, tone)
 
 
 func _draw_links() -> void:
@@ -234,12 +309,55 @@ func _on_gui_input(event: InputEvent) -> void:
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
 			_select_at(mouse_event.position)
 			accept_event()
-	elif event is InputEventMouseMotion and _dragging:
+	elif event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
-		_camera += motion.position - _last_pointer
-		_last_pointer = motion.position
-		queue_redraw()
-		accept_event()
+		if _dragging:
+			_camera += motion.position - _last_pointer
+			_last_pointer = motion.position
+			queue_redraw()
+			accept_event()
+			return
+		_keyboard_tile = _screen_to_tile(motion.position)
+		tile_hovered.emit(_keyboard_tile)
+	elif event is InputEventKey:
+		var key_event := event as InputEventKey
+		if not key_event.pressed or key_event.echo:
+			return
+		var handled := true
+		match key_event.keycode:
+			KEY_LEFT:
+				_move_keyboard_tile(Vector2i.LEFT)
+			KEY_RIGHT:
+				_move_keyboard_tile(Vector2i.RIGHT)
+			KEY_UP:
+				_move_keyboard_tile(Vector2i.UP)
+			KEY_DOWN:
+				_move_keyboard_tile(Vector2i.DOWN)
+			KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
+				tile_selected.emit(_keyboard_tile)
+			KEY_PLUS, KEY_EQUAL:
+				_adjust_zoom(1.14)
+			KEY_MINUS:
+				_adjust_zoom(0.88)
+			KEY_HOME:
+				reset_camera()
+			_:
+				handled = false
+		if handled:
+			accept_event()
+
+
+func _move_keyboard_tile(offset: Vector2i) -> void:
+	_keyboard_tile += offset
+	focus_tile(_keyboard_tile)
+	tile_hovered.emit(_keyboard_tile)
+
+
+func _adjust_zoom(multiplier: float) -> void:
+	var before := _keyboard_tile
+	_zoom = clampf(_zoom * multiplier, 0.35, 2.5)
+	_camera = size * 0.5 - Vector2(before) * maxf(2.0, 4.0 * _zoom)
+	queue_redraw()
 
 
 func _select_at(point: Vector2) -> void:
@@ -252,6 +370,18 @@ func _select_at(point: Vector2) -> void:
 			link_selected.emit(_link_by_id(link_id))
 			queue_redraw()
 			return
+	# Construction orders are drawn above resource fields.  Their inspector must
+	# remain reachable when an in-progress build occupies an extraction field.
+	for order_id_value in _construction_order_rects.keys():
+		var order_id := str(order_id_value)
+		var order_row: Dictionary = _construction_order_rects.get(order_id, {})
+		var order_rect: Rect2 = order_row.get("rect", Rect2())
+		if order_rect.has_point(point):
+			_selected_node_id = ""
+			_selected_link_id = ""
+			construction_order_selected.emit((order_row.get("data", {}) as Dictionary).duplicate(true))
+			queue_redraw()
+			return
 	var node_ids: Array = _node_rects.keys()
 	node_ids.reverse()
 	for node_id_value in node_ids:
@@ -259,6 +389,11 @@ func _select_at(point: Vector2) -> void:
 		var row: Dictionary = _node_rects.get(node_id, {})
 		var rect: Rect2 = row.get("rect", Rect2())
 		if rect.has_point(point):
+			# A valid placement preview on a resource field (notably an
+			# extractor) is an intentional build gesture, not field selection.
+			if not bool(row.get("is_entity", false)) and _placement_preview_contains(point):
+				_select_tile(point)
+				return
 			_selected_node_id = node_id
 			_selected_link_id = ""
 			if bool(row.get("is_entity", false)):
@@ -267,9 +402,21 @@ func _select_at(point: Vector2) -> void:
 				resource_field_selected.emit((row.get("data", {}) as Dictionary).duplicate(true))
 			queue_redraw()
 			return
+	_select_tile(point)
+
+
+func _placement_preview_contains(point: Vector2) -> bool:
+	if not bool(_placement_preview.get("valid", false)):
+		return false
+	var footprint_value: Variant = _placement_preview.get("footprint", {})
+	return footprint_value is Dictionary and _footprint_rect(footprint_value, 2.0).has_point(point)
+
+
+func _select_tile(point: Vector2) -> void:
 	_selected_node_id = ""
 	_selected_link_id = ""
-	tile_selected.emit(_screen_to_tile(point))
+	_keyboard_tile = _screen_to_tile(point)
+	tile_selected.emit(_keyboard_tile)
 	queue_redraw()
 
 
@@ -343,3 +490,14 @@ func _has_active_flow() -> bool:
 		if float((link_value as Dictionary).get("last_flow", 0.0)) > 0.00001:
 			return true
 	return false
+
+
+func _status_name(status_id: String) -> String:
+	return I18n.status(status_id)
+
+
+func _item_name(item_id: String) -> String:
+	if item_id.is_empty():
+		return I18n.t("factory.resource_field")
+	var names: Dictionary = _snapshot.get("item_names", {}) if _snapshot.get("item_names", {}) is Dictionary else {}
+	return str(names.get(item_id, item_id.replace("_", " ").capitalize()))

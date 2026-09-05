@@ -83,6 +83,19 @@ func normalize_world(source: Dictionary) -> Dictionary:
 	for field in ["resource_fields", "entities", "links", "construction_orders", "command_receipts", "tile_deltas", "revealed_chunks", "statistics"]:
 		if source.get(field, null) is Dictionary:
 			normalized[field] = source.get(field, {}).duplicate(true)
+	# Command receipts are authoritative idempotency records, not presentation
+	# snapshots. Strip legacy localized messages and retain a stable localization
+	# key so loading a save under another locale stays deterministic.
+	for command_id_value in normalized.get("command_receipts", {}).keys():
+		var receipt_value = normalized.get("command_receipts", {}).get(command_id_value, null)
+		if receipt_value is not Dictionary:
+			continue
+		var receipt := receipt_value as Dictionary
+		receipt.erase("message")
+		if str(receipt.get("message_key", "")).is_empty():
+			var command_kind := str(receipt.get("command_kind", "")).to_lower()
+			if not command_kind.is_empty():
+				receipt["message_key"] = "factory.success.%s" % command_kind
 	if source.get("command_receipt_order", null) is Array:
 		normalized["command_receipt_order"] = source.get("command_receipt_order", []).duplicate(true)
 	for field in ["next_entity_serial", "next_link_serial", "next_construction_serial"]:
@@ -397,6 +410,8 @@ func fund_construction_from_storage(world: Dictionary, order_id: String, storage
 		# Delivery only changes custody from storage to the construction order.
 		# The material remains a physical asset until the order completes.
 		_add_statistic(world, "construction_delivered", item_id, quantity)
+	if moved.is_empty():
+		return _failure("INPUT_SHORTAGE", "No required construction materials are available in this storage")
 	order["delivered_items"] = delivered
 	if _construction_funded(order):
 		order["status"] = "READY"
@@ -409,6 +424,137 @@ func fund_construction_from_storage(world: Dictionary, order_id: String, storage
 	return {"ok":true, "moved":moved, "fully_funded":_construction_funded(order)}
 
 
+## Stages materials offered by the same Location Inventory. The caller owns the
+## matching removal from that inventory inside the same transaction.
+func fund_construction_from_external(world: Dictionary, order_id: String, available_items: Dictionary) -> Dictionary:
+	var order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+	if order.is_empty() or str(order.get("status", "")) in ["COMPLETE", "CANCELLED", "FAILED"]:
+		return _failure("INVALID_CONSTRUCTION_ORDER", "Construction order is not fundable")
+	var previous_status := str(order.get("status", ""))
+	var delivered: Dictionary = order.get("delivered_items", {})
+	var moved := {}
+	for item_id_value in _sorted_keys(order.get("required_items", {})):
+		var item_id := str(item_id_value)
+		var need := maxi(0, int(order.get("required_items", {}).get(item_id, 0)) - int(delivered.get(item_id, 0)))
+		var quantity := mini(need, maxi(0, int(available_items.get(item_id, 0))))
+		if quantity <= 0:
+			continue
+		delivered[item_id] = int(delivered.get(item_id, 0)) + quantity
+		moved[item_id] = quantity
+		_add_statistic(world, "construction_delivered", item_id, quantity)
+	if moved.is_empty():
+		return _failure("INPUT_SHORTAGE", "No required construction materials are available in this inventory")
+	order["delivered_items"] = delivered
+	if _construction_funded(order):
+		order["status"] = "READY"
+		order["blocked_reason"] = ""
+	else:
+		order["status"] = "WAITING_MATERIALS"
+		order["blocked_reason"] = "MISSING_MATERIALS"
+	if not moved.is_empty() or previous_status != str(order.get("status", "")):
+		_bump_runtime_revision(world)
+	return {"ok":true, "moved":moved, "fully_funded":_construction_funded(order)}
+
+
+## Moves physical items across the FactoryWorld boundary without creating or
+## destroying them. The application layer owns the matching Location Inventory
+## mutation and wraps both sides in one GameStateTransaction.
+func deposit_storage_inventory(world: Dictionary, storage_id: String, item_id: String, requested: int) -> Dictionary:
+	if item_id.is_empty() or requested <= 0:
+		return _failure("INVALID_TRANSFER", "Factory storage transfer requires an item and positive quantity")
+	var storage: Dictionary = world.get("entities", {}).get(storage_id, {})
+	if str(storage.get("kind", "")) != "STORAGE" or str(storage.get("status", "")) == "UNDER_CONSTRUCTION":
+		return _failure("INVALID_STORAGE", "Factory transfer requires an operational storage entity")
+	var free_capacity := _target_free_capacity(storage, item_id)
+	if free_capacity < requested:
+		return _failure("STORAGE_FULL", "Factory storage has insufficient capacity for the requested transfer")
+	var moved := requested
+	var inventory: Dictionary = storage.get("inventory", {})
+	inventory[item_id] = int(inventory.get(item_id, 0)) + moved
+	_add_statistic(world, "external_imported", item_id, moved)
+	_bump_runtime_revision(world)
+	return {"ok":true, "moved":moved, "storage_id":storage_id, "item_id":item_id}
+
+
+func withdraw_storage_inventory(world: Dictionary, storage_id: String, item_id: String, requested: int) -> Dictionary:
+	if item_id.is_empty() or requested <= 0:
+		return _failure("INVALID_TRANSFER", "Factory storage transfer requires an item and positive quantity")
+	var storage: Dictionary = world.get("entities", {}).get(storage_id, {})
+	if str(storage.get("kind", "")) != "STORAGE" or str(storage.get("status", "")) == "UNDER_CONSTRUCTION":
+		return _failure("INVALID_STORAGE", "Factory transfer requires an operational storage entity")
+	var inventory: Dictionary = storage.get("inventory", {})
+	var on_hand := maxi(0, int(inventory.get(item_id, 0)))
+	if on_hand < requested:
+		return _failure("STORAGE_EMPTY", "Factory storage does not contain the requested quantity")
+	var moved := requested
+	inventory[item_id] = int(inventory.get(item_id, 0)) - moved
+	_add_statistic(world, "external_exported", item_id, moved)
+	_bump_runtime_revision(world)
+	return {"ok":true, "moved":moved, "storage_id":storage_id, "item_id":item_id}
+
+
+## Consumes a fully preflighted quantity from physical Factory custody without
+## pretending it crossed back into Location inventory. The application layer
+## calls this only inside the same transaction that starts a Megastructure phase.
+func consume_storage_inventory(world: Dictionary, storage_id: String, item_id: String, requested: int) -> Dictionary:
+	if item_id.is_empty() or requested <= 0:
+		return _failure("INVALID_TRANSFER", "Factory storage consumption requires an item and positive quantity")
+	var storage: Dictionary = world.get("entities", {}).get(storage_id, {})
+	if str(storage.get("kind", "")) != "STORAGE" or str(storage.get("status", "")) == "UNDER_CONSTRUCTION":
+		return _failure("INVALID_STORAGE", "Factory consumption requires an operational storage entity")
+	var inventory: Dictionary = storage.get("inventory", {})
+	var on_hand := maxi(0, int(inventory.get(item_id, 0)))
+	if on_hand < requested:
+		return _failure("STORAGE_EMPTY", "Factory storage does not contain the requested quantity")
+	inventory[item_id] = on_hand - requested
+	_add_statistic(world, "consumed", item_id, requested)
+	_bump_runtime_revision(world)
+	return {"ok":true, "moved":requested, "storage_id":storage_id, "item_id":item_id}
+
+
+## Reconfigures an existing physical machine without destroying buffered cargo.
+## Cargo edges whose ports no longer exist are removed atomically so a stale
+## route cannot continue feeding or draining an incompatible recipe.
+func set_entity_recipe(world: Dictionary, entity_id: String, recipe_id: String) -> Dictionary:
+	var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
+	if entity.is_empty():
+		return _failure("UNKNOWN_ENTITY", "The selected Factory entity does not exist")
+	if str(entity.get("kind", "")) != "MACHINE":
+		return _failure("INVALID_MACHINE", "Only a completed Factory machine can change recipe")
+	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+	var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
+	if recipe.is_empty() or not definition.get("recipe_ids", []).has(recipe_id):
+		return _failure("INCOMPATIBLE_RECIPE", "The selected recipe is incompatible with this machine")
+	var previous_recipe_id := str(entity.get("recipe_id", ""))
+	if previous_recipe_id == recipe_id:
+		return {"ok":true, "entity_id":entity_id, "previous_recipe_id":previous_recipe_id, "recipe_id":recipe_id, "removed_link_ids":[]}
+	entity["recipe_id"] = recipe_id
+	entity["progress"] = 0.0
+	entity["actual_rate"] = 0.0
+	entity["status"] = "READY"
+	var removed_link_ids: Array[String] = []
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link_id := str(link_id_value)
+		var link: Dictionary = world.get("links", {}).get(link_id, {})
+		if str(link.get("kind", "")) != "CARGO":
+			continue
+		var source: Dictionary = world.get("entities", {}).get(str(link.get("source_id", "")), {})
+		var target: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
+		var item_id := str(link.get("item_id", ""))
+		if (str(link.get("source_id", "")) == entity_id and not _entity_can_output(world, source, item_id)) or (str(link.get("target_id", "")) == entity_id and not _entity_can_input(target, item_id)):
+			removed_link_ids.append(link_id)
+	for link_id in removed_link_ids:
+		world.get("links", {}).erase(link_id)
+	_bump_topology_revision(world)
+	return {
+		"ok":true,
+		"entity_id":entity_id,
+		"previous_recipe_id":previous_recipe_id,
+		"recipe_id":recipe_id,
+		"removed_link_ids":removed_link_ids
+	}
+
+
 func connect_entities(world: Dictionary, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1) -> Dictionary:
 	if kind not in LINK_KINDS or source_id == target_id:
 		return _failure("INVALID_LINK", "Link kind and endpoints must be valid")
@@ -416,6 +562,10 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 	var target: Dictionary = world.get("entities", {}).get(target_id, {})
 	if source.is_empty() or target.is_empty():
 		return _failure("MISSING_ENDPOINT", "Both link endpoints must exist")
+	# POWER has no item channel. Canonicalize before duplicate detection so an
+	# ignored payload item cannot create parallel copies of the same edge.
+	if kind == "POWER":
+		item_id = ""
 	for link_value in world.get("links", {}).values():
 		var existing := link_value as Dictionary
 		if str(existing.get("kind", "")) == kind and str(existing.get("source_id", "")) == source_id and str(existing.get("target_id", "")) == target_id and str(existing.get("item_id", "")) == item_id:
@@ -431,7 +581,10 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 				if str(occupied.get("kind", "")) == "CARGO" and str(occupied.get("target_id", "")) == target_id and str(occupied.get("item_id", "")) == item_id:
 					return _failure("CARGO_INPUT_OCCUPIED", "A target item port accepts one incoming cargo link")
 		"POWER":
-			item_id = ""
+			var source_definition: Dictionary = building_definitions.get(str(source.get("definition_id", "")), {})
+			var target_definition: Dictionary = building_definitions.get(str(target.get("definition_id", "")), {})
+			if float(source_definition.get("power_generation_kw", 0.0)) <= EPSILON or float(target_definition.get("power_demand_kw", 0.0)) <= EPSILON:
+				return _failure("INVALID_LINK", "Power links require a generating source and a consuming target")
 	var link_id := _next_id(world, "next_link_serial", "LINK-")
 	world["links"][link_id] = {
 		"id":link_id,
@@ -474,6 +627,44 @@ func advance_world(world: Dictionary, elapsed_ms: float) -> Dictionary:
 	return {"simulated_ms":maxf(0.0, elapsed_ms), "steps":steps, "events":events}
 
 
+## Recompute topology-derived power and the corresponding zero-time operational
+## presentation without advancing clocks, moving cargo, or producing items.
+## Application commands use this immediately after a topology change so UI and
+## downstream availability checks observe one internally consistent graph.
+func refresh_derived_state(world: Dictionary) -> Dictionary:
+	var power_factors := _calculate_power_factors(world)
+	_refresh_operational_status(world, power_factors)
+	return power_factors
+
+
+## Factory evaluates physical flow in fixed deterministic ticks. The top-level
+## simulator uses the same tick as a cross-domain boundary whenever the world
+## can produce, extract, or complete funded construction, so a result created at
+## the end of a tick cannot be consumed retroactively during that tick.
+func synchronization_boundary_ms(world: Dictionary) -> float:
+	var result := INF
+	var construction_capacity := _construction_capacity_per_second(world)
+	var orders: Array = world.get("construction_orders", {}).values()
+	orders.sort_custom(func(a, b):
+		var a_priority := int((a as Dictionary).get("priority", 50))
+		var b_priority := int((b as Dictionary).get("priority", 50))
+		return str((a as Dictionary).get("id", "")) < str((b as Dictionary).get("id", "")) if a_priority == b_priority else a_priority > b_priority
+	)
+	for order_value in orders:
+		var order := order_value as Dictionary
+		if _construction_funded(order) and construction_capacity > EPSILON:
+			var work_remaining := maxf(0.0, float(order.get("work_required", 1.0)) - float(order.get("work_done", 0.0)))
+			result = minf(result, maxf(0.001, work_remaining / construction_capacity * 1000.0))
+			break
+	for entity_value in world.get("entities", {}).values():
+		if str((entity_value as Dictionary).get("kind", "")) in ["EXTRACTOR", "MACHINE"]:
+			var tick_ms := maxf(0.05, float(rules.get("simulation_step_seconds", DEFAULT_STEP_SECONDS))) * 1000.0
+			var tick_progress := fposmod(maxf(0.0, float(world.get("elapsed_ms", 0.0))), tick_ms)
+			result = minf(result, tick_ms if tick_progress <= 0.001 else tick_ms - tick_progress)
+			break
+	return result
+
+
 func _step(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void:
 	for link_value in world.get("links", {}).values():
 		var link := link_value as Dictionary
@@ -482,8 +673,8 @@ func _step(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void
 			link["capacity_progress"] = float(link.get("capacity_progress", 0.0)) + maxf(0.0, float(link.get("capacity_per_second", 0.0))) * seconds
 	_transfer_cargo(world, seconds)
 	var power_factors := _calculate_power_factors(world)
-	_run_extractors(world, seconds, power_factors)
-	_run_machines(world, seconds, power_factors)
+	_run_extractors(world, seconds, power_factors, events)
+	_run_machines(world, seconds, power_factors, events)
 	_transfer_cargo(world, seconds)
 	# Unused whole-unit throughput expires at the end of this simulation step.
 	# Only sub-unit progress crosses a boundary, so a blocked belt cannot bank
@@ -529,77 +720,118 @@ func _calculate_power_factors(world: Dictionary) -> Dictionary:
 	return factors
 
 
-func _run_extractors(world: Dictionary, seconds: float, power_factors: Dictionary) -> void:
+func _refresh_operational_status(world: Dictionary, power_factors: Dictionary) -> void:
+	for entity_id_value in _sorted_keys(world.get("entities", {})):
+		var entity_id := str(entity_id_value)
+		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
+		match str(entity.get("kind", "")):
+			"EXTRACTOR":
+				_apply_operational_projection(entity, _extractor_operational_projection(world, entity_id, entity, power_factors))
+			"MACHINE":
+				_apply_operational_projection(entity, _machine_operational_projection(entity_id, entity, power_factors))
+
+
+func _apply_operational_projection(entity: Dictionary, projection: Dictionary) -> void:
+	entity["status"] = str(projection.get("status", "IDLE"))
+	entity["actual_rate"] = maxf(0.0, float(projection.get("actual_rate", 0.0)))
+
+
+func _extractor_operational_projection(world: Dictionary, entity_id: String, entity: Dictionary, power_factors: Dictionary) -> Dictionary:
+	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+	var resource_profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+	_apply_extractor_resource_profile(entity, resource_profile)
+	var projection := {"status":"NO_RESOURCE", "actual_rate":0.0, "resource_profile":resource_profile, "resource_id":str(resource_profile.get("resource_id", "")), "free":0}
+	if int(resource_profile.get("covered_resource_tiles", 0)) <= 0 or bool(resource_profile.get("mixed_resource_types", false)):
+		return projection
+	var factor := float(power_factors.get(entity_id, 0.0))
+	if factor <= EPSILON:
+		projection["status"] = "NO_POWER"
+		return projection
+	var free := maxi(0, int(definition.get("output_capacity", 0)) - _dictionary_total(entity.get("outputs", {})))
+	projection["free"] = free
+	if free <= 0:
+		projection["status"] = "OUTPUT_FULL"
+		return projection
+	var sustainable_rate := float(resource_profile.get("sustainable_rate_per_second", 0.0))
+	var installed_rate := maxf(0.0, float(definition.get("mining_rate_per_second", 0.0)))
+	projection["actual_rate"] = minf(installed_rate * maxf(EPSILON, float(resource_profile.get("average_grade", 1.0))) * float(resource_profile.get("coverage_efficiency", 0.0)) * factor, sustainable_rate)
+	projection["status"] = "POWER_LIMITED" if factor < 0.999 else ("PARTIAL_COVERAGE" if float(resource_profile.get("coverage_efficiency", 0.0)) < 0.999 else "RUNNING")
+	return projection
+
+
+func _machine_operational_projection(entity_id: String, entity: Dictionary, power_factors: Dictionary) -> Dictionary:
+	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+	var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
+	var projection := {"status":"NO_RECIPE", "actual_rate":0.0, "recipe":recipe, "available_cycles":0, "output_cycles":0}
+	if recipe.is_empty():
+		return projection
+	var factor := float(power_factors.get(entity_id, 0.0))
+	if factor <= EPSILON:
+		projection["status"] = "NO_POWER"
+		return projection
+	var available_cycles := _available_recipe_input_cycles(entity, recipe)
+	projection["available_cycles"] = available_cycles
+	if available_cycles <= 0:
+		projection["status"] = "INPUT_SHORTAGE"
+		return projection
+	var output_cycles := _available_recipe_output_cycles(entity, definition, recipe)
+	projection["output_cycles"] = output_cycles
+	if output_cycles <= 0:
+		projection["status"] = "OUTPUT_FULL"
+		return projection
+	projection["actual_rate"] = maxf(EPSILON, float(definition.get("speed", 1.0))) / maxf(EPSILON, float(recipe.get("duration_seconds", 1.0))) * factor
+	projection["status"] = "POWER_LIMITED" if factor < 0.999 else "RUNNING"
+	return projection
+
+
+func _run_extractors(world: Dictionary, seconds: float, power_factors: Dictionary, events: Array[Dictionary]) -> void:
 	for entity_id_value in _sorted_keys(world.get("entities", {})):
 		var entity_id := str(entity_id_value)
 		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
 		if str(entity.get("kind", "")) != "EXTRACTOR":
 			continue
-		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
-		var resource_profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
-		_apply_extractor_resource_profile(entity, resource_profile)
-		if int(resource_profile.get("covered_resource_tiles", 0)) <= 0 or bool(resource_profile.get("mixed_resource_types", false)):
-			entity["status"] = "NO_RESOURCE"
-			entity["actual_rate"] = 0.0
+		var projection := _extractor_operational_projection(world, entity_id, entity, power_factors)
+		_apply_operational_projection(entity, projection)
+		if str(projection.get("status", "")) in ["NO_RESOURCE", "NO_POWER", "OUTPUT_FULL"]:
 			continue
-		var factor := float(power_factors.get(entity_id, 0.0))
-		if factor <= EPSILON:
-			entity["status"] = "NO_POWER"
-			entity["actual_rate"] = 0.0
-			continue
-		var resource_id := str(resource_profile.get("resource_id", ""))
-		var output_capacity := maxi(0, int(definition.get("output_capacity", 0)))
+		var resource_id := str(projection.get("resource_id", ""))
 		var current := maxi(0, int(entity.get("outputs", {}).get(resource_id, 0)))
-		var free := maxi(0, output_capacity - _dictionary_total(entity.get("outputs", {})))
-		if free <= 0:
-			entity["status"] = "OUTPUT_FULL"
-			entity["actual_rate"] = 0.0
-			continue
-		var sustainable_rate := float(resource_profile.get("sustainable_rate_per_second", 0.0))
-		var installed_rate := maxf(0.0, float(definition.get("mining_rate_per_second", 0.0)))
-		var unconstrained_rate := installed_rate * maxf(EPSILON, float(resource_profile.get("average_grade", 1.0))) * float(resource_profile.get("coverage_efficiency", 0.0)) * factor
-		var actual_rate := minf(unconstrained_rate, sustainable_rate)
+		var free := maxi(0, int(projection.get("free", 0)))
+		var actual_rate := maxf(0.0, float(projection.get("actual_rate", 0.0)))
 		entity["progress"] = float(entity.get("progress", 0.0)) + actual_rate * seconds
 		var produced := mini(free, maxi(0, floori(float(entity.get("progress", 0.0)) + EPSILON)))
 		if produced > 0:
 			entity["outputs"][resource_id] = current + produced
 			entity["progress"] = 0.0 if produced >= free else maxf(0.0, float(entity.get("progress", 0.0)) - float(produced))
 			_add_statistic(world, "produced", resource_id, produced)
-		entity["actual_rate"] = actual_rate
-		entity["status"] = "POWER_LIMITED" if factor < 0.999 else ("PARTIAL_COVERAGE" if float(resource_profile.get("coverage_efficiency", 0.0)) < 0.999 else "RUNNING")
+			events.append({
+				"type":"FactoryResourceExtracted",
+				"world_id":str(world.get("world_id", "")),
+				"entity_id":entity_id,
+				"resource_id":resource_id,
+				"activity_id":str(rules.get("resource_activity_ids", {}).get(resource_id, "")),
+				"quantity":produced
+			})
 
 
-func _run_machines(world: Dictionary, seconds: float, power_factors: Dictionary) -> void:
+func _run_machines(world: Dictionary, seconds: float, power_factors: Dictionary, events: Array[Dictionary]) -> void:
 	for entity_id_value in _sorted_keys(world.get("entities", {})):
 		var entity_id := str(entity_id_value)
 		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
 		if str(entity.get("kind", "")) != "MACHINE":
 			continue
-		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
-		var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
-		if recipe.is_empty():
-			entity["status"] = "NO_RECIPE"
-			entity["actual_rate"] = 0.0
+		var projection := _machine_operational_projection(entity_id, entity, power_factors)
+		_apply_operational_projection(entity, projection)
+		if str(projection.get("status", "")) in ["NO_RECIPE", "NO_POWER", "INPUT_SHORTAGE", "OUTPUT_FULL"]:
 			continue
-		var factor := float(power_factors.get(entity_id, 0.0))
-		if factor <= EPSILON:
-			entity["status"] = "NO_POWER"
-			entity["actual_rate"] = 0.0
-			continue
-		var available_cycles := _available_recipe_input_cycles(entity, recipe)
-		if available_cycles <= 0:
-			entity["status"] = "INPUT_SHORTAGE"
-			entity["actual_rate"] = 0.0
-			continue
-		var output_cycles := _available_recipe_output_cycles(entity, definition, recipe)
-		if output_cycles <= 0:
-			entity["status"] = "OUTPUT_FULL"
-			entity["actual_rate"] = 0.0
-			continue
-		var cycle_rate := maxf(EPSILON, float(definition.get("speed", 1.0))) / maxf(EPSILON, float(recipe.get("duration_seconds", 1.0))) * factor
+		var recipe := projection.get("recipe", {}) as Dictionary
+		var available_cycles := maxi(0, int(projection.get("available_cycles", 0)))
+		var output_cycles := maxi(0, int(projection.get("output_cycles", 0)))
+		var cycle_rate := maxf(0.0, float(projection.get("actual_rate", 0.0)))
 		entity["progress"] = float(entity.get("progress", 0.0)) + cycle_rate * seconds
 		var completed_cycles := mini(mini(available_cycles, output_cycles), maxi(0, floori(float(entity.get("progress", 0.0)) + EPSILON)))
 		if completed_cycles > 0:
+			var produced_items := {}
 			for input_value in recipe.get("inputs", []):
 				var input := input_value as Dictionary
 				var item_id := str(input.get("item", ""))
@@ -612,9 +844,17 @@ func _run_machines(world: Dictionary, seconds: float, power_factors: Dictionary)
 				var quantity := int(output.get("quantity", 0)) * completed_cycles
 				entity["outputs"][item_id] = int(entity.get("outputs", {}).get(item_id, 0)) + quantity
 				_add_statistic(world, "produced", item_id, quantity)
+				produced_items[item_id] = int(produced_items.get(item_id, 0)) + quantity
 			entity["progress"] = maxf(0.0, float(entity.get("progress", 0.0)) - float(completed_cycles))
-		entity["actual_rate"] = cycle_rate
-		entity["status"] = "POWER_LIMITED" if factor < 0.999 else "RUNNING"
+			events.append({
+				"type":"FactoryRecipeCompleted",
+				"world_id":str(world.get("world_id", "")),
+				"entity_id":entity_id,
+				"recipe_id":str(recipe.get("id", "")),
+				"activity_id":str(recipe.get("activity_id", "")),
+				"completed_cycles":completed_cycles,
+				"produced":produced_items
+			})
 
 
 func _transfer_cargo(world: Dictionary, seconds: float) -> void:
@@ -714,12 +954,7 @@ func _fair_priority_allocations(source: Dictionary, item_id: String, priority: i
 
 
 func _advance_construction(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void:
-	var capacity := maxf(0.0, float(rules.get("base_construction_capacity_per_second", 1.0)))
-	for entity_value in world.get("entities", {}).values():
-		var entity := entity_value as Dictionary
-		if str(entity.get("kind", "")) == "CONSTRUCTION":
-			var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
-			capacity += maxf(0.0, float(definition.get("construction_capacity_per_second", 0.0))) * float(entity.get("power_factor", 1.0))
+	var capacity := _construction_capacity_per_second(world)
 	var available_work := capacity * seconds
 	var orders: Array = world.get("construction_orders", {}).values()
 	orders.sort_custom(func(a, b):
@@ -760,6 +995,16 @@ func _advance_construction(world: Dictionary, seconds: float, events: Array[Dict
 		world["entities"][str(entity.get("id", ""))] = entity
 		world["statistics"]["construction_completed"] = int(world.get("statistics", {}).get("construction_completed", 0)) + 1
 		events.append({"type":"FactoryConstructionCompleted", "world_id":world.get("world_id", ""), "order_id":order_id, "entity_id":entity.get("id", ""), "definition_id":entity.get("definition_id", "")})
+
+
+func _construction_capacity_per_second(world: Dictionary) -> float:
+	var capacity := maxf(0.0, float(rules.get("base_construction_capacity_per_second", 1.0)))
+	for entity_value in world.get("entities", {}).values():
+		var entity := entity_value as Dictionary
+		if str(entity.get("kind", "")) == "CONSTRUCTION":
+			var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+			capacity += maxf(0.0, float(definition.get("construction_capacity_per_second", 0.0))) * float(entity.get("power_factor", 1.0))
+	return capacity
 
 
 func world_summary(world: Dictionary) -> Dictionary:
@@ -1037,7 +1282,7 @@ func _create_entity(entity_id: String, definition_id: String, origin: Vector2i, 
 		"inventory":{},
 		"routing_cursor":{},
 		"progress":0.0,
-		"power_factor":1.0,
+		"power_factor":0.0 if float(definition.get("power_demand_kw", 0.0)) > EPSILON else 1.0,
 		"actual_rate":0.0
 	}
 

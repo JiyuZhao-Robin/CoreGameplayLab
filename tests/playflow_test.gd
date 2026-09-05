@@ -1,3 +1,7 @@
+# RETIRED_POST_FACTORY_CUTOVER: this legacy aggregate-industry flow is kept as
+# migration reference only. It is intentionally excluded from release gates
+# until its extraction/production/automation section is rewritten against the
+# public Factory workspace command contract.
 extends Node
 
 var failures: Array[String] = []
@@ -10,7 +14,15 @@ func _ready() -> void:
 	var ship_id := str(ship.get("instance_id", ""))
 	_check(str(ship.get("blueprint_id", "")) == "patchwork_prospector", "new game starts with the mining-first prospector")
 	_check(Game.state.ship_module_definition_ids(ship).has("light_autocannon"), "starter ship already carries its baseline combat Component Design")
-	_check(Game.state.item_quantity("scrap_metal") == 12 and Game.state.item_quantity("electronics") == 16 and Game.state.item_quantity("data_core") == 2, "founding stockpile covers the finite bootstrap requirements")
+	var starter_world: Dictionary = Game.state.factory_worlds.get("earth-surface-grid", {})
+	var starter_depot: Dictionary = starter_world.get("entities", {}).get("starter-depot", {})
+	_check(
+		Game.state.item_quantity("scrap_metal") == 0
+		and int(starter_depot.get("inventory", {}).get("scrap_metal", 0)) == 44
+		and int(starter_depot.get("inventory", {}).get("electronics", 0)) == 16
+		and Game.state.item_quantity("data_core") == 2,
+		"founding stockpile has one physical owner and covers the finite remote-industry bootstrap"
+	)
 	var selected_loadout_id := _save_starter_blueprint("Prospector Patrol")
 	var second_design_id := _save_starter_blueprint("Prospector Escort")
 	_check(not selected_loadout_id.is_empty() and not second_design_id.is_empty(), "one Hull can save multiple named blueprints")

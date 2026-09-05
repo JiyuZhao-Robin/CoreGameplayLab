@@ -41,16 +41,10 @@ func _run() -> void:
 
 	_press(main.find_child("Navigation_industry", true, false) as Button)
 	await _redraw()
-	for industry_section in ["production", "facilities", "construction"]:
-		_press(main.find_child("IndustrySection_%s" % industry_section, true, false) as Button)
-		await _redraw()
-		_scan_visible_page(main, "industry %s" % industry_section)
-	_press(main.find_child("IndustrySection_automation", true, false) as Button)
-	await _redraw()
-	_check(_has_text_fragment(main, I18n.core("diagnostics.economy.title")), "English diagnostics are rendered from its stable key")
-	_check(_has_text_fragment(main, I18n.core("planner.title")), "English planner is rendered from its stable key")
-	_check(_has_text_fragment(main, I18n.core("automation.title")), "English automation is rendered from its stable key")
-	_scan_visible_page(main, "industry diagnostics")
+	_check(main.find_child("FactoryWorkspace", true, false) != null, "English Industry navigation mounts the real Factory workspace")
+	_check(main.find_child("BuildingPalette", true, false) != null and main.find_child("FactoryCanvas", true, false) != null, "English Factory workspace exposes construction palette and canvas")
+	_check(_has_text_fragment(main, I18n.t("factory.palette.construction")), "English Factory controls are rendered from stable localization keys")
+	_scan_visible_page(main, "factory workspace")
 	for core_page in ["inventory", "logistics", "construction", "diagnostics"]:
 		_press(main.find_child("Navigation_%s" % core_page, true, false) as Button)
 		await _redraw()
