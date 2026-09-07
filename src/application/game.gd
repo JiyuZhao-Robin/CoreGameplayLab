@@ -189,21 +189,35 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 		return _factory_command_rejection(command_id, command_kind, world_id, "MISSING_COMMAND_ID", "Factory command requires a stable command id")
 	if not state.factory_worlds.has(world_id):
 		return _factory_command_rejection(command_id, command_kind, world_id, "UNKNOWN_FACTORY_WORLD", "Unknown factory world")
+	var payload_value = intent.get("payload", {})
+	if not payload_value is Dictionary:
+		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", "Factory command payload must be an object")
+	var normalized_payload := _normalize_factory_command_payload(command_kind, payload_value as Dictionary)
+	if not bool(normalized_payload.get("ok", false)):
+		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", str(normalized_payload.get("reason", "Factory command payload is invalid")))
+	var payload: Dictionary = normalized_payload.get("payload", {})
+	var request_record := {
+		"protocol_version":protocol_version,
+		"command_kind":command_kind,
+		"world_id":world_id,
+		"base_topology_revision":int(intent.get("base_topology_revision", -1)),
+		"base_runtime_revision":int(intent.get("base_runtime_revision", -1)),
+		"payload":payload.duplicate(true)
+	}
 	var current_world: Dictionary = state.factory_worlds.get(world_id, {})
 	var previous_receipt_value = current_world.get("command_receipts", {}).get(command_id, null)
 	if previous_receipt_value is Dictionary:
 		var previous_receipt := (previous_receipt_value as Dictionary).duplicate(true)
-		if str(previous_receipt.get("command_kind", "")) != command_kind:
+		var previous_request = previous_receipt.get("request", null)
+		if str(previous_receipt.get("command_kind", "")) != command_kind \
+				or not previous_request is Dictionary \
+				or not _factory_requests_match(previous_request as Dictionary, request_record):
 			return _factory_command_rejection(command_id, command_kind, world_id, "COMMAND_ID_CONFLICT", "Factory command id was already used for another action")
 		previous_receipt["replayed"] = true
 		return previous_receipt
 	var current_topology_revision := maxi(0, int(current_world.get("topology_revision", 0)))
 	if int(intent.get("base_topology_revision", -1)) != current_topology_revision:
 		return _factory_command_rejection(command_id, command_kind, world_id, "STALE_TOPOLOGY", "Factory layout changed; refresh the workspace before retrying")
-	var payload_value = intent.get("payload", {})
-	if not payload_value is Dictionary:
-		return _factory_command_rejection(command_id, command_kind, world_id, "INVALID_PAYLOAD", "Factory command payload must be an object")
-	var payload := payload_value as Dictionary
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var world: Dictionary = transaction.working_state.factory_worlds.get(world_id, {})
 	var operation_result: Dictionary
@@ -302,6 +316,7 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 		"runtime_revision":int(world.get("runtime_revision", 0)),
 		"events":accepted_events,
 		"result":operation_result.duplicate(true),
+		"request":request_record,
 		"replayed":false
 	}
 	world["command_receipts"][command_id] = response.duplicate(true)
@@ -311,6 +326,75 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 		world["command_receipts"].erase(expired_command_id)
 	_commit_transaction(transaction)
 	return response
+
+
+func _normalize_factory_command_payload(command_kind: String, raw_payload: Dictionary) -> Dictionary:
+	var text_types := [TYPE_STRING, TYPE_STRING_NAME]
+	var number_types := [TYPE_INT, TYPE_FLOAT]
+	match command_kind:
+		"QUEUE_CONSTRUCTION":
+			var origin_value = raw_payload.get("origin", null)
+			if not origin_value is Dictionary:
+				return {"ok":false, "reason":"Factory construction origin must be an object"}
+			var origin := origin_value as Dictionary
+			if typeof(raw_payload.get("definition_id", "")) not in text_types \
+					or typeof(raw_payload.get("recipe_id", "")) not in text_types \
+					or typeof(origin.get("x", 0)) not in number_types \
+					or typeof(origin.get("y", 0)) not in number_types \
+					or typeof(raw_payload.get("priority", 50)) not in number_types:
+				return {"ok":false, "reason":"Factory construction payload has invalid field types"}
+			return {"ok":true, "payload":{
+				"definition_id":str(raw_payload.get("definition_id", "")),
+				"recipe_id":str(raw_payload.get("recipe_id", "")),
+				"origin":{"x":int(origin.get("x", 0)), "y":int(origin.get("y", 0))},
+				"priority":clampi(int(raw_payload.get("priority", 50)), 0, 100)
+			}}
+		"FUND_CONSTRUCTION":
+			if typeof(raw_payload.get("order_id", "")) not in text_types or typeof(raw_payload.get("storage_id", "")) not in text_types:
+				return {"ok":false, "reason":"Factory funding payload has invalid field types"}
+			return {"ok":true, "payload":{
+				"order_id":str(raw_payload.get("order_id", "")),
+				"storage_id":str(raw_payload.get("storage_id", ""))
+			}}
+		"CONNECT_ENTITIES":
+			for key in ["link_kind", "source_id", "target_id", "item_id"]:
+				if typeof(raw_payload.get(key, "")) not in text_types:
+					return {"ok":false, "reason":"Factory connection payload has invalid field types"}
+			if typeof(raw_payload.get("capacity_per_second", 1.0)) not in number_types or typeof(raw_payload.get("priority", 1)) not in number_types:
+				return {"ok":false, "reason":"Factory connection capacity and priority must be numeric"}
+			var link_kind := str(raw_payload.get("link_kind", "")).to_upper()
+			return {"ok":true, "payload":{
+				"link_kind":link_kind,
+				"source_id":str(raw_payload.get("source_id", "")),
+				"target_id":str(raw_payload.get("target_id", "")),
+				"item_id":"" if link_kind == "POWER" else str(raw_payload.get("item_id", "")),
+				"capacity_per_second":maxf(0.01, float(raw_payload.get("capacity_per_second", 1.0))),
+				"priority":clampi(int(raw_payload.get("priority", 1)), 0, 2)
+			}}
+		"REMOVE_LINK":
+			if typeof(raw_payload.get("link_id", "")) not in text_types:
+				return {"ok":false, "reason":"Factory remove-link payload has an invalid link id"}
+			return {"ok":true, "payload":{"link_id":str(raw_payload.get("link_id", ""))}}
+	return {"ok":true, "payload":{}}
+
+
+func _factory_requests_match(previous: Dictionary, current: Dictionary) -> bool:
+	var previous_kind := str(previous.get("command_kind", "")).to_upper()
+	var previous_payload_value = previous.get("payload", null)
+	if not previous_payload_value is Dictionary:
+		return false
+	var normalized_previous := _normalize_factory_command_payload(previous_kind, previous_payload_value as Dictionary)
+	if not bool(normalized_previous.get("ok", false)):
+		return false
+	var canonical_previous := {
+		"protocol_version":int(previous.get("protocol_version", 0)),
+		"command_kind":previous_kind,
+		"world_id":str(previous.get("world_id", "")),
+		"base_topology_revision":int(previous.get("base_topology_revision", -1)),
+		"base_runtime_revision":int(previous.get("base_runtime_revision", -1)),
+		"payload":(normalized_previous.get("payload", {}) as Dictionary).duplicate(true)
+	}
+	return canonical_previous == current
 
 
 func _factory_command_rejection(command_id: String, command_kind: String, world_id: String, reason_code: String, message: String) -> Dictionary:

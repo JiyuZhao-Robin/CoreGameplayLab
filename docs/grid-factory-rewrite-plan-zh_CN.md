@@ -20,7 +20,7 @@
 → 建设订单从实体仓储取得材料并完成新设施
 ```
 
-画布交互和空间反馈参考 Factorio；固定资源、端口、连接、状态灯和反压参考 Gridworks；实体、线路、配方、电网、建设队列、蓝图和结算阶段参考 DSPONLINE。Godot 代码、内容、美术和品牌仍在本项目内独立实现。
+画布交互和空间反馈参考 Factorio；固定资源、端口、连接、状态灯和反压参考 Gridworks；实体、线路、配方、电网、建设队列、蓝图和结算阶段参考 DSPONLINE。自 2026-09-04 起，用户已确认可在采矿、生产、工厂建设与本地工厂物流范围内直接复用、翻译或改编 DSPONLINE 的逻辑和工厂专用 UI 实现；其来源、Required Notice 与排除项见 [DSPONLINE 来源范围与署名](../third_party/dsponline/SOURCE_SCOPE.md)。内容、品牌、非工厂 UI 与其他玩法仍是本项目独立边界。
 
 ## 2. 尺度定义
 
@@ -57,7 +57,15 @@ Factory World
 └── production / consumption / transfer statistics
 ```
 
-这一聚合由 `FactoryGridSimulation` 结算。UI 只能通过 `Game` 的事务命令创建世界、注册生成器资源田、提交建设、交付材料和建立连接。资源田不是实体，不能成为线路端点。
+这一聚合由 `FactoryGridSimulation` 结算。资源田不是实体，不能成为线路端点。
+
+### Factory Workspace 协议 v1（已实现并挂载首个可玩竖切）
+
+工厂 UI 不读取可写世界状态，也不直接调用 `FactoryGridSimulation`。它从 `Game.factory_workspace_snapshot(world_id)` 取得版本化、按 identifier 稳定排序的只读快照；快照包含 `topology_revision`、`runtime_revision`、资源田、实体、线路、建设订单、调色板和汇总。资源田在快照中仍只是 Tile 资源层投影，不会伪装为 Entity 或连线端点。
+
+UI 通过 `Game.execute_factory_command(intent)` 提交版本化 intent。v1 的 intent 含 `protocol_version`、稳定的 `command_id`、`world_id`、`base_topology_revision`、`base_runtime_revision` 与 `payload`；当前支持 `QUEUE_CONSTRUCTION`、`FUND_CONSTRUCTION`、`CONNECT_ENTITIES`、`REMOVE_LINK`。回执明确给出接受/拒绝、原因码、当前 revisions、结果与关联事件；事件保留 `protocol_version`、`command_id`、`command_kind`、`world_id` 和提交后的 revisions。过期拓扑 intent 在变更前拒绝，重复的同一 `command_id` 返回既有回执而不重复变更。
+
+该协议已进入核心实现和契约测试；Factory Canvas 已挂入主界面 Industry 路由，具有建造调色板、平移/缩放画布、资源田/实体/线路/施工投影、基础 Footprint 放置预览、本地 Inspector，以及落位、交付材料、连线和拆线 intent。主界面命令转发已由聚焦集成测试覆盖；Chunk/culling、放置合法性/阻挡反馈、端口拖线和完整生产 Golden Path 仍未完成，因此 P1 仍是进行中。
 
 ## 4. 第一阶段已经落地
 
@@ -120,6 +128,8 @@ Schema 38 完成舰船职责硬切换：采矿/施工插件、舰船采集活动
 ## 6. 接下来的开发顺序
 
 ### P1：可玩的行星画布
+
+状态：进行中。Factory Workspace 协议 v1 与首个 Godot Canvas 竖切已挂入主界面并通过聚焦测试；以下条目中，基础相机/米制 Picking、三档 LOD、实体/线路/资源田绘制、基础 Footprint 放置预览和 Inspector 已有首版，Chunk/culling、放置合法性/阻挡反馈、端口拖线及完整玩家路径仍待完成。
 
 - Godot `Node2D` 方格画布、相机平移/缩放和米制 Picking。
 - Chunk 加载、卸载、脏标记和两级 LOD。

@@ -1,15 +1,15 @@
 # 实现状态
 
-更新时间：2026-09-01
+更新时间：2026-09-04
 
-> 1.32 方向更新：1.29 的地点级采矿、Production Line、Extraction Network 和普通 Construction 已从运行时移除；schema 38 又删除了舰船采矿能力与常驻打捞职业。舰船只负责战斗、探索和实际运输。新的发布目标是 Factorio 式二维方格画布与 Gridworks / DSPONLINE 原则下的实体工厂。当前权威路线见[方格工厂玩法重构计划](./grid-factory-rewrite-plan-zh_CN.md)。
+> 1.32 方向更新：1.29 的地点级采矿、Production Line、Extraction Network 和普通 Construction 已从运行时移除；schema 38 又删除了舰船采矿能力与常驻打捞职业。舰船只负责战斗、探索和实际运输。新的发布目标是 Factorio 式二维方格画布与 Gridworks / DSPONLINE 原则下的实体工厂。2026-09-04 起，用户确认采矿、生产、工厂建设与本地工厂物流可在保留署名与许可边界的前提下直接复用/翻译 DSPONLINE 实现；详见 [来源范围与署名](../third_party/dsponline/SOURCE_SCOPE.md) 和[方格工厂玩法重构计划](./grid-factory-rewrite-plan-zh_CN.md)。
 
 状态含义：`已实现` 可进入最终游戏；`部分实现` 已有领域能力但缺发布验收；`待迁移` 为旧流程必须移除或改造。
 
 | 领域 | 状态 | 当前实现与验收重点 |
 |---|---|---|
-| 方格工厂领域核心 | 部分实现 | Schema 36 + Factory World Schema 2 已具备稀疏米制世界、地形/资源双层 Tile、异种资源田排斥、矿机 Footprint 覆盖效率、宏观实体、CARGO/POWER 连接、电网、吞吐、配方缓存、反压、实体仓储、建设订单和独立资产账本；画布、路径 Tile、星港和内容链尚待完成。 |
-| 二维行星画布 | 待实现 | 需要 Chunk/LOD、相机与米制 Picking、Footprint 预览、端口拖线、Inspector 和实际流量动画。 |
+| 方格工厂领域核心 | 部分实现 | Schema 36 + Factory World Schema 3 已具备稀疏米制世界、地形/资源双层 Tile、异种资源田排斥、矿机 Footprint 覆盖效率、宏观实体、CARGO/POWER 连接、电网、吞吐、配方缓存、反压、实体仓储、建设订单和独立资产账本。Factory Workspace 协议 v1 已实现：identifier 稳定排序的只读快照、独立 topology/runtime revisions、版本化 intent 与关联事件；完整画布、路径 Tile、星港和内容链尚待完成。 |
+| 二维行星画布 | 进行中 | Factory Canvas 已以 Workspace 协议 v1 挂入主界面 Industry 路由：已有建造调色板、相机平移/缩放、米制 Picking、三档 LOD、资源田/实体/线路/施工绘制、基础 Footprint 放置预览、本地 Inspector，以及由真实 `last_flow` 驱动并受 Reduced Motion 控制的流量动画；落位、交付材料、连线和拆线均只发 intent。Chunk/culling、放置合法性/阻挡反馈、端口拖线和完整 Golden Path 尚待完成。 |
 | 旧真实生产运行 | 已退役 | Schema 36 将 Mining Operation、Production Line、Extraction Network 和普通 Construction 归档；矿点/舰船采矿命令、查询、内容集合和实时状态字段已删除，其余旧工业命令不再结算。 |
 | 分域库存与仓储 | 部分实现 | Location Inventory 的容量/预留继续有效；方格实体缓存、仓储和施工暂存由 `FactoryWorld` 独立持有。两域之间的显式星港装卸协议尚待实现。 |
 | O&M | 部分实现 | 舰船与保留设施维护仍使用正常工业品；方格采掘、机器和线路的实体维护尚待接入，旧采掘点维护不再运行。 |
@@ -25,7 +25,7 @@
 | Golden Path | 待重写 | 1.29 Golden Path 依赖已删除的聚合玩法，因此退出发布门禁；新路径必须从方格画布完成工业闭环。 |
 | 离线模拟 | 已实现 | `unprocessed_ms` 可持久化续算；60 分钟整段与 60×1 分钟在允许误差内一致。 |
 | Save Migration | 部分实现 | schema 24→38 显式迁移；35→36 只创建空 `factory_worlds`，不会凭空猜测历史设施坐标；37→38 剥离旧舰船工作插件、迁移物流方舟并初始化有限残骸状态。旧资产进入画布的可视迁移向导尚待实现。 |
-| 本地化 | 已实现 | zh-CN / en 目录对齐；英文 smoke 遍历全部导航、地点/工业/舰队子页并禁止可见 CJK 泄漏。 |
+| 本地化 | 部分实现 | 既有 zh-CN / en 目录对齐，英文 smoke 覆盖既有导航、地点与舰队页面；新 Factory Workspace 首版仍使用硬编码英文，需在 UI 打磨恢复后接入 I18n 并补中文切换测试。 |
 | UI/Guidance | 已实现 | 核心流程、唯一终局和统计均可操作；结构化 Guidance 提供页面、子区域、地点、聚焦实体、原因和获取链。 |
 
 ## 已确认废弃范围

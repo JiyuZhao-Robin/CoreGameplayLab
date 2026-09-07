@@ -13,11 +13,19 @@ CoreGameplayLab 已经拥有正确的基础边界：
 | simulation projection | `Game` 查询 / UI projection |
 | device UI state | `UiNavigationState` + UI cfg |
 | local save store | `SaveRepository` / `LocalSaveRepository` |
-| Factory Canvas | `IndustrialNetworkView` |
+| Factory Canvas | Factory Workspace v1（已挂载首个可玩竖切；旧 `IndustrialNetworkView` 不再是采矿/生产入口） |
 | semantic CSS tokens | `UiThemeTokens` |
 | desktop workspace shell | `GameShell` |
 
-因此不需要跨语言移植 TypeScript。应把 DSPONLINE 作为行为和不变量参考，在现有 GDScript 分层内实现。
+因此不需要跨语言移植 TypeScript。除下方记录的 2026-09-04 限域授权外，应把 DSPONLINE 作为行为和不变量参考，在现有 GDScript 分层内实现。
+
+## 1.1 2026-09-04 工厂范围授权与当前接口
+
+用户已确认，采矿、生产、工厂建设与本地工厂物流可直接复用、翻译或改编 DSPONLINE 的实现逻辑及工厂专用 UI 实现，包含预期商业使用。该决定的上游许可、Required Notice、书面授权边界、准确文件范围和品牌排除项由 [DSPONLINE 来源范围与署名](../../third_party/dsponline/SOURCE_SCOPE.md) 记录；上游 PolyForm Noncommercial 许可本身不授予商业权利。
+
+该复用只通过本项目的 Factory Workspace v1 边界进入：`Game.factory_workspace_snapshot(world_id)` 返回 identifier 稳定排序的只读世界投影，使用独立 `topology_revision` / `runtime_revision`；UI 以 `Game.execute_factory_command(intent)` 提交带 `protocol_version`、`command_id`、基准 revisions 和 payload 的 intent。初始命令集为 `QUEUE_CONSTRUCTION`、`FUND_CONSTRUCTION`、`CONNECT_ENTITIES`、`REMOVE_LINK`，回执和领域事件以 `command_id` 关联。UI 不得直接写 `Game.state`，资源田仍是非 Entity 的 Tile 属性。
+
+Canvas 组件已通过该协议挂入主界面 Industry 路由，并覆盖建造选择、方格落位、实体/资源田/线路选择、本地 Inspector、材料交付和连线/拆线 intent。主界面落位命令已通过事务网关集成测试；完整“供电 → 采矿 → 物流 → 冶炼 → 反压恢复”Golden Path 仍待补齐。旧 `IndustrialNetworkView` 不再是采矿/生产入口或权威交互入口。
 
 ## 2. 建议直接复用的思想
 
@@ -52,11 +60,11 @@ global_pre
 - `WorkspaceProjection`
 - `BlockerProjection`
 
-投影携带 `state_revision`。UI 缓存只能影响绘制，不能写回 Domain。
+投影携带 `state_revision`。对 Factory Workspace v1，使用独立的 `topology_revision` 与 `runtime_revision`。UI 缓存只能影响绘制，不能写回 Domain。
 
 ### C. 命令 patch / intent
 
-现有 `_command(label, callable)` 可演进为结构化 intent：
+现有 `_command(label, callable)` 可演进为结构化 intent；Factory Workspace v1 已经以更具体的版本化 Factory intent 落地：
 
 ```gdscript
 {
@@ -151,11 +159,11 @@ back():
 
 ### 不复制整块模拟文件
 
-DSPONLINE 的 `engine.ts` 用一个文件保证了规则集中，但 CoreGameplayLab 已有更清楚的 `SimulationEngine`、`LogisticsEngine`、`EconomyPlanner` 和 requirement/modifier 模块。只移植阶段、不变量和测试 oracle。
+DSPONLINE 的 `engine.ts` 用一个文件保证了规则集中，但 CoreGameplayLab 已有更清楚的 `SimulationEngine`、`LogisticsEngine`、`EconomyPlanner` 和 requirement/modifier 模块。即使在已授权的工厂范围内，也只能按 `FactoryGridSimulation`、Factory Workspace 和事务边界拆分复用，不能把整块引擎文件变成第二个权威状态来源。
 
-### 不复制 CSS 或资产
+### 非工厂范围不复制 CSS 或资产
 
-当前 `UiThemeTokens` 已采用相近语义。继续维护原创 Godot Theme、图标和布局。不要导入 DSPONLINE 的 CSS、Logo、截图、glyph、品牌或文本目录。
+当前 `UiThemeTokens` 已采用相近语义。工厂范围外继续维护原创 Godot Theme、图标和布局，不导入 DSPONLINE 的 CSS、Logo、截图、glyph、品牌或文本目录。采矿、生产、工厂建设与本地工厂物流的 CSS、canvas、节点、线路和几何表现可按 [来源范围与署名](../../third_party/dsponline/SOURCE_SCOPE.md) 直接复用、翻译或改编；绝不使用 Logo、名称或其他品牌资产。
 
 ### 不复制旧本地化桥
 
@@ -266,5 +274,4 @@ CoreGameplayLab 的 `I18n.t/core/content` 应成为唯一入口。`inline()` 兼
 4. 工业网络 topology/runtime 双 revision。
 5. 存档 revision + 写后重读证明。
 
-这些改动直接服务当前 CoreGameplayLab，且不引入 DSPONLINE 的 React、云端和发布复杂度。
-
+这些改动直接服务当前 CoreGameplayLab。Factory Workspace v1 已先落地只读快照、版本化 intent 与关联事件；获授权的工厂实现可以在该边界内翻译 DSPONLINE 的 React/CSS/canvas 逻辑，但不引入其云端、发布壳、品牌或工厂范围外的复杂度。

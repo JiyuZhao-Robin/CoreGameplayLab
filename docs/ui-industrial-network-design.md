@@ -126,9 +126,9 @@ Reduced Motion 是跨存档 UI preference。开启后关闭粒子和呼吸、相
 
 ## 参考转化与原创边界
 
-`UI-reference/` 的 Upload Labs 截图现为非规范历史材料，不再指导正式 UI 布局。工业网络与全局 Shell 的信息结构、工作区密度、上下文检查器和操作反馈改以 `D:\Projects\DSPONLINE` 的原则为主要参考；实现不复制其 React/CSS、字体、图片、图标、品牌、节点内容或代码，Helios 继续使用自己的工业对象、语义 token、原创 glyph、Context Inspector 和轨道工业尺度。
+`UI-reference/` 的 Upload Labs 截图现为非规范历史材料，不再指导正式 UI 布局。工业网络与全局 Shell 的信息结构、工作区密度、上下文检查器和操作反馈改以 `D:\Projects\DSPONLINE` 的原则为主要参考。本段记录的是 2026-09-01 的历史边界；自 2026-09-04 起，采矿、生产、工厂建设与本地工厂物流可按 [DSPONLINE 来源范围与署名](../third_party/dsponline/SOURCE_SCOPE.md) 直接复用、翻译或改编工厂实现。字体、图片、图标、品牌、非工厂节点内容与其他玩法仍不在授权范围内，Helios 继续使用自己的领域对象、Context Inspector 和轨道工业尺度。
 
-DSPONLINE 仅用于动态节奏与性能思路：真实流量驱动、拥堵降速、共享画布时钟、暂停域动画、低频警告、一次性恢复反馈、viewport culling、topology/runtime 分离和 Reduced Motion。没有复制 React、CSS、组件、资产、数据或品牌。
+DSPONLINE 的动态节奏与性能规则包括：真实流量驱动、拥堵降速、共享画布时钟、暂停域动画、低频警告、一次性恢复反馈、viewport culling、topology/runtime 分离和 Reduced Motion。2026-09-04 的限域授权允许 Factory Workspace 直接翻译其工厂 React/CSS/canvas/组件实现；数据、品牌、Logo、非工厂资产和其他 UI 仍不复制。
 
 后续公开源码检索发现第三方 MIT 项目 `zebadrabbit/Gridworks` 明确自述采用 Upload Labs 风格，但它是 HTML Canvas/JavaScript 的 Satisfactory 主题再创作。本实现没有引入、移植或复制该项目源码；它只作为“同类开源实现存在”的外部交叉参考，Godot Control/GraphEdit/CanvasItem 架构及 Helios 领域投影均保持原创。
 

@@ -26,7 +26,7 @@ func _run() -> void:
 	await _settle_ui()
 
 	await _test_shell_structure_and_collapsing(main)
-	await _test_industrial_network_input(main)
+	await _test_factory_workspace_input(main)
 	await _test_mouse_keyboard_navigation(main)
 	await _test_focus_survives_domain_refresh(main)
 	await _test_disabled_reasons(main)
@@ -85,49 +85,32 @@ func _test_shell_structure_and_collapsing(main: Control) -> void:
 	await get_tree().process_frame
 
 
-func _test_industrial_network_input(main: Control) -> void:
+func _test_factory_workspace_input(main: Control) -> void:
 	_press(main.find_child("Navigation_industry", true, false) as Button)
 	await _settle_ui()
-	var view := main.find_child("IndustrialNetworkView", true, false) as IndustrialNetworkView
-	_check(view != null and view.is_visible_in_tree(), "Industry opens the native industrial network as its default production view", "EXECUTED", {})
-	if view == null:
+	var workspace := main.find_child("FactoryMiningProductionWorkspace", true, false) as Control
+	_check(workspace != null and workspace.is_visible_in_tree(), "Industry opens the Factory mining and production workspace", "EXECUTED", {})
+	if workspace == null:
 		return
-	var production_node: IndustrialNetworkNode = null
-	for value in view._nodes.values():
-		var candidate := value as IndustrialNetworkNode
-		if str(candidate.projection.get("kind", "")) == "PRODUCTION":
-			production_node = candidate
-			break
-	_check(production_node != null, "the network exposes a keyboard-focusable aggregate Production node", "EXECUTED", {})
-	if production_node == null:
-		return
-	var production_node_id := production_node.node_id
-	production_node.grab_focus()
-	await _send_root_key(KEY_ENTER)
-	await _settle_ui()
-	_check(_page_visible(main, "industry") and main.find_child("IndustryProductionNetworkView", true, false) != null and main.find_child("IndustrialNetworkView", true, false) == null, "Enter opens the selected network entity's existing detailed control path", "EXECUTED", {
-		"selectedNode":production_node_id
-	})
-	var network_button := main.find_child("IndustryProductionNetworkView", true, false) as Button
-	_press(network_button)
-	await _settle_ui()
-	view = main.find_child("IndustrialNetworkView", true, false) as IndustrialNetworkView
-	if view == null or view._nodes.is_empty():
-		_check(false, "network view can be restored from the preserved list/detail entry", "EXECUTED", {})
-		return
-	var selected_id := str(view._nodes.keys()[0])
-	view._select_node(selected_id, true)
-	await get_tree().process_frame
-	_check(main.find_child("IndustrialNetworkInspectorOpen", true, false) != null, "node selection populates the Context Inspector", "EXECUTED", {"nodeId":selected_id})
-	await _send_action("ui_cancel")
-	await _settle_ui()
-	_check(_page_visible(main, "industry") and view.selected_entity().is_empty(), "Escape closes network focus/Inspector before leaving the Industry workspace", "EXECUTED", {})
-	var reduced := main.find_child("IndustrialNetworkReducedMotion", true, false) as CheckButton
-	if reduced != null:
-		reduced.grab_focus()
+	_check(workspace.find_child("FactoryPalettePane", true, false) != null and workspace.find_child("FactoryCanvasSurface", true, false) != null and workspace.find_child("FactoryInspectorPane", true, false) != null, "the workspace exposes construction palette, grid canvas, and inspector panes", "EXECUTED", {})
+	var palette_button := _first_enabled_named_prefix(workspace, "FactoryPalette_")
+	var palette_button_available := palette_button != null
+	if palette_button != null:
+		palette_button.grab_focus()
 		await _send_action("ui_accept")
 		await get_tree().process_frame
-	_check(reduced != null and reduced.button_pressed, "Reduced Motion is keyboard-operable and remains a UI-only preference", "EXECUTED", {})
+	var selected_definition := str(workspace.get("_selected_definition_id"))
+	_check(palette_button_available and not selected_definition.is_empty(), "the definition-backed construction palette is keyboard-operable", "EXECUTED", {"definitionId":selected_definition})
+	var canvas := workspace.find_child("FactoryCanvas", true, false) as Control
+	if canvas != null:
+		canvas.grab_focus()
+	await get_tree().process_frame
+	_check(canvas != null and canvas.has_focus(), "the pan/zoom factory canvas participates in keyboard focus traversal", "EXECUTED", {})
+	var entities: Array = workspace.get("_snapshot").get("entities", [])
+	if not entities.is_empty():
+		workspace.call("_on_entity_selected", (entities[0] as Dictionary).duplicate(true))
+		await get_tree().process_frame
+	_check(not entities.is_empty() and workspace.find_child("FactoryInspectorStatus", true, false) != null and workspace.find_child("FactoryInspectorPower", true, false) != null, "selecting a physical Factory entity populates its local status and power inspector", "EXECUTED", {})
 
 
 func _test_mouse_keyboard_navigation(main: Control) -> void:

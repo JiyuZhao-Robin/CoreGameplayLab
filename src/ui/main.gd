@@ -6,8 +6,7 @@ const SystemMapViewScript = preload("res://src/ui/components/system_map_view.gd"
 const MegastructureProgressViewScript = preload("res://src/ui/components/megastructure_progress_view.gd")
 const GameShellScript = preload("res://src/ui/components/game_shell.gd")
 const UiNavigationStateScript = preload("res://src/ui/ui_navigation_state.gd")
-const IndustrialNetworkProjectionScript = preload("res://src/ui/view_models/industrial_network_projection.gd")
-const IndustrialNetworkViewScript = preload("res://src/ui/components/industrial_network_view.gd")
+const FactoryWorkspaceScript = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
 const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
 const ShipAssemblyBlueprintEditorScript = preload("res://src/ui/components/ship_assembly_blueprint_editor.gd")
 const ShipRegistryPreviewGridScript = preload("res://src/ui/components/ship_registry_preview_grid.gd")
@@ -112,8 +111,6 @@ var _speed_buttons: Dictionary = {}
 var _nav_buttons: Dictionary = {}
 var _selected_location_id := SpaceGameState.MAIN_BASE_LOCATION_ID
 var _location_section := "overview"
-var _industry_section := "production"
-var _industry_view_mode := "network"
 var _fleet_section := "roster"
 var _fleet_roster_filter := "ALL"
 var _fleet_roster_search_query := ""
@@ -149,10 +146,7 @@ var _alert_records := {}
 var _active_blocker_cache: Array[Dictionary] = []
 var _telemetry_events: Array[Dictionary] = []
 var _seen_blocker_ids := {}
-var _industrial_network_view: IndustrialNetworkView
-var _industrial_network_projection: IndustrialNetworkProjection
-var _industrial_network_preferences: Dictionary = {}
-var _selected_industrial_network_node: Dictionary = {}
+var _factory_workspace
 var _selected_research_project_id := ""
 var _ship_blueprint_editor: ShipAssemblyBlueprintEditor
 var _shipyard_handoff_content: VBoxContainer
@@ -171,7 +165,6 @@ var _responsive_state_initialized := false
 var _responsive_session_restored := false
 var _ui_scale_cli_override := false
 var _ui_scale_preference_source := "default"
-var _network_preferences_save_due_ms := 0
 var _audit_fast_refresh := false
 var _fleet_roster_popup: PopupMenu
 var _fleet_roster_dismantle_dialog
@@ -196,10 +189,6 @@ func _ready() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if String(argument).begins_with("--fleet-section="):
 			_fleet_section = String(argument).trim_prefix("--fleet-section=")
-		elif String(argument).begins_with("--industry-section="):
-			_industry_section = String(argument).trim_prefix("--industry-section=")
-		elif String(argument).begins_with("--industry-view="):
-			_industry_view_mode = String(argument).trim_prefix("--industry-view=")
 		elif String(argument).begins_with("--network-location="):
 			_selected_location_id = String(argument).trim_prefix("--network-location=")
 		elif String(argument) == "--reduced-motion":
@@ -244,9 +233,6 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	var now := Time.get_ticks_msec()
-	if _network_preferences_save_due_ms > 0 and now >= _network_preferences_save_due_ms:
-		_network_preferences_save_due_ms = 0
-		_save_ui_preferences()
 	if now - _last_header_ms >= 200:
 		_update_header()
 		_last_header_ms = now
@@ -267,6 +253,9 @@ func _process(_delta: float) -> void:
 	if not editing_text and not fleet_roster_transient_open and _dirty and refresh_due and not _rebuild_in_progress:
 		_immediate_refresh_requested = false
 		_rebuild_active_page()
+	elif not editing_text and not fleet_roster_transient_open and refresh_due and not _rebuild_in_progress and _active_page_key == "industry" and is_instance_valid(_factory_workspace):
+		_refresh_factory_workspace()
+		_last_refresh_ms = now
 
 
 func _request_active_page_refresh(immediate: bool) -> void:
@@ -292,12 +281,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			and not is_instance_valid(_fleet_roster_dismantle_dialog) \
 			and not is_instance_valid(_fleet_roster_bulk_dismantle_dialog):
 		_clear_fleet_roster_bulk_selection()
-		get_viewport().set_input_as_handled()
-		return
-	if is_instance_valid(_industrial_network_view) and _active_page_key == "industry" and _industry_section == "production" and _industry_view_mode == "network" and _industrial_network_view.clear_selection():
-		_selected_industrial_network_node.clear()
-		_ui_state.select_context("location", _selected_location_id)
-		_rebuild_sidebar()
 		get_viewport().set_input_as_handled()
 		return
 	var destination: String = String(_ui_state.back_target(_page_controls))
@@ -426,6 +409,10 @@ func _build_navigation_rail() -> Control:
 
 
 func _switch_page(key: String, record_history: bool = true) -> void:
+	# Ordinary construction is a Factory-grid operation after the aggregate
+	# cutover. Keep the legacy navigation key as a compatibility alias only.
+	if key == "construction":
+		key = "industry"
 	var page: Control = _page_controls.get(key)
 	if not is_instance_valid(page):
 		return
@@ -651,8 +638,8 @@ func _rebuild_active_page() -> void:
 		"location": _rebuild_location()
 		"frontier": _rebuild_frontier()
 		"industry":
-			if _industry_section == "production" and _industry_view_mode == "network" and is_instance_valid(_industrial_network_view):
-				_refresh_industrial_network_view()
+			if is_instance_valid(_factory_workspace):
+				_refresh_factory_workspace()
 			else:
 				_rebuild_industry()
 		"inventory": _rebuild_inventory()
@@ -787,10 +774,6 @@ func _rebuild_sidebar() -> void:
 	selector.item_selected.connect(_on_context_location_selected.bind(location_ids))
 	box.add_child(selector)
 	var selected := Game.state.location_state(_selected_location_id)
-	if _ui_state.selected_kind == "industrial_network" and not _selected_industrial_network_node.is_empty():
-		_build_industrial_network_inspector(box, _selected_industrial_network_node)
-		_build_sidebar_footer(box)
-		return
 	if _active_page_key == "research" and not _selected_research_project_id.is_empty():
 		_build_research_project_inspector(box, _selected_research_project_id)
 		_build_sidebar_footer(box)
@@ -855,78 +838,6 @@ func _clear_research_project_selection() -> void:
 	_selected_research_project_id = ""
 	_ui_state.select_context("location", _selected_location_id)
 	_rebuild_sidebar()
-
-
-func _build_industrial_network_inspector(box: VBoxContainer, node: Dictionary) -> void:
-	var kind := String(node.get("kind", "PRODUCTION"))
-	var status := String(node.get("status", "PAUSED"))
-	box.add_child(_label(I18n.core("industrial_network.inspector.entity", "%s ENTITY") % I18n.core("industrial_network.kind.%s" % kind.to_lower(), kind.capitalize()), 10, COLOR_MUTED))
-	box.add_child(_label(String(node.get("title", node.get("id", ""))), 18, COLOR_TEXT))
-	box.add_child(_label(String(node.get("subtitle", "")), 12, COLOR_TEXT_SECONDARY))
-	var status_tone := COLOR_BAD if status in ["BLOCKED", "BLOCKED_INPUT", "BLOCKED_OUTPUT", "CRITICAL"] else (COLOR_WARN if status in ["POWER_LIMITED", "COOLING_LIMITED", "LOGISTICS_LIMITED", "CONGESTED", "SATURATED", "TIGHT", "STORAGE_FULL", "CONSTRAINED"] else COLOR_GOOD)
-	box.add_child(_label(I18n.core("industrial_network.inspector.status", "Status: %s") % _status_text(status), 13, status_tone))
-	var blocker: Dictionary = node.get("blocker", {}) if node.get("blocker", null) is Dictionary else {}
-	if not blocker.is_empty():
-		box.add_child(_label(I18n.core("blocker.primary") % _blocker_text(blocker), 13, COLOR_WARN))
-	box.add_child(_separator())
-	box.add_child(_label(I18n.core("industrial_network.inspector.behavior", "ACTUAL BEHAVIOR"), 10, COLOR_MUTED))
-	box.add_child(_label(I18n.core("industrial_network.inspector.rate", "Actual %.2f/h · Theoretical %.2f/h · Utilization %d%%") % [float(node.get("actual_rate", 0.0)), float(node.get("theoretical_rate", 0.0)), int(float(node.get("utilization", 0.0)) * 100.0)], 12, COLOR_TEXT))
-	var buffer: Dictionary = node.get("buffer", {}) if node.get("buffer", null) is Dictionary else {}
-	if kind == "BUFFER":
-		box.add_child(_label(I18n.core("industrial_network.inspector.buffer", "Available %d · Reserved %d · Inbound %.1f · Capacity %.0f") % [int(buffer.get("available", 0)), int(buffer.get("reserved", 0)), float(buffer.get("inbound", 0.0)), float(buffer.get("capacity", 0.0))], 12, COLOR_TEXT_SECONDARY))
-		box.add_child(_label(I18n.core("industrial_network.inspector.net", "Net %.2f/h · Committed %.1f") % [float(buffer.get("net_rate", 0.0)), float(buffer.get("committed_demand", 0.0))], 12, COLOR_TEXT_SECONDARY))
-	elif kind == "LOGISTICS":
-		box.add_child(_label(I18n.core("industrial_network.inspector.logistics", "In transit %.1f · Capacity %.1f/h") % [float(buffer.get("in_transit", 0.0)), float(buffer.get("capacity", 0.0))], 12, COLOR_TEXT_SECONDARY))
-	elif kind == "DEMAND":
-		box.add_child(_label(I18n.core("industrial_network.inspector.demand", "Committed %.1f · Priority %d") % [float(buffer.get("backlog", buffer.get("quantity", 0.0))), int(buffer.get("priority", 50))], 12, COLOR_TEXT_SECONDARY))
-	_add_network_port_inspector(box, I18n.core("industrial_network.inputs", "INPUTS"), node.get("inputs", []))
-	_add_network_port_inspector(box, I18n.core("industrial_network.outputs", "OUTPUTS"), node.get("outputs", []))
-	box.add_child(_separator())
-	var open_button := _button(I18n.core("industrial_network.inspector.open", "Open detailed control"), _open_industrial_network_target.bind(node), false, COLOR_ACCENT)
-	open_button.name = "IndustrialNetworkInspectorOpen"
-	box.add_child(open_button)
-	if kind == "PRODUCTION" and node.get("allowed_actions", []).has("STOP"):
-		var slot := int(buffer.get("slot", -1))
-		var stop_button := _button(I18n.core("common.stop"), _command.bind(I18n.core("command.stop_production"), Game.stop_industry_operation.bind(slot)), slot < 0, COLOR_WARN)
-		stop_button.name = "IndustrialNetworkInspectorStop"
-		stop_button.tooltip_text = I18n.core("industrial_network.inspector.stop_reason", "Stops this real production line through the command gateway")
-		box.add_child(stop_button)
-	var close_button := _button(I18n.core("industrial_network.inspector.close", "Close inspector"), _close_industrial_network_inspector, false, COLOR_MUTED)
-	close_button.name = "IndustrialNetworkInspectorClose"
-	box.add_child(close_button)
-
-
-func _add_network_port_inspector(box: VBoxContainer, heading: String, ports_value) -> void:
-	var ports: Array = ports_value if ports_value is Array else []
-	if ports.is_empty():
-		return
-	box.add_child(_label(heading, 10, COLOR_MUTED))
-	for port_value in ports:
-		var port := port_value as Dictionary
-		var item_id := String(port.get("item_id", ""))
-		var title := String(port.get("title", _content_name(Game.content.items.get(item_id, {}), item_id)))
-		box.add_child(_label(I18n.core("industrial_network.inspector.port_rate", "%s · %.2f/h") % [title, float(port.get("actual_rate", port.get("requested_rate", 0.0)))], 11, COLOR_TEXT_SECONDARY))
-
-
-func _close_industrial_network_inspector() -> void:
-	_selected_industrial_network_node.clear()
-	_ui_state.select_context("location", _selected_location_id)
-	if is_instance_valid(_industrial_network_view):
-		_industrial_network_view.clear_selection()
-	_rebuild_sidebar()
-
-
-func _open_industrial_network_target(node: Dictionary) -> void:
-	var target: Dictionary = node.get("navigation_target", {}) if node.get("navigation_target", null) is Dictionary else {}
-	var page := String(target.get("page", "industry"))
-	if target.has("location_id") and Game.state.has_location(String(target.get("location_id", ""))):
-		_selected_location_id = String(target.get("location_id", _selected_location_id))
-	if page == "industry":
-		_industry_section = String(target.get("section", "production"))
-		_industry_view_mode = String(target.get("view", "list"))
-	elif page == "logistics" and target.has("route_id"):
-		_logistics_route_focus_id = String(target.get("route_id", ""))
-	_switch_page(page)
 
 
 func _build_sidebar_footer(box: VBoxContainer) -> void:
@@ -1042,12 +953,18 @@ func _open_location_section(location_id: String, section: String) -> void:
 	if not Game.state.has_location(location_id):
 		return
 	_selected_location_id = location_id
+	if section == "industry":
+		_switch_page("industry")
+		return
 	_location_section = section
 	_save_ui_preferences()
 	_switch_page("location")
 
 
 func _select_location_section(section: String) -> void:
+	if section == "industry":
+		_switch_page("industry")
+		return
 	_location_section = section
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
@@ -1072,8 +989,6 @@ func _rebuild_location() -> void:
 	match _location_section:
 		"resources":
 			_build_location_resources(box, location)
-		"industry":
-			_build_location_industry(box, location)
 		"logistics":
 			_build_location_logistics(box, location)
 		"projects":
@@ -1167,213 +1082,6 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 				var footprint: Dictionary = profile.get("footprint", {}).get("size", {})
 				card.add_child(_label(I18n.core("location.resources.grid_deep_surveyed", "Exact footprint %d × %d m · fixed world resource") % [int(footprint.get("x", 0)), int(footprint.get("y", 0))], 13, COLOR_ACCENT))
 		box.add_child(_wrap_card(card))
-
-
-func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
-	var summary: Dictionary = location.get("industry_summary", {})
-	box.add_child(_card_text(I18n.core("location.industry.status_summary") % [_status_text(String(summary.get("status", "NOT_AVAILABLE"))), summary.get("active_facilities", 0), summary.get("active_operations", 0)], COLOR_TEXT))
-	var local_logistics: Dictionary = summary.get("local_logistics", {})
-	box.add_child(_card_text(I18n.core("location.industry.local_logistics") % [_status_text(String(local_logistics.get("status", "NOT_AVAILABLE"))), float(local_logistics.get("required", 0.0)), float(local_logistics.get("capacity", 0.0)), float(local_logistics.get("utilization", 0.0)) * 100.0], COLOR_WARN if str(local_logistics.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
-	var constraints: Dictionary = summary.get("constraints", {})
-	box.add_child(_card_text(I18n.core("location.industry.constraints") % [float(constraints.get("power_demand", 0.0)), float(constraints.get("power_capacity", 0.0)), I18n.core("location.industry.cooling_required") if bool(constraints.get("cooling_required", false)) else I18n.core("location.industry.cooling_not_required"), float(constraints.get("cooling_demand", 0.0)), float(constraints.get("cooling_capacity", 0.0)), float(constraints.get("structural_used", 0.0)), float(constraints.get("structural_capacity", 0.0)), float(constraints.get("throughput_multiplier", 0.0)) * 100.0], COLOR_WARN if str(constraints.get("status", "")) == "CONSTRAINED" else COLOR_MUTED))
-	box.add_child(_card_text(I18n.core("location.industry.domain_contract"), COLOR_MUTED))
-	box.add_child(_section_title(I18n.core("industry.templates", "Industrial policy templates")))
-	var template_card := _card()
-	var automation: Dictionary = location.get("automation", {})
-	var active_template_id := String(automation.get("industrial_template_id", ""))
-	template_card.add_child(_label(I18n.core("industry.template_current", "Current template") + " · " + (_content_name(Game.content.industrial_templates.get(active_template_id, {}), active_template_id) if not active_template_id.is_empty() else I18n.core("status.NONE", "None")), 13, COLOR_ACCENT if not active_template_id.is_empty() else COLOR_MUTED))
-	var template_selector := OptionButton.new()
-	template_selector.name = "IndustrialTemplateSelector"
-	var template_ids: Array = Game.content.industrial_templates.keys()
-	template_ids.sort()
-	for template_id_value in template_ids:
-		var template_id := String(template_id_value)
-		var template: Dictionary = Game.content.industrial_templates.get(template_id, {})
-		template_selector.add_item(_content_name(template, template_id))
-		if template_id == active_template_id:
-			template_selector.select(template_selector.item_count - 1)
-	template_card.add_child(template_selector)
-	var template_actions := HFlowContainer.new()
-	template_actions.add_theme_constant_override("h_separation", 6)
-	var apply_template := _button(I18n.core("industry.template_apply", "Apply template"), _apply_selected_industrial_template.bind(template_selector, template_ids), template_ids.is_empty(), COLOR_GOOD)
-	apply_template.name = "ApplyIndustrialTemplate"
-	template_actions.add_child(apply_template)
-	var clear_template := _button(I18n.core("industry.template_clear", "Clear template"), _command.bind(I18n.core("command.clear_industrial_template"), Game.clear_location_industrial_template.bind(_selected_location_id)), active_template_id.is_empty(), COLOR_WARN)
-	clear_template.name = "ClearIndustrialTemplate"
-	template_actions.add_child(clear_template)
-	if not active_template_id.is_empty():
-		var target_level := int(automation.get("target_level", Game.content.industrial_templates.get(active_template_id, {}).get("auto_expand_target", 5)))
-		var automation_enabled := bool(automation.get("enabled", false))
-		template_actions.add_child(_button(I18n.core("industry.template_pause", "Pause managed expansion") if automation_enabled else I18n.core("industry.template_resume", "Resume managed expansion"), _command.bind(I18n.core("command.toggle_template_expansion"), Game.configure_location_industrial_automation.bind(_selected_location_id, not automation_enabled, target_level)), false, COLOR_ACCENT))
-	template_card.add_child(template_actions)
-	template_card.add_child(_label(I18n.core("industry.template_help", "Templates set explainable logistics policies and an authorized expansion target; they do not create materials or bypass Construction."), 12, COLOR_MUTED))
-	box.add_child(_wrap_card(template_card))
-	var developing_facilities: Array[Dictionary] = []
-	for project_value in Game.state.construction_operations:
-		var project := project_value as Dictionary
-		if String(project.get("location_id", "")) != _selected_location_id or String(project.get("project_type", "")) not in ["FACILITY_BUILD", "FACILITY_EXPANSION", "SCALE_STAGE_UPGRADE"] or String(project.get("status", "")) not in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
-			continue
-		developing_facilities.append(project)
-	if not developing_facilities.is_empty():
-		box.add_child(_section_title(I18n.core("industry.development.title", "Factories under Construction")))
-		for project in developing_facilities:
-			var project_id := String(project.get("project_id", "PROJECT"))
-			var target_id := String(project.get("target_id", project.get("facility_id", "")))
-			var development_card := _card()
-			development_card.add_child(_label(I18n.core("industry.development.summary", "%s · %s") % [_content_name(Game.content.facilities.get(target_id, {}), target_id), _status_text("BUILDING")], 15, COLOR_ACCENT))
-			development_card.add_child(_label(I18n.core("industry.development.project", "Project %s · %s") % [project_id, _construction_project_type_name(String(project.get("project_type", "FACILITY_BUILD")))], 12, COLOR_MUTED))
-			development_card.add_child(_operation_progress(project, I18n.core("construction.status") % _status_text(Game.simulation.construction_gameplay_state(project))))
-			development_card.add_child(_label(I18n.core("construction.materials") % [_resource_dictionary(project.get("material_plan", {})), _resource_dictionary(project.get("consumed", {})), _resource_dictionary(project.get("delivered_materials", {})), _resource_dictionary(project.get("in_transit_materials", {}))], 12, COLOR_MUTED))
-			var open_project := _button(I18n.core("industry.development.open_construction", "Open Construction Project"), _open_production_construction.bind(project_id), false, COLOR_ACCENT)
-			open_project.name = "OpenProductionConstruction_%s" % project_id
-			development_card.add_child(open_project)
-			box.add_child(_wrap_card(development_card))
-	box.add_child(_section_title(I18n.core("location.industry.local")))
-	for facility_value in SpaceGameState.MANUFACTURING_FACILITY_IDS:
-		var facility_id := String(facility_value)
-		if not Game.simulation.facility_available(Game.state, facility_id):
-			continue
-		var facility: Dictionary = Game.content.facilities.get(facility_id, {})
-		var local_industry: Dictionary = Game.state.location_industry(_selected_location_id, facility_id)
-		var level := int(local_industry.get("level", 0))
-		var scale_stage := String(local_industry.get("scale_stage", "WORKSHOP"))
-		var scale_names := {"WORKSHOP":I18n.core("industry.scale.WORKSHOP"), "FACTORY":I18n.core("industry.scale.FACTORY"), "INDUSTRIAL_COMPLEX":I18n.core("industry.scale.INDUSTRIAL_COMPLEX"), "AUTOMATED_DISTRICT":I18n.core("industry.scale.AUTOMATED_DISTRICT")}
-		var lines := Game.state.production_lines_for(_selected_location_id, facility_id)
-		var card := _card()
-		card.add_child(_label(I18n.core("location.industry.facility_summary") % [_content_name(facility, facility_id), level, scale_names.get(scale_stage, scale_stage), Game.simulation.facility_manufacturing_throughput(Game.state, facility_id, _selected_location_id), lines.size(), Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id)], 16, COLOR_TEXT))
-		if level > 0:
-			for runtime_value in lines:
-				var runtime := runtime_value as Dictionary
-				var current_activity_id := String(runtime.get("activity_id", ""))
-				if current_activity_id.is_empty():
-					current_activity_id = String(runtime.get("method_id", ""))
-				var mastery := Game.simulation.industry_mastery_profile(Game.state, _selected_location_id, facility_id, current_activity_id)
-				var device_id := String(runtime.get("production_device_id", ""))
-				var method_name := _content_name(Game.content.activities.get(current_activity_id, {}), I18n.core("status.NOT_CONFIGURED"))
-				var status_id := Game.simulation.production_gameplay_state(Game.state, runtime)
-				card.add_child(_label(I18n.core("location.industry.line_summary") % [String(runtime.get("line_id", "LINE")), _status_text(status_id), method_name, device_id if not device_id.is_empty() else I18n.core("status.NOT_INSTALLED"), _status_text(String(runtime.get("control_mode", "PINNED"))), int(runtime.get("priority", 50)), float(runtime.get("theoretical_rate", 0.0)), float(runtime.get("actual_rate", 0.0)), int(mastery.get("mastery_level", 0))], 13, COLOR_WARN if status_id.begins_with("BLOCKED") or status_id.ends_with("LIMITED") else COLOR_MUTED))
-				_add_blocker_label(card, runtime)
-				var control_row := HFlowContainer.new()
-				control_row.add_theme_constant_override("h_separation", 6)
-				var slot := int(runtime.get("slot", -1))
-				var mode := String(runtime.get("control_mode", "PINNED"))
-				var manual_lock := bool(runtime.get("manual_lock", true))
-				var capability_disabled := status_id == "DISABLED"
-				var run_pinned := _button(I18n.core("industry.line.run_pinned"), _command.bind(I18n.core("command.pin_production_method"), Game.set_production_line_control.bind(slot, "PINNED", manual_lock)), mode == "PINNED" or capability_disabled, COLOR_ACCENT)
-				run_pinned.name = "RunProductionLine_%d" % slot
-				if capability_disabled:
-					run_pinned.tooltip_text = I18n.core("industry.line.disabled_tooltip", "Install the required production device or choose a compatible method.")
-				control_row.add_child(run_pinned)
-				control_row.add_child(_button(I18n.core("industry.line.turn_off"), _command.bind(I18n.core("command.stop_production_line"), Game.set_production_line_control.bind(slot, "OFF", manual_lock)), mode == "OFF", COLOR_WARN))
-				control_row.add_child(_button(I18n.core("industry.line.manual_lock") % (I18n.core("common.yes") if manual_lock else I18n.core("common.no")), _command.bind(I18n.core("command.toggle_manual_lock"), Game.set_production_line_control.bind(slot, mode, not manual_lock)), false, COLOR_GOOD if manual_lock else COLOR_MUTED))
-				control_row.add_child(_button(I18n.core("industry.line.high_priority"), _command.bind(I18n.core("command.raise_line_priority"), Game.configure_production_line.bind(slot, 100, 100)), int(runtime.get("priority", 50)) == 100, COLOR_ACCENT))
-				control_row.add_child(_button(I18n.core("industry.line.normal_priority"), _command.bind(I18n.core("command.restore_line_priority"), Game.configure_production_line.bind(slot, 100, 50)), int(runtime.get("priority", 50)) == 50))
-				if capability_disabled:
-					var open_capability := _button(I18n.core("industry.line.open_capability", "Open Facility Configuration"), _open_production_capability.bind(_selected_location_id), false, COLOR_WARN)
-					open_capability.name = "OpenProductionCapability_%d" % slot
-					control_row.add_child(open_capability)
-				card.add_child(control_row)
-				# `production_gameplay_state()` intentionally projects an unused IDLE
-				# runtime as PAUSED.  Configuration availability, however, belongs to
-				# the authoritative raw runtime status; otherwise a legal empty line has
-				# no player surface for choosing its first Production Method.
-				if String(runtime.get("status", "IDLE")) == "IDLE" or current_activity_id.is_empty():
-					for activity_value in Game.content.activities.values():
-						var activity := activity_value as Dictionary
-						var activity_id := String(activity.get("id", ""))
-						if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
-							continue
-						var scale_blocked := not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)
-						var method_button := _button(I18n.core("industry.line.select_method") % [_content_name(activity, activity_id), I18n.core("industry.line.higher_scale_required") if scale_blocked else ""], _command.bind(I18n.core("command.set_production_method"), Game.start_industry_operation.bind(slot, activity_id)), scale_blocked or not Game.simulation.activity_available(Game.state, activity))
-						method_button.name = "SelectProductionMethod_%d_%s" % [slot, activity_id]
-						card.add_child(method_button)
-			var line_capacity := Game.simulation.max_production_lines(Game.state, _selected_location_id, facility_id)
-			var line_capacity_full := lines.size() >= line_capacity
-			card.add_child(_label(I18n.core("industry.line.capacity_full", "Production-line capacity is full. Upgrade the Factory scale stage to add another line.") if line_capacity_full else I18n.core("industry.line.add_help"), 13, COLOR_WARN if line_capacity_full else COLOR_ACCENT))
-			for activity_value in Game.content.activities.values():
-				var activity := activity_value as Dictionary
-				var activity_id := String(activity.get("id", ""))
-				if String(activity.get("domain", "")) != "industry" or Game.simulation.is_construction_activity(activity) or Game.content.is_module_bom_activity(activity) or String(activity.get("facility", "")) != facility_id or not Game.simulation.definition_revealed(Game.state, activity):
-					continue
-				var activity_blocked := not Game.simulation.activity_available(Game.state, activity) or not Game.simulation.production_method_available_at_scale(Game.state, _selected_location_id, facility_id, activity)
-				var add_line_button := _button(I18n.core("industry.line.add") % _content_name(activity, activity_id), _command.bind(I18n.core("command.add_production_line"), Game.add_production_line.bind(_selected_location_id, facility_id, activity_id, 50, 50)), line_capacity_full or activity_blocked)
-				add_line_button.name = "AddProductionLine_%s_%s" % [facility_id, activity_id]
-				if line_capacity_full:
-					add_line_button.tooltip_text = I18n.core("industry.line.capacity_full", "Production-line capacity is full. Upgrade the Factory scale stage to add another line.")
-				card.add_child(add_line_button)
-		var expansion_row := HBoxContainer.new()
-		expansion_row.add_theme_constant_override("separation", 6)
-		var stage_definition: Dictionary = Game.simulation.industry_scale_stage_definition(scale_stage)
-		var stage_max_level := int(stage_definition.get("max_level", 4))
-		for amount in [1, 5, 10]:
-			var expansion_button := _button(I18n.core("industry.expansion.queue") % amount, _command.bind(I18n.core("command.expand_local_industry"), Game.expand_location_industry.bind(_selected_location_id, facility_id, amount)), level + amount > stage_max_level)
-			expansion_button.name = "ExpandIndustry_%s_%d" % [facility_id, amount]
-			expansion_button.tooltip_text = I18n.core("construction.inputs") % _resource_dictionary(Game.simulation.industry_expansion_costs(Game.state, _selected_location_id, facility_id, amount))
-			expansion_row.add_child(expansion_button)
-		var next_stage := String(stage_definition.get("next_stage", ""))
-		if level >= stage_max_level and not next_stage.is_empty():
-			var scale_button := _button(I18n.core("industry.expansion.scale_transition") % scale_names.get(next_stage, next_stage), _command.bind(I18n.core("command.scale_stage_transition"), Game.queue_scale_stage_upgrade.bind(_selected_location_id, facility_id, 70)), Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state), COLOR_ACCENT)
-			scale_button.name = "UpgradeScaleStage_%s_%s_%s" % [_selected_location_id, facility_id, next_stage]
-			expansion_row.add_child(scale_button)
-		card.add_child(expansion_row)
-		box.add_child(_wrap_card(card))
-	var mastered_transformations: Array[String] = []
-	for transformation_id_value in Game.content.industry_rules.get("industrial_transformations", {}).keys():
-		var transformation_id := String(transformation_id_value)
-		if bool(Game.state.unlocked_industrial_transformations.get(transformation_id, false)):
-			mastered_transformations.append(transformation_id)
-	if not mastered_transformations.is_empty():
-		box.add_child(_section_title(I18n.core("industry.transformation.title")))
-		for transformation_id in mastered_transformations:
-			var transformation: Dictionary = Game.content.industry_rules.get("industrial_transformations", {}).get(transformation_id, {})
-			var transformation_card := _card()
-			var adopted := bool(Game.state.adopted_industrial_transformations.get(transformation_id, false))
-			var transformation_name := I18n.t("industrial_transformation.%s.name" % transformation_id, String(transformation.get("name", transformation_id)))
-			var transformation_description := I18n.t("industrial_transformation.%s.description" % transformation_id, String(transformation.get("description", "")))
-			transformation_card.add_child(_label(I18n.core("industry.transformation.status") % [transformation_name, I18n.core("industry.transformation.adopted") if adopted else I18n.core("industry.transformation.available")], 15, COLOR_GOOD if adopted else COLOR_ACCENT))
-			transformation_card.add_child(_label(I18n.core("industry.transformation.details") % [transformation_description, _resource_list(transformation.get("costs", [])), float(transformation.get("downtime_multiplier", 0.5)) * 100.0], 12, COLOR_MUTED))
-			var transformation_button := _button(I18n.core("industry.transformation.start"), _command.bind(I18n.core("command.start_industrial_transformation"), Game.queue_industrial_transformation.bind(transformation_id, 70)), adopted, COLOR_ACCENT)
-			transformation_button.name = "AdoptIndustrialTransformation_%s" % transformation_id
-			transformation_card.add_child(transformation_button)
-			box.add_child(_wrap_card(transformation_card))
-	box.add_child(_section_title(I18n.core("industry.capacity.title")))
-	var capacity_card := _card()
-	capacity_card.add_child(_label(I18n.core("industry.capacity.help"), 13, COLOR_MUTED))
-	var storage_snapshot: Dictionary = Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
-	var storage_classes: Dictionary = storage_snapshot.get("classes", {})
-	var capacity_values := {
-		"POWER_UPGRADE":int(location.get("industry", {}).get("power_capacity", 0)),
-		"COOLING_UPGRADE":int(location.get("industry", {}).get("cooling_capacity", 0)),
-		"STRUCTURE_UPGRADE":int(location.get("industry", {}).get("structural_capacity", 0)),
-		"BULK_STORAGE_UPGRADE":int(storage_classes.get("BULK", {}).get("capacity", 0)),
-		"COMPONENT_STORAGE_UPGRADE":int(storage_classes.get("COMPONENT", {}).get("capacity", 0)),
-		"FLUID_STORAGE_UPGRADE":int(storage_classes.get("FLUID", {}).get("capacity", 0)),
-		"SPECIAL_STORAGE_UPGRADE":int(storage_classes.get("SPECIAL", {}).get("capacity", 0)),
-		"LOGISTICS_HUB_UPGRADE":int(location.get("logistics", {}).get("hub_throughput", 0))
-	}
-	var capacity_names := {"POWER_UPGRADE":I18n.core("industry.capacity.power"), "COOLING_UPGRADE":I18n.core("industry.capacity.cooling"), "STRUCTURE_UPGRADE":I18n.core("industry.capacity.structure"), "BULK_STORAGE_UPGRADE":I18n.core("industry.capacity.bulk_storage"), "COMPONENT_STORAGE_UPGRADE":I18n.core("industry.capacity.component_storage"), "FLUID_STORAGE_UPGRADE":I18n.core("industry.capacity.fluid_storage"), "SPECIAL_STORAGE_UPGRADE":I18n.core("industry.capacity.special_storage"), "LOGISTICS_HUB_UPGRADE":I18n.core("industry.capacity.logistics_hub")}
-	var capacity_actions := HFlowContainer.new()
-	capacity_actions.add_theme_constant_override("h_separation", 6)
-	for project_type_value in capacity_values.keys():
-		var project_type := String(project_type_value)
-		# Domain owns both the legal increment and the strategic batch size. This
-		# keeps large mature depots from requiring ten identical clicks without
-		# teaching the UI any construction or economy formula.
-		var target := Game.simulation.suggested_location_capacity_upgrade_target(Game.state, _selected_location_id, project_type)
-		var queue_full := Game.simulation.construction_queue_size(Game.state) >= Game.simulation.construction_queue_capacity(Game.state)
-		var capacity_button := _button(I18n.core("industry.capacity.target") % [capacity_names.get(project_type, project_type), target], _command.bind(I18n.core("command.queue_capacity_project"), Game.queue_location_capacity_upgrade.bind(_selected_location_id, project_type, target, 50)), queue_full)
-		capacity_button.name = "UpgradeLocationCapacity_%s_%s_%d" % [_selected_location_id, project_type, target]
-		if queue_full:
-			capacity_button.tooltip_text = I18n.t("notice.construction_queue_full", "The construction queue is full")
-		capacity_actions.add_child(capacity_button)
-	capacity_card.add_child(capacity_actions)
-	box.add_child(_wrap_card(capacity_card))
-
-
-func _apply_selected_industrial_template(selector: OptionButton, template_ids: Array) -> void:
-	if selector.selected < 0 or selector.selected >= template_ids.size():
-		return
-	_command(I18n.core("command.apply_industrial_template"), Game.apply_location_industrial_template.bind(_selected_location_id, String(template_ids[selector.selected])))
 
 
 func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void:
@@ -1728,15 +1436,15 @@ func _toggle_logistics_service_ship(route_id: String, ship_id: String) -> void:
 
 func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void:
 	var found := false
-	for operation_value in Game.state.construction_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id or String(operation.get("activity_id", "")).is_empty():
+	for project_id_value in Game.state.megastructure_projects.keys():
+		var project_id := String(project_id_value)
+		var project := Game.state.megastructure_projects.get(project_id, {}) as Dictionary
+		if String(project.get("site_location_id", project.get("location_id", ""))) != _selected_location_id:
 			continue
 		found = true
-		var activity: Dictionary = Game.simulation.construction_activity_for_runtime(operation)
-		var project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
-		var stage_line := I18n.core("construction.megastructure_stage_suffix") % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "RECEIVING")))] if not project.is_empty() else ""
-		box.add_child(_card_text(I18n.core("construction.location_project") % [_construction_project_name(operation, activity), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
+		var definition := Game.content.megastructures.get(project_id, {"id":project_id, "name":project_id}) as Dictionary
+		var stage_line := I18n.core("construction.megastructure_stage_suffix") % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "AWAITING_NEXT_PHASE")))]
+		box.add_child(_card_text(I18n.core("construction.location_project") % [_content_name(definition, project_id), _status_text(String(project.get("status", "READY"))), stage_line], COLOR_TEXT))
 	for order_value in Game.state.shipyard_queue:
 		var order := order_value as Dictionary
 		if String(order.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id:
@@ -1805,13 +1513,6 @@ func _capture_requested_view() -> void:
 			captured_page.scroll_vertical = int(captured_page.get_v_scroll_bar().max_value)
 			await get_tree().process_frame
 			await get_tree().process_frame
-	for argument in args:
-		if String(argument).begins_with("--network-visual-phase=") and is_instance_valid(_industrial_network_view):
-			_industrial_network_view.set_visual_phase_for_capture(float(String(argument).trim_prefix("--network-visual-phase=")))
-		elif String(argument).begins_with("--network-focus-activity=") and is_instance_valid(_industrial_network_view):
-			_industrial_network_view.focus_production_method(String(argument).trim_prefix("--network-focus-activity="), false)
-	if args.has("--network-focus-bottleneck") and is_instance_valid(_industrial_network_view):
-		_industrial_network_view.focus_bottleneck(false)
 	if requested_view == "ships" and not requested_roster_state.is_empty():
 		await _prepare_fleet_roster_capture_state(requested_roster_state)
 	if requested_view == "ships" and args.has("--capture-inspector-scroll-bottom"):
@@ -2342,8 +2043,10 @@ func _rebuild_logistics() -> void:
 func _rebuild_construction() -> void:
 	var box: VBoxContainer = _pages["construction"]
 	_clear(box)
-	box.add_child(_page_title(I18n.core("page.construction", "Construction"), I18n.core("construction.subtitle", "One material-backed queue for facilities, upgrades, remote sites and stellar engineering.")))
-	_build_industry_construction(box)
+	box.add_child(_page_title(I18n.core("page.construction", "Construction"), "Ordinary construction is managed as physical Factory-grid entities and orders."))
+	var open_factory := _button("OPEN FACTORY WORKSPACE", _switch_page.bind("industry"), false, COLOR_ACCENT)
+	open_factory.name = "OpenFactoryConstructionWorkspace"
+	box.add_child(open_factory)
 
 
 func _rebuild_diagnostics() -> void:
@@ -2443,47 +2146,47 @@ func _refresh_alerts() -> void:
 
 func _rebuild_industry() -> void:
 	var box: VBoxContainer = _pages["industry"]
-	var network_workspace := _industry_section == "production" and _industry_view_mode == "network"
-	_configure_industry_workspace(network_workspace)
+	_configure_industry_workspace(true)
 	_clear(box)
-	if network_workspace:
-		var compact_header := HBoxContainer.new()
-		compact_header.name = "IndustryNetworkHeader"
-		compact_header.add_theme_constant_override("separation", 10)
-		var compact_title := Label.new()
-		compact_title.text = I18n.core("industry.title")
-		compact_title.add_theme_font_size_override("font_size", UiTokens.font_size(20))
-		compact_title.add_theme_color_override("font_color", COLOR_TEXT)
-		compact_header.add_child(compact_title)
-		var compact_context := Label.new()
-		compact_context.text = I18n.core("industrial_network.workspace_context", "Orbital industrial operations console")
-		compact_context.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		compact_context.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		compact_context.add_theme_font_size_override("font_size", UiTokens.font_size(12))
-		compact_context.add_theme_color_override("font_color", COLOR_MUTED)
-		compact_context.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		compact_header.add_child(compact_context)
-		box.add_child(compact_header)
-	else:
-		box.add_child(_page_title(I18n.core("industry.title"), I18n.core("industry.subtitle")))
-	var section_tabs := HFlowContainer.new()
-	section_tabs.add_theme_constant_override("h_separation", 6)
-	section_tabs.add_theme_constant_override("v_separation", 6)
-	for entry in [["production", I18n.core("industry.tab.production")], ["facilities", I18n.core("industry.tab.facilities")], ["construction", I18n.core("industry.tab.construction")], ["automation", I18n.core("industry.tab.diagnostics")]]:
-		var section_id := String(entry[0])
-		var section_button := _button(String(entry[1]), _select_industry_section.bind(section_id), section_id == _industry_section, COLOR_ACCENT)
-		section_button.name = "IndustrySection_%s" % section_id
-		section_tabs.add_child(section_button)
-	box.add_child(section_tabs)
-	match _industry_section:
-		"facilities":
-			_build_facility_management(box)
-		"construction":
-			_build_industry_construction(box)
-		"automation":
-			_build_background_economy_controls(box)
-		_:
-			_build_industry_production(box)
+	_factory_workspace = FactoryWorkspaceScript.new()
+	_factory_workspace.name = "FactoryMiningProductionWorkspace"
+	_factory_workspace.custom_minimum_size.y = UiTokens.layout_px(560)
+	_factory_workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_factory_workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_factory_workspace.set_reduced_motion(_reduced_motion)
+	_factory_workspace.command_intent.connect(_on_factory_command_intent)
+	box.add_child(_factory_workspace)
+	_refresh_factory_workspace()
+
+
+func _refresh_factory_workspace() -> void:
+	if not is_instance_valid(_factory_workspace):
+		return
+	var world_id := _factory_world_id_for_location(_selected_location_id)
+	if world_id.is_empty():
+		_factory_workspace.clear_workspace()
+		return
+	_factory_workspace.apply_snapshot(Game.factory_workspace_snapshot(world_id))
+	_factory_workspace.set_reduced_motion(_reduced_motion)
+
+
+func _factory_world_id_for_location(location_id: String) -> String:
+	var world_ids: Array = Game.state.factory_worlds.keys()
+	world_ids.sort_custom(func(a, b): return str(a) < str(b))
+	for world_id_value in world_ids:
+		var world_id := str(world_id_value)
+		if str(Game.state.factory_worlds.get(world_id, {}).get("location_id", "")) == location_id:
+			return world_id
+	return ""
+
+
+func _on_factory_command_intent(intent: Dictionary) -> void:
+	var result: Dictionary = Game.execute_factory_command(intent)
+	var message := str(result.get("message", "Factory command rejected"))
+	_append_log(message)
+	if bool(result.get("accepted", false)):
+		_refresh_factory_workspace()
+	_request_active_page_refresh(false)
 
 
 func _configure_industry_workspace(network_workspace: bool) -> void:
@@ -2497,319 +2200,6 @@ func _configure_industry_workspace(network_workspace: bool) -> void:
 	var box = _pages.get("industry") as VBoxContainer
 	if is_instance_valid(box):
 		box.size_flags_vertical = Control.SIZE_EXPAND_FILL if network_workspace else Control.SIZE_SHRINK_BEGIN
-
-
-func _select_industry_section(section: String) -> void:
-	_industry_section = section
-	_save_ui_preferences()
-	_request_active_page_refresh(true)
-
-
-func _open_production_construction(_project_id: String) -> void:
-	_industry_section = "construction"
-	_switch_page("construction")
-
-
-func _open_production_capability(location_id: String) -> void:
-	_selected_location_id = location_id
-	_industry_section = "facilities"
-	_switch_page("industry")
-
-
-func _build_industry_production(box: VBoxContainer) -> void:
-	var view_tabs := HBoxContainer.new()
-	view_tabs.add_theme_constant_override("separation", 6)
-	var network_button := _industrial_network_mode_button(I18n.core("industrial_network.view.network", "Network view"), "network")
-	network_button.name = "IndustryProductionNetworkView"
-	view_tabs.add_child(network_button)
-	var list_button := _industrial_network_mode_button(I18n.core("industrial_network.view.list", "List / detailed view"), "list")
-	list_button.name = "IndustryProductionListView"
-	view_tabs.add_child(list_button)
-	box.add_child(view_tabs)
-	if _industry_view_mode == "network":
-		_build_industry_network(box)
-		return
-	_build_industry_production_list(box)
-
-
-func _industrial_network_mode_button(caption: String, mode: String) -> Button:
-	var button := _button(caption, _select_industry_view_mode.bind(mode), false, COLOR_ACCENT)
-	if mode == _industry_view_mode:
-		button.add_theme_stylebox_override("normal", UiTokens.control_style(UiTokens.COLOR_CONTROL_ACTIVE, UiTokens.COLOR_FOCUS))
-		button.add_theme_stylebox_override("hover", UiTokens.control_style(UiTokens.COLOR_CONTROL_ACTIVE.lightened(0.03), UiTokens.COLOR_FOCUS))
-		button.add_theme_color_override("font_color", COLOR_TEXT)
-		button.tooltip_text = I18n.core("industrial_network.view.active", "Current production view")
-	return button
-
-
-func _select_industry_view_mode(mode: String) -> void:
-	if mode not in ["network", "list"]:
-		return
-	_industry_view_mode = mode
-	if mode != "network":
-		_industrial_network_view = null
-	_save_ui_preferences()
-	_request_active_page_refresh(true)
-
-
-func _build_industry_network(box: VBoxContainer) -> void:
-	if not is_instance_valid(_industrial_network_projection):
-		_industrial_network_projection = IndustrialNetworkProjectionScript.new(Game.content)
-	_industrial_network_view = IndustrialNetworkViewScript.new()
-	_industrial_network_view.name = "IndustrialNetworkView"
-	_industrial_network_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_industrial_network_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_industrial_network_view.build(_industrial_network_preferences, _reduced_motion)
-	_industrial_network_view.entity_selected.connect(_on_industrial_network_entity_selected)
-	_industrial_network_view.entity_activated.connect(_on_industrial_network_entity_activated)
-	_industrial_network_view.preferences_changed.connect(_on_industrial_network_preferences_changed)
-	_industrial_network_view.reduced_motion_changed.connect(_on_reduced_motion_changed)
-	box.add_child(_industrial_network_view)
-	_refresh_industrial_network_view()
-
-
-func _refresh_industrial_network_view() -> void:
-	if not is_instance_valid(_industrial_network_view):
-		return
-	if not is_instance_valid(_industrial_network_projection):
-		_industrial_network_projection = IndustrialNetworkProjectionScript.new(Game.content)
-	var snapshot := Game.simulation.industrial_network_snapshot(Game.state, _selected_location_id)
-	var projection := _industrial_network_projection.build(snapshot)
-	_industrial_network_view.apply_projection(projection)
-	_industrial_network_view.set_reduced_motion(_reduced_motion)
-	_industrial_network_view.set_simulation_paused(Engine.time_scale <= 0.0)
-	if not _selected_industrial_network_node.is_empty():
-		_industrial_network_view.select_entity(String(_selected_industrial_network_node.get("id", "")), false)
-		var current := _industrial_network_view.selected_entity()
-		if not current.is_empty():
-			_selected_industrial_network_node = current
-			_rebuild_sidebar()
-
-
-func _on_industrial_network_entity_selected(node: Dictionary) -> void:
-	if node.is_empty():
-		return
-	_selected_industrial_network_node = node.duplicate(true)
-	_ui_state.select_context("industrial_network", String(node.get("id", "")))
-	if _ui_state.right_inspector_collapsed:
-		_ui_state.right_inspector_collapsed = false
-		if is_instance_valid(_shell):
-			_shell.set_right_collapsed(false)
-	_rebuild_sidebar()
-	_network_preferences_save_due_ms = Time.get_ticks_msec() + 500
-
-
-func _on_industrial_network_entity_activated(node: Dictionary) -> void:
-	_on_industrial_network_entity_selected(node)
-	_open_industrial_network_target(node)
-
-
-func _on_industrial_network_preferences_changed(preferences: Dictionary) -> void:
-	_industrial_network_preferences = preferences.duplicate(true)
-	_network_preferences_save_due_ms = Time.get_ticks_msec() + 500
-
-
-func _on_reduced_motion_changed(enabled: bool) -> void:
-	_reduced_motion = enabled
-	_save_ui_preferences()
-
-
-func _build_industry_production_list(box: VBoxContainer) -> void:
-	box.add_child(_section_title(I18n.core("industry.production_methods")))
-	for activity_value in Game.content.activities.values():
-		var activity := activity_value as Dictionary
-		if String(activity.get("domain", "")) != "industry":
-			continue
-		if Game.simulation.is_construction_activity(activity):
-			continue
-		if not Game.simulation.definition_revealed(Game.state, activity):
-			continue
-		var activity_id := String(activity.get("id", ""))
-		var facility_id := String(activity.get("facility", ""))
-		var runtime := _industrial_runtime_for_facility(facility_id)
-		var runtime_active := not runtime.is_empty() and String(runtime.get("status", "IDLE")) in ["RUNNING", "BLOCKED"]
-		var card := _card()
-		card.add_child(_label(_content_name(activity, activity_id), 16, COLOR_TEXT))
-		card.add_child(_label(_activity_summary(activity), 13, COLOR_MUTED))
-		if runtime_active and String(runtime.get("activity_id", "")) == activity_id:
-			card.add_child(_operation_progress(runtime, I18n.core("industry.production_active")))
-			_add_blocker_label(card, runtime)
-			var stop_industry_button := _button(I18n.core("common.stop"), _command.bind(I18n.core("command.stop_production"), Game.stop_industry_operation.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
-			stop_industry_button.name = "StopIndustry_%s" % activity_id
-			card.add_child(stop_industry_button)
-		else:
-			var busy := runtime_active
-			var reason := _activity_block_reason("industry", activity_id)
-			var disabled := busy or not reason.is_empty()
-			var start_industry_button := _button(I18n.core("industry.start_production"), _command.bind(I18n.core("command.start_production"), Game.start_industry_operation.bind(int(runtime.get("slot", 0)), activity_id)), disabled)
-			start_industry_button.name = "StartIndustry_%s" % activity_id
-			card.add_child(start_industry_button)
-			if busy:
-				card.add_child(_label(I18n.core("industry.facility_busy"), 13, COLOR_WARN))
-			elif not reason.is_empty():
-				card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
-		box.add_child(_wrap_card(card))
-
-
-func _build_industry_construction(box: VBoxContainer) -> void:
-	box.add_child(_section_title(I18n.core("construction.facilities")))
-	for operation_value in Game.state.construction_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("activity_id", "")).is_empty():
-			continue
-		var definition := Game.simulation.construction_activity_for_runtime(operation)
-		var active_card := _card()
-		active_card.add_child(_label(_construction_project_name(operation, definition), 16, COLOR_TEXT))
-		active_card.add_child(_label(I18n.core("construction.project_header") % [String(operation.get("project_id", "PROJECT")), _construction_project_type_name(String(operation.get("project_type", "FACILITY_BUILD"))), _content_name(Game.content.regions.get(String(operation.get("location_id", "")), {"name":operation.get("location_id", "")}), String(operation.get("location_id", ""))), int(operation.get("priority", 50))], 13, COLOR_MUTED))
-		active_card.add_child(_operation_progress(operation, I18n.core("construction.status") % _status_text(Game.simulation.construction_gameplay_state(operation))))
-		_add_blocker_label(active_card, operation)
-		active_card.add_child(_label(I18n.core("construction.materials") % [_resource_dictionary(operation.get("material_plan", {})), _resource_dictionary(operation.get("consumed", {})), _resource_dictionary(operation.get("delivered_materials", {})), _resource_dictionary(operation.get("in_transit_materials", {}))], 12, COLOR_MUTED))
-		var priority_actions := HBoxContainer.new()
-		priority_actions.add_theme_constant_override("separation", 6)
-		for priority in [100, 50, 10]:
-			var priority_button := _button(I18n.core("construction.priority") % priority, _command.bind(I18n.core("command.change_construction_priority"), Game.set_construction_project_priority.bind(String(operation.get("project_id", "")), priority)), int(operation.get("priority", 50)) == priority, COLOR_ACCENT)
-			priority_button.name = "ConstructionPriority_%s_%d" % [String(operation.get("project_id", "PROJECT")), priority]
-			priority_actions.add_child(priority_button)
-		active_card.add_child(priority_actions)
-		var paused := String(operation.get("status", "")) == "PAUSED"
-		var pause_button := _button(I18n.core("construction.resume") if paused else I18n.core("construction.pause"), _command.bind(I18n.core("command.resume_construction") if paused else I18n.core("command.pause_construction"), Game.set_construction_project_paused.bind(String(operation.get("project_id", "")), not paused)), false, COLOR_ACCENT)
-		pause_button.name = "%sConstruction_%s" % ["Resume" if paused else "Pause", String(operation.get("project_id", "PROJECT"))]
-		active_card.add_child(pause_button)
-		var megastructure_project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
-		if not megastructure_project.is_empty():
-			active_card.add_child(_label(I18n.core("construction.megastructure_phase") % [int(megastructure_project.get("progress_percent", 0)), _status_text(String(megastructure_project.get("stage_name", "PLANNED"))), _status_text(String(megastructure_project.get("material_flow_status", "RECEIVING")))], 14, COLOR_ACCENT))
-		var cancel_button := _button(I18n.core("construction.cancel"), _command.bind(I18n.core("command.cancel_construction"), Game.stop_construction_project.bind(int(operation.get("slot", 0)))), false, COLOR_WARN)
-		cancel_button.name = "CancelConstruction_%s" % String(operation.get("project_id", "PROJECT"))
-		active_card.add_child(cancel_button)
-		box.add_child(_wrap_card(active_card))
-
-	if not Game.state.construction_history.is_empty():
-		box.add_child(_section_title(I18n.core("construction.history.title")))
-		var history_start := maxi(0, Game.state.construction_history.size() - 10)
-		for history_index in range(Game.state.construction_history.size() - 1, history_start - 1, -1):
-			var history := Game.state.construction_history[history_index] as Dictionary
-			var history_definition := Game.content.activities.get(String(history.get("activity_id", "")), {}) as Dictionary
-			var history_card := _card()
-			history_card.add_child(_label(I18n.core("construction.history.header") % [_status_text(String(history.get("status", "COMPLETE"))), _construction_project_name(history, history_definition)], 16, COLOR_GOOD if String(history.get("status", "")) == "COMPLETE" else COLOR_WARN))
-			history_card.add_child(_label(I18n.core("construction.history.summary") % [String(history.get("project_id", "PROJECT")), _construction_project_type_name(String(history.get("project_type", "FACILITY_BUILD"))), _location_name(String(history.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))), _format_ms(int(history.get("finished_at_ms", 0)))], 13, COLOR_MUTED))
-			history_card.add_child(_label(I18n.core("construction.history.materials") % [_resource_dictionary(history.get("material_plan", {})), _resource_dictionary(history.get("consumed", {}))], 12, COLOR_MUTED))
-			var cancellation: Dictionary = history.get("cancellation_result", {}) if history.get("cancellation_result", null) is Dictionary else {}
-			if String(history.get("status", "")) == "CANCELLED":
-				history_card.add_child(_label(I18n.core("construction.history.cancellation") % [_resource_dictionary(cancellation.get("delivered_released", {})), _resource_dictionary(cancellation.get("consumed_lost", {})), _location_name(String(cancellation.get("in_transit_destination", history.get("location_id", ""))))], 12, COLOR_WARN))
-			var history_button := _button(I18n.core("construction.history.open_ledger"), _open_construction_history_target.bind(history), false, COLOR_ACCENT)
-			history_button.name = "ConstructionHistory_%s" % String(history.get("project_id", "PROJECT"))
-			history_card.add_child(history_button)
-			box.add_child(_wrap_card(history_card))
-
-	for activity_value in Game.content.activities.values():
-		var activity := activity_value as Dictionary
-		if String(activity.get("domain", "")) != "industry" or not Game.simulation.is_construction_activity(activity):
-			continue
-		if Game.simulation.construction_project_type_for_activity(activity) == "MEGASTRUCTURE":
-			continue
-		if not Game.simulation.definition_revealed(Game.state, activity):
-			continue
-		var activity_id := String(activity.get("id", ""))
-		var card := _card()
-		card.add_child(_label(_content_name(activity, activity_id), 16, COLOR_TEXT))
-		card.add_child(_label(_activity_summary(activity), 13, COLOR_MUTED))
-		var reason := _construction_block_reason(activity_id)
-		var start_construction_button := _button(I18n.core("construction.start"), _command.bind(I18n.core("command.start_construction"), Game.start_construction_project.bind(activity_id)), not reason.is_empty())
-		start_construction_button.name = "StartConstruction_%s" % activity_id
-		if not reason.is_empty():
-			start_construction_button.tooltip_text = reason
-		card.add_child(start_construction_button)
-		if not reason.is_empty():
-			card.add_child(_label(I18n.core("expedition.unavailable") % reason, 13, COLOR_WARN))
-		box.add_child(_wrap_card(card))
-
-
-func _open_construction_history_target(history: Dictionary) -> void:
-	var location_id := String(history.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-	_open_location_section(location_id, "industry")
-
-
-func _build_facility_management(box: VBoxContainer) -> void:
-	box.add_child(_section_title(I18n.core("facility.config_title", "Facility Configuration & Process Capability")))
-	box.add_child(_card_text(I18n.core("facility.config_help", "Facility modules use real materials and the shared Construction queue. Stop a manufacturing facility before changing Process Modules or Universal Plugins."), COLOR_MUTED))
-	var facility_ids: Array = Game.state.facilities.keys()
-	facility_ids.sort()
-	for facility_id_value in facility_ids:
-		var facility_id := String(facility_id_value)
-		var definition := Game.content.facilities.get(facility_id, {}) as Dictionary
-		if definition.is_empty():
-			continue
-		var runtime: Dictionary = Game.simulation.industry_runtime_for_facility(Game.state, facility_id)
-		var runtime_busy := Game.simulation.industry_facility_busy(Game.state, facility_id)
-		var state_entry: Dictionary = Game.state.facilities.get(facility_id, {})
-		var card := _card()
-		card.add_child(_label(I18n.core("facility.level", "%s · Tier %d") % [_content_name(definition, facility_id), int(state_entry.get("level", 1))], 17, COLOR_TEXT))
-		if not runtime.is_empty():
-			card.add_child(_label(I18n.core("facility.production_status", "Production status: %s%s") % [_status_text(String(runtime.get("status", "IDLE"))), I18n.core("facility.stop_before_refit", " · Stop production before refitting") if runtime_busy else ""], 13, COLOR_WARN if runtime_busy else COLOR_MUTED))
-
-		var advanced_demand := Game.simulation.facility_advanced_power_demand(Game.state, facility_id)
-		if advanced_demand > 0.0 or definition.has("advanced_power_priority"):
-			card.add_child(_label(I18n.core("facility.advanced_power_priority", "Advanced Power Priority · Actual demand %.1f") % advanced_demand, 14, COLOR_ACCENT))
-			var current_priority := String(Game.state.energy_system.get("advanced_priorities", {}).get(facility_id, definition.get("advanced_power_priority", "NORMAL")))
-			var priority_row := HFlowContainer.new()
-			priority_row.add_theme_constant_override("h_separation", 6)
-			for priority in ["CRITICAL", "HIGH", "NORMAL", "LOW"]:
-				var power_priority_button := _button(_status_text(priority), _command.bind(I18n.core("command.set_power_priority", "Set Power Priority"), Game.set_advanced_power_priority.bind(facility_id, priority)), current_priority == priority)
-				power_priority_button.name = "AdvancedPowerPriority_%s_%s" % [facility_id, priority]
-				priority_row.add_child(power_priority_button)
-			card.add_child(priority_row)
-
-		var installed_upgrades: Array = state_entry.get("installed_modules", [])
-		if not definition.get("upgrade_modules", {}).is_empty():
-			card.add_child(_label(I18n.core("facility.infrastructure_modules", "Infrastructure Modules %d / %d") % [installed_upgrades.size(), int(definition.get("module_slots", 0))], 14, COLOR_ACCENT))
-			for module_id_value in definition.get("upgrade_modules", {}).keys():
-				var module_id := String(module_id_value)
-				var module := definition.get("upgrade_modules", {}).get(module_id, {}) as Dictionary
-				if installed_upgrades.has(module_id):
-					card.add_child(_label(I18n.core("common.completed_item") % _content_name(module, module_id), 13, COLOR_GOOD))
-				else:
-					var available := Game.simulation.facility_module_available(Game.state, facility_id, module_id)
-					var facility_module_button := _button(I18n.core("facility.queue_install", "Queue Installation · %s · %s") % [_content_name(module, module_id), _resource_list(module.get("costs", []))], _command.bind(I18n.core("command.queue_facility_module", "Queue Facility Module Installation"), Game.install_facility_module.bind(facility_id, module_id)), not available)
-					facility_module_button.name = "InstallFacilityModule_%s_%s" % [facility_id, module_id]
-					card.add_child(facility_module_button)
-
-		if int(definition.get("manufacturing_generation", 0)) > 0:
-			_add_manufacturing_module_controls(card, facility_id, definition, state_entry, "process", runtime_busy)
-			_add_manufacturing_module_controls(card, facility_id, definition, state_entry, "plugin", runtime_busy)
-		box.add_child(_wrap_card(card))
-
-
-func _add_manufacturing_module_controls(card: VBoxContainer, facility_id: String, facility: Dictionary, state_entry: Dictionary, module_kind: String, runtime_busy: bool) -> void:
-	var field := "installed_process_modules" if module_kind == "process" else "installed_plugins"
-	var slot_field := "process_module_slots" if module_kind == "process" else "plugin_slots"
-	var definitions: Dictionary = Game.content.process_modules if module_kind == "process" else Game.content.universal_industry_plugins
-	var installed: Array = state_entry.get(field, [])
-	card.add_child(_label(I18n.core("facility.manufacturing_modules") % [I18n.core("facility.process_modules") if module_kind == "process" else I18n.core("facility.universal_plugins"), installed.size(), int(facility.get(slot_field, 0))], 14, COLOR_ACCENT))
-	for installed_id_value in installed:
-		var installed_id := String(installed_id_value)
-		var installed_definition := definitions.get(installed_id, {}) as Dictionary
-		var installed_row := HFlowContainer.new()
-		installed_row.add_theme_constant_override("h_separation", 6)
-		installed_row.add_child(_label(I18n.core("common.completed_item") % _content_name(installed_definition, installed_id), 13, COLOR_GOOD))
-		var uninstall_button := _button(I18n.core("facility.remove_module"), _command.bind(I18n.core("command.remove_manufacturing_module"), Game.uninstall_manufacturing_module.bind(facility_id, installed_id, module_kind)), runtime_busy, COLOR_WARN)
-		uninstall_button.name = "UninstallManufacturingModule_%s_%s_%s" % [facility_id, installed_id, module_kind]
-		installed_row.add_child(uninstall_button)
-		card.add_child(installed_row)
-	for module_id_value in definitions.keys():
-		var module_id := String(module_id_value)
-		if installed.has(module_id):
-			continue
-		var module := definitions.get(module_id, {}) as Dictionary
-		if not Game.simulation.definition_revealed(Game.state, module):
-			continue
-		var compatible: bool = facility_id in module.get("compatible_facilities", []) if module_kind == "process" else int(facility.get("manufacturing_generation", 0)) in module.get("compatible_generations", [])
-		if not compatible:
-			continue
-		var available := Game.simulation.manufacturing_module_available(Game.state, facility_id, module_id, module_kind)
-		var storage := int(Game.state.manufacturing_module_inventory.get(module_id, 0))
-		var install_button := _button(I18n.core("facility.install_manufacturing_module") % [_content_name(module, module_id), I18n.core("facility.module_stock") % storage if storage > 0 else "", _resource_list(module.get("costs", []))], _command.bind(I18n.core("command.install_manufacturing_module"), Game.install_manufacturing_module.bind(facility_id, module_id, module_kind)), runtime_busy or not available)
-		install_button.name = "InstallManufacturingModule_%s_%s_%s" % [facility_id, module_id, module_kind]
-		card.add_child(install_button)
 
 
 func _build_background_economy_controls(box: VBoxContainer) -> void:
@@ -2914,36 +2304,6 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 	box.add_child(mega_controls)
 	if not _planner_result.is_empty():
 		_build_read_only_plan_result(box, _planner_result)
-
-	box.add_child(_section_title(I18n.core("automation.title")))
-	box.add_child(_card_text(I18n.core("automation.help"), COLOR_MUTED))
-	for rule_value in Game.state.automation_rules:
-		var rule := rule_value as Dictionary
-		var rule_card := _card()
-		var condition: Dictionary = rule.get("condition", {})
-		var action: Dictionary = rule.get("action", {})
-		rule_card.add_child(_label(I18n.core("automation.rule_header") % [String(rule.get("rule_id", "AUTOMATION")), I18n.core("status.PAUSED") if bool(rule.get("paused", false)) else I18n.core("automation.authorized")], 14, COLOR_ACCENT))
-		rule_card.add_child(_label(I18n.core("automation.rule_condition") % [_automation_term("condition", String(condition.get("type", "CONDITION"))), _automation_term("operator", String(condition.get("operator", "LT"))), float(condition.get("threshold", 0.0)), _automation_term("action", String(action.get("type", "ACTION"))), float(rule.get("cooldown_ms", 0.0)) / 1000.0, float(rule.get("hysteresis", 0.0))], 12, COLOR_MUTED))
-		var rule_actions := HFlowContainer.new()
-		rule_actions.add_child(_button(I18n.core("automation.resume_rule") if bool(rule.get("paused", false)) else I18n.core("automation.pause_rule"), _command.bind(I18n.core("command.toggle_automation_rule"), Game.set_automation_rule_paused.bind(String(rule.get("rule_id", "")), not bool(rule.get("paused", false)))), false, COLOR_WARN))
-		rule_actions.add_child(_button(I18n.core("automation.revoke"), _command.bind(I18n.core("command.revoke_automation"), Game.revoke_automation_rule.bind(String(rule.get("rule_id", "")))), false, COLOR_BAD))
-		rule_card.add_child(rule_actions)
-		box.add_child(_wrap_card(rule_card))
-	for runtime_value in Game.state.industrial_operations:
-		var runtime := runtime_value as Dictionary
-		if str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"] or not bool(runtime.get("manual_lock", true)):
-			continue
-		var slot := int(runtime.get("slot", -1))
-		var facility_id := String(runtime.get("facility_id", ""))
-		var location_id := String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
-		var guard_button := _button(I18n.core("automation.authorize_storage_guard") % _content_name(Game.content.facilities.get(facility_id, {}), facility_id), _command.bind(I18n.core("command.authorize_storage_automation"), _authorize_storage_guard.bind(slot, location_id)), false, COLOR_GOOD)
-		guard_button.name = "AuthorizeStorageGuard_%d" % slot
-		box.add_child(guard_button)
-
-
-func _authorize_storage_guard(slot: int, location_id: String) -> bool:
-	return Game.authorize_storage_guard(slot, location_id)
-
 
 func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_input: SpinBox) -> void:
 	if selector.selected < 0 or selector.selected >= product_ids.size():
@@ -3099,7 +2459,6 @@ func _rebuild_megastructure() -> void:
 	var current_phase: Dictionary = phases[clampi(current_index, 0, maxi(0, phases.size() - 1))] if not phases.is_empty() else {}
 	var activity_id := String(current_phase.get("activity_id", ""))
 	var activity := Game.content.activities.get(activity_id, {}) as Dictionary
-	var runtime := _construction_runtime_for_activity(activity_id)
 	var card := _card()
 	card.add_child(_label(("✓ " if complete else "") + _content_name(definition, megastructure_id), 18, COLOR_GOOD if complete else COLOR_TEXT))
 	card.add_child(_label(I18n.core("megastructure.gameplay_state") % _status_text(megastructure_status), 14, COLOR_GOOD if complete else (COLOR_WARN if megastructure_status == "WAITING_MATERIAL" else COLOR_ACCENT)))
@@ -3111,20 +2470,17 @@ func _rebuild_megastructure() -> void:
 	if complete:
 		card.add_child(_label(I18n.core("megastructure.completed"), 14, COLOR_GOOD))
 		card.add_child(_label(I18n.core("megastructure.completion.statistics") % [_quantity_map_text(project.get("total_materials_consumed", {})), _quantity_map_text(project.get("total_capital_goods", {})), float(project.get("total_cargo_transported", 0.0)), float(project.get("peak_construction_throughput", 0.0)), float(project.get("peak_power_demand", 0.0)), _format_ms(maxi(0, int(project.get("completed_at_ms", 0)) - int(project.get("started_at_ms", 0)))), _supplier_map_text(project.get("supplier_locations", {}))], 13, COLOR_TEXT))
-	elif not runtime.is_empty():
-		card.add_child(_label(I18n.core("megastructure.phase.invested") % [_project_summary(activity), _quantity_map_text(project.get("delivered_materials", {}))], 13, COLOR_MUTED))
-		_add_blocker_label(card, runtime)
-		var cancel_button := _button(I18n.core("megastructure.phase.cancel"), _command.bind(I18n.core("command.megastructure.cancel_phase"), Game.stop_construction_project.bind(int(runtime.get("slot", 0)))), false, COLOR_WARN)
-		cancel_button.name = "CancelMegastructure_%s" % megastructure_id
-		card.add_child(cancel_button)
 	else:
 		card.add_child(_label(I18n.core("megastructure.phase.next_bom") % _project_summary(activity), 13, COLOR_MUTED))
 		var blocker: Dictionary = Game.simulation.megastructure_site_requirement_blocker(Game.state, current_phase, site_id)
-		var start_button := _button(I18n.core("megastructure.phase.start"), _command.bind(I18n.core("command.megastructure.start_phase"), Game.start_megastructure_phase.bind(megastructure_id, 90)), not blocker.is_empty(), COLOR_GOOD)
+		var start_button := _button(I18n.core("megastructure.phase.start"), Callable(), true, COLOR_GOOD)
 		start_button.name = "StartMegastructure_%s" % megastructure_id
+		start_button.tooltip_text = I18n.core("notice.aggregate_industry_removed")
 		card.add_child(start_button)
 		if not blocker.is_empty():
 			card.add_child(_label(I18n.core("megastructure.site.blocked") % _blocker_text(blocker), 13, COLOR_WARN))
+		else:
+			card.add_child(_label(I18n.core("notice.aggregate_industry_removed"), 13, COLOR_WARN))
 	box.add_child(_wrap_card(card))
 
 
@@ -3192,14 +2548,6 @@ func _quantity_map_text(values: Dictionary) -> String:
 		parts.append(I18n.t("format.item_quantity") % [_content_name(item, item_id), int(values.get(item_id, 0))])
 	parts.sort()
 	return I18n.core("format.list_separator").join(parts)
-
-
-func _construction_runtime_for_activity(activity_id: String) -> Dictionary:
-	for operation_value in Game.state.construction_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("activity_id", "")) == activity_id and String(operation.get("status", "IDLE")) in ["RUNNING", "BLOCKED", "QUEUED", "PAUSED"]:
-			return operation
-	return {}
 
 
 func _rebuild_research() -> void:
@@ -6101,8 +5449,6 @@ func _open_next_flow_target() -> void:
 	var location_id := str(guidance.get("location_id", ""))
 	if not location_id.is_empty() and Game.state.has_location(location_id):
 		_selected_location_id = location_id
-	if page == "industry":
-		_industry_section = String(guidance.get("section", "production"))
 	_switch_page(page)
 
 
@@ -6113,15 +5459,6 @@ func _next_flow_step() -> String:
 
 func _next_flow_page() -> String:
 	return String(Game.guidance_snapshot().get("page", "system_map"))
-
-
-func _industrial_runtime_for_facility(facility_id: String) -> Dictionary:
-	for operation_value in Game.state.industrial_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("facility_id", "")) == facility_id \
-			and String(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) == _selected_location_id:
-			return operation
-	return {}
 
 
 func _activity_block_reason(domain_id: String, activity_id: String) -> String:
@@ -6140,17 +5477,6 @@ func _activity_block_reason(domain_id: String, activity_id: String) -> String:
 	if domain_id == "expedition":
 		return I18n.core("block_reason.expedition")
 	return I18n.core("block_reason.default")
-
-
-func _construction_block_reason(activity_id: String) -> String:
-	var activity := Game.content.activities.get(activity_id, {}) as Dictionary
-	if not activity.is_empty() and Game.can_start_construction_project(activity):
-		return ""
-	var sponsor_facility_id := String(activity.get("facility", ""))
-	if not sponsor_facility_id.is_empty() and not Game.simulation.facility_available(Game.state, sponsor_facility_id):
-		return I18n.core("block_reason.sponsor_facility") % _content_name(Game.content.facilities.get(sponsor_facility_id, {}), sponsor_facility_id)
-	var unmet := _unmet_requirements(activity.get("requirements", []))
-	return unmet if not unmet.is_empty() else I18n.core("block_reason.construction")
 
 
 func _unmet_requirements(requirements: Array) -> String:
@@ -6224,22 +5550,6 @@ func _resource_dictionary(values: Dictionary) -> String:
 	for item_id_value in item_ids:
 		entries.append({"item":str(item_id_value), "quantity":int(values[item_id_value])})
 	return _resource_list(entries)
-
-
-func _construction_project_type_name(project_type: String) -> String:
-	var key := "construction.type.%s" % project_type
-	var translated := I18n.core(key)
-	return project_type.replace("_", " ").capitalize() if translated == key else translated
-
-
-func _construction_project_name(operation: Dictionary, definition: Dictionary) -> String:
-	if operation.get("project_definition", {}).is_empty():
-		return _content_name(definition, String(operation.get("activity_id", I18n.core("construction.project_fallback"))))
-	var project_type := String(operation.get("project_type", ""))
-	var target_id := String(operation.get("target_id", ""))
-	if project_type == "FACILITY_EXPANSION":
-		return I18n.core("construction.facility_expansion_name") % [_content_name(Game.content.facilities.get(target_id, {}), target_id), int(operation.get("target_level", 0))]
-	return I18n.core("construction.target_level_name") % [_construction_project_type_name(project_type), int(operation.get("target_level", 0))]
 
 
 func _operation_progress(operation: Dictionary, caption: String) -> Control:
@@ -6319,11 +5629,6 @@ func _logistics_technology_name(technology_id: String) -> String:
 	if technology_id == "chemical_cargo":
 		return I18n.t("logistics_technology.chemical_cargo", "Chemical Cargo")
 	return _content_name(Game.content.technologies.get(technology_id, {"id":technology_id, "name":technology_id.replace("_", " ").capitalize()}), technology_id)
-
-
-func _automation_term(kind: String, term_id: String) -> String:
-	var normalized := term_id.strip_edges().to_upper()
-	return I18n.t("automation.%s.%s" % [kind, normalized], normalized.replace("_", " ").capitalize())
 
 
 func _status_text(status: String) -> String:
@@ -6569,8 +5874,8 @@ func _load_ui_preferences() -> void:
 		_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
 		_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
 		_location_section = String(_ui_config.get_value("navigation", "location_section", "overview"))
-		_industry_section = String(_ui_config.get_value("navigation", "industry_section", "production"))
-		_industry_view_mode = String(_ui_config.get_value("navigation", "industry_view_mode", "network"))
+		if _location_section == "industry":
+			_location_section = "overview"
 		_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
 		_selected_formation_id = String(_ui_config.get_value("navigation", "formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
 		_fleet_roster_filter = String(_ui_config.get_value("ship_registry", "lifecycle_filter", "ALL"))
@@ -6601,8 +5906,6 @@ func _load_ui_preferences() -> void:
 				_ui_config.save(_ui_config_path())
 		_ui_state.left_rail_collapsed = bool(_ui_config.get_value("display", "resource_rail_collapsed", false))
 		_ui_state.right_inspector_collapsed = bool(_ui_config.get_value("display", "context_inspector_collapsed", false))
-		var network_preferences = _ui_config.get_value("industrial_network", "workspace", {})
-		_industrial_network_preferences = network_preferences.duplicate(true) if network_preferences is Dictionary else {}
 	elif not _responsive_session_restored:
 		var defaults := ResponsivePolicy.migrate_preference_state({})
 		_ui_scale_mode = String(defaults.get("preferred_mode", ResponsivePolicy.DEFAULT_MODE))
@@ -6614,8 +5917,8 @@ func _load_ui_preferences() -> void:
 		_active_page_key = "fleet"
 	elif _active_page_key == "survey":
 		_active_page_key = "frontier"
-	if _industry_view_mode not in ["network", "list"]:
-		_industry_view_mode = "network"
+	elif _active_page_key == "construction":
+		_active_page_key = "industry"
 	if not Game.state.has_location(_selected_location_id):
 		_selected_location_id = SpaceGameState.MAIN_BASE_LOCATION_ID
 	_ui_state.restore_workspace(_active_page_key)
@@ -6665,13 +5968,9 @@ func _restore_responsive_session_state() -> bool:
 func _save_ui_preferences() -> void:
 	if not Game.persistence_enabled:
 		return
-	if is_instance_valid(_industrial_network_view):
-		_industrial_network_preferences = _industrial_network_view.export_preferences()
 	_ui_config.set_value("navigation", "active_page", _active_page_key)
 	_ui_config.set_value("navigation", "selected_location", _selected_location_id)
 	_ui_config.set_value("navigation", "location_section", _location_section)
-	_ui_config.set_value("navigation", "industry_section", _industry_section)
-	_ui_config.set_value("navigation", "industry_view_mode", _industry_view_mode)
 	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
 	_ui_config.set_value("navigation", "formation_id", _selected_formation_id)
 	_ui_config.set_value("ship_registry", "lifecycle_filter", _fleet_roster_filter)
@@ -6689,7 +5988,6 @@ func _save_ui_preferences() -> void:
 		_ui_config.set_value("display", "ui_scale", _manual_ui_scale)
 	_ui_config.set_value("display", "resource_rail_collapsed", _ui_state.left_rail_collapsed)
 	_ui_config.set_value("display", "context_inspector_collapsed", _ui_state.right_inspector_collapsed)
-	_ui_config.set_value("industrial_network", "workspace", _industrial_network_preferences)
 	_ui_config.save(_ui_config_path())
 
 
@@ -6833,7 +6131,6 @@ func _on_context_location_selected(index: int, location_ids: Array[String]) -> v
 	if index < 0 or index >= location_ids.size():
 		return
 	_selected_location_id = location_ids[index]
-	_selected_industrial_network_node.clear()
 	_ui_state.select_context("location", _selected_location_id)
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
@@ -6960,8 +6257,6 @@ func _toggle_developer_details() -> void:
 
 func _on_locale_changed(_locale: String) -> void:
 	_refresh_shell_locale()
-	_industrial_network_view = null
-	_industrial_network_projection = null
 	_request_active_page_refresh(true)
 	_schedule_responsive_refresh()
 

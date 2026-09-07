@@ -1,7 +1,7 @@
 class_name FactoryWorkspaceCanvas
 extends Control
 
-## Local, draw-batched factory canvas. It is intentionally ignorant of Game and
+## Local, draw-batched factory canvas. It is intentionally domain-agnostic and
 ## exposes selection/tile gestures only; FactoryWorkspace translates them into
 ## versioned application intents.
 
@@ -9,6 +9,7 @@ signal entity_selected(entity: Dictionary)
 signal resource_field_selected(field: Dictionary)
 signal link_selected(link: Dictionary)
 signal tile_selected(tile: Vector2i)
+signal placement_cancelled
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const CANVAS_COLOR := Color("0b100e")
@@ -31,6 +32,10 @@ var _dragging := false
 var _last_pointer := Vector2.ZERO
 var _node_rects := {}
 var _link_hit_rects := {}
+var _placement_active := false
+var _placement_size := Vector2i.ONE
+var _pointer_position := Vector2.ZERO
+var _pointer_available := false
 
 
 func _ready() -> void:
@@ -51,6 +56,13 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 
 func set_reduced_motion(enabled: bool) -> void:
 	_reduced_motion = enabled
+	queue_redraw()
+
+
+func set_placement_mode(enabled: bool, footprint_size: Vector2i = Vector2i.ONE) -> void:
+	_placement_active = enabled
+	_placement_size = Vector2i(maxi(1, footprint_size.x), maxi(1, footprint_size.y))
+	mouse_default_cursor_shape = Control.CURSOR_CROSS if enabled else Control.CURSOR_ARROW
 	queue_redraw()
 
 
@@ -86,6 +98,7 @@ func _draw() -> void:
 	_draw_resource_fields()
 	_draw_entities()
 	_draw_construction_orders()
+	_draw_placement_preview()
 
 
 func _draw_empty() -> void:
@@ -111,6 +124,8 @@ func _draw_resource_fields() -> void:
 		var selected := _selected_node_id == str(field.get("id", ""))
 		draw_rect(rect, Color(color, 0.18), true)
 		draw_rect(rect, FOCUS_COLOR if selected else Color(color, 0.72), false, 1.4)
+		if _lod() == "COMPACT":
+			continue
 		var font := get_theme_default_font()
 		var label := "%s  ×%.2f" % [str(field.get("resource_id", "RESOURCE")).to_upper(), float(field.get("grade", 1.0))]
 		draw_string(font, rect.position + Vector2(5, 15), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(0.0, rect.size.x - 8.0), 10, Color("d5ddd8"))
@@ -124,7 +139,11 @@ func _draw_entities() -> void:
 		var status := str(entity.get("status", "IDLE"))
 		var tone := _status_color(status)
 		var selected := _selected_node_id == str(entity.get("id", ""))
+		var lod := _lod()
 		draw_style_box(_node_style(tone, selected), rect)
+		if lod == "COMPACT":
+			draw_circle(rect.get_center(), minf(5.0, minf(rect.size.x, rect.size.y) * 0.25), tone)
+			continue
 		var header_rect := Rect2(rect.position, Vector2(rect.size.x, minf(22.0, rect.size.y)))
 		draw_rect(header_rect, HEADER_COLOR, true)
 		draw_circle(header_rect.position + Vector2(9, 11), 3.0, tone)
@@ -132,6 +151,8 @@ func _draw_entities() -> void:
 		var kind := str(entity.get("node_kind", "UNIT")).replace("_", " ")
 		draw_string(font, header_rect.position + Vector2(16, 14), kind, HORIZONTAL_ALIGNMENT_LEFT, header_rect.size.x - 18, 9, Color("a5b2ac"))
 		draw_string(font, rect.position + Vector2(8, minf(39.0, rect.size.y - 8.0)), str(entity.get("name", entity.get("id", "Unit"))), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 11, Color("e6eeea"))
+		if lod == "MEDIUM":
+			continue
 		var progress := clampf(float(entity.get("progress", 0.0)), 0.0, 1.0)
 		var bar := Rect2(rect.position + Vector2(8, maxf(45.0, rect.size.y - 14.0)), Vector2(maxf(0.0, rect.size.x - 16.0), 4.0))
 		if bar.position.y + bar.size.y <= rect.end.y - 4.0:
@@ -152,6 +173,16 @@ func _draw_construction_orders() -> void:
 		draw_dashed_line(Vector2(rect.position.x, rect.end.y), rect.position, tone, 1.0, 4.0)
 		var font := get_theme_default_font()
 		draw_string(font, rect.position + Vector2(5, 14), "BUILD %d%%" % roundi(float(order.get("progress", 0.0)) * 100.0), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 8, 9, tone)
+
+
+func _draw_placement_preview() -> void:
+	if not _placement_active or not _pointer_available:
+		return
+	var origin := _screen_to_tile(_pointer_position)
+	var scale := maxf(2.0, 4.0 * _zoom)
+	var rect := Rect2(_world_to_screen(Vector2(origin)), Vector2(_placement_size) * scale)
+	draw_rect(rect, Color(FOCUS_COLOR, 0.16), true)
+	draw_rect(rect, FOCUS_COLOR, false, 1.5)
 
 
 func _draw_links() -> void:
@@ -217,8 +248,20 @@ func _screen_to_tile(screen: Vector2) -> Vector2i:
 
 
 func _on_gui_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and _placement_active:
+		set_placement_mode(false)
+		placement_cancelled.emit()
+		accept_event()
+		return
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
+		_pointer_position = mouse_event.position
+		_pointer_available = true
+		if mouse_event.button_index == MOUSE_BUTTON_RIGHT and mouse_event.pressed and _placement_active:
+			set_placement_mode(false)
+			placement_cancelled.emit()
+			accept_event()
+			return
 		if mouse_event.button_index == MOUSE_BUTTON_MIDDLE:
 			_dragging = mouse_event.pressed
 			_last_pointer = mouse_event.position
@@ -234,15 +277,24 @@ func _on_gui_input(event: InputEvent) -> void:
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
 			_select_at(mouse_event.position)
 			accept_event()
-	elif event is InputEventMouseMotion and _dragging:
+	elif event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
-		_camera += motion.position - _last_pointer
-		_last_pointer = motion.position
+		_pointer_position = motion.position
+		_pointer_available = true
+		if _dragging:
+			_camera += motion.position - _last_pointer
+			_last_pointer = motion.position
+			accept_event()
 		queue_redraw()
-		accept_event()
 
 
 func _select_at(point: Vector2) -> void:
+	if _placement_active:
+		_selected_node_id = ""
+		_selected_link_id = ""
+		tile_selected.emit(_screen_to_tile(point))
+		queue_redraw()
+		return
 	for link_id_value in _link_hit_rects.keys():
 		var link_id := str(link_id_value)
 		var hit: Rect2 = _link_hit_rects.get(link_id, Rect2())
@@ -343,3 +395,11 @@ func _has_active_flow() -> bool:
 		if float((link_value as Dictionary).get("last_flow", 0.0)) > 0.00001:
 			return true
 	return false
+
+
+func _lod() -> String:
+	if _zoom < 0.58:
+		return "COMPACT"
+	if _zoom < 0.92:
+		return "MEDIUM"
+	return "FULL"

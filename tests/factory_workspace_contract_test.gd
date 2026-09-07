@@ -25,6 +25,8 @@ func _test_stable_presentation_snapshot() -> void:
 	factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "a-mine")
 	var connected := factory.connect_entities(world, "POWER", "z-power", "a-mine")
 	_check(bool(connected.get("ok", false)), "snapshot fixture creates an explicit power edge")
+	var duplicate_power := factory.connect_entities(world, "power", "z-power", "a-mine", "iron_ore")
+	_check(not bool(duplicate_power.get("ok", true)) and str(duplicate_power.get("reason_code", "")) == "DUPLICATE_LINK" and world.get("links", {}).size() == 1, "power links canonicalize kind and discard stale item channels before duplicate detection")
 	factory.advance_world(world, 1000.0)
 	var snapshot := factory.workspace_snapshot(world)
 	_check(int(snapshot.get("protocol_version", 0)) == 1 and int(snapshot.get("world_schema_version", 0)) == 3, "workspace publishes explicit protocol and world-schema versions")
@@ -50,6 +52,9 @@ func _test_versioned_application_intents() -> void:
 	factory.add_resource_field(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid")
 	factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", "power")
 	factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "mine")
+	factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(64, 0), "", "empty-depot")
+	var empty_order := factory.queue_construction(world, "grid_bulk_depot", Vector2i(96, 0))
+	_check(bool(empty_order.get("ok", false)), "application fixture queues a construction order that its empty depot cannot fund")
 	game.state.factory_worlds["intent-grid"] = world
 	var before: Dictionary = game.factory_workspace_snapshot("intent-grid")
 	_check(bool(before.get("valid", false)) and int(before.get("protocol_version", 0)) == 1, "Game exposes the versioned read-only factory snapshot")
@@ -60,20 +65,49 @@ func _test_versioned_application_intents() -> void:
 		"world_id":"intent-grid",
 		"base_topology_revision":int(before.get("topology_revision", -1)),
 		"base_runtime_revision":int(before.get("runtime_revision", -1)),
-		"payload":{"link_kind":"POWER", "source_id":"power", "target_id":"mine"}
+		"payload":{"link_kind":"POWER", "source_id":"power", "target_id":"mine", "item_id":"iron_ore", "ignored_untrusted_field":{"nested":true}}
 	}
 	var connected: Dictionary = game.execute_factory_command(connect_intent)
 	_check(bool(connected.get("accepted", false)) and str(connected.get("reason_code", "x")).is_empty(), "versioned intent creates a link through the application transaction boundary")
+	_check(not (connected.get("request", {}).get("payload", {}) as Dictionary).has("ignored_untrusted_field"), "durable command receipts retain only canonical JSON-safe payload fields")
+	_check(str(connected.get("request", {}).get("payload", {}).get("item_id", "invalid")) == "" and str((connected.get("events", [])[0] as Dictionary).get("item_id", "invalid")) == "", "POWER receipts and events expose the canonical item-free link contract")
 	_check(int(connected.get("topology_revision", 0)) == int(before.get("topology_revision", 0)) + 1 and connected.get("events", []).size() == 1, "accepted command returns the committed revision and one correlated domain event")
 	var event: Dictionary = connected.get("events", [])[0]
 	_check(str(event.get("command_id", "")) == "contract-connect-1" and int(event.get("protocol_version", 0)) == 1 and str(event.get("type", "")) == "FactoryEntitiesConnected", "factory event envelope preserves command correlation and protocol version")
 	var replayed: Dictionary = game.execute_factory_command(connect_intent)
 	_check(bool(replayed.get("accepted", false)) and bool(replayed.get("replayed", false)), "an exact command-id retry returns its durable receipt without repeating mutation")
+	var serialized_state = JSON.parse_string(JSON.stringify(game.state.to_dictionary()))
+	game.state = SpaceGameState.from_dictionary(serialized_state as Dictionary, database.domains.keys(), database.regions)
+	var replayed_after_reload: Dictionary = game.execute_factory_command(connect_intent)
+	_check(bool(replayed_after_reload.get("accepted", false)) and bool(replayed_after_reload.get("replayed", false)) and game.state.factory_worlds["intent-grid"].get("links", {}).size() == 1, "a persisted command receipt still makes the exact retry idempotent after save/load")
+	var conflicting_replay := connect_intent.duplicate(true)
+	conflicting_replay["payload"] = (connect_intent.get("payload", {}) as Dictionary).duplicate(true)
+	conflicting_replay["payload"]["target_id"] = "power"
+	var conflict: Dictionary = game.execute_factory_command(conflicting_replay)
+	_check(not bool(conflict.get("accepted", true)) and str(conflict.get("reason_code", "")) == "COMMAND_ID_CONFLICT", "a reused command id with a different payload is rejected instead of replaying an unrelated receipt")
+	var duplicate_intent := connect_intent.duplicate(true)
+	duplicate_intent["command_id"] = "contract-connect-duplicate"
+	duplicate_intent["base_topology_revision"] = int(game.state.factory_worlds["intent-grid"].get("topology_revision", -1))
+	var duplicate: Dictionary = game.execute_factory_command(duplicate_intent)
+	_check(not bool(duplicate.get("accepted", true)) and str(duplicate.get("reason_code", "")) == "DUPLICATE_LINK", "a POWER retry with a stale cargo item cannot bypass duplicate-edge rejection")
 	var stale_intent := connect_intent.duplicate(true)
 	stale_intent["command_id"] = "contract-connect-stale"
 	var stale: Dictionary = game.execute_factory_command(stale_intent)
 	_check(not bool(stale.get("accepted", true)) and str(stale.get("reason_code", "")) == "STALE_TOPOLOGY", "a new stale layout intent is rejected before mutation")
+	var invalid_payload: Dictionary = game.execute_factory_command({"protocol_version":1, "command_id":"bad-origin", "kind":"QUEUE_CONSTRUCTION", "world_id":"intent-grid", "base_topology_revision":int(game.state.factory_worlds["intent-grid"].get("topology_revision", -1)), "payload":{"definition_id":"grid_surface_mine", "origin":"32,32"}})
+	_check(not bool(invalid_payload.get("accepted", true)) and str(invalid_payload.get("reason_code", "")) == "INVALID_PAYLOAD", "malformed nested payloads fail closed before reaching FactoryGridSimulation")
 	_check(game.state.factory_worlds["intent-grid"].get("links", {}).size() == 1, "replay and stale rejection leave authoritative topology unchanged")
+	var runtime_before_empty_funding := int(game.state.factory_worlds["intent-grid"].get("runtime_revision", -1))
+	var empty_funding: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"contract-empty-funding",
+		"kind":"FUND_CONSTRUCTION",
+		"world_id":"intent-grid",
+		"base_topology_revision":int(game.state.factory_worlds["intent-grid"].get("topology_revision", -1)),
+		"payload":{"order_id":str(empty_order.get("order_id", "")), "storage_id":"empty-depot"}
+	})
+	_check(not bool(empty_funding.get("accepted", true)) and str(empty_funding.get("reason_code", "")) == "NO_MATERIALS_MOVED" and empty_funding.get("events", []).is_empty(), "an empty construction delivery is rejected instead of publishing a false success event")
+	_check(int(game.state.factory_worlds["intent-grid"].get("runtime_revision", -1)) == runtime_before_empty_funding, "rejected empty funding does not commit a Factory runtime mutation")
 	var refreshed: Dictionary = game.factory_workspace_snapshot("intent-grid")
 	var link_id := str((refreshed.get("links", [])[0] as Dictionary).get("id", ""))
 	var remove_intent := {

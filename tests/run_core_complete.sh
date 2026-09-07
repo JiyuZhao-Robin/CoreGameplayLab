@@ -9,6 +9,8 @@ python3 -m json.tool data/localization_en.json >/dev/null
 
 godot --headless --path . --log-file /tmp/helios-content-planner.log --script res://tests/content_planner_contract_test.gd -- --no-persistence
 godot --headless --path . --log-file /tmp/helios-factory-grid.log --script res://tests/factory_grid_simulation_test.gd -- --no-persistence
+godot --headless --path . --log-file /tmp/helios-factory-workspace-contract.log --script res://tests/factory_workspace_contract_test.gd -- --no-persistence
+godot --headless --path . --log-file /tmp/helios-factory-workspace-ui.log --script res://tests/factory_workspace_ui_test.gd -- --no-persistence
 godot --headless --path . --log-file /tmp/helios-operational-formations.log --script res://tests/operational_formation_test.gd -- --no-persistence
 godot --headless --path . --log-file /tmp/helios-wreck-sites.log --script res://tests/wreck_site_system_test.gd -- --no-persistence
 godot --headless --path . --log-file /tmp/helios-core-integrity.log --script res://tests/core_integrity_test.gd -- --no-persistence
@@ -17,5 +19,7 @@ godot --headless --path . --log-file /tmp/helios-asset-conservation.log --script
 # The 1.29 Headless, Golden Path and industrial UI suites asserted the removed
 # location-level mining, Production Line, Extraction Network and generic
 # Construction behavior. They are deliberately not a post-cutover gate. Replacement
-# canvas/playflow suites must exercise FactoryGridSimulation through Game's
-# transactional grid commands rather than resurrecting the retired runtime.
+# playflow suite must exercise FactoryGridSimulation through Game's transactional
+# grid commands rather than resurrecting the retired runtime. The v1 Factory
+# workspace contract and focused Canvas/main-route test above are the first
+# replacement gates; the complete mining-to-production Golden Path remains open.

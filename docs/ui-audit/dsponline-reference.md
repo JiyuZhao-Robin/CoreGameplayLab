@@ -10,13 +10,13 @@
 
 ## 结论
 
-DSPONLINE 最适合作为信息架构和交互语言的参考，而不是代码或资产来源。本项目采用它的“工业控制台、中央工作区、上下文检查器、语义状态、渐进式指引和多尺寸截图门禁”原则，并在 Godot 中重新实现。React、React Flow、CSS、品牌、图标、截图、内容目录和游戏资产均不复制。
+截至 2026-09-01，DSPONLINE 最适合作为信息架构和交互语言的参考，而不是代码或资产来源。本项目采用它的“工业控制台、中央工作区、上下文检查器、语义状态、渐进式指引和多尺寸截图门禁”原则，并在 Godot 中重新实现。该历史结论已由下方 2026-09-04 的限域授权取代，仅对工厂玩法范围以外的部分继续适用。
 
 ## 2026-08-31 用户方向更新
 
 Core Gameplay Lab 的正式 UI 布局以 `/Volumes/T9/Developer/projects/DSPONLINE` 的固定基线为主要参考。仓库内 `UI-reference/` 的 Upload Labs 图片降为非规范历史材料，不再决定 Shell、导航、页面卡片、弹窗、科技树或检查器布局。科技树采用用户确认的横向拓扑语法：可平移/缩放画布、矩形项目节点、真实前置依赖连线、节点选择驱动 Context Inspector；所有节点和动作仍来自 Helios 的权威研究项目与领域命令。
 
-该决定不允许直接复制 DSPONLINE 的 React/CSS、品牌或资产；Godot 实现继续使用本项目自己的语义 token、内容、本地化与自动化测试契约。
+该决定在当时不允许直接复制 DSPONLINE 的 React/CSS、品牌或资产；该限制现由 2026-09-04 的限域授权取代，仅对工厂玩法范围以外的部分继续适用。Godot 的内容、本地化、领域权威与自动化测试契约仍归本项目所有。
 
 参考仓库在审计开始前已有未提交删除：`LICENSE`、`NOTICE`、`README.en.md`、`README.md`。本次未触碰这些状态；许可结论从固定 Git 基线读取。
 
@@ -44,6 +44,14 @@ Domain command gateway
 写操作大多通过统一提交边界进入领域命令；呈现缓存不写回权威状态。当前项目延续这一原则，UI 不持有经济公式，不直接改库存、项目、科研、舰船、物流或巨构状态。
 
 不可采用的结构：DSPONLINE 的 `App.tsx`、`engine.ts` 和 `styles.css` 均已成为超大文件；部分组件读取完整 `GameState` 并在 UI 内遍历全局状态。Godot 实现应拆为小型工作区、投影查询、统一命令入口和单一 UI 导航状态。
+
+## 2026-09-04 工厂范围直接复用决定
+
+用户已确认可在**采矿、生产、工厂建设与本地工厂物流**范围内，直接复用、翻译或改编 DSPONLINE 的实现逻辑和工厂专用 UI 实现；该权限包含预期商业使用，但上游 PolyForm Noncommercial 许可本身不提供商业授权。精确的来源、许可、Required Notice、授权边界和排除项记录在 [DSPONLINE 来源范围与署名](../../third_party/dsponline/SOURCE_SCOPE.md)。
+
+该决定不延伸到：DSPONLINE 名称、Logo、`public/icon.svg`、域名、账号/云端/原生壳、非工厂玩法、工厂范围以外的 UI，或任何未被该来源记录覆盖的第三方依赖。它也不允许把上游的全局 `App.tsx`、`engine.ts`、`styles.css` 整体搬入本项目；只允许在限定工厂范围内按本项目边界拆分采用。
+
+Factory Workspace v1 已挂入主界面 Industry 路由。它只读取按 identifier 稳定排序的快照，带独立的 `topology_revision` 与 `runtime_revision`；资源田仍是 Tile 属性而非可连线实体。UI 仅发送版本化 intent（当前为 `QUEUE_CONSTRUCTION`、`FUND_CONSTRUCTION`、`CONNECT_ENTITIES`、`REMOVE_LINK`），经 `Game` 事务入口获得关联 `command_id` 的事件/回执，绝不直接改写 `Game.state`。建造选择、画布、Inspector 与主界面落位网关已有聚焦测试；完整生产 Golden Path 尚未验证，不在本审计中宣称完成。
 
 ## 可采用的桌面布局
 
@@ -105,7 +113,7 @@ radius 4 / 6 / 10
 - 紧凑节点只展示名称、状态和主要流量；详情交给 Inspector。
 - 所有长期进度同时显示进度条、数值和状态文字。
 
-不可采用：React Flow/DOM/CSS 实现，以及参考项目的品牌、物品 glyph、图标和截图资产。
+不可采用：React Flow/DOM 实现，以及参考项目的品牌、物品 glyph、图标和截图资产；工厂范围内获授权的 CSS、canvas、节点和线路实现例外，但必须经过 Godot 的 Factory Workspace 边界并保留来源署名。
 
 ## 舰船装配图决策（2026-08-31）
 
@@ -127,11 +135,11 @@ DSPONLINE 在这里提供的是“Palette 拖拽创建草稿 → 端口实时校
 - 舰船装配画布进一步对齐 `factory-canvas`：`#0b100e` 底色、20 px 间距的 `#3c4743` 点阵、2 px 普通连线、`#131917` 节点主体、`#171e1b` 标题栏、6 px 圆角和克制的黑色投影。
 - 本地 DSPONLINE 没有位图光标资源，而是使用 CSS 系统光标状态；Godot 对应使用画布拖动、节点移动、接口十字和不可用四种原生状态，不虚构一套不存在的光标图片。
 
-这是对参考项目布局与路径行为的直接对照实现，不导入其 React 组件、CSS、素材、品牌或游戏数据。
+这是 2026-09-01 的直接对照记录。当时未导入其 React 组件、CSS、素材、品牌或游戏数据；2026-09-04 后，工厂范围内获授权的实现可按 [来源范围与署名](../../third_party/dsponline/SOURCE_SCOPE.md) 直接复用、翻译或改编，品牌和非工厂范围仍不得导入。
 
 ## 工业网络动态实现审计（2026-08-31 补充）
 
-本轮在可访问的只读副本 `/Volumes/T9/Developer/projects/DSPONLINE` 中进一步检查了工业网络动态实现。只记录可泛化行为，没有复制源码或资源：
+本轮在可访问的只读副本 `/Volumes/T9/Developer/projects/DSPONLINE` 中进一步检查了工业网络动态实现。以下最初记录为可泛化行为；2026-09-04 后，限域工厂实现可按 [来源范围与署名](../../third_party/dsponline/SOURCE_SCOPE.md) 直接复用、翻译或改编：
 
 - 线路只有在权威流量大于零时进入 active；流量/容量决定 packet 密度和节奏，而不是固定装饰跑马灯。
 - 拓扑 revision 与 runtime flow update 分离；节点位置和端口变化才重建几何，普通数值更新只改变视觉签名。
@@ -172,7 +180,9 @@ Helios 将这些原则转化为一个 Godot `IndustrialNetworkEdgeLayer` 共享�
 
 ## 许可与资产边界
 
-参考仓库固定基线的许可为 PolyForm Noncommercial 1.0.0，并有独立商标和商业使用说明。即使用户拥有两个项目，本次也按最保守边界执行：只提炼设计原则，不复制代码、样式表、Logo、项目名、截图、反馈资产、内容名称或完整英文目录。所有 Godot UI、token、组件和测试在当前项目内独立实现。
+参考仓库固定基线的许可为 PolyForm Noncommercial 1.0.0，并有独立商标和商业使用说明。用户已确认工厂范围的直接复用授权，包含预期商业使用；该确认不改变 PolyForm 本身的非商业性质，也不能取代须由权利人另行保留的书面商业授权。工厂范围的许可与 Required Notice 以 [DSPONLINE 来源范围与署名](../../third_party/dsponline/SOURCE_SCOPE.md) 及其同目录文件为准。
+
+除获授权的采矿、生产、工厂建设与本地工厂物流实现外，继续只提炼设计原则：不复制 Logo、项目名、截图、反馈资产、内容名称、完整英文目录或任何非工厂 UI/玩法实现。所有未直接复用的 Godot UI、token、组件和测试仍在本项目内独立实现。
 
 ## 明确不采用
 

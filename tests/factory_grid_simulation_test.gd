@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_resource_potential_caps_high_grade_extraction()
 	_test_mining_production_power_and_conservation()
 	_test_backpressure_and_recovery()
+	_test_empty_construction_funding_is_rejected()
 	_test_production_funds_real_construction()
 	_test_simulation_engine_integration()
 	_test_new_game_factory_bootstrap()
@@ -169,6 +170,18 @@ func _test_backpressure_and_recovery() -> void:
 	factory.advance_world(world, 60_000.0)
 	_check(int(world["entities"]["depot"].get("inventory", {}).get("iron_ingot", 0)) > 0, "free output space automatically resumes the line")
 	_check(str(world["entities"]["mine"].get("status", "")) in ["RUNNING", "POWER_LIMITED"], "backpressure clears all the way to extraction")
+
+
+func _test_empty_construction_funding_is_rejected() -> void:
+	var world := factory.create_world("empty-construction-funding", "earth_orbit", Vector2i(128, 128), 16)
+	_check(bool(factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(0, 0), "", "empty-depot").get("ok", false)), "empty-funding fixture creates an operational storage entity")
+	var queued := factory.queue_construction(world, "grid_bulk_depot", Vector2i(40, 0))
+	_check(bool(queued.get("ok", false)), "empty-funding fixture creates a material-backed construction order")
+	var runtime_revision_before := int(world.get("runtime_revision", 0))
+	var funded := factory.fund_construction_from_storage(world, str(queued.get("order_id", "")), "empty-depot")
+	var order := world.get("construction_orders", {}).get(str(queued.get("order_id", "")), {}) as Dictionary
+	_check(not bool(funded.get("ok", true)) and str(funded.get("reason_code", "")) == "NO_MATERIALS_MOVED", "an empty storage does not report a successful construction delivery")
+	_check(order.get("delivered_items", {}).is_empty() and int(world.get("runtime_revision", 0)) == runtime_revision_before, "rejected empty construction funding leaves the order and runtime revision unchanged")
 
 
 func _test_production_funds_real_construction() -> void:

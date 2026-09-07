@@ -397,6 +397,8 @@ func fund_construction_from_storage(world: Dictionary, order_id: String, storage
 		# Delivery only changes custody from storage to the construction order.
 		# The material remains a physical asset until the order completes.
 		_add_statistic(world, "construction_delivered", item_id, quantity)
+	if moved.is_empty():
+		return _failure("NO_MATERIALS_MOVED", "The selected storage has none of the construction materials still required")
 	order["delivered_items"] = delivered
 	if _construction_funded(order):
 		order["status"] = "READY"
@@ -410,12 +412,17 @@ func fund_construction_from_storage(world: Dictionary, order_id: String, storage
 
 
 func connect_entities(world: Dictionary, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1) -> Dictionary:
+	kind = kind.to_upper()
 	if kind not in LINK_KINDS or source_id == target_id:
 		return _failure("INVALID_LINK", "Link kind and endpoints must be valid")
 	var source: Dictionary = world.get("entities", {}).get(source_id, {})
 	var target: Dictionary = world.get("entities", {}).get(target_id, {})
 	if source.is_empty() or target.is_empty():
 		return _failure("MISSING_ENDPOINT", "Both link endpoints must exist")
+	# POWER has no item channel. Canonicalize before duplicate detection so a
+	# stale cargo item from the UI cannot create parallel copies of one edge.
+	if kind == "POWER":
+		item_id = ""
 	for link_value in world.get("links", {}).values():
 		var existing := link_value as Dictionary
 		if str(existing.get("kind", "")) == kind and str(existing.get("source_id", "")) == source_id and str(existing.get("target_id", "")) == target_id and str(existing.get("item_id", "")) == item_id:
@@ -431,7 +438,7 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 				if str(occupied.get("kind", "")) == "CARGO" and str(occupied.get("target_id", "")) == target_id and str(occupied.get("item_id", "")) == item_id:
 					return _failure("CARGO_INPUT_OCCUPIED", "A target item port accepts one incoming cargo link")
 		"POWER":
-			item_id = ""
+			pass
 	var link_id := _next_id(world, "next_link_serial", "LINK-")
 	world["links"][link_id] = {
 		"id":link_id,

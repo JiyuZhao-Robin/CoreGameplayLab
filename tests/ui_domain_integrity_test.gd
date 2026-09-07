@@ -11,6 +11,9 @@ const UI_PATHS := [
 	"res://src/ui/components/industrial_network_node.gd",
 	"res://src/ui/components/industrial_network_edge_layer.gd",
 	"res://src/ui/components/industrial_network_glyph.gd",
+	"res://src/ui/view_models/factory/factory_workspace_view_model.gd",
+	"res://src/ui/workspaces/factory/factory_workspace.gd",
+	"res://src/ui/workspaces/factory/factory_canvas.gd",
 	"res://src/ui/components/system_map_view.gd",
 	"res://src/ui/components/megastructure_progress_view.gd",
 	"res://src/ui/components/ship_assembly_blueprint_editor.gd"

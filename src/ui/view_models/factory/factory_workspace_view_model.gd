@@ -41,15 +41,23 @@ func storage_entities(snapshot: Dictionary) -> Array:
 	var storages: Array = []
 	for entity_value in snapshot.get("entities", []):
 		var entity := entity_value as Dictionary
-		if str(entity.get("node_kind", "")) == "STORAGE":
+		if str(entity.get("node_kind", "")) == "STORAGE" and str(entity.get("status", "")) != "UNDER_CONSTRUCTION":
 			storages.append(entity.duplicate(true))
 	return storages
 
 
 
 func footprint_origin(footprint: Dictionary) -> Vector2i:
-	return Vector2i(int(footprint.get("x", footprint.get("origin_x", 0))), int(footprint.get("y", footprint.get("origin_y", 0))))
+	var origin: Dictionary = footprint.get("origin", {}) if footprint.get("origin", null) is Dictionary else {}
+	return Vector2i(
+		int(origin.get("x", footprint.get("x", footprint.get("origin_x", 0)))),
+		int(origin.get("y", footprint.get("y", footprint.get("origin_y", 0))))
+	)
 
 
 func footprint_size(footprint: Dictionary) -> Vector2i:
-	return Vector2i(maxi(1, int(footprint.get("width", 1))), maxi(1, int(footprint.get("height", 1))))
+	var extent: Dictionary = footprint.get("size", {}) if footprint.get("size", null) is Dictionary else {}
+	return Vector2i(
+		maxi(1, int(extent.get("x", footprint.get("width", 1)))),
+		maxi(1, int(extent.get("y", footprint.get("height", 1))))
+	)
