@@ -15,6 +15,7 @@ func _initialize() -> void:
 	_test_schema_34_to_35_fixture()
 	_test_every_migratable_schema_entry()
 	_test_operational_formation_migration()
+	_test_schema_38_survey_staging_migration()
 	_test_full_storage_blocks_and_recovers_delivery()
 	_test_offline_debt_survives_cap_and_round_trip()
 	_finish()
@@ -27,7 +28,7 @@ func _test_schema_34_to_35_fixture() -> void:
 		return
 	var fixture := fixture_value as Dictionary
 	var migrated_payload := SpaceGameState.migrate_save_dictionary(fixture)
-	_check(int(migrated_payload.get("save_version", 0)) == 38, "schema 34 migrates through the explicit chain to schema 38")
+	_check(int(migrated_payload.get("save_version", 0)) == 39, "schema 34 migrates through the explicit chain to schema 39")
 	_check(migrated_payload.get("factory_worlds", null) is Dictionary and migrated_payload.get("factory_worlds", {}).is_empty(), "schema 35-to-36 creates an explicit empty grid-world collection without inventing placement")
 	_check(migrated_payload.get("statistics", {}).get("item_consumed_totals", null) is Dictionary, "schema 34-to-35 initializes item-specific consumption accounting")
 	var archive: Dictionary = migrated_payload.get("retired_megastructure_archive", {})
@@ -59,7 +60,7 @@ func _test_schema_34_to_35_fixture() -> void:
 
 
 func _test_every_migratable_schema_entry() -> void:
-	_check(GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION == 24 and SpaceGameState.SAVE_VERSION == 38, "migration-chain test covers every published schema entry from 24 through 37")
+	_check(GameVersion.MIN_MIGRATABLE_SAVE_SCHEMA_VERSION == 24 and SpaceGameState.SAVE_VERSION == 39, "migration-chain test covers every published schema entry from 24 through 38")
 	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	seed.revision = 341
 	seed.parent_revision = 340
@@ -77,7 +78,7 @@ func _test_every_migratable_schema_entry() -> void:
 		var entry_payload := seed_payload.duplicate(true)
 		entry_payload["save_version"] = entry_schema
 		var migrated_payload := SpaceGameState.migrate_save_dictionary(entry_payload)
-		_check(int(migrated_payload.get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d migration chain reaches schema 38" % entry_schema)
+		_check(int(migrated_payload.get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d migration chain reaches schema 39" % entry_schema)
 		_check(str(migrated_payload.get("save_id", "")) == sentinel_save_id and int(migrated_payload.get("revision", -1)) == 341, "schema %d migration preserves Save identity and revision sentinels" % entry_schema)
 		var migrated_locations: Dictionary = migrated_payload.get("locations", {})
 		var migrated_earth: Dictionary = migrated_locations.get("earth_orbit", {})
@@ -89,7 +90,7 @@ func _test_every_migratable_schema_entry() -> void:
 		_check(restored.item_quantity("iron_ore", "earth_orbit") == expected_earth_iron and restored.item_quantity("electronics", "lunar_space") == expected_lunar_electronics, "schema %d deserialization preserves per-Location inventory" % entry_schema)
 		_check(int(restored.location_reserves("earth_orbit").get("iron_ore", 0)) == 13 and int(restored.location_reserves("lunar_space").get("electronics", 0)) == 3, "schema %d deserialization preserves Location reserve ownership" % entry_schema)
 		_check(not sentinel_ship_id.is_empty() and not restored.ship_by_id(sentinel_ship_id).is_empty(), "schema %d deserialization preserves stable Ship identity" % entry_schema)
-		_check(int(restored.to_dictionary().get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d deserialization reserializes only as current schema 38" % entry_schema)
+		_check(int(restored.to_dictionary().get("save_version", 0)) == SpaceGameState.SAVE_VERSION, "schema %d deserialization reserializes only as current schema 39" % entry_schema)
 
 
 func _test_operational_formation_migration() -> void:
@@ -125,6 +126,40 @@ func _test_operational_formation_migration() -> void:
 	interim_payload["save_version"] = 38
 	var interim_restored := SpaceGameState.from_dictionary(interim_payload, database.domains.keys(), database.regions)
 	_check(str(interim_restored.ship_by_id(legacy_constructor_id).get("blueprint_id", "")) == "heavy_lift_transport" and not interim_restored.ship_module_definition_ids(interim_restored.ship_by_id(ship_id)).has("mining_laser"), "interim schema-38 developer saves also enforce the completed ship-role cutover")
+
+
+func _test_schema_38_survey_staging_migration() -> void:
+	var seed := SpaceGameState.create_new(database.domains.keys(), database.regions)
+	var simulation := SimulationEngine.new(database)
+	simulation.ensure_frontier_state(seed)
+	var payload := seed.to_dictionary()
+	payload["save_version"] = 38
+	var locations: Dictionary = payload.get("locations", {})
+	var lunar: Dictionary = locations.get("lunar_space", {})
+	lunar["survey_state"] = LocationState.SURVEYED
+	lunar["survey_staging_installed"] = false
+	var asteroid: Dictionary = locations.get("asteroid_belt", {})
+	asteroid["survey_state"] = LocationState.DETECTED
+	asteroid["survey_staging_installed"] = false
+	var region_states: Dictionary = payload.get("region_states", {})
+	region_states["lunar_space"] = {"discovered":true, "survey_state":LocationState.SURVEYED, "exploration_state":LocationState.SURVEYED}
+	region_states["asteroid_belt"] = {"discovered":true, "survey_state":LocationState.DETECTED, "exploration_state":LocationState.DETECTED}
+	var restored := SpaceGameState.from_dictionary(payload, database.domains.keys(), database.regions)
+	simulation.ensure_frontier_state(restored)
+	var migrated_lunar: Dictionary = restored.location_state("lunar_space")
+	var migrated_asteroid: Dictionary = restored.location_state("asteroid_belt")
+	_check(
+		bool(migrated_lunar.get("survey_staging_installed", false))
+		and int(migrated_lunar.get("logistics", {}).get("storage_capacities", {}).get("BULK", 0)) == 20
+		and int(migrated_lunar.get("logistics", {}).get("storage_capacities", {}).get("FLUID", 0)) == 24
+		and int(migrated_lunar.get("construction", {}).get("capacity", 0)) == 1,
+		"schema-38 surveyed remote sites retain their paid finite staging package after migration"
+	)
+	_check(
+		not bool(migrated_asteroid.get("survey_staging_installed", false))
+		and int(migrated_asteroid.get("logistics", {}).get("storage_capacities", {}).get("BULK", 0)) == 0,
+		"schema-38 detected-only remote sites do not receive free staging during migration"
+	)
 
 
 func _test_identity_serial_recovery() -> void:

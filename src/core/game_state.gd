@@ -225,7 +225,7 @@ static func create_new(domain_ids: Array, location_definitions: Dictionary = {})
 	state.unlocked_ship_plans["construct_patchwork_prospector"] = true
 	# The founding stockpile prevents an early circular dependency before basic
 	# electronics production comes online.
-	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":12, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}
+	state.locations[MAIN_BASE_LOCATION_ID]["inventory"] = {"scrap_metal":44, "electronics":16, "data_core":2, "kinetic_munitions":120, "chemical_propellant":20, "repair_supplies":10, "repair_material":10}
 	state.saved_at_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	return state
 
@@ -252,6 +252,7 @@ static func migrate_save_dictionary(source: Dictionary) -> Dictionary:
 			35: migrated = _migrate_35_36(migrated)
 			36: migrated = _migrate_36_37(migrated)
 			37: migrated = _migrate_37_38(migrated)
+			38: migrated = _migrate_38_39(migrated)
 			_: break
 		var next_version := int(migrated.get("save_version", version))
 		if next_version <= version:
@@ -551,6 +552,27 @@ static func _migrate_37_38(data: Dictionary) -> Dictionary:
 	return _retire_aggregate_industry_metadata_in_dictionary(migrated)
 
 
+static func _migrate_38_39(data: Dictionary) -> Dictionary:
+	# Schema 38 existed before paid Survey missions recorded their finite staging
+	# package explicitly. Every remote site that was already surveyed in that
+	# schema necessarily completed the old founding flow, so preserve its ability
+	# to receive the first physical Factory buildings after upgrading.
+	var migrated := _migrate_37_38(data)
+	var locations: Dictionary = migrated.get("locations", {}).duplicate(true)
+	var region_states: Dictionary = migrated.get("region_states", {})
+	for location_id_value in locations.keys():
+		var location_id := str(location_id_value)
+		if location_id == MAIN_BASE_LOCATION_ID:
+			continue
+		var location := locations[location_id] as Dictionary
+		var region_runtime: Dictionary = region_states.get(location_id, {})
+		var survey_state := str(region_runtime.get("survey_state", region_runtime.get("exploration_state", location.get("survey_state", LocationState.UNKNOWN))))
+		if survey_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
+			location["survey_staging_installed"] = true
+	migrated["locations"] = locations
+	return _stamp_schema(migrated, 39)
+
+
 static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary) -> Dictionary:
 	var migrated := source.duplicate(true)
 	var archive: Dictionary = migrated.get("retired_aggregate_industry_archive", {}).duplicate(true)
@@ -596,11 +618,6 @@ static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary
 
 static func from_dictionary(data: Dictionary, domain_ids: Array, location_definitions: Dictionary = {}) -> SpaceGameState:
 	data = migrate_save_dictionary(data)
-	# Schema 38 was introduced on this feature branch before its content hard cut
-	# was complete. Reapply the idempotent role invariant on load so an interim
-	# schema-38 developer save cannot retain deleted work modules or hull IDs.
-	if SAVE_VERSION == 38:
-		data = _migrate_37_38(data)
 	data = _retire_aggregate_industry_metadata_in_dictionary(data)
 	var state := create_new(domain_ids, location_definitions)
 	state.save_id = str(data.get("save_id", state.save_id))
@@ -2051,6 +2068,8 @@ static func _normalized_megastructure_projects(source: Dictionary, completed: Di
 		runtime["phase_index"] = maxi(0, int(runtime.get("phase_index", runtime.get("stage_index", 0))))
 		runtime["stage_index"] = int(runtime["phase_index"])
 		runtime["delivered_materials"] = runtime.get("delivered_materials", {}).duplicate(true)
+		runtime["phase_runtime"] = runtime.get("phase_runtime", {}).duplicate(true)
+		runtime["site_effects"] = runtime.get("site_effects", {}).duplicate(true)
 		runtime["phase_history"] = runtime.get("phase_history", []).duplicate(true)
 		runtime["total_materials_consumed"] = runtime.get("total_materials_consumed", {}).duplicate(true)
 		runtime["total_capital_goods"] = runtime.get("total_capital_goods", {}).duplicate(true)
@@ -2066,7 +2085,7 @@ static func _normalized_megastructure_projects(source: Dictionary, completed: Di
 	for project_id in completed:
 		if not bool(completed.get(project_id, false)) or result.has(project_id):
 			continue
-		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "phase_index":8, "stage_index":8, "stage_name":"COMPLETE", "delivered_materials":{}, "phase_history":[], "total_materials_consumed":{}, "total_capital_goods":{}, "supplier_locations":{}, "total_cargo_transported":0.0, "peak_construction_throughput":0.0, "peak_power_demand":0.0, "started_at_ms":0, "completed_at_ms":0, "site_location_id":MAIN_BASE_LOCATION_ID, "status":"COMPLETE"}
+		result[str(project_id)] = {"id":str(project_id), "progress_percent":100, "phase_index":8, "stage_index":8, "stage_name":"COMPLETE", "delivered_materials":{}, "phase_runtime":{}, "site_effects":{}, "phase_history":[], "total_materials_consumed":{}, "total_capital_goods":{}, "supplier_locations":{}, "total_cargo_transported":0.0, "peak_construction_throughput":0.0, "peak_power_demand":0.0, "started_at_ms":0, "completed_at_ms":0, "site_location_id":MAIN_BASE_LOCATION_ID, "status":"COMPLETE"}
 	return result
 
 

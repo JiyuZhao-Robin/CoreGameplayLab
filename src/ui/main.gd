@@ -6,7 +6,6 @@ const SystemMapViewScript = preload("res://src/ui/components/system_map_view.gd"
 const MegastructureProgressViewScript = preload("res://src/ui/components/megastructure_progress_view.gd")
 const GameShellScript = preload("res://src/ui/components/game_shell.gd")
 const UiNavigationStateScript = preload("res://src/ui/ui_navigation_state.gd")
-const FactoryWorkspaceScript = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
 const ResearchTreeViewScript = preload("res://src/ui/components/research_tree_view.gd")
 const ShipAssemblyBlueprintEditorScript = preload("res://src/ui/components/ship_assembly_blueprint_editor.gd")
 const ShipRegistryPreviewGridScript = preload("res://src/ui/components/ship_registry_preview_grid.gd")
@@ -15,6 +14,7 @@ const ShipDismantleModalScript = preload("res://src/ui/components/ship_dismantle
 const ShipRegistryQueryScript = preload("res://src/ui/view_models/ship_registry_query.gd")
 const ShipRegistrySelectionScript = preload("res://src/ui/view_models/ship_registry_selection.gd")
 const ShipRegistrySelectionCheckboxScript = preload("res://src/ui/components/ship_registry_selection_checkbox.gd")
+const FactoryWorkspaceScript = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const ResponsivePolicy = preload("res://src/ui/responsive_ui_policy.gd")
 
@@ -147,6 +147,8 @@ var _active_blocker_cache: Array[Dictionary] = []
 var _telemetry_events: Array[Dictionary] = []
 var _seen_blocker_ids := {}
 var _factory_workspace
+var _selected_factory_world_id := ""
+var _rendered_factory_world_id := ""
 var _selected_research_project_id := ""
 var _ship_blueprint_editor: ShipAssemblyBlueprintEditor
 var _shipyard_handoff_content: VBoxContainer
@@ -189,8 +191,6 @@ func _ready() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if String(argument).begins_with("--fleet-section="):
 			_fleet_section = String(argument).trim_prefix("--fleet-section=")
-		elif String(argument).begins_with("--network-location="):
-			_selected_location_id = String(argument).trim_prefix("--network-location=")
 		elif String(argument) == "--reduced-motion":
 			_reduced_motion = true
 		elif String(argument).begins_with("--ui-scale="):
@@ -253,9 +253,6 @@ func _process(_delta: float) -> void:
 	if not editing_text and not fleet_roster_transient_open and _dirty and refresh_due and not _rebuild_in_progress:
 		_immediate_refresh_requested = false
 		_rebuild_active_page()
-	elif not editing_text and not fleet_roster_transient_open and refresh_due and not _rebuild_in_progress and _active_page_key == "industry" and is_instance_valid(_factory_workspace):
-		_refresh_factory_workspace()
-		_last_refresh_ms = now
 
 
 func _request_active_page_refresh(immediate: bool) -> void:
@@ -409,10 +406,6 @@ func _build_navigation_rail() -> Control:
 
 
 func _switch_page(key: String, record_history: bool = true) -> void:
-	# Ordinary construction is a Factory-grid operation after the aggregate
-	# cutover. Keep the legacy navigation key as a compatibility alias only.
-	if key == "construction":
-		key = "industry"
 	var page: Control = _page_controls.get(key)
 	if not is_instance_valid(page):
 		return
@@ -638,8 +631,13 @@ func _rebuild_active_page() -> void:
 		"location": _rebuild_location()
 		"frontier": _rebuild_frontier()
 		"industry":
-			if is_instance_valid(_factory_workspace):
-				_refresh_factory_workspace()
+			if (
+				is_instance_valid(_factory_workspace)
+				and not _selected_factory_world_id.is_empty()
+				and Game.state.factory_worlds.has(_selected_factory_world_id)
+				and _rendered_factory_world_id == _selected_factory_world_id
+			):
+				_factory_workspace.apply_snapshot(Game.factory_workspace_snapshot(_selected_factory_world_id))
 			else:
 				_rebuild_industry()
 		"inventory": _rebuild_inventory()
@@ -769,6 +767,7 @@ func _rebuild_sidebar() -> void:
 	location_ids.sort()
 	for location_id in location_ids:
 		selector.add_item(_location_name(location_id))
+		selector.set_item_metadata(selector.item_count - 1, location_id)
 		if location_id == _selected_location_id:
 			selector.select(selector.item_count - 1)
 	selector.item_selected.connect(_on_context_location_selected.bind(location_ids))
@@ -953,18 +952,12 @@ func _open_location_section(location_id: String, section: String) -> void:
 	if not Game.state.has_location(location_id):
 		return
 	_selected_location_id = location_id
-	if section == "industry":
-		_switch_page("industry")
-		return
 	_location_section = section
 	_save_ui_preferences()
 	_switch_page("location")
 
 
 func _select_location_section(section: String) -> void:
-	if section == "industry":
-		_switch_page("industry")
-		return
 	_location_section = section
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
@@ -989,6 +982,8 @@ func _rebuild_location() -> void:
 	match _location_section:
 		"resources":
 			_build_location_resources(box, location)
+		"industry":
+			_build_location_industry(box, location)
 		"logistics":
 			_build_location_logistics(box, location)
 		"projects":
@@ -1082,6 +1077,48 @@ func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> voi
 				var footprint: Dictionary = profile.get("footprint", {}).get("size", {})
 				card.add_child(_label(I18n.core("location.resources.grid_deep_surveyed", "Exact footprint %d × %d m · fixed world resource") % [int(footprint.get("x", 0)), int(footprint.get("y", 0))], 13, COLOR_ACCENT))
 		box.add_child(_wrap_card(card))
+
+
+func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
+	var world_ids := Game.factory_world_ids_for_location(_selected_location_id)
+	box.add_child(_section_title(I18n.t("factory.location.title", "Factory grid")))
+	if not world_ids.is_empty():
+		var world_id := str(world_ids[0])
+		var snapshot := Game.factory_workspace_snapshot(world_id)
+		box.add_child(_card_text(I18n.t("factory.location.summary", "Physical grid %s · %d buildings · %d links · %d construction orders") % [world_id, (snapshot.get("entities", []) as Array).size(), (snapshot.get("links", []) as Array).size(), (snapshot.get("construction_orders", []) as Array).size()], COLOR_TEXT))
+		var open_button := _button(I18n.t("factory.location.open", "Open Factory workspace"), _open_factory_world.bind(world_id), false, COLOR_ACCENT)
+		open_button.name = "OpenFactoryWorkspace_%s" % _selected_location_id
+		box.add_child(open_button)
+		return
+	var survey_state := str(location.get("survey_state", LocationState.UNKNOWN))
+	var can_initialize := _selected_location_id == SpaceGameState.MAIN_BASE_LOCATION_ID or Game.simulation.survey_state_rank(survey_state) >= Game.simulation.survey_state_rank(LocationState.SURVEYED)
+	box.add_child(_card_text(I18n.t("factory.location.empty", "This location has no Factory grid. Surveyed resource regions become non-depleting tile fields; extraction remains limited by field grade, machine throughput, power and logistics."), COLOR_MUTED))
+	var initialize_button := _button(I18n.t("factory.location.initialize", "Initialize Factory grid"), _initialize_factory_for_location.bind(_selected_location_id), not can_initialize, COLOR_GOOD)
+	initialize_button.name = "InitializeFactoryWorld_%s" % _selected_location_id
+	initialize_button.tooltip_text = I18n.t("factory.location.requires_survey", "Complete a survey before initializing this location's Factory grid.") if not can_initialize else I18n.core("availability.ready", "Requirements met")
+	box.add_child(initialize_button)
+	return
+
+func _open_factory_world(world_id: String) -> void:
+	if not Game.state.factory_worlds.has(world_id):
+		return
+	_selected_factory_world_id = world_id
+	var world: Dictionary = Game.state.factory_worlds.get(world_id, {})
+	_selected_location_id = str(world.get("location_id", _selected_location_id))
+	_save_ui_preferences()
+	_switch_page("industry")
+
+
+func _initialize_factory_for_location(location_id: String) -> void:
+	var success := Game.initialize_surveyed_factory_world(location_id)
+	if success:
+		var world_ids := Game.factory_world_ids_for_location(location_id)
+		if not world_ids.is_empty():
+			_selected_factory_world_id = str(world_ids[0])
+		_append_log(I18n.core("command.executed") % I18n.t("factory.command.initialize", "Initialize Factory grid"))
+		_open_factory_world(_selected_factory_world_id)
+	else:
+		_append_log(I18n.core("command.failed") % [I18n.t("factory.command.initialize", "Initialize Factory grid"), Game.last_notice])
 
 
 func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void:
@@ -1436,15 +1473,15 @@ func _toggle_logistics_service_ship(route_id: String, ship_id: String) -> void:
 
 func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void:
 	var found := false
-	for project_id_value in Game.state.megastructure_projects.keys():
-		var project_id := String(project_id_value)
-		var project := Game.state.megastructure_projects.get(project_id, {}) as Dictionary
-		if String(project.get("site_location_id", project.get("location_id", ""))) != _selected_location_id:
+	for operation_value in Game.state.construction_operations:
+		var operation := operation_value as Dictionary
+		if String(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id or String(operation.get("activity_id", "")).is_empty():
 			continue
 		found = true
-		var definition := Game.content.megastructures.get(project_id, {"id":project_id, "name":project_id}) as Dictionary
-		var stage_line := I18n.core("construction.megastructure_stage_suffix") % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "AWAITING_NEXT_PHASE")))]
-		box.add_child(_card_text(I18n.core("construction.location_project") % [_content_name(definition, project_id), _status_text(String(project.get("status", "READY"))), stage_line], COLOR_TEXT))
+		var activity: Dictionary = Game.simulation.construction_activity_for_runtime(operation)
+		var project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
+		var stage_line := I18n.core("construction.megastructure_stage_suffix") % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "RECEIVING")))] if not project.is_empty() else ""
+		box.add_child(_card_text(I18n.core("construction.location_project") % [_construction_project_name(operation, activity), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
 	for order_value in Game.state.shipyard_queue:
 		var order := order_value as Dictionary
 		if String(order.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id:
@@ -2043,10 +2080,16 @@ func _rebuild_logistics() -> void:
 func _rebuild_construction() -> void:
 	var box: VBoxContainer = _pages["construction"]
 	_clear(box)
-	box.add_child(_page_title(I18n.core("page.construction", "Construction"), "Ordinary construction is managed as physical Factory-grid entities and orders."))
-	var open_factory := _button("OPEN FACTORY WORKSPACE", _switch_page.bind("industry"), false, COLOR_ACCENT)
-	open_factory.name = "OpenFactoryConstructionWorkspace"
-	box.add_child(open_factory)
+	box.add_child(_page_title(I18n.core("page.construction", "Construction"), I18n.core("construction.subtitle", "Factory construction is managed on the Factory Grid; Stellar Engineering phases remain in Megastructure.")))
+	var routes := HFlowContainer.new()
+	routes.add_theme_constant_override("h_separation", 8)
+	var factory_button := _button(I18n.t("factory.workspace.title", "FACTORY GRID"), _switch_page.bind("industry"), false, COLOR_ACCENT)
+	factory_button.name = "OpenFactoryConstruction"
+	routes.add_child(factory_button)
+	var megastructure_button := _button(I18n.core("page.megastructure", "Stellar Engineering"), _switch_page.bind("megastructure"), false, COLOR_GOOD)
+	megastructure_button.name = "OpenMegastructureConstruction"
+	routes.add_child(megastructure_button)
+	box.add_child(_wrap_card(routes))
 
 
 func _rebuild_diagnostics() -> void:
@@ -2147,53 +2190,82 @@ func _refresh_alerts() -> void:
 func _rebuild_industry() -> void:
 	var box: VBoxContainer = _pages["industry"]
 	_configure_industry_workspace(true)
+	if is_instance_valid(_factory_workspace) and _factory_workspace.get_parent() == box:
+		box.remove_child(_factory_workspace)
 	_clear(box)
-	_factory_workspace = FactoryWorkspaceScript.new()
-	_factory_workspace.name = "FactoryMiningProductionWorkspace"
-	_factory_workspace.custom_minimum_size.y = UiTokens.layout_px(560)
+	var header := HBoxContainer.new()
+	header.name = "FactoryWorkspaceHeader"
+	header.add_theme_constant_override("separation", 10)
+	var title := _label(I18n.t("factory.workspace.title", "FACTORY GRID"), 20, COLOR_TEXT)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	var world_ids: Array[String] = []
+	for world_id_value in Game.state.factory_worlds.keys():
+		world_ids.append(str(world_id_value))
+	world_ids.sort()
+	var selected_world_location := str(Game.state.factory_worlds.get(_selected_factory_world_id, {}).get("location_id", ""))
+	if _selected_factory_world_id.is_empty() or not Game.state.factory_worlds.has(_selected_factory_world_id) or selected_world_location != _selected_location_id:
+		var location_worlds := Game.factory_world_ids_for_location(_selected_location_id)
+		_selected_factory_world_id = location_worlds[0] if not location_worlds.is_empty() else ""
+	_rendered_factory_world_id = _selected_factory_world_id
+	var selector := OptionButton.new()
+	selector.name = "FactoryWorldSelector"
+	for world_id in world_ids:
+		var world: Dictionary = Game.state.factory_worlds.get(world_id, {})
+		selector.add_item(I18n.t("factory.workspace.selector", "%s / %s") % [_location_name(str(world.get("location_id", ""))), world_id])
+		selector.set_item_metadata(selector.item_count - 1, world_id)
+		if world_id == _selected_factory_world_id:
+			selector.select(selector.item_count - 1)
+	selector.disabled = world_ids.size() <= 1
+	selector.item_selected.connect(_select_factory_world.bind(selector))
+	header.add_child(selector)
+	box.add_child(header)
+	if _selected_factory_world_id.is_empty():
+		box.add_child(_card_text(I18n.t("factory.workspace.no_world", "Survey a location, then initialize its Factory grid from the Location workspace."), COLOR_WARN))
+		return
+	if not is_instance_valid(_factory_workspace):
+		_factory_workspace = FactoryWorkspaceScript.new()
+		_factory_workspace.command_requested.connect(_on_factory_command_requested)
+		_factory_workspace.refresh_requested.connect(_on_factory_refresh_requested)
 	_factory_workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_factory_workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_factory_workspace.set_reduced_motion(_reduced_motion)
-	_factory_workspace.command_intent.connect(_on_factory_command_intent)
 	box.add_child(_factory_workspace)
-	_refresh_factory_workspace()
+	_factory_workspace.apply_snapshot(Game.factory_workspace_snapshot(_selected_factory_world_id))
 
 
-func _refresh_factory_workspace() -> void:
-	if not is_instance_valid(_factory_workspace):
+func _select_factory_world(index: int, selector: OptionButton) -> void:
+	if index < 0:
 		return
-	var world_id := _factory_world_id_for_location(_selected_location_id)
-	if world_id.is_empty():
-		_factory_workspace.clear_workspace()
-		return
-	_factory_workspace.apply_snapshot(Game.factory_workspace_snapshot(world_id))
-	_factory_workspace.set_reduced_motion(_reduced_motion)
+	_selected_factory_world_id = str(selector.get_item_metadata(index))
+	var world: Dictionary = Game.state.factory_worlds.get(_selected_factory_world_id, {})
+	_selected_location_id = str(world.get("location_id", _selected_location_id))
+	_save_ui_preferences()
+	call_deferred("_rebuild_sidebar")
+	_request_active_page_refresh(true)
 
 
-func _factory_world_id_for_location(location_id: String) -> String:
-	var world_ids: Array = Game.state.factory_worlds.keys()
-	world_ids.sort_custom(func(a, b): return str(a) < str(b))
-	for world_id_value in world_ids:
-		var world_id := str(world_id_value)
-		if str(Game.state.factory_worlds.get(world_id, {}).get("location_id", "")) == location_id:
-			return world_id
-	return ""
-
-
-func _on_factory_command_intent(intent: Dictionary) -> void:
+func _on_factory_command_requested(intent: Dictionary) -> void:
 	var result: Dictionary = Game.execute_factory_command(intent)
-	var message := str(result.get("message", "Factory command rejected"))
-	_append_log(message)
-	if bool(result.get("accepted", false)):
-		_refresh_factory_workspace()
-	_request_active_page_refresh(false)
+	if is_instance_valid(_factory_workspace):
+		_factory_workspace.apply_command_result(result)
+	var accepted := bool(result.get("accepted", false))
+	var label_text := I18n.t("factory.command.%s" % str(intent.get("kind", "")).to_lower(), str(intent.get("kind", "FACTORY_COMMAND")).replace("_", " ").capitalize())
+	_append_log(I18n.core("command.executed") % label_text if accepted else I18n.core("command.failed") % [label_text, str(result.get("message", result.get("reason_code", "UNKNOWN")))])
+	_record_telemetry("PlayerAction", {"label":str(intent.get("kind", "FACTORY_COMMAND")), "screen":"industry", "success":accepted, "reason":str(result.get("reason_code", ""))})
+
+
+func _on_factory_refresh_requested(world_id: String) -> void:
+	if is_instance_valid(_factory_workspace) and Game.state.factory_worlds.has(world_id):
+		_factory_workspace.apply_snapshot(Game.factory_workspace_snapshot(world_id))
 
 
 func _configure_industry_workspace(network_workspace: bool) -> void:
 	var scroll = _page_controls.get("industry") as ScrollContainer
 	if not is_instance_valid(scroll):
 		return
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED if network_workspace else ScrollContainer.SCROLL_MODE_AUTO
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if network_workspace else ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	var margin := scroll.get_child(0) as MarginContainer if scroll.get_child_count() > 0 else null
 	if is_instance_valid(margin):
 		margin.size_flags_vertical = Control.SIZE_EXPAND_FILL if network_workspace else Control.SIZE_SHRINK_BEGIN
@@ -2305,6 +2377,36 @@ func _build_background_economy_controls(box: VBoxContainer) -> void:
 	if not _planner_result.is_empty():
 		_build_read_only_plan_result(box, _planner_result)
 
+	box.add_child(_section_title(I18n.core("automation.title")))
+	box.add_child(_card_text(I18n.core("automation.help"), COLOR_MUTED))
+	for rule_value in Game.state.automation_rules:
+		var rule := rule_value as Dictionary
+		var rule_card := _card()
+		var condition: Dictionary = rule.get("condition", {})
+		var action: Dictionary = rule.get("action", {})
+		rule_card.add_child(_label(I18n.core("automation.rule_header") % [String(rule.get("rule_id", "AUTOMATION")), I18n.core("status.PAUSED") if bool(rule.get("paused", false)) else I18n.core("automation.authorized")], 14, COLOR_ACCENT))
+		rule_card.add_child(_label(I18n.core("automation.rule_condition") % [_automation_term("condition", String(condition.get("type", "CONDITION"))), _automation_term("operator", String(condition.get("operator", "LT"))), float(condition.get("threshold", 0.0)), _automation_term("action", String(action.get("type", "ACTION"))), float(rule.get("cooldown_ms", 0.0)) / 1000.0, float(rule.get("hysteresis", 0.0))], 12, COLOR_MUTED))
+		var rule_actions := HFlowContainer.new()
+		rule_actions.add_child(_button(I18n.core("automation.resume_rule") if bool(rule.get("paused", false)) else I18n.core("automation.pause_rule"), _command.bind(I18n.core("command.toggle_automation_rule"), Game.set_automation_rule_paused.bind(String(rule.get("rule_id", "")), not bool(rule.get("paused", false)))), false, COLOR_WARN))
+		rule_actions.add_child(_button(I18n.core("automation.revoke"), _command.bind(I18n.core("command.revoke_automation"), Game.revoke_automation_rule.bind(String(rule.get("rule_id", "")))), false, COLOR_BAD))
+		rule_card.add_child(rule_actions)
+		box.add_child(_wrap_card(rule_card))
+	for runtime_value in Game.state.industrial_operations:
+		var runtime := runtime_value as Dictionary
+		if str(runtime.get("status", "")) not in ["RUNNING", "BLOCKED"] or not bool(runtime.get("manual_lock", true)):
+			continue
+		var slot := int(runtime.get("slot", -1))
+		var facility_id := String(runtime.get("facility_id", ""))
+		var location_id := String(runtime.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
+		var guard_button := _button(I18n.core("automation.authorize_storage_guard") % _content_name(Game.content.facilities.get(facility_id, {}), facility_id), _command.bind(I18n.core("command.authorize_storage_automation"), _authorize_storage_guard.bind(slot, location_id)), false, COLOR_GOOD)
+		guard_button.name = "AuthorizeStorageGuard_%d" % slot
+		box.add_child(guard_button)
+
+
+func _authorize_storage_guard(slot: int, location_id: String) -> bool:
+	return Game.authorize_storage_guard(slot, location_id)
+
+
 func _run_read_only_plan(selector: OptionButton, product_ids: Array, target_input: SpinBox) -> void:
 	if selector.selected < 0 or selector.selected >= product_ids.size():
 		return
@@ -2411,8 +2513,9 @@ func _rebuild_megastructure() -> void:
 	var megastructure_id := String(definition.get("id", "stellar_energy"))
 	var phases: Array = definition.get("phases", [])
 	var project: Dictionary = Game.state.megastructure_projects.get(megastructure_id, {})
-	var queue_used := Game.simulation.construction_queue_size(Game.state)
-	var queue_capacity := Game.simulation.construction_queue_capacity(Game.state)
+	var phase_runtime: Dictionary = project.get("phase_runtime", {})
+	var queue_used := 0 if phase_runtime.is_empty() else 1
+	var queue_capacity := 1
 	var complete := bool(Game.state.megastructures.get(megastructure_id, false))
 	var summary := HBoxContainer.new()
 	summary.add_theme_constant_override("separation", 8)
@@ -2459,6 +2562,7 @@ func _rebuild_megastructure() -> void:
 	var current_phase: Dictionary = phases[clampi(current_index, 0, maxi(0, phases.size() - 1))] if not phases.is_empty() else {}
 	var activity_id := String(current_phase.get("activity_id", ""))
 	var activity := Game.content.activities.get(activity_id, {}) as Dictionary
+	var runtime: Dictionary = phase_runtime
 	var card := _card()
 	card.add_child(_label(("✓ " if complete else "") + _content_name(definition, megastructure_id), 18, COLOR_GOOD if complete else COLOR_TEXT))
 	card.add_child(_label(I18n.core("megastructure.gameplay_state") % _status_text(megastructure_status), 14, COLOR_GOOD if complete else (COLOR_WARN if megastructure_status == "WAITING_MATERIAL" else COLOR_ACCENT)))
@@ -2470,17 +2574,19 @@ func _rebuild_megastructure() -> void:
 	if complete:
 		card.add_child(_label(I18n.core("megastructure.completed"), 14, COLOR_GOOD))
 		card.add_child(_label(I18n.core("megastructure.completion.statistics") % [_quantity_map_text(project.get("total_materials_consumed", {})), _quantity_map_text(project.get("total_capital_goods", {})), float(project.get("total_cargo_transported", 0.0)), float(project.get("peak_construction_throughput", 0.0)), float(project.get("peak_power_demand", 0.0)), _format_ms(maxi(0, int(project.get("completed_at_ms", 0)) - int(project.get("started_at_ms", 0)))), _supplier_map_text(project.get("supplier_locations", {}))], 13, COLOR_TEXT))
+	elif not runtime.is_empty():
+		card.add_child(_label(I18n.core("megastructure.phase.invested") % [_project_summary(activity), _quantity_map_text(project.get("delivered_materials", {}))], 13, COLOR_MUTED))
+		var runtime_blocker: Dictionary = runtime.get("blocker", {})
+		if str(runtime.get("status", "BUILDING")) == "BLOCKED" and not runtime_blocker.is_empty():
+			card.add_child(_label(I18n.core("megastructure.site.blocked") % _blocker_text(runtime_blocker), 13, COLOR_WARN))
 	else:
 		card.add_child(_label(I18n.core("megastructure.phase.next_bom") % _project_summary(activity), 13, COLOR_MUTED))
-		var blocker: Dictionary = Game.simulation.megastructure_site_requirement_blocker(Game.state, current_phase, site_id)
-		var start_button := _button(I18n.core("megastructure.phase.start"), Callable(), true, COLOR_GOOD)
+		var blocker: Dictionary = Game.simulation.megastructure_phase_start_blocker(Game.state, activity, site_id)
+		var start_button := _button(I18n.core("megastructure.phase.start"), _command.bind(I18n.core("command.megastructure.start_phase"), Game.start_megastructure_phase.bind(megastructure_id, 90)), not blocker.is_empty(), COLOR_GOOD)
 		start_button.name = "StartMegastructure_%s" % megastructure_id
-		start_button.tooltip_text = I18n.core("notice.aggregate_industry_removed")
 		card.add_child(start_button)
 		if not blocker.is_empty():
 			card.add_child(_label(I18n.core("megastructure.site.blocked") % _blocker_text(blocker), 13, COLOR_WARN))
-		else:
-			card.add_child(_label(I18n.core("notice.aggregate_industry_removed"), 13, COLOR_WARN))
 	box.add_child(_wrap_card(card))
 
 
@@ -4539,7 +4645,7 @@ func _build_fleet_roster_select_filtered_group(visible_ships: Array, compact_lab
 	var group := HBoxContainer.new()
 	group.name = "FleetRosterSelectFilteredGroup"
 	group.add_theme_constant_override("separation", UiTokens.layout_px(7))
-	var checkbox: ShipRegistrySelectionCheckbox = _fleet_roster_selection_checkbox("FleetRosterSelectFiltered")
+	var checkbox = _fleet_roster_selection_checkbox("FleetRosterSelectFiltered")
 	checkbox.focus_mode = Control.FOCUS_ALL
 	checkbox.mouse_filter = Control.MOUSE_FILTER_STOP
 	checkbox.disabled = visible_ids.is_empty()
@@ -4593,7 +4699,7 @@ func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool, bulk_selecte
 	var selection_area := CenterContainer.new()
 	selection_area.custom_minimum_size.x = UiTokens.layout_px(20)
 	selection_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var selection_checkbox: ShipRegistrySelectionCheckbox = _fleet_roster_selection_checkbox("FleetRosterSelectionControl_%s" % ship_id)
+	var selection_checkbox = _fleet_roster_selection_checkbox("FleetRosterSelectionControl_%s" % ship_id)
 	selection_checkbox.button_pressed = bulk_selected
 	selection_checkbox.focus_mode = Control.FOCUS_ALL
 	selection_checkbox.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -4664,8 +4770,8 @@ func _fleet_roster_row_style(selected: bool, bulk_selected: bool, hovered: bool)
 	return style
 
 
-func _fleet_roster_selection_checkbox(control_name: String) -> ShipRegistrySelectionCheckbox:
-	var checkbox := ShipRegistrySelectionCheckboxScript.new() as ShipRegistrySelectionCheckbox
+func _fleet_roster_selection_checkbox(control_name: String):
+	var checkbox = ShipRegistrySelectionCheckboxScript.new()
 	checkbox.name = control_name
 	checkbox.custom_minimum_size = _fleet_roster_vector(Vector2(18, 18))
 	checkbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -5449,7 +5555,17 @@ func _open_next_flow_target() -> void:
 	var location_id := str(guidance.get("location_id", ""))
 	if not location_id.is_empty() and Game.state.has_location(location_id):
 		_selected_location_id = location_id
-	_switch_page(page)
+	if page == "industry":
+		var location_worlds := Game.factory_world_ids_for_location(_selected_location_id)
+		if not location_worlds.is_empty():
+			_selected_factory_world_id = str(location_worlds[0])
+	# Navigation to the workspace that is already open is intentionally a no-op
+	# in UiNavigationState. Guidance can still change the selected Factory world,
+	# so explicitly refresh the active workspace after the signal returns.
+	if page == _active_page_key:
+		_request_active_page_refresh(true)
+	else:
+		_switch_page(page)
 
 
 func _next_flow_step() -> String:
@@ -5552,6 +5668,22 @@ func _resource_dictionary(values: Dictionary) -> String:
 	return _resource_list(entries)
 
 
+func _construction_project_type_name(project_type: String) -> String:
+	var key := "construction.type.%s" % project_type
+	var translated := I18n.core(key)
+	return project_type.replace("_", " ").capitalize() if translated == key else translated
+
+
+func _construction_project_name(operation: Dictionary, definition: Dictionary) -> String:
+	if operation.get("project_definition", {}).is_empty():
+		return _content_name(definition, String(operation.get("activity_id", I18n.core("construction.project_fallback"))))
+	var project_type := String(operation.get("project_type", ""))
+	var target_id := String(operation.get("target_id", ""))
+	if project_type == "FACILITY_EXPANSION":
+		return I18n.core("construction.facility_expansion_name") % [_content_name(Game.content.facilities.get(target_id, {}), target_id), int(operation.get("target_level", 0))]
+	return I18n.core("construction.target_level_name") % [_construction_project_type_name(project_type), int(operation.get("target_level", 0))]
+
+
 func _operation_progress(operation: Dictionary, caption: String) -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
@@ -5629,6 +5761,11 @@ func _logistics_technology_name(technology_id: String) -> String:
 	if technology_id == "chemical_cargo":
 		return I18n.t("logistics_technology.chemical_cargo", "Chemical Cargo")
 	return _content_name(Game.content.technologies.get(technology_id, {"id":technology_id, "name":technology_id.replace("_", " ").capitalize()}), technology_id)
+
+
+func _automation_term(kind: String, term_id: String) -> String:
+	var normalized := term_id.strip_edges().to_upper()
+	return I18n.t("automation.%s.%s" % [kind, normalized], normalized.replace("_", " ").capitalize())
 
 
 func _status_text(status: String) -> String:
@@ -5742,6 +5879,10 @@ func _confirm_reset_game(dialog: ConfirmationDialog) -> void:
 func _reset_game() -> void:
 	Engine.time_scale = 1.0
 	Game.reset_game()
+	_selected_location_id = SpaceGameState.MAIN_BASE_LOCATION_ID
+	_selected_factory_world_id = ""
+	_synchronize_factory_world_with_location()
+	_ui_state.select_context("location", _selected_location_id)
 	_event_log.clear()
 	_append_log(I18n.core("timeline.game_reset"))
 	_request_active_page_refresh(true)
@@ -5873,9 +6014,8 @@ func _load_ui_preferences() -> void:
 	if config_loaded:
 		_active_page_key = String(_ui_config.get_value("navigation", "active_page", "system_map"))
 		_selected_location_id = String(_ui_config.get_value("navigation", "selected_location", SpaceGameState.MAIN_BASE_LOCATION_ID))
+		_selected_factory_world_id = String(_ui_config.get_value("navigation", "selected_factory_world", ""))
 		_location_section = String(_ui_config.get_value("navigation", "location_section", "overview"))
-		if _location_section == "industry":
-			_location_section = "overview"
 		_fleet_section = String(_ui_config.get_value("navigation", "fleet_section", "roster"))
 		_selected_formation_id = String(_ui_config.get_value("navigation", "formation_id", SpaceGameState.DEFAULT_FORMATION_ID))
 		_fleet_roster_filter = String(_ui_config.get_value("ship_registry", "lifecycle_filter", "ALL"))
@@ -5917,10 +6057,10 @@ func _load_ui_preferences() -> void:
 		_active_page_key = "fleet"
 	elif _active_page_key == "survey":
 		_active_page_key = "frontier"
-	elif _active_page_key == "construction":
-		_active_page_key = "industry"
 	if not Game.state.has_location(_selected_location_id):
 		_selected_location_id = SpaceGameState.MAIN_BASE_LOCATION_ID
+	if _active_page_key == "industry":
+		_synchronize_factory_world_with_location()
 	_ui_state.restore_workspace(_active_page_key)
 	_ui_state.select_context("location", _selected_location_id)
 
@@ -5970,6 +6110,7 @@ func _save_ui_preferences() -> void:
 		return
 	_ui_config.set_value("navigation", "active_page", _active_page_key)
 	_ui_config.set_value("navigation", "selected_location", _selected_location_id)
+	_ui_config.set_value("navigation", "selected_factory_world", _selected_factory_world_id)
 	_ui_config.set_value("navigation", "location_section", _location_section)
 	_ui_config.set_value("navigation", "fleet_section", _fleet_section)
 	_ui_config.set_value("navigation", "formation_id", _selected_formation_id)
@@ -6131,9 +6272,20 @@ func _on_context_location_selected(index: int, location_ids: Array[String]) -> v
 	if index < 0 or index >= location_ids.size():
 		return
 	_selected_location_id = location_ids[index]
+	if _active_page_key == "industry":
+		_synchronize_factory_world_with_location()
 	_ui_state.select_context("location", _selected_location_id)
 	_save_ui_preferences()
+	call_deferred("_rebuild_sidebar")
 	_request_active_page_refresh(true)
+
+
+func _synchronize_factory_world_with_location() -> void:
+	var selected_world: Dictionary = Game.state.factory_worlds.get(_selected_factory_world_id, {})
+	if not selected_world.is_empty() and str(selected_world.get("location_id", "")) == _selected_location_id:
+		return
+	var location_worlds := Game.factory_world_ids_for_location(_selected_location_id)
+	_selected_factory_world_id = str(location_worlds[0]) if not location_worlds.is_empty() else ""
 
 
 func _on_left_rail_toggled(collapsed: bool) -> void:
@@ -6257,6 +6409,11 @@ func _toggle_developer_details() -> void:
 
 func _on_locale_changed(_locale: String) -> void:
 	_refresh_shell_locale()
+	if is_instance_valid(_factory_workspace):
+		if _factory_workspace.get_parent() != null:
+			_factory_workspace.get_parent().remove_child(_factory_workspace)
+		_factory_workspace.queue_free()
+		_factory_workspace = null
 	_request_active_page_refresh(true)
 	_schedule_responsive_refresh()
 

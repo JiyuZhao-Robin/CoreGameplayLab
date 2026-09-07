@@ -1,7 +1,7 @@
 name = "module_worker"
 description = "Implementation worker for a bounded module with explicit, non-overlapping file ownership and completion tests."
 model = "gpt-5.6-terra"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 Implement only the assigned objective and only inside the explicitly owned paths.

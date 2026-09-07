@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Fixture-only UI contract. The workspace must remain a pure snapshot renderer
-## and intent emitter.
+## Focused protocol-v1 UI contract. This fixture creates only presentation
+## objects; it never reaches through the workspace boundary to Game or state.
 
 const WorkspaceScript = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
 
@@ -13,144 +13,439 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	var fixture := _snapshot_fixture()
-	var original_signature := JSON.stringify(fixture)
-	var host := Control.new()
-	host.size = Vector2(1280, 720)
+	var host := Node.new()
+	host.name = "FactoryWorkspaceUiTestHost"
 	get_root().add_child(host)
-	var workspace: Control = WorkspaceScript.new()
-	workspace.size = host.size
+	var workspace = WorkspaceScript.new()
+	workspace.size = Vector2(1280, 720)
 	host.add_child(workspace)
+	var fixture := _fixture_snapshot()
+	var original_fixture_signature := JSON.stringify(fixture)
 	workspace.apply_snapshot(fixture)
-	await process_frame
-	await process_frame
+	await _settle()
 
-	_check(workspace.find_child("FactoryPalettePane", true, false) != null and workspace.find_child("FactoryCanvasSurface", true, false) != null and workspace.find_child("FactoryInspectorPane", true, false) != null, "workspace mounts DSP-style construction, canvas, and inspector panes")
-	_check(workspace._canvas._node_rects.size() == 4 and workspace._canvas._link_hit_rects.size() == 2, "canvas deterministically draws resource fields, entities, and CARGO/POWER connections")
-	_check(workspace.find_child("FactoryPalette_grid_surface_mine", true, false) != null, "definition-backed construction palette is rendered")
-	var world_power_row := workspace.find_child("FactoryInspectorPower", true, false) as HBoxContainer
-	var world_power_value := world_power_row.get_child(1) as Label if world_power_row != null and world_power_row.get_child_count() > 1 else null
-	var inspector_pane := workspace.find_child("FactoryInspectorPane", true, false) as Control
-	_check(world_power_value != null and world_power_value.text.contains("100") and world_power_value.size.x > 0.0 and inspector_pane != null and inspector_pane.get_global_rect().encloses(world_power_value.get_global_rect()), "world inspector renders its power value inside the visible metric column")
+	var intents: Array = []
+	var refreshes: Array = []
+	workspace.command_requested.connect(func(intent: Dictionary) -> void: intents.append(intent.duplicate(true)))
+	workspace.refresh_requested.connect(func(world_id: String) -> void: refreshes.append(world_id))
 
-	var emitted: Array = []
-	workspace.command_intent.connect(func(intent: Dictionary) -> void: emitted.append(intent.duplicate(true)))
-	workspace._select_building("grid_surface_mine", _building("grid_surface_mine"))
-	var resource_hit: Rect2 = workspace._canvas._node_rects.get("iron-field", {}).get("rect", Rect2())
-	workspace._canvas._select_at(resource_hit.get_center())
-	_check(emitted.size() == 1 and _has_valid_envelope(emitted[0] as Dictionary, "QUEUE_CONSTRUCTION") and (emitted[0] as Dictionary).get("payload", {}).get("origin", {}) == {"x":40, "y":40}, "placement mode turns a click on resource terrain into a versioned queue-construction intent")
-	workspace._cancel_placement()
+	_test_initial_render(workspace)
+	_test_construction_intent(workspace, intents)
+	_test_recipe_change_intent(workspace, intents)
+	await _test_runtime_refresh_preserves_inspector_focus(workspace)
+	_test_build_placement_cancel(workspace, intents)
+	_test_cargo_connection_intent(workspace, intents)
+	_test_power_connection_intent(workspace, intents)
+	_test_location_transfer_intents(workspace, intents)
+	_test_result_feedback_and_reduced_motion(workspace, refreshes)
+	_test_keyboard_canvas_action(workspace, intents)
+	await _test_mouse_hit_priorities(workspace, intents)
+	var first_instance_command_id := _emit_rebuild_probe(workspace, intents)
+	_check(JSON.stringify(fixture) == original_fixture_signature, "Factory workspace never mutates its caller-owned snapshot fixture")
 
-	workspace._on_entity_selected(_entity("mine"))
+	workspace.queue_free()
 	await process_frame
-	_check(workspace.find_child("FactoryInspectorStatus", true, false) != null and workspace.find_child("FactoryInspectorBlocker", true, false) != null and workspace.find_child("FactoryInspectorThroughput", true, false) != null and workspace.find_child("FactoryInspectorInventory", true, false) != null and workspace.find_child("FactoryInspectorPower", true, false) != null, "entity inspector exposes status, blocker, throughput, I/O inventory, and power")
-	var stable_target := workspace.find_child("FactoryConnectionTarget", true, false) as OptionButton
-	stable_target.grab_focus()
-	var runtime_update := fixture.duplicate(true)
-	runtime_update["runtime_revision"] = 4
-	workspace.apply_snapshot(runtime_update)
-	await process_frame
-	_check(is_instance_valid(stable_target) and workspace.find_child("FactoryConnectionTarget", true, false) == stable_target, "runtime polling preserves focused Inspector controls instead of rebuilding them mid-interaction")
-	workspace.request_connection("mine", "smelter", "CARGO", "iron_ore", 2.0)
-	_check(emitted.size() == 2 and _has_valid_envelope(emitted[1] as Dictionary, "CONNECT_ENTITIES"), "entity selection can emit a compatible connection intent")
-	workspace.request_connection("iron-field", "smelter", "CARGO", "iron_ore")
-	_check(emitted.size() == 2, "resource fields cannot become connection endpoints")
-
-	workspace._on_link_selected(_link("cargo-link"))
-	await process_frame
-	_check(workspace.find_child("FactoryRemoveLinkButton", true, false) != null, "link inspection offers a remove-link intent")
-	workspace.request_remove_link("cargo-link")
-	_check(emitted.size() == 3 and _has_valid_envelope(emitted[2] as Dictionary, "REMOVE_LINK"), "remove-link uses the versioned command envelope")
-
-	workspace._select_order(_order("BUILD-1"))
-	await process_frame
-	_check(workspace.find_child("FactoryFundConstructionButton", true, false) != null and workspace.find_child("FactoryFundingStorage", true, false) != null, "construction inspection exposes an explicit storage-backed funding action")
-	workspace.request_fund_construction("BUILD-1", "depot")
-	_check(emitted.size() == 4 and _has_valid_envelope(emitted[3] as Dictionary, "FUND_CONSTRUCTION"), "construction funding emits no direct state mutation")
-	_check(JSON.stringify(fixture) == original_signature, "workspace never mutates the supplied fixture snapshot")
-
+	await _test_rebuilt_workspace_command_id(host, first_instance_command_id)
 	host.queue_free()
 	await process_frame
-	await _test_main_command_gateway()
 	_finish()
 
 
-func _test_main_command_gateway() -> void:
-	var game = get_root().get_node("Game")
-	game.persistence_enabled = false
-	game.reset_game()
-	var main_scene: PackedScene = load("res://src/ui/main.tscn")
-	var main := main_scene.instantiate()
-	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	main.size = Vector2(1440, 900)
-	get_root().add_child(main)
+func _test_initial_render(workspace) -> void:
+	var building_palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	var source_selector := workspace.find_child("ConnectionSource", true, false) as OptionButton
+	var target_selector := workspace.find_child("ConnectionTarget", true, false) as OptionButton
+	var canvas = workspace.canvas()
+	_check(building_palette != null and building_palette.item_count == 4, "Factory workspace renders the versioned construction palette")
+	_check(source_selector != null and target_selector != null and source_selector.item_count == 5 and target_selector.item_count == 5, "Factory workspace renders deterministic entity connection selectors")
+	var exposes_resource_field := false
+	for index in source_selector.item_count:
+		if str(source_selector.get_item_metadata(index)) == "iron-field":
+			exposes_resource_field = true
+	_check(not exposes_resource_field, "resource fields never appear as connectable Factory endpoints")
+	_check(canvas != null and canvas.selected_node_id().is_empty() and canvas.selected_link_id().is_empty(), "Factory canvas starts with an empty presentation-only selection")
+
+
+func _test_construction_intent(workspace, intents: Array) -> void:
+	var palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	_select_metadata(palette, "grid_solar_array")
+	workspace._on_tile_hovered(Vector2i(100, 80))
+	workspace._on_tile_selected(Vector2i(100, 80))
+	_check(not intents.is_empty(), "placing a preview footprint emits an intent instead of mutating Factory state")
+	var intent: Dictionary = intents.back() as Dictionary
+	var payload: Dictionary = intent.get("payload", {})
+	_check(
+		int(intent.get("protocol_version", 0)) == 1
+		and str(intent.get("kind", "")) == "QUEUE_CONSTRUCTION"
+		and str(intent.get("world_id", "")) == "ui-grid"
+		and int(intent.get("base_topology_revision", -1)) == 17
+		and int(intent.get("base_runtime_revision", -1)) == 9
+		and str(payload.get("definition_id", "")) == "grid_solar_array"
+		and int((payload.get("origin", {}) as Dictionary).get("x", -1)) == 100,
+		"construction intent preserves protocol, immutable revision, and selected footprint origin"
+	)
+
+
+func _test_recipe_change_intent(workspace, intents: Array) -> void:
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
+	var selector := workspace.find_child("EntityRecipeSelector", true, false) as OptionButton
+	var apply_button := workspace.find_child("ApplyEntityRecipe", true, false) as Button
+	_check(selector != null and apply_button != null, "machine inspector exposes recipe reconfiguration controls")
+	if selector == null or apply_button == null:
+		return
+	_select_metadata(selector, "grid_refine_copper")
+	apply_button.pressed.emit()
+	var intent: Dictionary = intents.back() as Dictionary
+	var payload: Dictionary = intent.get("payload", {})
+	_check(str(intent.get("kind", "")) == "SET_RECIPE" and str(payload.get("entity_id", "")) == "smelter-a" and str(payload.get("recipe_id", "")) == "grid_refine_copper", "machine inspector emits only a versioned SET_RECIPE intent")
+
+
+func _test_runtime_refresh_preserves_inspector_focus(workspace) -> void:
+	var stable_selector := workspace.find_child("EntityRecipeSelector", true, false) as OptionButton
+	_check(stable_selector != null, "focus-stability fixture exposes the machine recipe selector")
+	if stable_selector == null:
+		return
+	stable_selector.grab_focus()
+	stable_selector.get_popup().popup()
 	await process_frame
+	var first_runtime_update := _fixture_snapshot()
+	first_runtime_update["runtime_revision"] = 10
+	for entity_value in first_runtime_update.get("entities", []):
+		var entity := entity_value as Dictionary
+		if str(entity.get("id", "")) == "smelter-a":
+			entity["recipe_id"] = "grid_refine_copper"
+	workspace.apply_snapshot(first_runtime_update)
+	var latest_runtime_update := _fixture_snapshot()
+	latest_runtime_update["runtime_revision"] = 11
+	workspace.apply_snapshot(latest_runtime_update)
+	_check(bool(workspace.get("_pending_inspector_refresh")) and workspace.is_processing(), "focused Inspector schedules an eventual snapshot refresh")
 	await process_frame
-	main.call("_switch_page", "industry", false)
+	_check(is_instance_valid(stable_selector) and workspace.find_child("EntityRecipeSelector", true, false) == stable_selector, "runtime refresh preserves the focused Inspector control instance")
+	stable_selector.get_popup().hide()
+	await _settle()
+	_check(not bool(workspace.get("_pending_inspector_refresh")), "pending Inspector refresh settles after the selector popup closes")
+	# The rebuilt controls replace their predecessors via queue_free(), which is
+	# finalized after the process frame that performs the deferred render.
 	await process_frame
+	var refreshed_selector := workspace.find_child("EntityRecipeSelector", true, false) as OptionButton
+	var revision_label := workspace.get("_revision_label") as Label
+	var inspector_child_names: Array[String] = []
+	for child_value in (workspace.get("_inspector_body") as VBoxContainer).get_children():
+		inspector_child_names.append(str((child_value as Node).name))
+	_check(refreshed_selector != null and not is_instance_valid(stable_selector), "Inspector rebuilds after the focused interaction ends (selection=%s children=%s)" % [str(workspace.get("_selection")), str(inspector_child_names)])
+	_check(refreshed_selector != null and str(refreshed_selector.get_item_metadata(refreshed_selector.selected)) == "grid_refine_iron", "deferred Inspector rebuild uses the newest snapshot payload (selected=%s)" % str(refreshed_selector.get_item_metadata(refreshed_selector.selected) if refreshed_selector != null else "missing"))
+	_check(revision_label != null and revision_label.text.contains("11"), "deferred Inspector rebuild exposes the newest runtime revision")
+	var focused_button := workspace.find_child("ApplyEntityRecipe", true, false) as Button
+	if focused_button != null:
+		focused_button.grab_focus()
+	var button_runtime_update := _fixture_snapshot()
+	button_runtime_update["runtime_revision"] = 12
+	for entity_value in button_runtime_update.get("entities", []):
+		var entity := entity_value as Dictionary
+		if str(entity.get("id", "")) == "smelter-a":
+			entity["recipe_id"] = "grid_refine_copper"
+	workspace.apply_snapshot(button_runtime_update)
+	await _settle()
 	await process_frame
-	_check(str(main.call("_factory_world_id_for_location", "lunar_space")).is_empty(), "Factory workspace never substitutes another location's world when the selected location has no grid")
-	var mounted_workspace := main.find_child("FactoryMiningProductionWorkspace", true, false)
-	_check(mounted_workspace != null, "main Industry route mounts the Factory workspace instead of the retired aggregate production UI")
-	if mounted_workspace != null:
-		var mounted_snapshot: Dictionary = mounted_workspace.get("_snapshot")
-		var world_id := str(mounted_snapshot.get("world_id", ""))
-		var before_orders := (mounted_snapshot.get("construction_orders", []) as Array).size()
-		var before_revision := int(mounted_snapshot.get("topology_revision", -1))
-		mounted_workspace.call("_select_building", "grid_surface_mine", _building("grid_surface_mine"))
-		var mounted_canvas = mounted_workspace.get("_canvas")
-		var mounted_resource_hit: Rect2 = mounted_canvas._node_rects.get("starter-iron-field", {}).get("rect", Rect2())
-		mounted_canvas._select_at(mounted_resource_hit.position + Vector2(2, 2))
-		await process_frame
-		var refreshed_snapshot: Dictionary = mounted_workspace.get("_snapshot")
-		var world: Dictionary = game.state.factory_worlds.get(world_id, {})
-		_check(world.get("construction_orders", {}).size() == before_orders + 1 and int(refreshed_snapshot.get("topology_revision", -1)) == before_revision + 1, "main forwards a placement intent through Game.execute_factory_command and refreshes the committed snapshot")
-	main.queue_free()
+	var button_refreshed_selector := workspace.find_child("EntityRecipeSelector", true, false) as OptionButton
+	_check(
+		button_refreshed_selector != null
+		and str(button_refreshed_selector.get_item_metadata(button_refreshed_selector.selected)) == "grid_refine_copper"
+		and not bool(workspace.get("_pending_inspector_refresh")),
+		"a focused Inspector button cannot indefinitely block the newest snapshot"
+	)
+
+
+func _test_build_placement_cancel(workspace, intents: Array) -> void:
+	var palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	var canvas = workspace.canvas()
+	var intent_count_before := intents.size()
+	_select_metadata(palette, "grid_solar_array")
+	var escape := InputEventKey.new()
+	escape.pressed = true
+	escape.keycode = KEY_ESCAPE
+	canvas._on_gui_input(escape)
+	_check(
+		str(workspace.get("_active_tool")) != "BUILD"
+		and str(workspace.get("_selected_building_id")) == ""
+		and (canvas.get("_placement_preview") as Dictionary).is_empty()
+		and intents.size() == intent_count_before,
+		"Escape cancels BUILD placement without emitting QUEUE_CONSTRUCTION"
+	)
+	_select_metadata(palette, "grid_solar_array")
+	var right_click := InputEventMouseButton.new()
+	right_click.button_index = MOUSE_BUTTON_RIGHT
+	right_click.pressed = true
+	canvas._on_gui_input(right_click)
+	_check(
+		str(workspace.get("_active_tool")) != "BUILD"
+		and str(workspace.get("_selected_building_id")) == ""
+		and (canvas.get("_placement_preview") as Dictionary).is_empty()
+		and intents.size() == intent_count_before,
+		"right-click cancels BUILD placement without emitting QUEUE_CONSTRUCTION"
+	)
+
+
+func _test_cargo_connection_intent(workspace, intents: Array) -> void:
+	workspace._set_connection_mode("CARGO")
+	var source_selector := workspace.find_child("ConnectionSource", true, false) as OptionButton
+	var target_selector := workspace.find_child("ConnectionTarget", true, false) as OptionButton
+	_select_metadata(source_selector, "mine-a")
+	_select_metadata(target_selector, "smelter-a")
+	var connect_button := workspace.find_child("CreateConnection", true, false) as Button
+	var intent_count_before := intents.size()
+	if connect_button != null:
+		connect_button.pressed.emit()
+	_check(connect_button != null and intents.size() == intent_count_before + 1, "real Create Connection press emits exactly one CARGO intent")
+	var intent: Dictionary = intents.back() as Dictionary
+	var payload: Dictionary = intent.get("payload", {})
+	_check(
+		str(intent.get("kind", "")) == "CONNECT_ENTITIES"
+		and str(payload.get("link_kind", "")) == "CARGO"
+		and str(payload.get("source_id", "")) == "mine-a"
+		and str(payload.get("target_id", "")) == "smelter-a"
+		and str(payload.get("item_id", "")) == "iron_ore",
+		"compatible entity ports produce a versioned CARGO connection intent"
+	)
+
+
+func _test_power_connection_intent(workspace, intents: Array) -> void:
+	workspace._set_connection_mode("POWER")
+	var source_selector := workspace.find_child("ConnectionSource", true, false) as OptionButton
+	var target_selector := workspace.find_child("ConnectionTarget", true, false) as OptionButton
+	_select_metadata(source_selector, "power-a")
+	_select_metadata(target_selector, "mine-a")
+	var connect_button := workspace.find_child("CreateConnection", true, false) as Button
+	var intent_count_before := intents.size()
+	if connect_button != null:
+		connect_button.pressed.emit()
+	_check(connect_button != null and intents.size() == intent_count_before + 1, "real Create Connection press emits exactly one POWER intent")
+	var intent: Dictionary = intents.back() as Dictionary
+	var payload: Dictionary = intent.get("payload", {})
+	_check(
+		str(intent.get("kind", "")) == "CONNECT_ENTITIES"
+		and str(payload.get("link_kind", "")) == "POWER"
+		and str(payload.get("source_id", "")) == "power-a"
+		and str(payload.get("target_id", "")) == "mine-a"
+		and str(payload.get("item_id", "unexpected")) == "",
+		"power producer and consumer ports produce a versioned POWER connection intent"
+	)
+
+
+func _test_location_transfer_intents(workspace, intents: Array) -> void:
+	workspace._request_storage_transfer("EXPORT_TO_LOCATION", "storage-a", "iron_ingot", 3)
+	var export_intent: Dictionary = intents.back() as Dictionary
+	workspace._request_storage_transfer("IMPORT_FROM_LOCATION", "storage-a", "iron_ingot", 2)
+	var import_intent: Dictionary = intents.back() as Dictionary
+	_check(
+		str(export_intent.get("kind", "")) == "EXPORT_TO_LOCATION"
+		and str((export_intent.get("payload", {}) as Dictionary).get("storage_id", "")) == "storage-a"
+		and int((export_intent.get("payload", {}) as Dictionary).get("quantity", 0)) == 3
+		and str(import_intent.get("kind", "")) == "IMPORT_FROM_LOCATION"
+		and int((import_intent.get("payload", {}) as Dictionary).get("quantity", 0)) == 2,
+		"same-location transfer controls construct only versioned import/export intents"
+	)
+
+
+func _test_result_feedback_and_reduced_motion(workspace, refreshes: Array) -> void:
+	workspace.apply_command_result({
+		"accepted":false,
+		"protocol_version":1,
+		"world_id":"ui-grid",
+		"reason_code":"STALE_TOPOLOGY",
+		"message":"Factory layout changed; refresh before retrying."
+	})
+	var feedback := workspace.find_child("FactoryCommandFeedback", true, false) as Label
+	var localization := get_root().get_node_or_null("I18n")
+	var expected_rejection := str(localization.call("t", "factory.reason.stale_topology")) if localization != null else "Factory layout changed; refresh before retrying."
+	_check(feedback != null and feedback.text.contains("[STALE_TOPOLOGY]") and feedback.text.contains(expected_rejection), "structured localized command rejection remains visible in Factory feedback")
+	_check(refreshes.size() == 1 and str(refreshes[0]) == "ui-grid", "command results request a fresh immutable snapshot from the host")
+	workspace.set_reduced_motion(true)
+	_check(bool(workspace.canvas().get("_reduced_motion")), "reduced-motion setter propagates to the animated Factory canvas")
+
+
+func _test_keyboard_canvas_action(workspace, intents: Array) -> void:
+	var palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	_select_metadata(palette, "grid_solar_array")
+	var canvas = workspace.canvas()
+	var right := InputEventKey.new()
+	right.pressed = true
+	right.keycode = KEY_RIGHT
+	canvas._on_gui_input(right)
+	var confirm := InputEventKey.new()
+	confirm.pressed = true
+	confirm.keycode = KEY_ENTER
+	canvas._on_gui_input(confirm)
+	var intent: Dictionary = intents.back() as Dictionary
+	var payload: Dictionary = intent.get("payload", {})
+	_check(
+		canvas.get("_keyboard_tile") == Vector2i.RIGHT
+		and str(intent.get("kind", "")) == "QUEUE_CONSTRUCTION"
+		and int((payload.get("origin", {}) as Dictionary).get("x", -1)) == 1,
+		"focused Factory canvas supports arrow-key tile movement and Enter placement"
+	)
+
+
+func _test_mouse_hit_priorities(workspace, intents: Array) -> void:
+	var palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	_select_metadata(palette, "grid_surface_mine")
+	var canvas = workspace.canvas()
+	# The preceding keyboard case centers its tile. Mouse hit coordinates below
+	# deliberately exercise world-space field/order rectangles at the origin.
+	canvas.reset_camera()
+	await _force_canvas_draw(canvas)
+	var extractor_tile := Vector2i(16, 16)
+	var extractor_point := Vector2(64, 64)
+	canvas._on_gui_input(_mouse_motion(extractor_point))
+	canvas._on_gui_input(_left_click(extractor_point))
+	var extractor_intent: Dictionary = intents.back() as Dictionary
+	var extractor_payload: Dictionary = extractor_intent.get("payload", {})
+	_check(
+		str(extractor_intent.get("kind", "")) == "QUEUE_CONSTRUCTION"
+		and Vector2i(int((extractor_payload.get("origin", {}) as Dictionary).get("x", -1)), int((extractor_payload.get("origin", {}) as Dictionary).get("y", -1))) == extractor_tile
+		and str((workspace.get("_selection") as Dictionary).get("kind", "")) != "RESOURCE_FIELD",
+		"a real mouse click on an extractor preview over a resource field emits construction instead of selecting the field"
+	)
+	var order_point := Vector2(104, 104)
+	canvas._on_gui_input(_mouse_motion(order_point))
+	canvas._on_gui_input(_left_click(order_point))
+	var selection: Dictionary = workspace.get("_selection") as Dictionary
+	_check(
+		str(selection.get("kind", "")) == "CONSTRUCTION_ORDER" and str(selection.get("id", "")) == "build-iron",
+		"a real mouse click selects a construction order that overlays a resource field"
+	)
+
+
+func _emit_rebuild_probe(workspace, intents: Array) -> String:
+	workspace._request_storage_transfer("IMPORT_FROM_LOCATION", "storage-a", "iron_ingot", 1)
+	_check(not intents.is_empty(), "first workspace emits a receipt-bearing command before rebuild")
+	return str((intents.back() as Dictionary).get("command_id", ""))
+
+
+func _test_rebuilt_workspace_command_id(host: Node, first_command_id: String) -> void:
+	var rebuilt = WorkspaceScript.new()
+	rebuilt.size = Vector2(1280, 720)
+	host.add_child(rebuilt)
+	rebuilt.apply_snapshot(_fixture_snapshot())
+	await _settle()
+	var rebuilt_intents: Array = []
+	rebuilt.command_requested.connect(func(intent: Dictionary) -> void: rebuilt_intents.append(intent.duplicate(true)))
+	rebuilt._request_storage_transfer("IMPORT_FROM_LOCATION", "storage-a", "iron_ingot", 1)
+	var rebuilt_command_id := str((rebuilt_intents.back() as Dictionary).get("command_id", "")) if not rebuilt_intents.is_empty() else ""
+	_check(
+		not first_command_id.is_empty() and not rebuilt_command_id.is_empty() and first_command_id != rebuilt_command_id,
+		"command IDs remain process-unique after a workspace is destroyed and rebuilt"
+	)
+	rebuilt.queue_free()
 	await process_frame
 
 
-func _has_valid_envelope(intent: Dictionary, kind: String) -> bool:
-	return int(intent.get("protocol_version", 0)) == 1 and str(intent.get("kind", "")) == kind and not str(intent.get("command_id", "")).is_empty() and str(intent.get("world_id", "")) == "fixture-grid" and intent.has("base_topology_revision") and intent.has("base_runtime_revision") and intent.get("payload", null) is Dictionary
+func _force_canvas_draw(canvas) -> void:
+	canvas.queue_redraw()
+	RenderingServer.force_draw(false)
+	await process_frame
 
 
-func _snapshot_fixture() -> Dictionary:
+func _mouse_motion(point: Vector2) -> InputEventMouseMotion:
+	var event := InputEventMouseMotion.new()
+	event.position = point
+	return event
+
+
+func _left_click(point: Vector2) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = true
+	event.position = point
+	return event
+
+
+func _select_metadata(options: OptionButton, value: String) -> void:
+	var index := -1
+	for candidate in range(options.item_count):
+		if str(options.get_item_metadata(candidate)) == value:
+			index = candidate
+			break
+	_check(index >= 0, "test fixture exposes selector metadata %s" % value)
+	if index < 0:
+		return
+	options.select(index)
+	options.item_selected.emit(index)
+
+
+func _fixture_snapshot() -> Dictionary:
 	return {
-		"valid":true, "protocol_version":1, "world_id":"fixture-grid", "location_id":"earth_orbit", "topology_revision":7, "runtime_revision":3,
-		"bounds":{"origin":{"x":0, "y":0}, "size":{"x":128, "y":128}},
-		"resource_fields":[{"id":"iron-field", "node_kind":"RESOURCE_FIELD", "is_entity":false, "resource_id":"iron_ore", "resource_color":"#b98555", "grade":1.15, "potential_density":0.5, "footprint":{"origin":{"x":32, "y":32}, "size":{"x":16, "y":16}}, "ports":{"inputs":[], "outputs":[]}}],
-		"entities":[_entity("depot"), _entity("mine"), _entity("smelter")],
-		"links":[_link("cargo-link"), _link("power-link", "POWER")],
-		"construction_orders":[_order("BUILD-1")],
-		"palette":{"buildings":[_building("grid_arc_smelter"), _building("grid_surface_mine")], "recipes":[{"id":"grid_refine_iron", "name":"Refine iron", "inputs":[], "outputs":[]}]},
-		"power":{"generation_kw":100.0, "demand_kw":130.0, "served_kw":100.0, "satisfaction":0.77}, "statistics":{}, "summary":{}
+		"valid":true,
+		"protocol_version":1,
+		"world_schema_version":3,
+		"world_id":"ui-grid",
+		"location_id":"earth_orbit",
+		"topology_revision":17,
+		"runtime_revision":9,
+		"bounds":{"origin":{"x":0, "y":0}, "size":{"x":256, "y":256}},
+		"resource_fields":[
+			{"id":"iron-field", "resource_id":"iron_ore", "resource_category":"solid", "resource_color":"#B45F45", "grade":1.0, "potential_density":0.25, "footprint":{"origin":{"x":12, "y":12}, "size":{"x":24, "y":24}}, "ports":{"inputs":[], "outputs":[], "accepts_power":false}}
+		],
+		"entities":[
+			_entity("power-a", "POWER", "Solar Array", Vector2i(12, 48), {"inputs":[], "outputs":[], "accepts_power":false, "provides_power":true}),
+			_entity("mine-a", "EXTRACTOR", "Surface Mine", Vector2i(40, 12), {"inputs":[], "outputs":["iron_ore"], "accepts_power":true, "provides_power":false}),
+			_entity("smelter-a", "MACHINE", "Arc Smelter", Vector2i(70, 12), {"inputs":["iron_ore"], "outputs":["iron_ingot"], "accepts_power":true, "provides_power":false}, {}, "grid_arc_smelter", "grid_refine_iron"),
+			_entity("storage-a", "STORAGE", "Bulk Depot", Vector2i(110, 12), {"inputs":["*"], "outputs":["*"], "accepts_power":false, "provides_power":false}, {"iron_ingot":5})
+		],
+		"links":[],
+		"construction_orders":[
+			{"id":"build-iron", "entity_id":"entity-build-iron", "definition_id":"grid_surface_mine", "recipe_id":"", "footprint":{"origin":{"x":24, "y":24}, "size":{"x":6, "y":6}}, "required_items":{"iron_ingot":2}, "delivered_items":{}, "work_required":5.0, "work_done":0.0, "progress":0.0, "priority":50, "status":"WAITING_MATERIALS"}
+		],
+		"location_inventory":{"items":{"iron_ingot":12}},
+		"palette":{
+			"buildings":[
+				{"id":"grid_solar_array", "name":"Surface Solar Array", "kind":"POWER", "footprint":{"width":8, "height":8}, "recipe_ids":[]},
+				{"id":"grid_surface_mine", "name":"Surface Mine", "kind":"EXTRACTOR", "footprint":{"width":3, "height":3}, "recipe_ids":[]},
+				{"id":"grid_arc_smelter", "name":"Arc Smelter", "kind":"MACHINE", "footprint":{"width":16, "height":12}, "recipe_ids":["grid_refine_iron", "grid_refine_copper"]}
+			],
+			"recipes":[
+				{"id":"grid_refine_iron", "name":"Grid Iron Refining", "duration_seconds":2.0, "inputs":[], "outputs":[]},
+				{"id":"grid_refine_copper", "name":"Grid Copper Refining", "duration_seconds":6.0, "inputs":[], "outputs":[]}
+			]
+			}
 	}
 
 
-func _building(id: String) -> Dictionary:
-	return {"id":id, "name":"Surface Mining Field" if id == "grid_surface_mine" else "Macro Arc Smelter", "kind":"EXTRACTOR" if id == "grid_surface_mine" else "MACHINE", "footprint":{"width":3, "height":3} if id == "grid_surface_mine" else {"width":16, "height":12}, "recipe_ids":[] if id == "grid_surface_mine" else ["grid_refine_iron"]}
-
-
-func _entity(id: String) -> Dictionary:
-	var data := {
-		"id":id, "is_entity":true, "definition_id":"grid_bulk_depot", "name":id.capitalize(), "node_kind":"STORAGE", "status":"RUNNING", "blocker_code":"", "footprint":{"origin":{"x":5, "y":5}, "size":{"x":8, "y":8}}, "inputs":{}, "outputs":{}, "inventory":{"scrap_metal":10}, "progress":0.5, "power_factor":1.0, "actual_rate":0.0, "power_generation_kw":0.0, "power_demand_kw":0.0, "ports":{"inputs":["*"], "outputs":["*"]}
+func _entity(entity_id: String, kind: String, title: String, origin: Vector2i, ports: Dictionary, inventory: Dictionary = {}, definition_id: String = "", recipe_id: String = "") -> Dictionary:
+	return {
+		"id":entity_id,
+		"node_kind":kind,
+		"name":title,
+		"definition_id":definition_id if not definition_id.is_empty() else entity_id,
+		"recipe_id":recipe_id,
+		"footprint":{"origin":{"x":origin.x, "y":origin.y}, "size":{"x":8, "y":8}},
+		"status":"READY",
+		"ports":ports,
+		"inputs":{},
+		"outputs":{},
+		"inventory":inventory,
+		"power_factor":1.0,
+		"actual_rate":0.0
 	}
-	if id == "mine":
-		data.merge({"definition_id":"grid_surface_mine", "name":"Surface Mining Field", "node_kind":"EXTRACTOR", "footprint":{"origin":{"x":35, "y":35}, "size":{"x":3, "y":3}}, "outputs":{"iron_ore":4}, "inventory":{"iron_ore":6}, "actual_rate":4.0, "power_demand_kw":50.0, "ports":{"inputs":[], "outputs":["iron_ore"]}})
-	elif id == "smelter":
-		data.merge({"definition_id":"grid_arc_smelter", "name":"Macro Arc Smelter", "node_kind":"MACHINE", "status":"INPUT_SHORTAGE", "blocker_code":"INPUT_SHORTAGE", "footprint":{"origin":{"x":65, "y":36}, "size":{"x":16, "y":12}}, "inputs":{"iron_ore":0}, "outputs":{"iron_ingot":0}, "actual_rate":0.0, "power_demand_kw":80.0, "ports":{"inputs":["iron_ore"], "outputs":["iron_ingot"]}})
-	return data
 
 
-func _link(id: String, kind: String = "CARGO") -> Dictionary:
-	return {"id":id, "kind":kind, "source_id":"mine" if kind == "CARGO" else "depot", "target_id":"smelter" if kind == "CARGO" else "mine", "item_id":"iron_ore" if kind == "CARGO" else "", "capacity_per_second":4.0, "last_flow":2.0 if kind == "CARGO" else 0.0, "utilization":0.5, "priority":1, "status":"FLOWING" if kind == "CARGO" else "CONNECTED"}
+func _snapshot_entity(workspace, entity_id: String) -> Dictionary:
+	for entity_value in (workspace.get("_snapshot") as Dictionary).get("entities", []):
+		var entity := entity_value as Dictionary
+		if str(entity.get("id", "")) == entity_id:
+			return entity.duplicate(true)
+	return {}
 
 
-func _order(id: String) -> Dictionary:
-	return {"id":id, "entity_id":"build-entity", "definition_id":"grid_surface_mine", "footprint":{"origin":{"x":48, "y":40}, "size":{"x":3, "y":3}}, "required_items":{"scrap_metal":4}, "delivered_items":{"scrap_metal":0}, "work_required":20.0, "work_done":0.0, "progress":0.0, "status":"WAITING_MATERIALS", "blocker_code":"MISSING_MATERIALS"}
+func _settle() -> void:
+	await process_frame
+	await process_frame
 
 
 func _check(condition: bool, message: String) -> void:
-	if not condition:
+	if condition:
+		print("PASS: %s" % message)
+	else:
 		failures.append(message)
 
 

@@ -91,7 +91,11 @@ func _test_placement_and_port_contracts() -> void:
 	var depot := factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(110, 32), "", "depot")
 	_check(bool(mine.get("ok", false)) and bool(power.get("ok", false)) and bool(smelter.get("ok", false)) and bool(depot.get("ok", false)), "compatible macro facilities occupy explicit square-metre footprints")
 	_check(not bool(factory.connect_entities(world, "RESOURCE", "iron-field", "mine").get("ok", true)), "resource tiles are read through footprint coverage and cannot become network links")
+	_check(str(factory.connect_entities(world, "POWER", "mine", "power").get("reason_code", "")) == "INVALID_LINK", "power links reject a consumer-to-generator reverse edge at the Domain boundary")
+	_check(str(factory.connect_entities(world, "POWER", "mine", "smelter").get("reason_code", "")) == "INVALID_LINK", "power links reject consumer-to-consumer edges")
+	_check(str(factory.connect_entities(world, "POWER", "power", "depot").get("reason_code", "")) == "INVALID_LINK", "power links reject targets without a physical power-demand port")
 	_check(bool(factory.connect_entities(world, "POWER", "power", "mine").get("ok", false)) and bool(factory.connect_entities(world, "POWER", "power", "smelter").get("ok", false)), "power links form an explicit local network")
+	_check(str(factory.connect_entities(world, "power", "power", "mine", "bogus-item").get("reason_code", "")) == "DUPLICATE_LINK" and world.get("links", {}).size() == 2, "POWER duplicate detection canonicalizes link-kind casing and ignored item payload before writing topology")
 	_check(bool(factory.connect_entities(world, "CARGO", "mine", "smelter", "iron_ore", 8.0).get("ok", false)), "cargo link accepts a compatible item route")
 	var second_input := factory.connect_entities(world, "CARGO", "depot", "smelter", "iron_ore", 8.0)
 	_check(not bool(second_input.get("ok", true)) and str(second_input.get("reason_code", "")) == "CARGO_INPUT_OCCUPIED", "ordinary item input ports cannot silently fan in and bypass a merger")
@@ -180,7 +184,7 @@ func _test_empty_construction_funding_is_rejected() -> void:
 	var runtime_revision_before := int(world.get("runtime_revision", 0))
 	var funded := factory.fund_construction_from_storage(world, str(queued.get("order_id", "")), "empty-depot")
 	var order := world.get("construction_orders", {}).get(str(queued.get("order_id", "")), {}) as Dictionary
-	_check(not bool(funded.get("ok", true)) and str(funded.get("reason_code", "")) == "NO_MATERIALS_MOVED", "an empty storage does not report a successful construction delivery")
+	_check(not bool(funded.get("ok", true)) and str(funded.get("reason_code", "")) == "INPUT_SHORTAGE", "an empty storage does not report a successful construction delivery")
 	_check(order.get("delivered_items", {}).is_empty() and int(world.get("runtime_revision", 0)) == runtime_revision_before, "rejected empty construction funding leaves the order and runtime revision unchanged")
 
 

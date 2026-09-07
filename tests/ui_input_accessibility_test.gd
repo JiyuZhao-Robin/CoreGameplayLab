@@ -88,29 +88,42 @@ func _test_shell_structure_and_collapsing(main: Control) -> void:
 func _test_factory_workspace_input(main: Control) -> void:
 	_press(main.find_child("Navigation_industry", true, false) as Button)
 	await _settle_ui()
-	var workspace := main.find_child("FactoryMiningProductionWorkspace", true, false) as Control
+	var workspace := main.find_child("FactoryWorkspace", true, false) as Control
 	_check(workspace != null and workspace.is_visible_in_tree(), "Industry opens the Factory mining and production workspace", "EXECUTED", {})
 	if workspace == null:
 		return
-	_check(workspace.find_child("FactoryPalettePane", true, false) != null and workspace.find_child("FactoryCanvasSurface", true, false) != null and workspace.find_child("FactoryInspectorPane", true, false) != null, "the workspace exposes construction palette, grid canvas, and inspector panes", "EXECUTED", {})
-	var palette_button := _first_enabled_named_prefix(workspace, "FactoryPalette_")
-	var palette_button_available := palette_button != null
-	if palette_button != null:
-		palette_button.grab_focus()
-		await _send_action("ui_accept")
+	_check(workspace.find_child("PaletteScroll", true, false) != null and workspace.find_child("FactoryCanvas", true, false) != null and workspace.find_child("InspectorScroll", true, false) != null, "the workspace exposes construction palette, grid canvas, and inspector panes", "EXECUTED", {})
+	var palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	var palette_available := palette != null and palette.item_count > 1 and not palette.disabled
+	if palette_available:
+		palette.select(0)
+		palette.grab_focus()
 		await get_tree().process_frame
-	var selected_definition := str(workspace.get("_selected_definition_id"))
-	_check(palette_button_available and not selected_definition.is_empty(), "the definition-backed construction palette is keyboard-operable", "EXECUTED", {"definitionId":selected_definition})
+		await _send_action("ui_accept")
+		await _send_action("ui_down")
+		await _send_action("ui_accept")
+		await _settle_ui()
+	var selected_definition := str(workspace.get("_selected_building_id"))
+	_check(palette_available and palette.selected == 1 and not selected_definition.is_empty(), "the definition-backed construction palette is keyboard-operable through focus, direction, and accept input", "EXECUTED", {"definitionId":selected_definition, "selectedIndex":palette.selected if palette != null else -1})
 	var canvas := workspace.find_child("FactoryCanvas", true, false) as Control
 	if canvas != null:
 		canvas.grab_focus()
 	await get_tree().process_frame
 	_check(canvas != null and canvas.has_focus(), "the pan/zoom factory canvas participates in keyboard focus traversal", "EXECUTED", {})
 	var entities: Array = workspace.get("_snapshot").get("entities", [])
-	if not entities.is_empty():
-		workspace.call("_on_entity_selected", (entities[0] as Dictionary).duplicate(true))
+	var inspected_entity: Dictionary = {}
+	for entity_value in entities:
+		var entity := entity_value as Dictionary
+		if str(entity.get("node_kind", "")) == "MACHINE":
+			inspected_entity = entity
+			break
+	if inspected_entity.is_empty() and not entities.is_empty():
+		inspected_entity = (entities[0] as Dictionary).duplicate(true)
+	if not inspected_entity.is_empty():
+		workspace.call("_on_entity_selected", inspected_entity)
 		await get_tree().process_frame
-	_check(not entities.is_empty() and workspace.find_child("FactoryInspectorStatus", true, false) != null and workspace.find_child("FactoryInspectorPower", true, false) != null, "selecting a physical Factory entity populates its local status and power inspector", "EXECUTED", {})
+	var inspector := workspace.find_child("FactoryInspector", true, false) as VBoxContainer
+	_check(not inspected_entity.is_empty() and workspace.call("selected_entity_id") == str(inspected_entity.get("id", "")) and inspector != null and inspector.get_child_count() > 1, "selecting a physical Factory entity populates its local status and power inspector", "EXECUTED", {})
 
 
 func _test_mouse_keyboard_navigation(main: Control) -> void:

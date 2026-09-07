@@ -4,7 +4,7 @@
 
 ## 运行边界
 
-当前产品只模拟一个恒星系。schema 36 已开始把采矿、生产和建设从地点级按钮操作迁移到 Factorio 式方格工厂；schema 37 移除了按工作类型划分舰队的模型；schema 38 则彻底删除舰船采矿/施工插件和对应内容、命令与能力字段。舰船只加入通用编队，承担战斗、探索和真实运输。`ContentDatabase` 是内容定义入口，`SpaceGameState` 是唯一可持久化状态，`SimulationEngine` 与 `FactoryGridSimulation` 共同承担规则权威。UI 和只读规划器只能查询这些规则或通过 `Game` 的事务命令改变状态，不允许直接改库存数字。
+当前产品只模拟一个恒星系。schema 36 已开始把采矿、生产和建设从地点级按钮操作迁移到 Factorio 式方格工厂；schema 37 移除了按工作类型划分舰队的模型；schema 38 则彻底删除舰船采矿/施工插件和对应内容、命令与能力字段；schema 39 为旧存档中已调查的远端地点补记有限调查前哨包。舰船只加入通用编队，承担战斗、探索和真实运输。`ContentDatabase` 是内容定义入口，`SpaceGameState` 是唯一可持久化状态，`SimulationEngine` 与 `FactoryGridSimulation` 共同承担规则权威。UI 和只读规划器只能查询这些规则或通过 `Game` 的事务命令改变状态，不允许直接改库存数字。
 
 ## 分层
 

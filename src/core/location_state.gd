@@ -39,6 +39,7 @@ static func create(location_id: String, location_type: String, system_id: String
 		"system_id":system_id,
 		"discovery_state":DISCOVERED if known else UNDISCOVERED,
 		"survey_state":SURVEYED if known else UNKNOWN,
+		"survey_staging_installed":false,
 		"environment":{},
 		"inventory":{},
 		"reserves":{},
@@ -75,6 +76,7 @@ static func normalize(source: Dictionary, location_id: String, location_type: St
 	if survey_state not in SURVEY_STATE_ORDER:
 		survey_state = SURVEYED if known else UNKNOWN
 	result["survey_state"] = survey_state
+	result["survey_staging_installed"] = bool(result.get("survey_staging_installed", false))
 	result["environment"] = result.get("environment", {}).duplicate(true)
 	result["inventory"] = result.get("inventory", {}).duplicate(true)
 	result["reserves"] = result.get("reserves", {}).duplicate(true)

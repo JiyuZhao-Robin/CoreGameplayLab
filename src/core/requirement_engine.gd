@@ -64,7 +64,10 @@ func evaluate(state: SpaceGameState, requirement: Dictionary) -> bool:
 		"own_ship":
 			return state.owns_ship_model(str(requirement.get("id", "")))
 		"own_facility":
-			return state.facilities.get(str(requirement.get("id", "")), {}).get("status", "") == "ACTIVE"
+			# Ownership is a persistent physical fact. Runtime consumers separately
+			# use facility_available(), which requires the backing grid provider to
+			# be powered and ACTIVE.
+			return state.facilities.has(str(requirement.get("id", "")))
 		"manufacturing_module_installed":
 			var facility: Dictionary = state.facilities.get(str(requirement.get("facility", "")), {})
 			var module_id := str(requirement.get("id", ""))

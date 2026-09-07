@@ -39,6 +39,10 @@ func _ready() -> void:
 		if events.size() < 3 or events.any(func(event_id) -> bool: return str(event_id).is_empty()):
 			_fail("Gameplay Journey must declare at least three non-empty ordered events: %s" % journey_id)
 			return
+		if journey_id == "JOURNEY_08_REMOTE_INDUSTRY":
+			if events.find("ShipmentArrived") >= events.find("FactoryConstructionQueued") or events.find("FactoryConstructionCompleted") >= events.find("FactoryCargoImported"):
+				_fail("Remote Industry must deliver cargo to Location before building and importing into its intentionally empty Factory world")
+				return
 		ids.append(journey_id)
 	ids.sort()
 	var expected := REQUIRED_IDS.duplicate()

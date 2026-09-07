@@ -165,7 +165,7 @@ worktrees may run them concurrently only with isolated logs and artifact roots.
 Canonical Unix-like commands from the repository root:
 
 ```bash
-# Current core-domain umbrella; this is not a complete UI/Golden Path gate.
+# Current release umbrella; legacy exhaustive UI/Golden Path suites remain separate.
 ./tests/run_core_complete.sh
 
 # Factory domain.
@@ -210,10 +210,12 @@ currently untracked files enter an authorized committed baseline.
 | State or migration | Core-integrity and asset-conservation commands above |
 | Cross-domain integration | Focused commands, then the current core-domain umbrella |
 
-The current umbrella runs only JSON validation and six domain scripts. It does
-not run the UI suites, Player Action/Journey registries, legacy headless suite,
-or Golden Path. Every affected change must report the focused evidence used for
-those gaps; never call the current umbrella a complete release certification.
+The current umbrella runs JSON validation, focused Factory and core-domain
+tests, localization/UI smoke tests, Player Action/Journey registries, UI-domain
+guards, accessibility coverage, and the ten-Journey application-boundary
+runtime gate. It still does not run the retired legacy headless/Golden Path
+suites or every exhaustive UI path, so affected changes must report any focused
+evidence used for those remaining gaps.
 
 ## Handoff format
 

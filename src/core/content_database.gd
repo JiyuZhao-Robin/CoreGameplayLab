@@ -747,18 +747,30 @@ func _validate_factory_grid_content() -> void:
 			if not items.has(str(item_id_value)) or int(entity.get("inventory", {}).get(item_id_value, 0)) < 0:
 				errors.append("factory starter entity has invalid inventory item '%s'" % item_id_value)
 	var allowed_kinds := ["EXTRACTOR", "MACHINE", "STORAGE", "POWER", "CONSTRUCTION"]
+	var factory_storage_classes := {}
 	for definition_value in factory_buildings.values():
 		var definition := definition_value as Dictionary
 		var definition_id := str(definition.get("id", "?"))
 		var kind := str(definition.get("kind", ""))
 		if kind not in allowed_kinds:
 			errors.append("factory building '%s' has invalid kind '%s'" % [definition_id, kind])
+		if kind == "STORAGE":
+			factory_storage_classes[str(definition.get("storage_class", ""))] = true
 		var footprint: Dictionary = definition.get("footprint", {})
 		if int(footprint.get("width", 0)) <= 0 or int(footprint.get("height", 0)) <= 0:
 			errors.append("factory building '%s' must define a positive footprint" % definition_id)
 		if float(definition.get("construction_work", 0.0)) <= 0.0:
 			errors.append("factory building '%s' must define positive construction work" % definition_id)
 		_validate_item_entries(definition.get("construction_cost", []), "factory building '%s'" % definition_id)
+		for requirement_value in definition.get("requirements", []):
+			_validate_requirement(requirement_value as Dictionary, "factory building '%s'" % definition_id)
+		for requirement_value in definition.get("reveal_requirements", []):
+			_validate_requirement(requirement_value as Dictionary, "factory building '%s' reveal rule" % definition_id)
+		for effect_value in definition.get("completion_effects", []):
+			_validate_effect(effect_value as Dictionary, "factory building '%s'" % definition_id)
+		var building_activity_id := str(definition.get("activity_id", ""))
+		if not building_activity_id.is_empty() and not activities.has(building_activity_id):
+			errors.append("factory building '%s' references missing activity '%s'" % [definition_id, building_activity_id])
 		for power_field in ["power_generation_kw", "power_demand_kw"]:
 			if float(definition.get(power_field, 0.0)) < 0.0:
 				errors.append("factory building '%s' has invalid %s" % [definition_id, power_field])
@@ -784,6 +796,9 @@ func _validate_factory_grid_content() -> void:
 			"CONSTRUCTION":
 				if float(definition.get("construction_capacity_per_second", 0.0)) <= 0.0:
 					errors.append("factory construction building '%s' must provide construction capacity" % definition_id)
+	for storage_class in ["BULK", "COMPONENT", "FLUID", "SPECIAL"]:
+		if not factory_storage_classes.has(storage_class):
+			errors.append("factory buildings must provide a physical %s storage definition" % storage_class)
 	for recipe_value in factory_recipes.values():
 		var recipe := recipe_value as Dictionary
 		var recipe_id := str(recipe.get("id", "?"))
@@ -793,6 +808,13 @@ func _validate_factory_grid_content() -> void:
 			errors.append("factory recipe '%s' must define inputs and outputs" % recipe_id)
 		_validate_item_entries(recipe.get("inputs", []), "factory recipe '%s' inputs" % recipe_id)
 		_validate_item_entries(recipe.get("outputs", []), "factory recipe '%s' outputs" % recipe_id)
+		for requirement_value in recipe.get("requirements", []):
+			_validate_requirement(requirement_value as Dictionary, "factory recipe '%s'" % recipe_id)
+		for requirement_value in recipe.get("reveal_requirements", []):
+			_validate_requirement(requirement_value as Dictionary, "factory recipe '%s' reveal rule" % recipe_id)
+		var recipe_activity_id := str(recipe.get("activity_id", ""))
+		if not recipe_activity_id.is_empty() and not activities.has(recipe_activity_id):
+			errors.append("factory recipe '%s' references missing activity '%s'" % [recipe_id, recipe_activity_id])
 
 
 func _validate_progression_supply_gates() -> void:
@@ -1771,6 +1793,19 @@ func _validate_item_entries(entries: Array, owner: String) -> void:
 
 func _validate_effect(effect: Dictionary, owner: String) -> void:
 	match str(effect.get("type", "")):
+		"unlock_facility", "set_facility_minimum_level":
+			if not facilities.has(str(effect.get("facility", effect.get("id", "")))):
+				errors.append("%s references a missing Facility effect target" % owner)
+			if str(effect.get("type", "")) == "set_facility_minimum_level" and int(effect.get("level", 0)) <= 0:
+				errors.append("%s sets a non-positive Facility level" % owner)
+		"install_facility_module":
+			var facility_id := str(effect.get("facility", ""))
+			if not facilities.has(facility_id) or not facilities.get(facility_id, {}).get("upgrade_modules", {}).has(str(effect.get("id", ""))):
+				errors.append("%s installs a missing Facility module" % owner)
+		"install_manufacturing_module":
+			var manufacturing_module_id := str(effect.get("id", ""))
+			if not facilities.has(str(effect.get("facility", ""))) or (not process_modules.has(manufacturing_module_id) and not universal_industry_plugins.has(manufacturing_module_id)):
+				errors.append("%s installs a missing manufacturing module" % owner)
 		"grant_spillover":
 			if not technologies.has(str(effect.get("id", ""))):
 				errors.append("%s grants a missing Spillover Technology" % owner)

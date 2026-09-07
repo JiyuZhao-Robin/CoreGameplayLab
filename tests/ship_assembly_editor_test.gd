@@ -39,6 +39,11 @@ func _run() -> void:
 	var hull := (Game.content.ships[hull_id] as Dictionary).duplicate(true)
 	var installation_interfaces := Game.content.ship_installation_interface_layout(hull_id)
 	_check(int(installation_interfaces.get("structure", 0)) == 2 and int(installation_interfaces.get("utility", 0)) == 1, "Lunar Pathfinder declares two interchangeable blue-square structure interfaces plus one special utility interface")
+	var titan_interfaces := Game.content.ship_installation_interface_layout("outer_titan")
+	_check(int(titan_interfaces.get("structure", 0)) == 2 and int(titan_interfaces.get("utility", 0)) == 2, "Outer-system Titan exposes both utility sockets as special interfaces for targeting and deep-survey modules")
+	_check(Game.content.ship_loadout_valid("outer_titan", ["plasma_cannon", "capital_shield", "advanced_drive", "targeting_computer", "deep_survey_system", "civilian_reactor_core"]), "Outer-system Titan accepts its canonical combat-and-deep-survey loadout")
+	var titan_second_utility := _socket_by_id(Game.ship_design_socket_schema("construct_outer_titan"), "socket_utility_1")
+	_check(str(titan_second_utility.get("interface_family", "")) == "utility" and str(titan_second_utility.get("shape", "")) == "PENTAGON", "Outer-system Titan's second utility socket accepts the deep-survey system")
 	_audit_interchangeable_structure_interfaces(plan_id, hull_id)
 	var large_plan_id := "construct_ultimate_combat"
 	var large_plan := (Game.content.ship_construction_projects[large_plan_id] as Dictionary).duplicate(true)
@@ -320,7 +325,7 @@ func _run() -> void:
 	var restored := SpaceGameState.from_dictionary(Game.state.to_dictionary(), Game.content.domains.keys(), Game.content.regions)
 	_check(restored.ship_designs.has(design_id) and restored.ship_designs[design_id].get("connections", []).size() == 4, "ship design nodes and links survive save serialization")
 	var serialized_state := JSON.stringify(restored.to_dictionary())
-	_check(serialized_state.find("ui_visual") < 0 and serialized_state.find("topdown_texture") < 0 and serialized_state.find("fx_mask") < 0, "presentation metadata never enters Save Schema 38")
+	_check(serialized_state.find("ui_visual") < 0 and serialized_state.find("topdown_texture") < 0 and serialized_state.find("fx_mask") < 0, "presentation metadata never enters Save Schema 39")
 	_check(Game.enqueue_saved_ship_design(design_id, 1), "saved design enters the real shipyard queue")
 	var runtime := Game.state.shipyard_queue.back() as Dictionary
 	_check(runtime.get("custom_modules", []) == ["light_autocannon", "civilian_shield", "civilian_reactor_core", "sensor_array"], "shipyard runtime owns the player's selected module list")
@@ -559,3 +564,11 @@ func _control_tree_ignores_mouse(root: Control) -> bool:
 		if child is Control and not _control_tree_ignores_mouse(child as Control):
 			return false
 	return true
+
+
+func _socket_by_id(sockets: Array, socket_id: String) -> Dictionary:
+	for socket_value in sockets:
+		var socket := socket_value as Dictionary
+		if str(socket.get("id", "")) == socket_id:
+			return socket
+	return {}

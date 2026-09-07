@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Single source of truth for the standalone Lab product and save contract.
 const PRODUCT_VERSION := "1.32.0-ship-role-cutover"
-const SAVE_SCHEMA_VERSION := 38
+const SAVE_SCHEMA_VERSION := 39
 const MIN_MIGRATABLE_SAVE_SCHEMA_VERSION := 24
 
 
