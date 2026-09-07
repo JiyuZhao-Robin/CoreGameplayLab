@@ -2072,18 +2072,25 @@ func shipyard_runtime_plan(runtime: Dictionary) -> Dictionary:
 
 
 func _shipyard_next_cycle_costs(runtime: Dictionary, plan: Dictionary) -> Dictionary:
-	var result := {}
+	var cumulative_target := {}
 	var next_paid := int(runtime.get("paid_cycles", 0)) + 1
 	var consumed: Dictionary = runtime.get("consumed", {})
-	if int(runtime.get("paid_cycles", 0)) == 0:
-		for cost in plan.get("fixed_costs", []):
-			result[str(cost.get("item", ""))] = int(cost.get("quantity", 0))
+	# Fixed and segmented construction costs may contain the same item. Build one
+	# cumulative target before subtracting the shared consumed ledger; subtracting
+	# once per cost class would let the fixed debit mask the module/hull debit.
+	for cost in plan.get("fixed_costs", []):
+		var fixed_item_id := str(cost.get("item", ""))
+		cumulative_target[fixed_item_id] = int(cumulative_target.get(fixed_item_id, 0)) + int(cost.get("quantity", 0))
 	var construction_totals := ship_construction_material_totals(plan)
 	for item_value in construction_totals:
 		var item_id := str(item_value)
 		var total := int(construction_totals.get(item_id, 0))
 		var target := int(floor(float(total) * float(next_paid) / 100.0 + 0.000001))
-		var due := maxi(0, target - int(consumed.get(item_id, 0)))
+		cumulative_target[item_id] = int(cumulative_target.get(item_id, 0)) + target
+	var result := {}
+	for item_value in cumulative_target:
+		var item_id := str(item_value)
+		var due := maxi(0, int(cumulative_target.get(item_id, 0)) - int(consumed.get(item_id, 0)))
 		if due > 0:
 			result[item_id] = int(result.get(item_id, 0)) + due
 	return result
