@@ -14,6 +14,8 @@ signal tile_hovered(tile: Vector2i)
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const CANVAS_COLOR := Color("0b100e")
+const WORLD_COLOR := Color("101814")
+const WORLD_BOUNDARY_COLOR := Color("62b5ae")
 const GRID_COLOR := Color("3c4743")
 const NODE_COLOR := Color("131917")
 const HEADER_COLOR := Color("171e1b")
@@ -49,12 +51,15 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(360, 300)
 	gui_input.connect(_on_gui_input)
+	resized.connect(_on_canvas_resized)
 
 
 func apply_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = _view_model.build(snapshot)
 	_selected_node_id = "" if not _has_node(_selected_node_id) else _selected_node_id
 	_selected_link_id = "" if not _has_link(_selected_link_id) else _selected_link_id
+	_keyboard_tile = _clamp_tile_to_bounds(_keyboard_tile)
+	_clamp_camera_to_bounds()
 	queue_redraw()
 
 
@@ -72,16 +77,18 @@ func selected_link_id() -> String:
 
 
 func focus_tile(tile: Vector2i) -> void:
-	_keyboard_tile = tile
-	var tile_position := _world_to_screen(Vector2(tile))
+	_keyboard_tile = _clamp_tile_to_bounds(tile)
+	var tile_position := _world_to_screen(Vector2(_keyboard_tile))
 	_camera += size * 0.5 - tile_position
+	_clamp_camera_to_bounds()
 	queue_redraw()
 
 
 func reset_camera() -> void:
 	_camera = Vector2.ZERO
 	_zoom = 1.0
-	_keyboard_tile = Vector2i.ZERO
+	_keyboard_tile = _bounds_origin()
+	_clamp_camera_to_bounds()
 	queue_redraw()
 
 
@@ -113,6 +120,8 @@ func _draw() -> void:
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
 		_draw_empty()
 		return
+	var world_rect := _world_screen_rect()
+	draw_rect(world_rect, WORLD_COLOR, true)
 	_draw_grid()
 	_node_rects.clear()
 	_link_hit_rects.clear()
@@ -123,6 +132,7 @@ func _draw() -> void:
 	_draw_resource_fields()
 	_draw_entities()
 	_draw_construction_orders()
+	draw_rect(world_rect, WORLD_BOUNDARY_COLOR, false, 2.0)
 
 
 func _draw_empty() -> void:
@@ -132,11 +142,19 @@ func _draw_empty() -> void:
 
 func _draw_grid() -> void:
 	var spacing := clampf(20.0 * _zoom, 10.0, 48.0)
-	var start_x := fposmod(_camera.x, spacing)
-	var start_y := fposmod(_camera.y, spacing)
-	for x in range(int(start_x), int(size.x) + 1, int(spacing)):
-		for y in range(int(start_y), int(size.y) + 1, int(spacing)):
+	var visible_world := _world_screen_rect().intersection(Rect2(Vector2.ZERO, size))
+	if not visible_world.has_area():
+		return
+	var world_start := _world_to_screen(Vector2(_bounds_origin()))
+	var start_x := visible_world.position.x + fposmod(world_start.x - visible_world.position.x, spacing)
+	var start_y := visible_world.position.y + fposmod(world_start.y - visible_world.position.y, spacing)
+	var x := start_x
+	while x <= visible_world.end.x:
+		var y := start_y
+		while y <= visible_world.end.y:
 			draw_circle(Vector2(x, y), 1.0, Color(GRID_COLOR, 0.43))
+			y += spacing
+		x += spacing
 
 
 func _draw_resource_fields() -> void:
@@ -291,6 +309,62 @@ func _screen_to_tile(screen: Vector2) -> Vector2i:
 	return Vector2i(floori((screen.x - _camera.x) / scale), floori((screen.y - _camera.y) / scale))
 
 
+func _bounds_origin() -> Vector2i:
+	var bounds: Dictionary = _snapshot.get("bounds", {})
+	var origin: Dictionary = bounds.get("origin", {})
+	return Vector2i(int(origin.get("x", 0)), int(origin.get("y", 0)))
+
+
+func _bounds_size() -> Vector2i:
+	var bounds: Dictionary = _snapshot.get("bounds", {})
+	var bounds_size: Dictionary = bounds.get("size", {})
+	return Vector2i(maxi(0, int(bounds_size.get("x", 0))), maxi(0, int(bounds_size.get("y", 0))))
+
+
+func _world_screen_rect() -> Rect2:
+	var tile_scale := maxf(2.0, 4.0 * _zoom)
+	return Rect2(_world_to_screen(Vector2(_bounds_origin())), Vector2(_bounds_size()) * tile_scale)
+
+
+func _tile_in_bounds(tile: Vector2i) -> bool:
+	var origin := _bounds_origin()
+	var bounds_size := _bounds_size()
+	return bounds_size.x > 0 and bounds_size.y > 0 and tile.x >= origin.x and tile.y >= origin.y and tile.x < origin.x + bounds_size.x and tile.y < origin.y + bounds_size.y
+
+
+func _clamp_tile_to_bounds(tile: Vector2i) -> Vector2i:
+	var origin := _bounds_origin()
+	var bounds_size := _bounds_size()
+	if bounds_size.x <= 0 or bounds_size.y <= 0:
+		return tile
+	return Vector2i(
+		clampi(tile.x, origin.x, origin.x + bounds_size.x - 1),
+		clampi(tile.y, origin.y, origin.y + bounds_size.y - 1)
+	)
+
+
+func _clamp_camera_to_bounds() -> void:
+	var bounds_size := _bounds_size()
+	if bounds_size.x <= 0 or bounds_size.y <= 0 or size.x <= 0.0 or size.y <= 0.0:
+		return
+	var tile_scale := maxf(2.0, 4.0 * _zoom)
+	var world_origin_pixels := Vector2(_bounds_origin()) * tile_scale
+	var world_size_pixels := Vector2(bounds_size) * tile_scale
+	if world_size_pixels.x <= size.x:
+		_camera.x = (size.x - world_size_pixels.x) * 0.5 - world_origin_pixels.x
+	else:
+		_camera.x = clampf(_camera.x, size.x - world_origin_pixels.x - world_size_pixels.x, -world_origin_pixels.x)
+	if world_size_pixels.y <= size.y:
+		_camera.y = (size.y - world_size_pixels.y) * 0.5 - world_origin_pixels.y
+	else:
+		_camera.y = clampf(_camera.y, size.y - world_origin_pixels.y - world_size_pixels.y, -world_origin_pixels.y)
+
+
+func _on_canvas_resized() -> void:
+	_clamp_camera_to_bounds()
+	queue_redraw()
+
+
 func _on_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
@@ -303,6 +377,7 @@ func _on_gui_input(event: InputEvent) -> void:
 			var before := _screen_to_tile(mouse_event.position)
 			_zoom = clampf(_zoom * (1.14 if mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.88), 0.35, 2.5)
 			_camera = mouse_event.position - Vector2(before) * maxf(2.0, 4.0 * _zoom)
+			_clamp_camera_to_bounds()
 			queue_redraw()
 			accept_event()
 			return
@@ -314,11 +389,14 @@ func _on_gui_input(event: InputEvent) -> void:
 		if _dragging:
 			_camera += motion.position - _last_pointer
 			_last_pointer = motion.position
+			_clamp_camera_to_bounds()
 			queue_redraw()
 			accept_event()
 			return
-		_keyboard_tile = _screen_to_tile(motion.position)
-		tile_hovered.emit(_keyboard_tile)
+		var hovered_tile := _screen_to_tile(motion.position)
+		if _tile_in_bounds(hovered_tile):
+			_keyboard_tile = hovered_tile
+			tile_hovered.emit(_keyboard_tile)
 	elif event is InputEventKey:
 		var key_event := event as InputEventKey
 		if not key_event.pressed or key_event.echo:
@@ -334,7 +412,8 @@ func _on_gui_input(event: InputEvent) -> void:
 			KEY_DOWN:
 				_move_keyboard_tile(Vector2i.DOWN)
 			KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
-				tile_selected.emit(_keyboard_tile)
+				if _tile_in_bounds(_keyboard_tile):
+					tile_selected.emit(_keyboard_tile)
 			KEY_PLUS, KEY_EQUAL:
 				_adjust_zoom(1.14)
 			KEY_MINUS:
@@ -348,7 +427,7 @@ func _on_gui_input(event: InputEvent) -> void:
 
 
 func _move_keyboard_tile(offset: Vector2i) -> void:
-	_keyboard_tile += offset
+	_keyboard_tile = _clamp_tile_to_bounds(_keyboard_tile + offset)
 	focus_tile(_keyboard_tile)
 	tile_hovered.emit(_keyboard_tile)
 
@@ -357,6 +436,7 @@ func _adjust_zoom(multiplier: float) -> void:
 	var before := _keyboard_tile
 	_zoom = clampf(_zoom * multiplier, 0.35, 2.5)
 	_camera = size * 0.5 - Vector2(before) * maxf(2.0, 4.0 * _zoom)
+	_clamp_camera_to_bounds()
 	queue_redraw()
 
 
@@ -415,7 +495,11 @@ func _placement_preview_contains(point: Vector2) -> bool:
 func _select_tile(point: Vector2) -> void:
 	_selected_node_id = ""
 	_selected_link_id = ""
-	_keyboard_tile = _screen_to_tile(point)
+	var selected_tile := _screen_to_tile(point)
+	if not _tile_in_bounds(selected_tile):
+		queue_redraw()
+		return
+	_keyboard_tile = selected_tile
 	tile_selected.emit(_keyboard_tile)
 	queue_redraw()
 

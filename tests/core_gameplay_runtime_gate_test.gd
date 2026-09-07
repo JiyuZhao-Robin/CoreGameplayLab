@@ -6909,23 +6909,24 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 		{"node_id":"weapon", "kind":"module", "definition_id":"plasma_cannon", "position":{"x":120.0, "y":0.0}},
 		{"node_id":"shield", "kind":"module", "definition_id":"capital_shield", "position":{"x":120.0, "y":50.0}},
 		{"node_id":"drive", "kind":"module", "definition_id":"advanced_drive", "position":{"x":120.0, "y":100.0}},
-		{"node_id":"targeting", "kind":"module", "definition_id":"targeting_computer", "position":{"x":120.0, "y":150.0}},
-		{"node_id":"survey", "kind":"module", "definition_id":"deep_survey_system", "position":{"x":120.0, "y":200.0}},
-		{"node_id":"core", "kind":"module", "definition_id":"civilian_reactor_core", "position":{"x":120.0, "y":250.0}}
+		{"node_id":"survey", "kind":"module", "definition_id":"deep_survey_system", "position":{"x":120.0, "y":150.0}},
+		{"node_id":"core", "kind":"module", "definition_id":"civilian_reactor_core", "position":{"x":120.0, "y":200.0}}
 	]
 	var titan_connections := [
 		{"module_node_id":"weapon", "socket_id":"socket_weapon_0"},
 		{"module_node_id":"shield", "socket_id":"socket_shield_0"},
 		{"module_node_id":"drive", "socket_id":"socket_drive_0"},
-		{"module_node_id":"targeting", "socket_id":"socket_utility_0"},
-		{"module_node_id":"survey", "socket_id":"socket_utility_1"},
+		{"module_node_id":"survey", "socket_id":"socket_utility_0"},
 		{"module_node_id":"core", "socket_id":"socket_core_0"}
 	]
-	var titan_expected_modules := ["plasma_cannon", "capital_shield", "advanced_drive", "targeting_computer", "deep_survey_system", "civilian_reactor_core"]
-	var titan_expected_costs := {"superalloy":18, "steel_composite":10, "antimatter_cell":3, "quantum_component":8, "titanium_alloy":2, "electronics":9, "data_core":2, "reactor_part":1, "iron_ingot":2, "copper_ingot":1}
+	var titan_expected_modules := ["plasma_cannon", "capital_shield", "advanced_drive", "deep_survey_system", "civilian_reactor_core"]
+	var titan_expected_costs := {"superalloy":18, "steel_composite":10, "antimatter_cell":3, "quantum_component":8, "titanium_alloy":2, "electronics":6, "data_core":2, "iron_ingot":2, "copper_ingot":1}
 	var titan_validation: Dictionary = game.ship_design_validation("construct_outer_titan", titan_nodes, titan_connections)
 	var titan_summary: Dictionary = game.ship_design_engineering_summary("construct_outer_titan", titan_nodes, titan_connections)
 	_check(bool(titan_validation.get("allowed", false)) and (titan_validation.get("modules", []) as Array) == titan_expected_modules and (titan_summary.get("construction_costs", {}) as Dictionary) == titan_expected_costs, "public Ship Design accepts the exact Deep Survey Titan graph and physical BOM; validation=%s summary=%s" % [JSON.stringify(titan_validation), JSON.stringify(titan_summary)])
+	_prepare_external_for_manifest(titan_expected_costs, packet, "J10 canonical Deep Survey Titan external closure")
+	if failures.size() > 0:
+		return
 	_stage_earth_manifest(titan_expected_costs, packet, "J10 canonical Deep Survey Titan Shipyard manifest")
 	if failures.size() > 0:
 		return
@@ -6966,7 +6967,7 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 	_check(deep_crisis_started and deep_crisis_defeated and _ordered_types(["ExpeditionNodeCompleted", "ExpeditionNodeCompleted", "CombatStarted", "EnemyDefeated", "ExpeditionNodeCompleted", "ExpeditionRouteCompleted"], deep_route_events) and deep_scoped.any(func(event_value): return str((event_value as Dictionary).get("type", "")) == "ExpeditionRouteCompleted" and str((event_value as Dictionary).get("route_id", "")) == "deep_system_route") and deep_dark_after == deep_dark_before + 5, "J10 completes the exact victorious Deep crisis route and receives five physical dark matter; before=%d after=%d events=%s" % [deep_dark_before, deep_dark_after, JSON.stringify(deep_route_events)])
 	if failures.size() > 0:
 		return
-	_stage_earth_manifest({"chemical_propellant":2, "repair_material":1, "industrial_machine_tools":1, "structural_frame":2, "electronics":2}, packet, "J10 Deep SURVEYED mission")
+	_stage_earth_manifest({"industrial_machine_tools":1, "structural_frame":2, "electronics":2, "chemical_propellant":2, "repair_material":1}, packet, "J10 Deep SURVEYED mission")
 	var deep_availability: Dictionary = game.survey_mission_availability("deep_system", "SURVEYED", [titan_id], EARTH_LOCATION_ID)
 	if not bool(deep_availability.get("allowed", false)):
 		var only_repair_blocked := not (deep_availability.get("blockers", []) as Array).is_empty() and (deep_availability.get("blockers", []) as Array).all(func(blocker_value): return str((blocker_value as Dictionary).get("code", "")) == "SURVEY_VESSEL_UNAVAILABLE")
@@ -6987,6 +6988,32 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 		return
 
 	_check(bool(game.configure_logistics_service("outer_deep_freight", "general_cargo")), "public Logistics configures the Outer-Deep corridor")
+	# Surface solar construction still consumes salvaged metal in the sparse Deep
+	# workspace.  Recover that finite manifest through the already-proven repeatable
+	# combat activity instead of treating scrap as a locally manufacturable input.
+	# Stage ammunition in small public Location batches so the route reward and the
+	# finite Earth staging capacity remain observable throughout the recovery.
+	if not game.formation_ready(pathfinder_formation_id):
+		_advance(200000.0, "J10 bounded Pathfinder-Cruiser repair before Deep scrap recovery")
+	_check(not pathfinder_formation_id.is_empty() and not game.formation_is_active(pathfinder_formation_id) and game.formation_ready(pathfinder_formation_id), "J10 can redeploy the proven Pathfinder-Cruiser formation for the Deep solar scrap manifest")
+	_check(bool(game.set_fleet_supply_plan("kinetic_munitions", 40, pathfinder_formation_id)), "J10 publishes a forty-round cap for four bounded Deep solar scrap patrols")
+	for deep_scrap_ammo_batch in range(4):
+		_export_to_location("kinetic_munitions", 10, "J10 Deep solar scrap-recovery ammunition batch %d/4" % (deep_scrap_ammo_batch + 1))
+		_check(bool(game.auto_resupply_fleet(pathfinder_formation_id, [pathfinder_ship_id, belt_cruiser_ship_id])), "J10 physically loads Deep scrap-recovery ammunition batch %d/4" % (deep_scrap_ammo_batch + 1))
+		if failures.size() > 0:
+			return
+	var deep_scrap_before := int((_snapshot(EARTH_WORLD_ID).get("location_available_inventory", {}) as Dictionary).get("scrap_metal", 0))
+	_check(bool(game.start_activity("expedition", "combat_lunar_raider_patrol", pathfinder_formation_id)), "J10 starts the ammunition-bounded Deep solar scrap-recovery patrol")
+	var deep_scrap_events := _advance(60000.0, "J10 bounded Deep solar scrap recovery")
+	var deep_scrap_cycles := _events_with_activity(deep_scrap_events, "OperationCycleCompleted", "combat_lunar_raider_patrol")
+	var deep_scrap_returned := not _events_with_activity(deep_scrap_events, "ExpeditionReturnedForLogistics", "combat_lunar_raider_patrol").is_empty()
+	var deep_scrap_recalled := true
+	if game.formation_is_active(pathfinder_formation_id):
+		deep_scrap_recalled = bool(game.stop_activity("expedition"))
+	var deep_scrap_after := int((_snapshot(EARTH_WORLD_ID).get("location_available_inventory", {}) as Dictionary).get("scrap_metal", 0))
+	_check(deep_scrap_cycles.size() >= 4 and not _events_have_type(deep_scrap_events, "ExpeditionFailed") and (deep_scrap_returned or deep_scrap_recalled) and deep_scrap_after >= deep_scrap_before + 8, "four bounded public Lunar patrols recover the eight physical scrap units required by the Deep solar base; before=%d after=%d cycles=%d events=%s" % [deep_scrap_before, deep_scrap_after, deep_scrap_cycles.size(), JSON.stringify(deep_scrap_events)])
+	if failures.size() > 0:
+		return
 	_transfer_earth_manifest_to_remote_factory("deep_system", deep_world_id, {"scrap_metal":8}, {"chemical_propellant":12, "repair_material":5}, packet, "J10 Deep four-solar power-base wave", "")
 	var deep_solars: Array[String] = []
 	for deep_solar_index in 4:
@@ -7173,10 +7200,15 @@ func _move_asteroid_cobalt_ore_to_jovian(quantity: int, packet: Dictionary, labe
 	var asteroid_storage_id := str(packet.get("asteroid_storage_id", ""))
 	var jovian_world_id := str(packet.get("jovian_world_id", ""))
 	var jovian_storage_id := str(packet.get("jovian_storage_id", ""))
+	var asteroid_custody := int((_entity(_snapshot(asteroid_world_id), asteroid_storage_id).get("inventory", {}) as Dictionary).get("cobalt_ore", 0))
+	var extraction_shortfall := maxi(0, quantity - asteroid_custody)
+	if extraction_shortfall > 0:
+		_extract_resource_batch(str(packet.get("asteroid_cobalt_extractor_id", "")), "cobalt_ore", str(packet.get("asteroid_power_id", "")), asteroid_storage_id, extraction_shortfall, "%s renewable shortfall" % label, asteroid_world_id)
+		if failures.size() > 0:
+			return
 	var chunk_count := ceili(float(quantity) / 8.0)
 	for chunk_index in range(chunk_count):
 		var chunk := mini(8, quantity - chunk_index * 8)
-		_extract_resource_batch(str(packet.get("asteroid_cobalt_extractor_id", "")), "cobalt_ore", str(packet.get("asteroid_power_id", "")), asteroid_storage_id, chunk, "%s extraction %d/%d" % [label, chunk_index + 1, chunk_count], asteroid_world_id)
 		_transfer_earth_manifest_to_remote_factory("asteroid_belt", asteroid_world_id, {"chemical_propellant":2, "repair_material":1}, {"chemical_propellant":3, "repair_material":2}, packet, "%s Jovian reserve %d/%d" % [label, chunk_index + 1, chunk_count], "")
 		_export_to_location("cobalt_ore", chunk, "%s source cargo %d/%d" % [label, chunk_index + 1, chunk_count], asteroid_world_id, asteroid_storage_id)
 		var moved := _freight_location_cargo("asteroid_belt", asteroid_world_id, "gas_giant_region", jovian_world_id, "cobalt_ore", chunk, {"chemical_propellant":2, "repair_material":1}, "%s public Jovian transfer %d/%d" % [label, chunk_index + 1, chunk_count])
@@ -7243,7 +7275,7 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 	# Survey module is the public capability source for the terminal step.
 	_stage_earth_manifest({"chemical_propellant":1}, packet, "J10 Lagrange DETECTED mission")
 	_complete_public_survey("earth_sun_lagrange", "DETECTED", titan_id, 20000.0, "J10 Lagrange detection survey")
-	_stage_earth_manifest({"chemical_propellant":2, "repair_material":1, "industrial_machine_tools":1, "structural_frame":2, "electronics":2}, packet, "J10 Lagrange SURVEYED mission")
+	_stage_earth_manifest({"industrial_machine_tools":1, "structural_frame":2, "electronics":2, "chemical_propellant":2, "repair_material":1}, packet, "J10 Lagrange SURVEYED mission")
 	_complete_public_survey("earth_sun_lagrange", "SURVEYED", titan_id, 40000.0, "J10 Lagrange industrial survey")
 	_stage_earth_manifest({"chemical_propellant":4, "repair_material":2, "electronics":1}, packet, "J10 Lagrange DEEP_SURVEYED mission")
 	_complete_public_survey("earth_sun_lagrange", "DEEP_SURVEYED", titan_id, 60000.0, "J10 Lagrange deep survey")

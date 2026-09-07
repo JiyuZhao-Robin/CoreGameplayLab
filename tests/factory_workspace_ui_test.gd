@@ -28,6 +28,7 @@ func _run() -> void:
 	workspace.refresh_requested.connect(func(world_id: String) -> void: refreshes.append(world_id))
 
 	_test_initial_render(workspace)
+	_test_finite_canvas_bounds(workspace)
 	_test_construction_intent(workspace, intents)
 	_test_recipe_change_intent(workspace, intents)
 	_test_cargo_connection_intent(workspace, intents)
@@ -54,6 +55,45 @@ func _test_initial_render(workspace) -> void:
 	_check(building_palette != null and building_palette.item_count == 4, "Factory workspace renders the versioned construction palette")
 	_check(source_selector != null and target_selector != null and source_selector.item_count == 5 and target_selector.item_count == 5, "Factory workspace renders deterministic entity connection selectors")
 	_check(canvas != null and canvas.selected_node_id().is_empty() and canvas.selected_link_id().is_empty(), "Factory canvas starts with an empty presentation-only selection")
+
+
+func _test_finite_canvas_bounds(workspace) -> void:
+	var canvas = workspace.canvas()
+	canvas.set("_camera", Vector2(100000.0, 100000.0))
+	canvas._clamp_camera_to_bounds()
+	var upper_left_rect: Rect2 = canvas._world_screen_rect()
+	var upper_x_ok: bool = is_equal_approx(upper_left_rect.position.x, (canvas.size.x - upper_left_rect.size.x) * 0.5) if upper_left_rect.size.x <= canvas.size.x else upper_left_rect.position.x <= 0.001
+	var upper_y_ok: bool = is_equal_approx(upper_left_rect.position.y, (canvas.size.y - upper_left_rect.size.y) * 0.5) if upper_left_rect.size.y <= canvas.size.y else upper_left_rect.position.y <= 0.001
+	_check(upper_x_ok and upper_y_ok, "finite canvas camera cannot pan beyond the world's upper-left boundary")
+	canvas.set("_camera", Vector2(-100000.0, -100000.0))
+	canvas._clamp_camera_to_bounds()
+	var lower_right_rect: Rect2 = canvas._world_screen_rect()
+	var lower_x_ok: bool = is_equal_approx(lower_right_rect.position.x, (canvas.size.x - lower_right_rect.size.x) * 0.5) if lower_right_rect.size.x <= canvas.size.x else lower_right_rect.end.x + 0.001 >= canvas.size.x
+	var lower_y_ok: bool = is_equal_approx(lower_right_rect.position.y, (canvas.size.y - lower_right_rect.size.y) * 0.5) if lower_right_rect.size.y <= canvas.size.y else lower_right_rect.end.y + 0.001 >= canvas.size.y
+	_check(lower_x_ok and lower_y_ok, "finite canvas camera cannot pan beyond the world's lower-right boundary")
+	canvas.focus_tile(Vector2i(255, 255))
+	canvas._move_keyboard_tile(Vector2i.RIGHT)
+	canvas._move_keyboard_tile(Vector2i.DOWN)
+	_check(canvas.get("_keyboard_tile") == Vector2i(255, 255), "keyboard navigation stops on the final in-bounds tile")
+	canvas.focus_tile(Vector2i(-50, -50))
+	_check(canvas.get("_keyboard_tile") == Vector2i.ZERO, "programmatic focus clamps to the finite canvas origin")
+	var selected_tiles: Array = []
+	canvas.tile_selected.connect(func(tile: Vector2i) -> void: selected_tiles.append(tile))
+	canvas._select_tile(canvas._world_screen_rect().position - Vector2(8.0, 8.0))
+	_check(selected_tiles.is_empty(), "clicking beyond the visible world boundary emits no placement tile")
+	var shifted_snapshot := _fixture_snapshot()
+	shifted_snapshot["bounds"] = {"origin":{"x":100, "y":200}, "size":{"x":256, "y":256}}
+	shifted_snapshot["resource_fields"] = []
+	shifted_snapshot["entities"] = []
+	shifted_snapshot["construction_orders"] = []
+	canvas.apply_snapshot(shifted_snapshot)
+	canvas.focus_tile(Vector2i(99, 199))
+	_check(canvas.get("_keyboard_tile") == Vector2i(100, 200), "finite canvas clamping respects a non-zero world origin")
+	selected_tiles.clear()
+	canvas._select_tile(canvas._world_to_screen(Vector2(100, 200)) + Vector2(2.0, 2.0))
+	_check(selected_tiles == [Vector2i(100, 200)], "screen-to-tile selection resolves the first tile of a shifted finite world")
+	canvas.apply_snapshot(_fixture_snapshot())
+	canvas.reset_camera()
 
 
 func _test_construction_intent(workspace, intents: Array) -> void:

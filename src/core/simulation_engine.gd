@@ -248,6 +248,7 @@ func ensure_frontier_state(state: SpaceGameState) -> void:
 			ship["assignment"] = {}
 			ship["status"] = "DOCKED"
 	_ensure_factory_starter_world(state)
+	_migrate_legacy_factory_world_bounds(state)
 	_sync_factory_facility_adapters(state)
 	for region_id in content.regions:
 		var region_definition: Dictionary = content.regions.get(region_id, {})
@@ -337,6 +338,76 @@ func _ensure_factory_starter_world(state: SpaceGameState) -> void:
 			location_inventory[item_id] = int(location_inventory.get(item_id, 0)) - quantity
 			inventory[item_id] = int(inventory.get(item_id, 0)) + quantity
 	state.factory_worlds[world_id] = world
+
+
+## The original 20-million-tile default was technically bounded but behaved as
+## an infinite canvas. Resize only canonical worlds that still have that exact
+## legacy default. Existing fields, structures, construction and edited tiles
+## always win over the profile target, so this migration never clips player data.
+func _migrate_legacy_factory_world_bounds(state: SpaceGameState) -> void:
+	var legacy_size_data: Dictionary = content.factory_grid_rules.get("legacy_default_size_tiles", {})
+	var legacy_size := Vector2i(int(legacy_size_data.get("x", 0)), int(legacy_size_data.get("y", 0)))
+	var profiles: Dictionary = content.factory_grid_rules.get("world_profiles", {})
+	if legacy_size.x <= 0 or legacy_size.y <= 0 or profiles.is_empty():
+		return
+	var padding := maxi(0, int(content.factory_grid_rules.get("legacy_resize_padding_tiles", 0)))
+	var chunk_size := maxi(1, int(content.factory_grid_rules.get("chunk_size_tiles", 64)))
+	for location_id_value in profiles.keys():
+		var location_id := str(location_id_value)
+		var profile_value: Variant = profiles.get(location_id, null)
+		if not profile_value is Dictionary:
+			continue
+		var profile := profile_value as Dictionary
+		var world_id := str(profile.get("world_id", ""))
+		var world_value: Variant = state.factory_worlds.get(world_id, null)
+		if not world_value is Dictionary:
+			continue
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		var bounds: Dictionary = world.get("bounds", {})
+		var current_size_data: Dictionary = bounds.get("size", {})
+		var current_size := Vector2i(int(current_size_data.get("x", 0)), int(current_size_data.get("y", 0)))
+		if current_size != legacy_size:
+			continue
+		var profile_size_data: Dictionary = profile.get("size_tiles", {})
+		var target_size := Vector2i(int(profile_size_data.get("x", 0)), int(profile_size_data.get("y", 0)))
+		var bounds_origin_data: Dictionary = bounds.get("origin", {})
+		var bounds_origin := Vector2i(int(bounds_origin_data.get("x", 0)), int(bounds_origin_data.get("y", 0)))
+		var required_size := target_size
+		for collection_name in ["resource_fields", "entities", "construction_orders"]:
+			for record_value in world.get(collection_name, {}).values():
+				var record := record_value as Dictionary
+				required_size = required_size.max(_factory_required_size_for_footprint(record.get("footprint", {}), bounds_origin, padding))
+		for tile_key_value in world.get("tile_deltas", {}).keys():
+			var components := str(tile_key_value).split(":", false, 2)
+			if components.size() != 2 or not components[0].is_valid_int() or not components[1].is_valid_int():
+				continue
+			var tile := Vector2i(int(components[0]), int(components[1]))
+			required_size = required_size.max(tile - bounds_origin + Vector2i.ONE * (padding + 1))
+		required_size = Vector2i(
+			mini(legacy_size.x, _align_factory_world_extent(required_size.x, chunk_size)),
+			mini(legacy_size.y, _align_factory_world_extent(required_size.y, chunk_size))
+		)
+		bounds["size"] = {"x":required_size.x, "y":required_size.y}
+		world["bounds"] = bounds
+		world["topology_revision"] = maxi(0, int(world.get("topology_revision", 0))) + 1
+
+
+func _factory_required_size_for_footprint(footprint_value: Variant, bounds_origin: Vector2i, padding: int) -> Vector2i:
+	if not footprint_value is Dictionary:
+		return Vector2i.ZERO
+	var footprint := footprint_value as Dictionary
+	var origin_data: Dictionary = footprint.get("origin", {})
+	var size_data: Dictionary = footprint.get("size", {})
+	var origin := Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0)))
+	var footprint_size := Vector2i(maxi(1, int(size_data.get("x", 1))), maxi(1, int(size_data.get("y", 1))))
+	return origin + footprint_size - bounds_origin + Vector2i.ONE * padding
+
+
+func _align_factory_world_extent(value: int, alignment: int) -> int:
+	var safe_alignment := maxi(1, alignment)
+	return maxi(safe_alignment, ceili(float(maxi(1, value)) / float(safe_alignment)) * safe_alignment)
 
 
 ## The facility dictionary is a compatibility view consumed by research,

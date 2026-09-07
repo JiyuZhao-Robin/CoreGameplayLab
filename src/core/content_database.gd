@@ -720,7 +720,8 @@ func _validate_factory_grid_content() -> void:
 		errors.append("factory_grid_rules must define one square metre tiles")
 	if int(factory_grid_rules.get("generator_version", 0)) <= 0:
 		errors.append("factory_grid_rules must define a positive generator version")
-	if int(factory_grid_rules.get("chunk_size_tiles", 0)) <= 0:
+	var chunk_size := int(factory_grid_rules.get("chunk_size_tiles", 0))
+	if chunk_size <= 0:
 		errors.append("factory_grid_rules must define a positive chunk size")
 	if float(factory_grid_rules.get("simulation_step_seconds", 0.0)) <= 0.0:
 		errors.append("factory_grid_rules must define a positive simulation step")
@@ -730,15 +731,58 @@ func _validate_factory_grid_content() -> void:
 	for terrain_id in ["MOUNTAIN", "WATER", "FOREST", "PLAIN", "DESERT"]:
 		if not terrain_types.has(terrain_id) or str(terrain_types.get(terrain_id, {}).get("color", "")).is_empty():
 			errors.append("factory_grid_rules must define terrain '%s' with a display color" % terrain_id)
+	var world_profiles_value: Variant = factory_grid_rules.get("world_profiles", {})
+	var world_profiles: Dictionary = world_profiles_value as Dictionary if world_profiles_value is Dictionary else {}
+	if world_profiles.is_empty():
+		errors.append("factory_grid_rules must define finite world_profiles")
+	var profile_world_ids := {}
+	for region_id_value in regions.keys():
+		var location_id := str(region_id_value)
+		var profile_value: Variant = world_profiles.get(location_id, null)
+		if not profile_value is Dictionary:
+			errors.append("factory_grid_rules world_profiles is missing known location '%s'" % location_id)
+			continue
+		var profile := profile_value as Dictionary
+		var profile_id := str(profile.get("profile_id", ""))
+		var world_id := str(profile.get("world_id", ""))
+		var scale_class := str(profile.get("scale_class", ""))
+		var profile_size_value: Variant = profile.get("size_tiles", {})
+		var profile_size: Dictionary = profile_size_value as Dictionary if profile_size_value is Dictionary else {}
+		var width := int(profile_size.get("x", 0))
+		var height := int(profile_size.get("y", 0))
+		if profile_id.is_empty() or world_id.is_empty() or scale_class.is_empty() or int(profile.get("seed", 0)) <= 0:
+			errors.append("factory world profile '%s' must define profile, world, scale and seed identity" % location_id)
+		if width <= 0 or height <= 0:
+			errors.append("factory world profile '%s' must define positive finite bounds" % location_id)
+		elif chunk_size > 0 and (width % chunk_size != 0 or height % chunk_size != 0):
+			errors.append("factory world profile '%s' bounds must align to %d-tile chunks" % [location_id, chunk_size])
+		if not world_id.is_empty() and profile_world_ids.has(world_id):
+			errors.append("factory world profiles must use unique world_id '%s'" % world_id)
+		profile_world_ids[world_id] = location_id
+	for location_id_value in world_profiles.keys():
+		if not regions.has(str(location_id_value)):
+			errors.append("factory world profile references unknown location '%s'" % location_id_value)
+	var legacy_size: Dictionary = factory_grid_rules.get("legacy_default_size_tiles", {})
+	if int(legacy_size.get("x", 0)) <= 0 or int(legacy_size.get("y", 0)) <= 0 or int(factory_grid_rules.get("legacy_resize_padding_tiles", -1)) < 0:
+		errors.append("factory_grid_rules must define valid legacy bounds and resize padding")
 	var starter: Dictionary = factory_grid_rules.get("starter_world", {})
 	var starter_size: Dictionary = starter.get("size_tiles", {})
 	if str(starter.get("world_id", "")).is_empty() or not regions.has(str(starter.get("location_id", ""))) or int(starter_size.get("x", 0)) <= 0 or int(starter_size.get("y", 0)) <= 0:
 		errors.append("factory_grid_rules starter_world must define identity, known location and positive bounds")
+	var starter_profile_value: Variant = world_profiles.get(str(starter.get("location_id", "")), null)
+	if starter_profile_value is Dictionary:
+		var starter_profile := starter_profile_value as Dictionary
+		var expected_size: Dictionary = starter_profile.get("size_tiles", {})
+		if str(starter.get("world_id", "")) != str(starter_profile.get("world_id", "")) or int(starter.get("seed", 0)) != int(starter_profile.get("seed", -1)) or int(starter_size.get("x", 0)) != int(expected_size.get("x", -1)) or int(starter_size.get("y", 0)) != int(expected_size.get("y", -1)):
+			errors.append("factory starter_world identity, seed and bounds must match its world profile")
 	for field_value in starter.get("resource_fields", []):
 		var resource_field := field_value as Dictionary
+		var field_origin: Dictionary = resource_field.get("origin", {})
 		var field_size: Dictionary = resource_field.get("size", {})
 		if str(resource_field.get("resource_field_id", "")).is_empty() or not items.has(str(resource_field.get("resource_id", ""))) or int(field_size.get("x", 0)) <= 0 or int(field_size.get("y", 0)) <= 0:
 			errors.append("factory starter resource field has invalid identity, resource or size")
+		elif int(field_origin.get("x", -1)) < 0 or int(field_origin.get("y", -1)) < 0 or int(field_origin.get("x", 0)) + int(field_size.get("x", 0)) > int(starter_size.get("x", 0)) or int(field_origin.get("y", 0)) + int(field_size.get("y", 0)) > int(starter_size.get("y", 0)):
+			errors.append("factory starter resource field '%s' exceeds starter bounds" % resource_field.get("resource_field_id", "?"))
 	for entity_value in starter.get("entities", []):
 		var entity := entity_value as Dictionary
 		if str(entity.get("entity_id", "")).is_empty() or not factory_buildings.has(str(entity.get("definition_id", ""))):

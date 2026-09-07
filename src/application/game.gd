@@ -117,6 +117,13 @@ func _notification(what: int) -> void:
 func initialize_factory_world(world_id: String, location_id: String, size_tiles: Vector2i, seed: int = 1) -> bool:
 	if world_id.is_empty() or not state.has_location(location_id) or size_tiles.x <= 0 or size_tiles.y <= 0:
 		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var profile_value: Variant = content.factory_grid_rules.get("world_profiles", {}).get(location_id, null)
+	if not profile_value is Dictionary:
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var profile_size_data: Dictionary = (profile_value as Dictionary).get("size_tiles", {})
+	var profile_size := Vector2i(int(profile_size_data.get("x", 0)), int(profile_size_data.get("y", 0)))
+	if size_tiles.x > profile_size.x or size_tiles.y > profile_size.y:
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
 	if state.factory_worlds.has(world_id):
 		return _reject(I18n.t("notice.factory_world_exists", "Factory world already exists"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
@@ -149,15 +156,21 @@ func initialize_surveyed_factory_world(location_id: String) -> bool:
 	var survey_state := str(state.location_state(location_id).get("survey_state", LocationState.UNKNOWN))
 	if location_id != SpaceGameState.MAIN_BASE_LOCATION_ID and simulation.survey_state_rank(survey_state) < simulation.survey_state_rank(LocationState.SURVEYED):
 		return _reject(I18n.t("notice.factory_world_requires_survey", "Complete the Location survey before opening a factory grid"))
-	var starter: Dictionary = content.factory_grid_rules.get("starter_world", {})
-	var starter_size: Dictionary = starter.get("size_tiles", {})
-	var world_id := "%s-grid" % location_id.replace("_", "-")
-	var seed := posmod(location_id.hash(), 2147483646) + 1
+	var profile_value: Variant = content.factory_grid_rules.get("world_profiles", {}).get(location_id, null)
+	if not profile_value is Dictionary:
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var profile := profile_value as Dictionary
+	var profile_size: Dictionary = profile.get("size_tiles", {})
+	var world_id := str(profile.get("world_id", ""))
+	var size_tiles := Vector2i(int(profile_size.get("x", 0)), int(profile_size.get("y", 0)))
+	var seed := int(profile.get("seed", 0))
+	if world_id.is_empty() or size_tiles.x <= 0 or size_tiles.y <= 0 or seed <= 0 or state.factory_worlds.has(world_id):
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
 	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var world := simulation.factory_grid.create_world(
 		world_id,
 		location_id,
-		Vector2i(maxi(1, int(starter_size.get("x", 20_000_000))), maxi(1, int(starter_size.get("y", 20_000_000)))),
+		size_tiles,
 		seed
 	)
 	var resource_ids: Array[String] = []
@@ -189,7 +202,17 @@ func initialize_surveyed_factory_world(location_id: String) -> bool:
 			return _reject(str(field_result.get("reason", I18n.t("notice.factory_resource_failed", "Resource-field generation failed"))))
 	transaction.working_state.factory_worlds[world_id] = world
 	last_notice = I18n.t("notice.factory_world_initialized", "Factory grid initialized: %s") % world_id
-	transaction.record({"type":"FactoryWorldInitialized", "world_id":world_id, "location_id":location_id, "resource_ids":resource_ids.duplicate()})
+	transaction.record({
+		"type":"FactoryWorldInitialized",
+		"world_id":world_id,
+		"location_id":location_id,
+		"profile_id":str(profile.get("profile_id", "")),
+		"scale_class":str(profile.get("scale_class", "")),
+		"size_tiles":{"x":size_tiles.x, "y":size_tiles.y},
+		"seed":seed,
+		"generator_version":int(world.get("generator_version", 1)),
+		"resource_ids":resource_ids.duplicate()
+	})
 	_commit_transaction(transaction)
 	return true
 
