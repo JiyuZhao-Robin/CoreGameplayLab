@@ -57,6 +57,7 @@ func _ready() -> void:
 	focus_mode = Control.FOCUS_ALL
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build_interface()
+	_apply_canvas_snapshot()
 	_render()
 	set_process(false)
 
@@ -76,9 +77,7 @@ func _process(_delta: float) -> void:
 ## The host may call this before or after adding this workspace to the tree.
 func apply_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = _view_model.build(snapshot)
-	if _canvas != null:
-		_canvas.apply_snapshot(_snapshot)
-		_canvas.set_reduced_motion(_reduced_motion)
+	_apply_canvas_snapshot()
 	# Runtime refreshes must not destroy an active inspector control or close an
 	# open selector. The next refresh after the interaction ends performs the
 	# normal rebuild with the latest immutable snapshot.
@@ -290,11 +289,17 @@ func _render() -> void:
 	_rebuild_palette(is_valid)
 	_rebuild_connection_selectors(is_valid)
 	_refresh_inspector()
-	if _canvas != null:
-		_canvas.apply_snapshot(_snapshot)
-		_canvas.set_reduced_motion(_reduced_motion)
 	_update_placement_preview()
 	_update_connection_preview()
+
+
+func _apply_canvas_snapshot() -> void:
+	if _canvas == null:
+		return
+	# The workspace already normalized and detached this immutable presentation
+	# payload. Passing it through avoids a second deep copy and sort in Canvas.
+	_canvas.apply_snapshot(_snapshot, true)
+	_canvas.set_reduced_motion(_reduced_motion)
 
 
 func _rebuild_palette(is_valid: bool) -> void:

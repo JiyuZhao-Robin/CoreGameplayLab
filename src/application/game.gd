@@ -293,6 +293,9 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 		}
 	var snapshot: Dictionary = simulation.factory_grid.workspace_snapshot(state.factory_worlds[world_id])
 	snapshot["valid"] = true
+	var max_world_size_value: Variant = content.factory_grid_rules.get("max_world_size_tiles", {})
+	if max_world_size_value is Dictionary:
+		snapshot["canvas_limits"] = {"max_world_size_tiles":(max_world_size_value as Dictionary).duplicate(true)}
 	var location_id := str(snapshot.get("location_id", ""))
 	var unlocked_recipe_ids := {}
 	var unlocked_recipes: Array = []

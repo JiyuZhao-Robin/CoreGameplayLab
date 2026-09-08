@@ -680,17 +680,17 @@ func _test_surveyed_world_initialization() -> void:
 	game.state.technologies["heavy_extraction"] = true
 	game.state.facilities["assembly_yard"] = {"level":99, "status":"ACTIVE", "factory_power_factor":1.0, "factory_providers":[]}
 	var earth_orders_before_forgery: int = int(earth_world.get("construction_orders", {}).size())
-	_check(not game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(600, 400), "grid_fabricate_quantum_component"), "a forged marked Factory adapter cannot satisfy transaction-local recipe ownership")
+	_check(not game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(400, 260), "grid_fabricate_quantum_component"), "a forged marked Factory adapter cannot satisfy transaction-local recipe ownership")
 	_check(game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {}).size() == earth_orders_before_forgery, "rejected forged ownership queues no physical construction")
 	game.state.facilities.erase("assembly_yard")
-	var assembly_placed: Dictionary = game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_assembly_array", Vector2i(640, 400), "grid_fabricate_quantum_component", "transaction-assembly")
+	var assembly_placed: Dictionary = game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_assembly_array", Vector2i(450, 260), "grid_fabricate_quantum_component", "transaction-assembly")
 	_check(bool(assembly_placed.get("ok", false)), "transaction fixture places a physical Assembly Array in the existing Earth world")
 	game.simulation.refresh_factory_runtime_views(game.state)
 	var assembly_ownership_requirement := {"type":"own_facility", "id":"assembly_yard"}
 	var quantum_recipe_visible_before := (game.factory_workspace_snapshot("earth-surface-grid").get("palette", {}).get("recipes", []) as Array).any(func(recipe_value): return str((recipe_value as Dictionary).get("id", "")) == "grid_fabricate_quantum_component")
 	_check(game.simulation.requirement_met(game.state, assembly_ownership_requirement) and str(game.state.facilities.get("assembly_yard", {}).get("status", "")) == "INACTIVE" and quantum_recipe_visible_before, "unpowered physical Assembly Array ownership exposes its canonical recipe before an unrelated world transaction")
 	game.state.facilities.erase("assembly_yard")
-	_check(game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(600, 400), "grid_fabricate_quantum_component"), "transaction pre-projection accepts physical ownership even when the live compatibility adapter is missing")
+	_check(game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(400, 260), "grid_fabricate_quantum_component"), "transaction pre-projection accepts physical ownership even when the live compatibility adapter is missing")
 	var archive_before: Dictionary = game.state.retired_aggregate_industry_archive.duplicate(true)
 	var current_round_trip := SpaceGameState.from_dictionary(game.state.to_dictionary(), database.domains.keys(), database.regions)
 	_check(current_round_trip.retired_aggregate_industry_archive == archive_before and not current_round_trip.facilities.has("assembly_yard"), "current-schema save normalization discards derived Factory adapters without fabricating retired migration evidence")
@@ -1109,8 +1109,8 @@ func _test_factory_progression_adapters() -> void:
 	game.simulation.factory_grid.advance_world(world, 1000.0)
 	game.simulation.ensure_frontier_state(game.state)
 	_check(is_equal_approx(game.simulation.research_capacity(game.state), 1.0), "disconnecting Research Complex II immediately falls back to the powered base complex")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_electronics_works", Vector2i(550, 100), "grid_fabricate_data_core", "adapter-electronics").get("ok", false)), "module fixture places the owning physical Electronics Works")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_fusion_test_rig", Vector2i(600, 100), "", "adapter-fusion-rig").get("ok", false)), "module fixture places a physical Fusion Test Rig")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_electronics_works", Vector2i(440, 100), "grid_fabricate_data_core", "adapter-electronics").get("ok", false)), "module fixture places the owning physical Electronics Works")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_fusion_test_rig", Vector2i(470, 100), "", "adapter-fusion-rig").get("ok", false)), "module fixture places a physical Fusion Test Rig")
 	_check(bool(game.simulation.factory_grid.connect_entities(world, "POWER", "adapter-module-power", "adapter-electronics").get("ok", false)), "module fixture powers the owning Electronics Works separately")
 	game.simulation.refresh_factory_runtime_views(game.state)
 	var module_requirement := {"type":"manufacturing_module_installed", "facility":"electronics_facility", "id":"fusion_component_test_rig"}

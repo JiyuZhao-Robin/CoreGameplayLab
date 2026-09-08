@@ -31,6 +31,7 @@ func _run() -> void:
 
 	_test_initial_render(workspace)
 	_test_finite_canvas_bounds(workspace)
+	await _test_canvas_scale_contract(workspace)
 	_test_construction_intent(workspace, intents)
 	_test_recipe_change_intent(workspace, intents)
 	await _test_runtime_refresh_preserves_inspector_focus(workspace)
@@ -100,8 +101,128 @@ func _test_finite_canvas_bounds(workspace) -> void:
 	canvas.focus_tile(Vector2i(99, 199))
 	_check(canvas.get("_keyboard_tile") == Vector2i(100, 200), "finite canvas clamping respects a non-zero world origin")
 	selected_tiles.clear()
-	canvas._select_tile(canvas._world_to_screen(Vector2(100, 200)) + Vector2(2.0, 2.0))
+	canvas._select_tile(canvas._world_to_screen(Vector2(100, 200)) + Vector2.ONE * canvas._tile_scale() * 0.5)
 	_check(selected_tiles == [Vector2i(100, 200)], "screen-to-tile selection resolves the first tile of a shifted finite world")
+	canvas.apply_snapshot(_fixture_snapshot())
+	canvas.reset_camera()
+
+
+func _test_canvas_scale_contract(workspace) -> void:
+	var canvas = workspace.canvas()
+	var small_snapshot := _fixture_snapshot()
+	small_snapshot["world_id"] = "small-canvas"
+	small_snapshot["bounds"] = {"origin":{"x":0, "y":0}, "size":{"x":256, "y":192}}
+	canvas.apply_snapshot(small_snapshot)
+	canvas.reset_camera()
+	var small_rect: Rect2 = canvas._world_screen_rect()
+	var small_zoom: float = float(canvas.get("_zoom"))
+
+	var large_snapshot := _fixture_snapshot()
+	large_snapshot["world_id"] = "large-canvas"
+	large_snapshot["bounds"] = {"origin":{"x":0, "y":0}, "size":{"x":512, "y":384}}
+	canvas.apply_snapshot(large_snapshot)
+	canvas.reset_camera()
+	var large_rect: Rect2 = canvas._world_screen_rect()
+	_check(
+		is_equal_approx(large_rect.size.x, small_rect.size.x * 2.0)
+		and is_equal_approx(large_rect.size.y, small_rect.size.y * 2.0)
+		and is_equal_approx(float(canvas.get("_zoom")), small_zoom),
+		"one shared overview scale makes larger planet bounds occupy proportionally more canvas area"
+	)
+	_check(
+		large_rect.position.x >= 23.9
+		and large_rect.position.y >= 23.9
+		and large_rect.end.x <= canvas.size.x - 23.9
+		and large_rect.end.y <= canvas.size.y - 23.9,
+		"the authored maximum factory canvas fits inside the overview padding"
+	)
+	_check(canvas._tile_scale() < 2.0 and is_equal_approx(canvas._tile_scale(), 4.0 * float(canvas.get("_zoom"))), "overview zoom has no hidden two-pixel dead band")
+
+	var anchor: Vector2 = canvas.size * 0.5
+	var anchor_world: Vector2 = canvas._screen_to_world(anchor)
+	canvas._set_zoom_around(anchor, anchor_world, float(canvas.get("_zoom")) * 1.5)
+	_check(canvas._screen_to_world(anchor).distance_to(anchor_world) < 0.001, "pointer zoom preserves the exact floating-point world anchor")
+	var preserved_zoom: float = float(canvas.get("_zoom"))
+	var preserved_camera: Vector2 = canvas.get("_camera")
+	large_snapshot["runtime_revision"] = int(large_snapshot.get("runtime_revision", 0)) + 1
+	canvas.apply_snapshot(large_snapshot)
+	var refreshed_camera: Vector2 = canvas.get("_camera")
+	_check(is_equal_approx(float(canvas.get("_zoom")), preserved_zoom) and refreshed_camera.distance_to(preserved_camera) < 0.001, "same-world runtime refresh preserves the player's camera and zoom")
+
+	for _step in range(80):
+		canvas._adjust_zoom(1.14)
+	var detail_rect: Rect2 = canvas._world_screen_rect()
+	_check(maxf(detail_rect.size.x, detail_rect.size.y) <= 4096.01 and canvas._tile_scale() <= 10.001, "detail zoom caps the rendered world extent and tile scale")
+
+	(large_snapshot["entities"] as Array).append(_entity("far-offscreen", "POWER", "Far Unit", Vector2i(500, 350), {"inputs":[], "outputs":[], "accepts_power":false, "provides_power":true}))
+	canvas.apply_snapshot(large_snapshot)
+	canvas.focus_tile(Vector2i.ZERO)
+	await _force_canvas_draw(canvas)
+	_check(not (canvas.get("_node_rects") as Dictionary).has("far-offscreen"), "drawing and hit-testing cull nodes outside the visible canvas")
+
+	var malformed_snapshot := _fixture_snapshot()
+	malformed_snapshot["world_id"] = "defensive-oversized-canvas"
+	malformed_snapshot["bounds"] = {"origin":{"x":0, "y":0}, "size":{"x":2560, "y":960}}
+	malformed_snapshot["resource_fields"] = []
+	malformed_snapshot["entities"] = []
+	malformed_snapshot["construction_orders"] = []
+	canvas.apply_snapshot(malformed_snapshot)
+	canvas.reset_camera()
+	var malformed_rect: Rect2 = canvas._world_screen_rect()
+	_check(malformed_rect.position.x >= 23.9 and malformed_rect.position.y >= 23.9 and malformed_rect.end.x <= canvas.size.x - 23.9 and malformed_rect.end.y <= canvas.size.y - 23.9, "canvas defensively fits an oversized malformed snapshot even though the application boundary force-crops it")
+
+	var normal_canvas_size: Vector2 = canvas.size
+	var tiny_snapshot := _fixture_snapshot()
+	tiny_snapshot["world_id"] = "tiny-canvas"
+	tiny_snapshot["bounds"] = {"origin":{"x":0, "y":0}, "size":{"x":64, "y":64}}
+	tiny_snapshot.erase("canvas_limits")
+	canvas.size = Vector2(8192, 8192)
+	canvas.apply_snapshot(tiny_snapshot)
+	canvas.reset_camera()
+	_check(canvas._tile_scale() <= 10.001 and maxf(canvas._world_screen_rect().size.x, canvas._world_screen_rect().size.y) <= 4096.01, "tile and rendered-axis performance caps remain hard limits even in an oversized viewport")
+	canvas.size = normal_canvas_size
+
+	canvas.apply_snapshot(_fixture_snapshot())
+	canvas.reset_camera()
+	_check((canvas.get("_entities_by_id") as Dictionary).size() == 4 and (canvas.get("_resources_by_id") as Dictionary).has("iron-field"), "Canvas builds constant-time snapshot indexes once per payload")
+	var storage_point: Vector2 = canvas._footprint_rect(_snapshot_entity(workspace, "storage-a").get("footprint", {}), 4.0).get_center()
+	canvas._set_zoom_around(storage_point, canvas._screen_to_world(storage_point), float(canvas.get("_zoom")) * 1.14)
+	var transformed_storage_point: Vector2 = canvas._footprint_rect(_snapshot_entity(workspace, "storage-a").get("footprint", {}), 4.0).get_center()
+	canvas._select_at(transformed_storage_point)
+	_check(canvas.selected_node_id() == "storage-a", "hit testing rebuilds immediately after a transform without waiting for a draw frame")
+
+	var flowing_snapshot := _fixture_snapshot()
+	flowing_snapshot["links"] = [{"id":"active-power", "kind":"POWER", "source_id":"power-a", "target_id":"mine-a", "status":"FLOWING", "last_flow":1.0, "utilization":0.5}]
+	canvas.apply_snapshot(flowing_snapshot)
+	canvas.reset_camera()
+	while canvas._tile_scale() < 0.75:
+		canvas._adjust_zoom(1.14)
+	await _force_canvas_draw(canvas)
+	canvas.set("_flow_redraw_elapsed", 0.0)
+	var phase_before := float(canvas.get("_visual_phase"))
+	canvas._process(0.02)
+	canvas._process(0.02)
+	_check(is_equal_approx(float(canvas.get("_visual_phase")), phase_before), "active-flow animation does not redraw before its 20 Hz budget interval")
+	canvas._process(0.02)
+	_check(float(canvas.get("_visual_phase")) > phase_before, "visible active-flow animation advances at the bounded redraw interval")
+	canvas.set_reduced_motion(true)
+	var reduced_phase := float(canvas.get("_visual_phase"))
+	canvas._process(1.0)
+	_check(is_equal_approx(float(canvas.get("_visual_phase")), reduced_phase), "reduced motion disables active-flow animation work")
+	canvas.set_reduced_motion(false)
+	canvas.apply_snapshot({"valid":false, "protocol_version":1})
+	var invalid_phase := float(canvas.get("_visual_phase"))
+	canvas._process(1.0)
+	_check(not bool(canvas.get("_visible_active_flow")) and is_equal_approx(float(canvas.get("_visual_phase")), invalid_phase), "switching to an invalid snapshot cannot leave an empty canvas redrawing at 20 Hz")
+
+	var dense_snapshot := flowing_snapshot.duplicate(true)
+	for dense_index in range(510):
+		(dense_snapshot["entities"] as Array).append(_entity("dense-%04d" % dense_index, "POWER", "Dense Unit", Vector2i(dense_index % 64, dense_index / 64), {"inputs":[], "outputs":[], "accepts_power":false, "provides_power":true}))
+	canvas.apply_snapshot(dense_snapshot)
+	canvas.reset_camera()
+	while canvas._tile_scale() < 0.75:
+		canvas._adjust_zoom(1.14)
+	_check(not canvas._flow_animation_allowed(), "high-density snapshots disable whole-canvas flow animation redraws")
 	canvas.apply_snapshot(_fixture_snapshot())
 	canvas.reset_camera()
 
@@ -335,7 +456,7 @@ func _test_mouse_hit_priorities(workspace, intents: Array) -> void:
 	canvas.reset_camera()
 	await _force_canvas_draw(canvas)
 	var extractor_tile := Vector2i(16, 16)
-	var extractor_point := Vector2(64, 64)
+	var extractor_point: Vector2 = canvas._world_to_screen(Vector2(extractor_tile)) + Vector2.ONE * canvas._tile_scale() * 0.5
 	canvas._on_gui_input(_mouse_motion(extractor_point))
 	canvas._on_gui_input(_left_click(extractor_point))
 	var extractor_intent: Dictionary = intents.back() as Dictionary
@@ -346,7 +467,7 @@ func _test_mouse_hit_priorities(workspace, intents: Array) -> void:
 		and str((workspace.get("_selection") as Dictionary).get("kind", "")) != "RESOURCE_FIELD",
 		"a real mouse click on an extractor preview over a resource field emits construction instead of selecting the field"
 	)
-	var order_point := Vector2(104, 104)
+	var order_point: Vector2 = canvas._world_to_screen(Vector2(26, 26)) + Vector2.ONE * canvas._tile_scale() * 0.5
 	canvas._on_gui_input(_mouse_motion(order_point))
 	canvas._on_gui_input(_left_click(order_point))
 	var selection: Dictionary = workspace.get("_selection") as Dictionary
@@ -422,6 +543,7 @@ func _fixture_snapshot() -> Dictionary:
 		"location_id":"earth_orbit",
 		"topology_revision":17,
 		"runtime_revision":9,
+		"canvas_limits":{"max_world_size_tiles":{"x":512, "y":384}},
 		"bounds":{"origin":{"x":0, "y":0}, "size":{"x":256, "y":256}},
 		"resource_fields":[
 			{"id":"iron-field", "resource_id":"iron_ore", "resource_category":"solid", "resource_color":"#B45F45", "grade":1.0, "potential_density":0.25, "footprint":{"origin":{"x":12, "y":12}, "size":{"x":24, "y":24}}, "ports":{"inputs":[], "outputs":[], "accepts_power":false}}

@@ -723,6 +723,14 @@ func _validate_factory_grid_content() -> void:
 	var chunk_size := int(factory_grid_rules.get("chunk_size_tiles", 0))
 	if chunk_size <= 0:
 		errors.append("factory_grid_rules must define a positive chunk size")
+	var max_world_size_value: Variant = factory_grid_rules.get("max_world_size_tiles", {})
+	var max_world_size: Dictionary = max_world_size_value as Dictionary if max_world_size_value is Dictionary else {}
+	var max_world_width := int(max_world_size.get("x", 0))
+	var max_world_height := int(max_world_size.get("y", 0))
+	if max_world_width <= 0 or max_world_height <= 0:
+		errors.append("factory_grid_rules must define a positive maximum world size")
+	elif chunk_size > 0 and (max_world_width % chunk_size != 0 or max_world_height % chunk_size != 0):
+		errors.append("factory_grid_rules maximum world size must align to %d-tile chunks" % chunk_size)
 	if float(factory_grid_rules.get("simulation_step_seconds", 0.0)) <= 0.0:
 		errors.append("factory_grid_rules must define a positive simulation step")
 	if float(factory_grid_rules.get("base_construction_capacity_per_second", -1.0)) < 0.0:
@@ -756,6 +764,8 @@ func _validate_factory_grid_content() -> void:
 			errors.append("factory world profile '%s' must define positive finite bounds" % location_id)
 		elif chunk_size > 0 and (width % chunk_size != 0 or height % chunk_size != 0):
 			errors.append("factory world profile '%s' bounds must align to %d-tile chunks" % [location_id, chunk_size])
+		elif max_world_width > 0 and max_world_height > 0 and (width > max_world_width or height > max_world_height):
+			errors.append("factory world profile '%s' exceeds the maximum canvas size" % location_id)
 		if width > 0 and height > 0:
 			var generated_resource_ids: Array[String] = []
 			for resource_region_value in resource_regions.values():
@@ -778,9 +788,6 @@ func _validate_factory_grid_content() -> void:
 	for location_id_value in world_profiles.keys():
 		if not regions.has(str(location_id_value)):
 			errors.append("factory world profile references unknown location '%s'" % location_id_value)
-	var legacy_size: Dictionary = factory_grid_rules.get("legacy_default_size_tiles", {})
-	if int(legacy_size.get("x", 0)) <= 0 or int(legacy_size.get("y", 0)) <= 0 or int(factory_grid_rules.get("legacy_resize_padding_tiles", -1)) < 0:
-		errors.append("factory_grid_rules must define valid legacy bounds and resize padding")
 	var starter: Dictionary = factory_grid_rules.get("starter_world", {})
 	var starter_size: Dictionary = starter.get("size_tiles", {})
 	if str(starter.get("world_id", "")).is_empty() or not regions.has(str(starter.get("location_id", ""))) or int(starter_size.get("x", 0)) <= 0 or int(starter_size.get("y", 0)) <= 0:

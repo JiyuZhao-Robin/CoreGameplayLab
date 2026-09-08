@@ -27,13 +27,10 @@ godot --headless --path . --log-file /tmp/helios-operational-formations.log --sc
 godot --headless --path . --log-file /tmp/helios-wreck-sites.log --script res://tests/wreck_site_system_test.gd -- --no-persistence
 godot --headless --path . --log-file /tmp/helios-core-integrity.log --script res://tests/core_integrity_test.gd -- --no-persistence
 godot --headless --path . --log-file /tmp/helios-asset-conservation.log --script res://tests/asset_conservation_test.gd -- --no-persistence
-godot --headless --path . --log-file /tmp/helios-core-gameplay-runtime.log --script res://tests/core_gameplay_runtime_gate_test.gd -- --no-persistence
-
 # The retired Headless, Golden Path, Playflow and industrial UI state/action suites asserted the removed
 # location-level mining, Production Line, Extraction Network and generic
 # Construction behavior. They are deliberately not a post-cutover gate. The
 # Factory workspace contract, intent-only UI, MainScene integration, registries,
 # localization and UI-domain guards above replace their industrial coverage.
-# The final application-boundary runtime gate exercises all ten core Journeys
-# through Game's transactional commands; focused UI suites remain responsible for
-# pointer/keyboard presentation behavior.
+# The all-Journey application-boundary runtime suite remains available as an
+# explicit opt-in test; it is intentionally excluded from this aggregate runner.

@@ -248,7 +248,7 @@ func ensure_frontier_state(state: SpaceGameState) -> void:
 			ship["assignment"] = {}
 			ship["status"] = "DOCKED"
 	_ensure_factory_starter_world(state)
-	_migrate_legacy_factory_world_bounds(state)
+	_enforce_factory_world_bounds(state)
 	_sync_factory_facility_adapters(state)
 	for region_id in content.regions:
 		var region_definition: Dictionary = content.regions.get(region_id, {})
@@ -341,81 +341,120 @@ func _ensure_factory_starter_world(state: SpaceGameState) -> void:
 	state.factory_worlds[world_id] = world
 
 
-## The original 20-million-tile default was technically bounded but behaved as
-## an infinite canvas. Resize canonical worlds and the reachable legacy
-## `<location>-grid` aliases that still have that exact default. Existing fields,
-## structures, construction and edited tiles always win over the profile target,
-## so this migration never clips player data or renames referenced world IDs.
-func _migrate_legacy_factory_world_bounds(state: SpaceGameState) -> void:
-	var legacy_size_data: Dictionary = content.factory_grid_rules.get("legacy_default_size_tiles", {})
-	var legacy_size := Vector2i(int(legacy_size_data.get("x", 0)), int(legacy_size_data.get("y", 0)))
+## Factory bounds are a runtime budget, not save compatibility metadata. Every
+## world is capped by the global authored maximum and, when available, its
+## Location profile. Oversized save data is clipped rather than allowed to grow
+## the draw/snapshot workload again.
+func _enforce_factory_world_bounds(state: SpaceGameState) -> void:
+	var maximum_size_data: Dictionary = content.factory_grid_rules.get("max_world_size_tiles", {})
+	var maximum_size := Vector2i(int(maximum_size_data.get("x", 0)), int(maximum_size_data.get("y", 0)))
 	var profiles: Dictionary = content.factory_grid_rules.get("world_profiles", {})
-	if legacy_size.x <= 0 or legacy_size.y <= 0 or profiles.is_empty():
+	if maximum_size.x <= 0 or maximum_size.y <= 0:
 		return
-	var padding := maxi(0, int(content.factory_grid_rules.get("legacy_resize_padding_tiles", 0)))
-	var chunk_size := maxi(1, int(content.factory_grid_rules.get("chunk_size_tiles", 64)))
-	for location_id_value in profiles.keys():
-		var location_id := str(location_id_value)
-		var profile_value: Variant = profiles.get(location_id, null)
-		if not profile_value is Dictionary:
+	for world_id_value in state.factory_worlds.keys():
+		var world_value: Variant = state.factory_worlds.get(world_id_value, null)
+		if not world_value is Dictionary:
 			continue
-		var profile := profile_value as Dictionary
-		var profile_size_data: Dictionary = profile.get("size_tiles", {})
-		var target_size := Vector2i(int(profile_size_data.get("x", 0)), int(profile_size_data.get("y", 0)))
-		var candidate_world_ids: Array[String] = [str(profile.get("world_id", ""))]
-		var legacy_world_id := "%s-grid" % location_id.replace("_", "-")
-		if not candidate_world_ids.has(legacy_world_id):
-			candidate_world_ids.append(legacy_world_id)
-		for world_id in candidate_world_ids:
-			var world_value: Variant = state.factory_worlds.get(world_id, null)
-			if world_value is Dictionary:
-				_resize_legacy_factory_world(world_value as Dictionary, location_id, legacy_size, target_size, padding, chunk_size)
+		var world := world_value as Dictionary
+		var target_size := maximum_size
+		var profile_value: Variant = profiles.get(str(world.get("location_id", "")), null)
+		if profile_value is Dictionary:
+			var profile_size_data: Dictionary = (profile_value as Dictionary).get("size_tiles", {})
+			var profile_size := Vector2i(int(profile_size_data.get("x", 0)), int(profile_size_data.get("y", 0)))
+			if profile_size.x > 0 and profile_size.y > 0:
+				target_size = target_size.min(profile_size)
+		_crop_factory_world(world, target_size)
 
 
-func _resize_legacy_factory_world(world: Dictionary, location_id: String, legacy_size: Vector2i, target_size: Vector2i, padding: int, chunk_size: int) -> void:
-	if str(world.get("location_id", "")) != location_id:
-		return
+func _crop_factory_world(world: Dictionary, target_size: Vector2i) -> void:
 	var bounds: Dictionary = world.get("bounds", {})
 	var current_size_data: Dictionary = bounds.get("size", {})
 	var current_size := Vector2i(int(current_size_data.get("x", 0)), int(current_size_data.get("y", 0)))
-	if current_size != legacy_size:
+	var cropped_size := Vector2i(mini(current_size.x, target_size.x), mini(current_size.y, target_size.y))
+	if current_size.x <= 0 or current_size.y <= 0:
 		return
 	var bounds_origin_data: Dictionary = bounds.get("origin", {})
 	var bounds_origin := Vector2i(int(bounds_origin_data.get("x", 0)), int(bounds_origin_data.get("y", 0)))
-	var required_size := target_size
+	var cropped_end := bounds_origin + cropped_size
+	var topology_changed := cropped_size != current_size
+	if topology_changed:
+		bounds["size"] = {"x":cropped_size.x, "y":cropped_size.y}
+		world["bounds"] = bounds
+	var runtime_changed := false
+
+	# The bounded-world cutover intentionally does not refund or archive records
+	# outside the playable rectangle. Old entity buffers and staged construction
+	# materials leave the live state together with their owning record.
 	for collection_name in ["resource_fields", "entities", "construction_orders"]:
-		for record_value in world.get(collection_name, {}).values():
-			var record := record_value as Dictionary
-			required_size = required_size.max(_factory_required_size_for_footprint(record.get("footprint", {}), bounds_origin, padding))
-	for tile_key_value in world.get("tile_deltas", {}).keys():
+		var collection: Dictionary = world.get(collection_name, {})
+		for record_id_value in collection.keys():
+			var record_value: Variant = collection.get(record_id_value, null)
+			if not record_value is Dictionary or not _factory_footprint_inside_crop((record_value as Dictionary).get("footprint", {}), bounds_origin, cropped_end):
+				collection.erase(record_id_value)
+				topology_changed = true
+				runtime_changed = true
+
+	var entities: Dictionary = world.get("entities", {})
+	var links: Dictionary = world.get("links", {})
+	for link_id_value in links.keys():
+		var link_value: Variant = links.get(link_id_value, null)
+		if not link_value is Dictionary:
+			links.erase(link_id_value)
+			topology_changed = true
+			runtime_changed = true
+			continue
+		var link := link_value as Dictionary
+		if not entities.has(str(link.get("source_id", ""))) or not entities.has(str(link.get("target_id", ""))):
+			links.erase(link_id_value)
+			topology_changed = true
+			runtime_changed = true
+
+	var tile_deltas: Dictionary = world.get("tile_deltas", {})
+	for tile_key_value in tile_deltas.keys():
 		var components := str(tile_key_value).split(":", false, 2)
 		if components.size() != 2 or not components[0].is_valid_int() or not components[1].is_valid_int():
+			tile_deltas.erase(tile_key_value)
+			topology_changed = true
 			continue
 		var tile := Vector2i(int(components[0]), int(components[1]))
-		required_size = required_size.max(tile - bounds_origin + Vector2i.ONE * (padding + 1))
-	required_size = Vector2i(
-		mini(legacy_size.x, _align_factory_world_extent(required_size.x, chunk_size)),
-		mini(legacy_size.y, _align_factory_world_extent(required_size.y, chunk_size))
-	)
-	bounds["size"] = {"x":required_size.x, "y":required_size.y}
-	world["bounds"] = bounds
-	world["topology_revision"] = maxi(0, int(world.get("topology_revision", 0))) + 1
+		if tile.x < bounds_origin.x or tile.y < bounds_origin.y or tile.x >= cropped_end.x or tile.y >= cropped_end.y:
+			tile_deltas.erase(tile_key_value)
+			topology_changed = true
+
+	var revealed_chunks: Dictionary = world.get("revealed_chunks", {})
+	var chunk_size := maxi(1, int(world.get("chunk_size_tiles", 64)))
+	var chunk_columns := ceili(float(cropped_size.x) / float(chunk_size))
+	var chunk_rows := ceili(float(cropped_size.y) / float(chunk_size))
+	for chunk_key_value in revealed_chunks.keys():
+		var chunk_components := str(chunk_key_value).split(":", false, 2)
+		if chunk_components.size() != 2 or not chunk_components[0].is_valid_int() or not chunk_components[1].is_valid_int():
+			revealed_chunks.erase(chunk_key_value)
+			topology_changed = true
+			continue
+		var chunk := Vector2i(int(chunk_components[0]), int(chunk_components[1]))
+		if chunk.x < 0 or chunk.y < 0 or chunk.x >= chunk_columns or chunk.y >= chunk_rows:
+			revealed_chunks.erase(chunk_key_value)
+			topology_changed = true
+
+	# Durable command receipts remain intact so cropping cannot make an old
+	# command executable a second time.
+	if runtime_changed:
+		factory_grid.refresh_derived_state(world)
+	if topology_changed:
+		world["topology_revision"] = maxi(0, int(world.get("topology_revision", 0))) + 1
+	if runtime_changed:
+		world["runtime_revision"] = maxi(0, int(world.get("runtime_revision", 0))) + 1
 
 
-func _factory_required_size_for_footprint(footprint_value: Variant, bounds_origin: Vector2i, padding: int) -> Vector2i:
+func _factory_footprint_inside_crop(footprint_value: Variant, bounds_origin: Vector2i, bounds_end: Vector2i) -> bool:
 	if not footprint_value is Dictionary:
-		return Vector2i.ZERO
+		return false
 	var footprint := footprint_value as Dictionary
 	var origin_data: Dictionary = footprint.get("origin", {})
 	var size_data: Dictionary = footprint.get("size", {})
 	var origin := Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0)))
-	var footprint_size := Vector2i(maxi(1, int(size_data.get("x", 1))), maxi(1, int(size_data.get("y", 1))))
-	return origin + footprint_size - bounds_origin + Vector2i.ONE * padding
-
-
-func _align_factory_world_extent(value: int, alignment: int) -> int:
-	var safe_alignment := maxi(1, alignment)
-	return maxi(safe_alignment, ceili(float(maxi(1, value)) / float(safe_alignment)) * safe_alignment)
+	var footprint_size := Vector2i(int(size_data.get("x", 0)), int(size_data.get("y", 0)))
+	return footprint_size.x > 0 and footprint_size.y > 0 and origin.x >= bounds_origin.x and origin.y >= bounds_origin.y and origin.x + footprint_size.x <= bounds_end.x and origin.y + footprint_size.y <= bounds_end.y
 
 
 ## The facility dictionary is a compatibility view consumed by research,

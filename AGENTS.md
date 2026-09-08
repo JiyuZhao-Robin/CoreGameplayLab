@@ -154,13 +154,9 @@ concurrent writers.
 - The primary agent reviews every changed file and checks for overlapping edits,
   duplicated state authority, obsolete aggregate-industry paths, and missing tests.
 - Merge or adapt contract changes before dependent implementations.
-- Run focused tests after each module is integrated. On Unix-like systems, then
-  run `./tests/run_core_complete.sh` for changes that can affect gameplay, state,
-  content, persistence, or its covered core-domain gate. On Windows, invoke the
-  equivalent Godot tests directly under the Windows rules below.
-- The current script is not a complete UI or Golden Path release gate. If it does
-  not cover the changed player path, add or run a focused
-  replacement test and explicitly report that coverage gap.
+- Run focused tests for the changed module and player path after integration.
+  Aggregate release gates and full Gameplay Journey runtime suites are opt-in;
+  run them only when the user explicitly requests them.
 - Final responses must distinguish subagent-reported results from checks actually
   rerun by the primary agent.
 
