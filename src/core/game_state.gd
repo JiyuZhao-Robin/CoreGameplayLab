@@ -573,12 +573,12 @@ static func _migrate_38_39(data: Dictionary) -> Dictionary:
 	return _stamp_schema(migrated, 39)
 
 
-static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary) -> Dictionary:
+static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary, archive_retired_metadata: bool = true) -> Dictionary:
 	var migrated := source.duplicate(true)
 	var archive: Dictionary = migrated.get("retired_aggregate_industry_archive", {}).duplicate(true)
 	for field in ["extraction_command", "mining_site_states"]:
 		var retired_value = migrated.get(field, {})
-		if retired_value is Dictionary and not retired_value.is_empty() and not archive.has(field):
+		if archive_retired_metadata and retired_value is Dictionary and not retired_value.is_empty() and not archive.has(field):
 			archive[field] = retired_value.duplicate(true)
 	migrated["extraction_command"] = {"capacity":0}
 	migrated["mining_site_states"] = {}
@@ -586,9 +586,15 @@ static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary
 	var retired_facilities := {}
 	for facility_id in RETIRED_AGGREGATE_FACILITY_IDS:
 		if facilities.has(facility_id):
-			retired_facilities[facility_id] = facilities[facility_id].duplicate(true)
+			var facility: Dictionary = facilities.get(facility_id, {})
+			# Physical compatibility projections from current-schema saves are
+			# disposable data, never historical evidence of the retired aggregate
+			# system. Application transactions rebuild them from physical worlds.
+			var physical_factory_projection := facility.has("factory_power_factor") and facility.has("factory_providers")
+			if archive_retired_metadata and not physical_factory_projection:
+				retired_facilities[facility_id] = facilities[facility_id].duplicate(true)
 			facilities.erase(facility_id)
-	if not retired_facilities.is_empty() and not archive.has("facilities"):
+	if archive_retired_metadata and not retired_facilities.is_empty() and not archive.has("facilities"):
 		archive["facilities"] = retired_facilities
 	var retired_locations := {}
 	var locations: Dictionary = migrated.get("locations", {}).duplicate(true)
@@ -603,11 +609,11 @@ static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary
 		location["industry"] = {"industries":{}, "specialization_id":"", "power_capacity":0.0, "cooling_capacity":0.0, "structural_capacity":0.0}
 		location["construction"] = {"capacity":0.0, "active_project_ids":[]}
 		location["automation"] = {"industrial_template_id":"", "managed_policy_items":[], "status":"RETIRED", "auto_expand_enabled":false, "target_industry_level":1, "expansion_progress_ms":0.0, "last_blocked_reason":"", "blocker":{}}
-	if not retired_locations.is_empty() and not archive.has("location_industry"):
+	if archive_retired_metadata and not retired_locations.is_empty() and not archive.has("location_industry"):
 		archive["location_industry"] = retired_locations
 	for field in ["manufacturing_module_inventory", "manufacturing_modules_built", "unlocked_industrial_transformations", "adopted_industrial_transformations"]:
 		var retired_value = migrated.get(field, {})
-		if retired_value is Dictionary and not retired_value.is_empty() and not archive.has(field):
+		if archive_retired_metadata and retired_value is Dictionary and not retired_value.is_empty() and not archive.has(field):
 			archive[field] = retired_value.duplicate(true)
 		migrated[field] = {}
 	migrated["facilities"] = facilities
@@ -618,7 +624,10 @@ static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary
 
 static func from_dictionary(data: Dictionary, domain_ids: Array, location_definitions: Dictionary = {}) -> SpaceGameState:
 	data = migrate_save_dictionary(data)
-	data = _retire_aggregate_industry_metadata_in_dictionary(data)
+	# Published migration steps own the immutable archive. This final pass also
+	# normalizes current-schema saves and transaction clones, but must not turn
+	# ordinary runtime cleanup into fabricated migration evidence.
+	data = _retire_aggregate_industry_metadata_in_dictionary(data, false)
 	var state := create_new(domain_ids, location_definitions)
 	state.save_id = str(data.get("save_id", state.save_id))
 	state.revision = int(data.get("revision", 0))

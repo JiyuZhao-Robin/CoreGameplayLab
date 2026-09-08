@@ -248,6 +248,7 @@ func ensure_frontier_state(state: SpaceGameState) -> void:
 			ship["assignment"] = {}
 			ship["status"] = "DOCKED"
 	_ensure_factory_starter_world(state)
+	_migrate_legacy_factory_world_bounds(state)
 	_sync_factory_facility_adapters(state)
 	for region_id in content.regions:
 		var region_definition: Dictionary = content.regions.get(region_id, {})
@@ -286,6 +287,7 @@ func ensure_frontier_state(state: SpaceGameState) -> void:
 		# package to its destination (currently the Lunar tutorial route).
 		if survey_state_rank(survey_state) >= survey_state_rank(LocationState.SURVEYED) and _survey_staging_package_is_installed(state, str(region_id)):
 			_install_survey_staging_package(state, str(region_id))
+	_reproject_megastructure_site_industry_effects(state)
 	for area_id in content.combat_areas:
 		if not state.combat_area_states.has(area_id):
 			state.combat_area_states[area_id] = {"unlocked":bool(content.combat_areas[area_id].get("initially_available", false)), "first_clear_complete":false, "completions":0}
@@ -337,6 +339,83 @@ func _ensure_factory_starter_world(state: SpaceGameState) -> void:
 			location_inventory[item_id] = int(location_inventory.get(item_id, 0)) - quantity
 			inventory[item_id] = int(inventory.get(item_id, 0)) + quantity
 	state.factory_worlds[world_id] = world
+
+
+## The original 20-million-tile default was technically bounded but behaved as
+## an infinite canvas. Resize canonical worlds and the reachable legacy
+## `<location>-grid` aliases that still have that exact default. Existing fields,
+## structures, construction and edited tiles always win over the profile target,
+## so this migration never clips player data or renames referenced world IDs.
+func _migrate_legacy_factory_world_bounds(state: SpaceGameState) -> void:
+	var legacy_size_data: Dictionary = content.factory_grid_rules.get("legacy_default_size_tiles", {})
+	var legacy_size := Vector2i(int(legacy_size_data.get("x", 0)), int(legacy_size_data.get("y", 0)))
+	var profiles: Dictionary = content.factory_grid_rules.get("world_profiles", {})
+	if legacy_size.x <= 0 or legacy_size.y <= 0 or profiles.is_empty():
+		return
+	var padding := maxi(0, int(content.factory_grid_rules.get("legacy_resize_padding_tiles", 0)))
+	var chunk_size := maxi(1, int(content.factory_grid_rules.get("chunk_size_tiles", 64)))
+	for location_id_value in profiles.keys():
+		var location_id := str(location_id_value)
+		var profile_value: Variant = profiles.get(location_id, null)
+		if not profile_value is Dictionary:
+			continue
+		var profile := profile_value as Dictionary
+		var profile_size_data: Dictionary = profile.get("size_tiles", {})
+		var target_size := Vector2i(int(profile_size_data.get("x", 0)), int(profile_size_data.get("y", 0)))
+		var candidate_world_ids: Array[String] = [str(profile.get("world_id", ""))]
+		var legacy_world_id := "%s-grid" % location_id.replace("_", "-")
+		if not candidate_world_ids.has(legacy_world_id):
+			candidate_world_ids.append(legacy_world_id)
+		for world_id in candidate_world_ids:
+			var world_value: Variant = state.factory_worlds.get(world_id, null)
+			if world_value is Dictionary:
+				_resize_legacy_factory_world(world_value as Dictionary, location_id, legacy_size, target_size, padding, chunk_size)
+
+
+func _resize_legacy_factory_world(world: Dictionary, location_id: String, legacy_size: Vector2i, target_size: Vector2i, padding: int, chunk_size: int) -> void:
+	if str(world.get("location_id", "")) != location_id:
+		return
+	var bounds: Dictionary = world.get("bounds", {})
+	var current_size_data: Dictionary = bounds.get("size", {})
+	var current_size := Vector2i(int(current_size_data.get("x", 0)), int(current_size_data.get("y", 0)))
+	if current_size != legacy_size:
+		return
+	var bounds_origin_data: Dictionary = bounds.get("origin", {})
+	var bounds_origin := Vector2i(int(bounds_origin_data.get("x", 0)), int(bounds_origin_data.get("y", 0)))
+	var required_size := target_size
+	for collection_name in ["resource_fields", "entities", "construction_orders"]:
+		for record_value in world.get(collection_name, {}).values():
+			var record := record_value as Dictionary
+			required_size = required_size.max(_factory_required_size_for_footprint(record.get("footprint", {}), bounds_origin, padding))
+	for tile_key_value in world.get("tile_deltas", {}).keys():
+		var components := str(tile_key_value).split(":", false, 2)
+		if components.size() != 2 or not components[0].is_valid_int() or not components[1].is_valid_int():
+			continue
+		var tile := Vector2i(int(components[0]), int(components[1]))
+		required_size = required_size.max(tile - bounds_origin + Vector2i.ONE * (padding + 1))
+	required_size = Vector2i(
+		mini(legacy_size.x, _align_factory_world_extent(required_size.x, chunk_size)),
+		mini(legacy_size.y, _align_factory_world_extent(required_size.y, chunk_size))
+	)
+	bounds["size"] = {"x":required_size.x, "y":required_size.y}
+	world["bounds"] = bounds
+	world["topology_revision"] = maxi(0, int(world.get("topology_revision", 0))) + 1
+
+
+func _factory_required_size_for_footprint(footprint_value: Variant, bounds_origin: Vector2i, padding: int) -> Vector2i:
+	if not footprint_value is Dictionary:
+		return Vector2i.ZERO
+	var footprint := footprint_value as Dictionary
+	var origin_data: Dictionary = footprint.get("origin", {})
+	var size_data: Dictionary = footprint.get("size", {})
+	var origin := Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0)))
+	var footprint_size := Vector2i(maxi(1, int(size_data.get("x", 1))), maxi(1, int(size_data.get("y", 1))))
+	return origin + footprint_size - bounds_origin + Vector2i.ONE * padding
+
+
+func _align_factory_world_extent(value: int, alignment: int) -> int:
+	var safe_alignment := maxi(1, alignment)
+	return maxi(safe_alignment, ceili(float(maxi(1, value)) / float(safe_alignment)) * safe_alignment)
 
 
 ## The facility dictionary is a compatibility view consumed by research,
@@ -423,6 +502,13 @@ func _sync_factory_facility_adapters(state: SpaceGameState) -> void:
 				provider_at_location["location_id"] = provider_location_id
 				provider_at_location["level"] = maxi(int(provider_at_location.get("level", 0)), provider_level)
 				provider_at_location["power_factor"] = maxf(float(provider_at_location.get("power_factor", 0.0)), provider_power_factor)
+				# Preserve the best real provider's powered level as one coupled
+				# quantity. Taking the maximum level and maximum power separately can
+				# synthesize a fully powered high-level facility that does not exist.
+				provider_at_location["operational_level_score"] = maxf(
+					float(provider_at_location.get("operational_level_score", 0.0)),
+					float(provider_level) * provider_power_factor
+				)
 				var provider_entity_ids: Array = provider_at_location.get("entity_ids", [])
 				var provider_entity_id := str(completed_entity.get("entity_id", ""))
 				if not provider_entity_id.is_empty() and not provider_entity_ids.has(provider_entity_id):
@@ -743,6 +829,30 @@ func _survey_staging_package_is_installed(state: SpaceGameState, location_id: St
 		if str(route_destinations.get(route_id_value, "")) == location_id and int(state.completed_activities.get("route:%s" % route_id, 0)) > 0:
 			return true
 	return false
+
+
+func _reproject_megastructure_site_industry_effects(state: SpaceGameState) -> void:
+	# Location industry/construction summaries are disposable views cleared at the
+	# start of ensure_frontier_state(). Rebuild the non-logistics portion of every
+	# cumulative project effect exactly once; logistics/storage are authoritative
+	# Location custody limits and are intentionally not re-added here.
+	var project_ids: Array = state.megastructure_projects.keys()
+	project_ids.sort()
+	for project_id_value in project_ids:
+		var project: Dictionary = state.megastructure_projects.get(project_id_value, {})
+		var location_id := str(project.get("site_location_id", ""))
+		if not state.has_location(location_id):
+			continue
+		var effects: Dictionary = project.get("site_effects", {})
+		var location: Dictionary = state.location_state(location_id)
+		var industry: Dictionary = location.get("industry", {})
+		industry["power_capacity"] = float(industry.get("power_capacity", 0.0)) + float(effects.get("power_capacity", 0.0))
+		industry["cooling_capacity"] = float(industry.get("cooling_capacity", 0.0)) + float(effects.get("cooling_capacity", 0.0))
+		industry["structural_capacity"] = float(industry.get("structural_capacity", 0.0)) + float(effects.get("structural_capacity", 0.0))
+		location["industry"] = industry
+		var construction: Dictionary = location.get("construction", {})
+		construction["capacity"] = float(construction.get("capacity", 0.0)) + float(effects.get("construction_capacity", 0.0))
+		location["construction"] = construction
 
 
 func refresh_location_summaries(state: SpaceGameState) -> void:
@@ -1368,8 +1478,9 @@ func location_industry_constraint_profile(state: SpaceGameState, location_id: St
 			precision_manufacturing += maxf(0.0, float(definition.get("precision_manufacturing", 0.0))) * power_factor
 			maintenance_coverage = maxf(maintenance_coverage, clampf(float(definition.get("maintenance_coverage", 0.0)) * power_factor, 0.0, 1.0))
 			# Factory entity inventories are local machine buffers. Only a completed
-			# STORAGE building projects receiving capacity into Location logistics;
-			# construction yards and other machines must not create phantom depots.
+			# STORAGE building contributes installed site-storage capability; this
+			# profile is used by site requirements and does not mutate the distinct
+			# Location Logistics receiving-capacity ledger.
 			var storage_capacity := maxf(0.0, float(definition.get("inventory_capacity", 0.0)))
 			if str(definition.get("kind", "")) == "STORAGE" and storage_capacity > 0.0:
 				var storage_class := str(definition.get("storage_class", "BULK"))
@@ -2544,7 +2655,7 @@ func research_capacity(state: SpaceGameState) -> float:
 	if global_factory_factor <= 0.000001:
 		return 0.0
 	var base_multiplier := facility_output_multiplier(state, "research_complex") / global_factory_factor
-	return maxf(0.0, float(provider.get("level", 0))) * base_multiplier * clampf(float(provider.get("power_factor", 0.0)), 0.0, 1.0)
+	return maxf(0.0, float(provider.get("operational_level_score", 0.0))) * base_multiplier
 
 
 func facility_available(state: SpaceGameState, facility_id: String) -> bool:

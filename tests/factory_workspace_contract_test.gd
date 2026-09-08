@@ -23,7 +23,7 @@ func _initialize() -> void:
 	_test_fresh_factory_bootstrap_closure()
 	_test_surveyed_world_initialization()
 	_test_factory_progression_adapters()
-	_test_location_storage_capacity_projection()
+	_test_factory_site_storage_capability()
 	_test_facility_providers_are_location_bound()
 	_test_multi_stage_research_boundaries()
 	_test_remote_factory_facility_maintenance_custody()
@@ -672,7 +672,70 @@ func _test_surveyed_world_initialization() -> void:
 		and float(paid_restored.location_state("asteroid_belt").get("construction", {}).get("capacity", 0.0)) == 1.0,
 		"non-route Survey Mission staging marker survives save/load and reprojects finite site capacity"
 	)
+	# Initializing another world is an ordinary in-memory transaction, not a save
+	# migration. It must preserve compatibility ownership derived from existing
+	# physical Factory entities so recipe availability cannot disappear.
+	var earth_world: Dictionary = game.state.factory_worlds.get("earth-surface-grid", {})
+	game.state.technologies["heavy_industry"] = true
+	game.state.technologies["heavy_extraction"] = true
+	game.state.facilities["assembly_yard"] = {"level":99, "status":"ACTIVE", "factory_power_factor":1.0, "factory_providers":[]}
+	var earth_orders_before_forgery: int = int(earth_world.get("construction_orders", {}).size())
+	_check(not game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(600, 400), "grid_fabricate_quantum_component"), "a forged marked Factory adapter cannot satisfy transaction-local recipe ownership")
+	_check(game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {}).size() == earth_orders_before_forgery, "rejected forged ownership queues no physical construction")
+	game.state.facilities.erase("assembly_yard")
+	var assembly_placed: Dictionary = game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_assembly_array", Vector2i(640, 400), "grid_fabricate_quantum_component", "transaction-assembly")
+	_check(bool(assembly_placed.get("ok", false)), "transaction fixture places a physical Assembly Array in the existing Earth world")
+	game.simulation.refresh_factory_runtime_views(game.state)
+	var assembly_ownership_requirement := {"type":"own_facility", "id":"assembly_yard"}
+	var quantum_recipe_visible_before := (game.factory_workspace_snapshot("earth-surface-grid").get("palette", {}).get("recipes", []) as Array).any(func(recipe_value): return str((recipe_value as Dictionary).get("id", "")) == "grid_fabricate_quantum_component")
+	_check(game.simulation.requirement_met(game.state, assembly_ownership_requirement) and str(game.state.facilities.get("assembly_yard", {}).get("status", "")) == "INACTIVE" and quantum_recipe_visible_before, "unpowered physical Assembly Array ownership exposes its canonical recipe before an unrelated world transaction")
+	game.state.facilities.erase("assembly_yard")
+	_check(game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(600, 400), "grid_fabricate_quantum_component"), "transaction pre-projection accepts physical ownership even when the live compatibility adapter is missing")
+	var archive_before: Dictionary = game.state.retired_aggregate_industry_archive.duplicate(true)
+	var current_round_trip := SpaceGameState.from_dictionary(game.state.to_dictionary(), database.domains.keys(), database.regions)
+	_check(current_round_trip.retired_aggregate_industry_archive == archive_before and not current_round_trip.facilities.has("assembly_yard"), "current-schema save normalization discards derived Factory adapters without fabricating retired migration evidence")
+	game.simulation.ensure_frontier_state(current_round_trip)
+	_check(game.simulation.requirement_met(current_round_trip, assembly_ownership_requirement) and current_round_trip.retired_aggregate_industry_archive == archive_before, "current-schema save/load rebuilds physical Factory ownership while keeping the migration archive immutable")
+	var first_ship: Dictionary = game.state.ships[0]
+	var first_ship_id := str(first_ship.get("instance_id", ""))
+	_check(game.set_ship_favorite(first_ship_id, not bool(first_ship.get("favorite", false))), "a non-Factory public transaction commits after Survey staging is installed")
+	var staging_after_non_factory: Dictionary = game.state.location_state("lunar_space")
+	_check(
+		bool(staging_after_non_factory.get("survey_staging_installed", false))
+		and float(staging_after_non_factory.get("industry", {}).get("structural_capacity", 0.0)) == 5.0
+		and float(staging_after_non_factory.get("construction", {}).get("capacity", 0.0)) == 1.0
+		and float(staging_after_non_factory.get("logistics", {}).get("storage_capacities", {}).get("BULK", 0.0)) == 20.0,
+		"a non-Factory transaction preserves the complete finite Survey staging package"
+	)
+	var quantum_recipe_visible_after_non_factory := (game.factory_workspace_snapshot("earth-surface-grid").get("palette", {}).get("recipes", []) as Array).any(func(recipe_value): return str((recipe_value as Dictionary).get("id", "")) == "grid_fabricate_quantum_component")
+	_check(game.simulation.requirement_met(game.state, assembly_ownership_requirement) and str(game.state.facilities.get("assembly_yard", {}).get("status", "")) == "INACTIVE" and quantum_recipe_visible_after_non_factory, "a non-Factory transaction also preserves unpowered physical Factory ownership and recipe availability")
+	game.state.facilities["frontier_matterworks"] = {"level":99, "status":"ACTIVE"}
+	var stale_earth_location: Dictionary = game.state.location_state("earth_orbit")
+	stale_earth_location["industry"]["industries"] = {"legacy_foundry":{"level":99}}
+	stale_earth_location["construction"]["active_project_ids"] = ["legacy-project"]
+	stale_earth_location["automation"]["industrial_template_id"] = "legacy-template"
+	var transaction_clone := GameStateTransaction.new(game.state, database.domains.keys())
+	var cloned_earth_location: Dictionary = transaction_clone.working_state.location_state("earth_orbit")
+	_check(not transaction_clone.working_state.facilities.has("assembly_yard"), "a raw transaction clone strips disposable Factory adapters before the application boundary reprojects physical ownership")
+	_check(not transaction_clone.working_state.facilities.has("frontier_matterworks") and (cloned_earth_location.get("industry", {}).get("industries", {}) as Dictionary).is_empty() and (cloned_earth_location.get("construction", {}).get("active_project_ids", []) as Array).is_empty() and str(cloned_earth_location.get("automation", {}).get("industrial_template_id", "")) == "", "an in-memory transaction clone still retires injected aggregate Industry metadata")
+	_check(transaction_clone.working_state.retired_aggregate_industry_archive == archive_before, "transaction normalization never mutates the immutable retired-aggregate migration archive")
+	# Corrupt only the compatibility view while retaining its authoritative
+	# physical entity. The public transaction below must repair this at the
+	# unified commit boundary, independently of the clone-preservation contract.
+	game.state.facilities.erase("assembly_yard")
 	_check(game.initialize_surveyed_factory_world("lunar_space"), "a surveyed remote Location can initialize its one canonical sparse factory grid")
+	var quantum_recipe_visible_after := (game.factory_workspace_snapshot("earth-surface-grid").get("palette", {}).get("recipes", []) as Array).any(func(recipe_value): return str((recipe_value as Dictionary).get("id", "")) == "grid_fabricate_quantum_component")
+	_check(game.simulation.requirement_met(game.state, assembly_ownership_requirement) and str(game.state.facilities.get("assembly_yard", {}).get("status", "")) == "INACTIVE" and quantum_recipe_visible_after, "an unrelated world transaction preserves unpowered physical Assembly Array ownership and recipe availability")
+	var normalized_earth_location: Dictionary = game.state.location_state("earth_orbit")
+	_check(not game.state.facilities.has("frontier_matterworks") and (normalized_earth_location.get("industry", {}).get("industries", {}) as Dictionary).is_empty() and (normalized_earth_location.get("construction", {}).get("active_project_ids", []) as Array).is_empty() and str(normalized_earth_location.get("automation", {}).get("industrial_template_id", "")) == "", "the public transaction retires injected aggregate Industry metadata while rebuilding physical adapters")
+	_check(game.state.retired_aggregate_industry_archive == archive_before, "a current-schema public transaction cleans stale aggregate metadata without rewriting migration history")
+	var staging_after_factory_transaction: Dictionary = game.state.location_state("lunar_space")
+	_check(
+		float(staging_after_factory_transaction.get("industry", {}).get("structural_capacity", 0.0)) == 5.0
+		and float(staging_after_factory_transaction.get("construction", {}).get("capacity", 0.0)) == 1.0
+		and float(staging_after_factory_transaction.get("logistics", {}).get("storage_capacities", {}).get("BULK", 0.0)) == 20.0,
+		"the Factory-world transaction commits with the full Survey staging projection intact"
+	)
 	var world_ids: Array[String] = game.factory_world_ids_for_location("lunar_space")
 	var world: Dictionary = game.state.factory_worlds.get(world_ids[0] if not world_ids.is_empty() else "", {})
 	var revealed_resources: Array[String] = []
@@ -1067,7 +1130,7 @@ func _test_factory_progression_adapters() -> void:
 	_check((unlocked_snapshot.get("palette", {}).get("buildings", []) as Array).any(func(entry): return str((entry as Dictionary).get("id", "")) == "grid_assembly_array"), "Factory palette reveals the same building after its technology requirement is met")
 
 
-func _test_location_storage_capacity_projection() -> void:
+func _test_factory_site_storage_capability() -> void:
 	var state := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	var simulation := SimulationEngine.new(database)
 	var world := factory.create_world("storage-profile-grid", "earth_orbit", Vector2i(128, 128), 901)
@@ -1076,8 +1139,8 @@ func _test_location_storage_capacity_projection() -> void:
 	state.factory_worlds = {"storage-profile-grid":world}
 	var profile: Dictionary = simulation.location_industry_constraint_profile(state, "earth_orbit")
 	var capacities: Dictionary = profile.get("storage_capacities", {})
-	_check(float(capacities.get("FLUID", 0.0)) == 1200.0, "typed Factory fluid storage projects its capacity into Location logistics")
-	_check(float(capacities.get("BULK", 0.0)) == 0.0, "non-storage Factory work buffers do not create phantom Location bulk capacity")
+	_check(float(capacities.get("FLUID", 0.0)) == 1200.0, "typed Factory fluid storage contributes its installed site-storage capability")
+	_check(float(capacities.get("BULK", 0.0)) == 0.0, "non-storage Factory work buffers do not create phantom site-storage capability")
 
 
 func _test_facility_providers_are_location_bound() -> void:
@@ -1096,6 +1159,17 @@ func _test_facility_providers_are_location_bound() -> void:
 	_check(simulation.facility_available(state, "research_complex") and is_zero_approx(simulation.research_capacity(state)), "a remote Research provider cannot supply Earth research")
 	_check(simulation.facility_available(state, "repair_dock") and simulation.ship_service_capacity(state) == 1, "a remote Repair Dock cannot increase Earth Starport service capacity")
 	_check(simulation.shipyard_engineering_level(state) == 1, "a remote Starport expansion cannot increase Earth shipyard engineering")
+	var local_world := factory.create_world("coupled-provider-grid", "earth_orbit", Vector2i(256, 128), 903)
+	_check(bool(factory.place_entity_immediate(local_world, "grid_solar_array", Vector2i(0, 0), "", "base-power").get("ok", false)), "coupled-provider fixture places full-power base generation")
+	_check(bool(factory.place_entity_immediate(local_world, "grid_research_complex", Vector2i(16, 0), "", "base-research").get("ok", false)), "coupled-provider fixture places a level-one Research provider")
+	_check(bool(factory.place_entity_immediate(local_world, "grid_solar_array", Vector2i(48, 0), "", "advanced-power").get("ok", false)), "coupled-provider fixture places limited advanced generation")
+	_check(bool(factory.place_entity_immediate(local_world, "grid_research_complex_ii", Vector2i(64, 0), "", "advanced-research").get("ok", false)), "coupled-provider fixture places a level-two Research provider")
+	_check(bool(factory.connect_entities(local_world, "POWER", "base-power", "base-research").get("ok", false)) and bool(factory.connect_entities(local_world, "POWER", "advanced-power", "advanced-research").get("ok", false)), "coupled-provider fixture powers the two Research providers on independent grids")
+	factory.advance_world(local_world, 1000.0)
+	state.factory_worlds = {"coupled-provider-grid":local_world}
+	simulation.ensure_frontier_state(state)
+	_check(is_equal_approx(simulation.research_capacity(state), 5.0 / 3.0), "Research capacity uses the best real provider's coupled level and power instead of combining maxima from different entities")
+	_check(simulation.facility_operational_level_at_location(state, "research_complex", "earth_orbit") == 2, "discrete facility-tier consumers retain the highest physically owned powered provider level")
 
 
 func _test_multi_stage_research_boundaries() -> void:
@@ -1367,11 +1441,25 @@ func _test_megastructure_phase_runtime() -> void:
 	_check(float(project.get("site_effects", {}).get("construction_capacity", 0.0)) == 12.0 and (project.get("phase_history", []) as Array).size() == 2, "phase completion persists cumulative site infrastructure and material history")
 	_check(is_zero_approx(float(project.get("total_cargo_transported", 0.0))), "same-site phase consumption does not masquerade as transported Megastructure freight")
 	game.simulation.ensure_frontier_state(game.state)
+	var normalized_site: Dictionary = game.state.location_state(site_id)
+	_check(
+		float(normalized_site.get("industry", {}).get("power_capacity", 0.0)) == 220.0
+		and float(normalized_site.get("industry", {}).get("cooling_capacity", 0.0)) == 220.0
+		and float(normalized_site.get("industry", {}).get("structural_capacity", 0.0)) == 80.0
+		and float(normalized_site.get("construction", {}).get("capacity", 0.0)) == 12.0,
+		"normalization reprojects cumulative Megastructure site effects into disposable Location capacity views"
+	)
+	game.simulation.ensure_frontier_state(game.state)
+	normalized_site = game.state.location_state(site_id)
+	_check(float(normalized_site.get("industry", {}).get("power_capacity", 0.0)) == 220.0 and float(normalized_site.get("construction", {}).get("capacity", 0.0)) == 12.0, "repeated normalization reprojects Megastructure capacity idempotently")
 	var next_phase: Dictionary = (definition.get("phases", []) as Array)[2]
 	_check(game.simulation.megastructure_site_requirement_blocker(game.state, next_phase, site_id).is_empty(), "next Megastructure phase reads persistent project-owned site effects after normalization")
 	var restored := SpaceGameState.from_dictionary(game.state.to_dictionary(), database.domains.keys(), database.regions)
 	var restored_project: Dictionary = restored.megastructure_projects.get("stellar_energy", {})
 	_check(float(restored_project.get("site_effects", {}).get("construction_capacity", 0.0)) == 12.0 and restored_project.get("phase_runtime", {}) is Dictionary, "Megastructure runtime and site effects survive save/load normalization")
+	game.simulation.ensure_frontier_state(restored)
+	var restored_site: Dictionary = restored.location_state(site_id)
+	_check(float(restored_site.get("industry", {}).get("power_capacity", 0.0)) == 220.0 and float(restored_site.get("construction", {}).get("capacity", 0.0)) == 12.0, "save/load normalization reprojects persisted Megastructure capacity exactly once")
 
 
 func _test_megastructure_factory_storage_custody() -> void:

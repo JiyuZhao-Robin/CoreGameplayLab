@@ -204,9 +204,10 @@ func _export_to_location(item_id: String, quantity: int, label: String, world_id
 ## Factory storage only.  This is deliberately a bounded pass over the visible
 ## storage inventories: it neither manufactures nor injects cargo, and returns
 ## the exact physical source split for later custody assertions.
-func _stage_location_shortfall_from_factory(item_id: String, target_available: int, label: String, world_id: String = EARTH_WORLD_ID) -> Dictionary:
+func _stage_location_shortfall_from_factory(item_id: String, target_available: int, label: String, world_id: String = EARTH_WORLD_ID, include_research_reserved: bool = false) -> Dictionary:
 	var before_snapshot := _snapshot(world_id)
-	var before_available := int((before_snapshot.get("location_available_inventory", {}) as Dictionary).get(item_id, 0))
+	var inventory_key := "location_inventory" if include_research_reserved else "location_available_inventory"
+	var before_available := int((before_snapshot.get(inventory_key, {}) as Dictionary).get(item_id, 0))
 	var remaining := maxi(0, target_available - before_available)
 	var source_breakdown := {}
 	for entity_value in before_snapshot.get("entities", []):
@@ -222,9 +223,9 @@ func _stage_location_shortfall_from_factory(item_id: String, target_available: i
 		source_breakdown[source_id] = moved
 		remaining -= moved
 	var after_snapshot := _snapshot(world_id)
-	var after_available := int((after_snapshot.get("location_available_inventory", {}) as Dictionary).get(item_id, 0))
+	var after_available := int((after_snapshot.get(inventory_key, {}) as Dictionary).get(item_id, 0))
 	var expected_moved := maxi(0, target_available - before_available)
-	_check(remaining == 0 and after_available == before_available + expected_moved and after_available >= target_available, "public Factory custody stages the finite %s Location shortfall for %s without treating pre-existing availability as an error; before=%d target=%d expected_moved=%d after=%d sources=%s" % [item_id, label, before_available, target_available, expected_moved, after_available, JSON.stringify(source_breakdown)])
+	_check(remaining == 0 and after_available == before_available + expected_moved and after_available >= target_available, "public Factory custody stages the finite %s Location %s shortfall for %s without treating pre-existing custody as an error; before=%d target=%d expected_moved=%d after=%d sources=%s" % [item_id, "physical" if include_research_reserved else "available", label, before_available, target_available, expected_moved, after_available, JSON.stringify(source_breakdown)])
 	return {"before":before_available, "after":after_available, "moved":expected_moved, "sources":source_breakdown}
 
 
@@ -408,7 +409,9 @@ func _freight_location_cargo(origin_location_id: String, origin_world_id: String
 	game.clear_location_logistics_policy(origin_location_id, item_id)
 	game.clear_location_logistics_policy(destination_location_id, item_id)
 	var origin_before: Dictionary = (_snapshot(origin_world_id).get("location_available_inventory", {}) as Dictionary).duplicate(true)
-	var destination_before: Dictionary = (_snapshot(destination_world_id).get("location_available_inventory", {}) as Dictionary).duplicate(true)
+	var destination_snapshot_before := _snapshot(destination_world_id)
+	var destination_before: Dictionary = (destination_snapshot_before.get("location_available_inventory", {}) as Dictionary).duplicate(true)
+	var destination_physical_before: Dictionary = (destination_snapshot_before.get("location_inventory", {}) as Dictionary).duplicate(true)
 	var cp_cost := int(path_costs.get("chemical_propellant", 0))
 	var repair_cost := int(path_costs.get("repair_material", 0))
 	var cp_projection: Dictionary = game.maintenance_recovery_snapshot(origin_location_id, "chemical_propellant", cp_cost, 5000.0)
@@ -434,17 +437,22 @@ func _freight_location_cargo(origin_location_id: String, origin_world_id: String
 	var eta_ms := float(dispatch.get("eta_ms", 0.0))
 	game.clear_location_logistics_policy(origin_location_id, item_id)
 	game.clear_location_logistics_policy(destination_location_id, item_id)
-	var arrival_events := _advance(eta_ms + 1000.0, "%s arrival" % label)
+	# Stop on the exact arrival boundary. Advancing past it can resume a blocked
+	# destination consumer in the same helper call and spend the delivered cargo
+	# before this custody assertion observes the handoff.
+	var arrival_events := _advance(eta_ms, "%s arrival" % label)
 	var arrivals: Array = arrival_events.filter(func(event_value):
 		var event := event_value as Dictionary
 		var cargo := event.get("cargo", {}) as Dictionary
 		return str(event.get("type", "")) == "ShipmentArrived" and str(event.get("shipment_id", "")) == shipment_id and str(event.get("origin", "")) == origin_location_id and str(event.get("destination", "")) == destination_location_id and cargo.size() == 1 and int(cargo.get(item_id, 0)) == quantity
 	)
-	var destination_after: Dictionary = _snapshot(destination_world_id).get("location_available_inventory", {})
-	_check(arrivals.size() == 1 and int(destination_after.get(item_id, 0)) == int(destination_before.get(item_id, 0)) + quantity, "%s settles the exact single shipment into public destination Location custody; shipment=%s arrivals=%s before=%s after=%s" % [label, JSON.stringify(dispatch), JSON.stringify(arrivals), JSON.stringify(destination_before), JSON.stringify(destination_after)])
+	var destination_snapshot_after := _snapshot(destination_world_id)
+	var destination_after: Dictionary = destination_snapshot_after.get("location_available_inventory", {})
+	var destination_physical_after: Dictionary = destination_snapshot_after.get("location_inventory", {})
+	_check(arrivals.size() == 1 and int(destination_physical_after.get(item_id, 0)) == int(destination_physical_before.get(item_id, 0)) + quantity, "%s settles the exact single shipment into public destination Location ownership; shipment=%s arrivals=%s physical_before=%s physical_after=%s available_before=%s available_after=%s" % [label, JSON.stringify(dispatch), JSON.stringify(arrivals), JSON.stringify(destination_physical_before), JSON.stringify(destination_physical_after), JSON.stringify(destination_before), JSON.stringify(destination_after)])
 	game.clear_location_logistics_policy(origin_location_id, item_id)
 	game.clear_location_logistics_policy(destination_location_id, item_id)
-	return {"shipment_id":shipment_id, "eta_ms":eta_ms, "dispatch":dispatch, "arrival":arrivals[0] if not arrivals.is_empty() else {}, "before":origin_before, "after":destination_after}
+	return {"shipment_id":shipment_id, "eta_ms":eta_ms, "dispatch":dispatch, "arrival":arrivals[0] if not arrivals.is_empty() else {}, "before":origin_before, "after":destination_after, "physical_after":destination_physical_after}
 
 
 ## Produce a finite repair-material shortfall from already-built Earth machines.
@@ -6984,7 +6992,7 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 	_check(deep_crisis_started and deep_crisis_defeated and _ordered_types(["ExpeditionNodeCompleted", "ExpeditionNodeCompleted", "CombatStarted", "EnemyDefeated", "ExpeditionNodeCompleted", "ExpeditionRouteCompleted"], deep_route_events) and deep_scoped.any(func(event_value): return str((event_value as Dictionary).get("type", "")) == "ExpeditionRouteCompleted" and str((event_value as Dictionary).get("route_id", "")) == "deep_system_route") and deep_dark_after == deep_dark_before + 5, "J10 completes the exact victorious Deep crisis route and receives five physical dark matter; before=%d after=%d events=%s" % [deep_dark_before, deep_dark_after, JSON.stringify(deep_route_events)])
 	if failures.size() > 0:
 		return
-	_stage_earth_manifest({"chemical_propellant":2, "repair_material":1, "industrial_machine_tools":1, "structural_frame":2, "electronics":2}, packet, "J10 Deep SURVEYED mission")
+	_stage_earth_manifest({"industrial_machine_tools":1, "structural_frame":2, "electronics":2, "chemical_propellant":2, "repair_material":1}, packet, "J10 Deep SURVEYED mission")
 	var deep_availability: Dictionary = game.survey_mission_availability("deep_system", "SURVEYED", [titan_id], EARTH_LOCATION_ID)
 	if not bool(deep_availability.get("allowed", false)):
 		var only_repair_blocked := not (deep_availability.get("blockers", []) as Array).is_empty() and (deep_availability.get("blockers", []) as Array).all(func(blocker_value): return str((blocker_value as Dictionary).get("code", "")) == "SURVEY_VESSEL_UNAVAILABLE")
@@ -7005,6 +7013,32 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 		return
 
 	_check(bool(game.configure_logistics_service("outer_deep_freight", "general_cargo")), "public Logistics configures the Outer-Deep corridor")
+	# Surface solar construction still consumes salvaged metal in the sparse Deep
+	# workspace.  Recover that finite manifest through the already-proven repeatable
+	# combat activity instead of treating scrap as a locally manufacturable input.
+	# Stage ammunition in small public Location batches so the route reward and the
+	# finite Earth staging capacity remain observable throughout the recovery.
+	if not game.formation_ready(pathfinder_formation_id):
+		_advance(200000.0, "J10 bounded Pathfinder-Cruiser repair before Deep scrap recovery")
+	_check(not pathfinder_formation_id.is_empty() and not game.formation_is_active(pathfinder_formation_id) and game.formation_ready(pathfinder_formation_id), "J10 can redeploy the proven Pathfinder-Cruiser formation for the Deep solar scrap manifest")
+	_check(bool(game.set_fleet_supply_plan("kinetic_munitions", 40, pathfinder_formation_id)), "J10 publishes a forty-round cap for four bounded Deep solar scrap patrols")
+	for deep_scrap_ammo_batch in range(4):
+		_export_to_location("kinetic_munitions", 10, "J10 Deep solar scrap-recovery ammunition batch %d/4" % (deep_scrap_ammo_batch + 1))
+		_check(bool(game.auto_resupply_fleet(pathfinder_formation_id, [pathfinder_ship_id, belt_cruiser_ship_id])), "J10 physically loads Deep scrap-recovery ammunition batch %d/4" % (deep_scrap_ammo_batch + 1))
+		if failures.size() > 0:
+			return
+	var deep_scrap_before := int((_snapshot(EARTH_WORLD_ID).get("location_available_inventory", {}) as Dictionary).get("scrap_metal", 0))
+	_check(bool(game.start_activity("expedition", "combat_lunar_raider_patrol", pathfinder_formation_id)), "J10 starts the ammunition-bounded Deep solar scrap-recovery patrol")
+	var deep_scrap_events := _advance(60000.0, "J10 bounded Deep solar scrap recovery")
+	var deep_scrap_cycles := _events_with_activity(deep_scrap_events, "OperationCycleCompleted", "combat_lunar_raider_patrol")
+	var deep_scrap_returned := not _events_with_activity(deep_scrap_events, "ExpeditionReturnedForLogistics", "combat_lunar_raider_patrol").is_empty()
+	var deep_scrap_recalled := true
+	if game.formation_is_active(pathfinder_formation_id):
+		deep_scrap_recalled = bool(game.stop_activity("expedition"))
+	var deep_scrap_after := int((_snapshot(EARTH_WORLD_ID).get("location_available_inventory", {}) as Dictionary).get("scrap_metal", 0))
+	_check(deep_scrap_cycles.size() >= 4 and not _events_have_type(deep_scrap_events, "ExpeditionFailed") and (deep_scrap_returned or deep_scrap_recalled) and deep_scrap_after >= deep_scrap_before + 8, "four bounded public Lunar patrols recover the eight physical scrap units required by the Deep solar base; before=%d after=%d cycles=%d events=%s" % [deep_scrap_before, deep_scrap_after, deep_scrap_cycles.size(), JSON.stringify(deep_scrap_events)])
+	if failures.size() > 0:
+		return
 	_transfer_earth_manifest_to_remote_factory("deep_system", deep_world_id, {"scrap_metal":8}, {"chemical_propellant":12, "repair_material":5}, packet, "J10 Deep four-solar power-base wave", "")
 	var deep_solars: Array[String] = []
 	for deep_solar_index in 4:
@@ -7017,7 +7051,15 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 	var dark_mine_id := str(dark_mine.get("entity_id", ""))
 	var dark_extractor_events := _advance(120000.0, "J10 Deep dark-matter extractor construction")
 	_check(str(_entity(_snapshot(deep_world_id), dark_mine_id).get("definition_id", "")) == "grid_exotic_extractor" and str(_entity(_snapshot(deep_world_id), dark_mine_id).get("resource_id", "")) == "dark_matter" and _events_have_type(dark_extractor_events, "FactoryConstructionCompleted"), "Factory physically completes the canonical two-solar Deep dark-matter extractor")
-	_transfer_earth_manifest_to_remote_factory("deep_system", deep_world_id, {"superalloy":10, "quantum_component":8, "antimatter_cell":2}, {"chemical_propellant":12, "repair_material":5}, packet, "J10 Frontier Matterworks wave", "")
+	# The surveyed Deep staging hub exposes 20 handling units per dispatch window.
+	# This construction manifest totals 20.5 units, so carry whole item lots in
+	# two bounded waves without adding another shipment or path-cost debit.
+	_transfer_earth_manifest_to_remote_factory("deep_system", deep_world_id, {"superalloy":10, "quantum_component":8}, {"chemical_propellant":12, "repair_material":5}, packet, "J10 Frontier Matterworks material wave", "")
+	if failures.size() > 0:
+		return
+	_transfer_earth_manifest_to_remote_factory("deep_system", deep_world_id, {"antimatter_cell":2}, {"chemical_propellant":12, "repair_material":5}, packet, "J10 Frontier Matterworks antimatter wave", "")
+	if failures.size() > 0:
+		return
 	var matterworks := _queue_and_fund("grid_frontier_matterworks", "", _find_clear_factory_origin("grid_frontier_matterworks", deep_world_id), "J10 Frontier Matterworks", true, deep_world_id, "")
 	var matterworks_id := str(matterworks.get("entity_id", ""))
 	var matterworks_events := _advance(180000.0, "J10 Frontier Matterworks construction")
@@ -7047,17 +7089,40 @@ func _complete_deep_system(packet: Dictionary, _outer_battleship_id: String) -> 
 	_complete_stellar_energy_program(packet, titan_id)
 
 
+func _active_research_stage_item(item_id: String) -> Dictionary:
+	var runtime: Dictionary = game.research_runtime_snapshot()
+	var reserved_costs: Dictionary = runtime.get("reserved_costs", {})
+	var stage_consumed: Dictionary = runtime.get("stage_consumed", {})
+	var active := str(runtime.get("status", "IDLE")) in ["RUNNING", "BLOCKED", "PAUSED"] and (reserved_costs.has(item_id) or stage_consumed.has(item_id))
+	return {
+		"active":active,
+		"project_id":str(runtime.get("project_id", "")),
+		"stage_id":str(runtime.get("stage_id", "")),
+		"status":str(runtime.get("status", "IDLE")),
+		"remaining":int(reserved_costs.get(item_id, 0)),
+		"consumed":int(stage_consumed.get(item_id, 0))
+	}
+
+
 func _stage_earth_manifest(manifest: Dictionary, packet: Dictionary, label: String) -> void:
 	for item_value in manifest:
 		var item_id := str(item_value)
-		var target := int(manifest.get(item_id, 0))
-		var location_quantity := int((_snapshot(EARTH_WORLD_ID).get("location_available_inventory", {}) as Dictionary).get(item_id, 0))
+		var canonical_target := int(manifest.get(item_id, 0))
+		var research_item := _active_research_stage_item(item_id)
+		var include_research_reserved := bool(research_item.get("active", false))
+		var target := int(research_item.get("remaining", 0)) if include_research_reserved else canonical_target
+		if include_research_reserved:
+			_check(int(research_item.get("consumed", 0)) + target == canonical_target, "%s %s maps its canonical stage cost exactly to consumed plus reserved research custody; canonical=%d consumed=%d reserved=%d runtime=%s" % [label, item_id, canonical_target, int(research_item.get("consumed", 0)), target, JSON.stringify(research_item)])
+		if failures.size() > 0:
+			return
+		var location_key := "location_inventory" if include_research_reserved else "location_available_inventory"
+		var location_quantity := int((_snapshot(EARTH_WORLD_ID).get(location_key, {}) as Dictionary).get(item_id, 0))
 		var shortfall := maxi(0, target - location_quantity)
 		if shortfall > 0:
 			_ensure_local_factory_item(item_id, shortfall, packet, "%s %s" % [label, item_id])
 		if failures.size() > 0:
 			return
-		_stage_location_shortfall_from_factory(item_id, target, label)
+		_stage_location_shortfall_from_factory(item_id, target, label, EARTH_WORLD_ID, include_research_reserved)
 
 
 func _complete_exact_research(project_id: String, costs: Dictionary, duration_ms: float, packet: Dictionary, technology_id: String) -> void:
@@ -7092,10 +7157,50 @@ func _construct_earth_adapter(definition_id: String, costs: Dictionary, packet: 
 	if failures.size() > 0:
 		return ""
 	var construction := _queue_and_fund(definition_id, initial_recipe_id, _find_clear_factory_origin(definition_id, EARTH_WORLD_ID), label, true, EARTH_WORLD_ID, "")
+	if failures.size() > 0:
+		return ""
 	var entity_id := str(construction.get("entity_id", ""))
 	var events := _advance(180000.0, "%s physical construction" % label)
 	_check(not entity_id.is_empty() and str(_entity(_snapshot(EARTH_WORLD_ID), entity_id).get("definition_id", "")) == definition_id and events.any(func(event_value): return str((event_value as Dictionary).get("type", "")) == "FactoryConstructionCompleted" and str((event_value as Dictionary).get("entity_id", "")) == entity_id), "%s completes through exact public funding and time advancement; events=%s" % [label, JSON.stringify(events)])
 	return entity_id
+
+
+## Long industrial programs legitimately accumulate fleet-maintenance debt while
+## their survey vessel remains docked.  Restore readiness through the same public
+## Factory custody and time progression used by normal play, while retaining the
+## exact repair-material cost of the pending survey mission.
+func _restore_earth_survey_vessel_readiness(location_id: String, target_state: String, ship_id: String, packet: Dictionary, label: String) -> void:
+	var availability: Dictionary = game.survey_mission_availability(location_id, target_state, [ship_id], EARTH_LOCATION_ID)
+	if bool(availability.get("allowed", false)):
+		return
+	var initial_blockers: Array = availability.get("blockers", [])
+	var maintenance_blocker: Dictionary = initial_blockers[0] as Dictionary if initial_blockers.size() == 1 else {}
+	var only_maintenance_blocked := initial_blockers.size() == 1 \
+		and str(maintenance_blocker.get("code", "")) == "SURVEY_VESSEL_UNAVAILABLE" \
+		and str(maintenance_blocker.get("ship_id", "")) == ship_id \
+		and str(maintenance_blocker.get("maintenance_state", "")) == "ACTIVE" \
+		and float(maintenance_blocker.get("maintenance_coverage", 1.0)) <= 0.0
+	_check(only_maintenance_blocked, "%s reaches maintenance recovery with every non-vessel survey prerequisite already satisfied; blockers=%s" % [label, JSON.stringify(initial_blockers)])
+	if failures.size() > 0:
+		return
+	var recovery_projections: Array = []
+	var settled_projection: Dictionary = {}
+	for recovery_pass in range(3):
+		var survey_costs: Dictionary = availability.get("costs", {})
+		var spendable_repair := int(survey_costs.get("repair_material", 0))
+		var projection: Dictionary = game.maintenance_recovery_snapshot(EARTH_LOCATION_ID, "repair_material", spendable_repair, 1000.0)
+		recovery_projections.append(projection)
+		_stage_earth_manifest({"repair_material":int(projection.get("gross_production_target", spendable_repair))}, packet, "%s maintenance recovery pass %d/3" % [label, recovery_pass + 1])
+		if failures.size() > 0:
+			return
+		_advance(1000.0, "%s maintenance settlement pass %d/3" % [label, recovery_pass + 1])
+		if failures.size() > 0:
+			return
+		availability = game.survey_mission_availability(location_id, target_state, [ship_id], EARTH_LOCATION_ID)
+		settled_projection = game.maintenance_recovery_snapshot(EARTH_LOCATION_ID, "repair_material", spendable_repair, 0.0)
+		if bool(availability.get("allowed", false)) and is_zero_approx(float(settled_projection.get("fleet_debt", 0.0))):
+			break
+	_check(bool(availability.get("allowed", false)) and is_zero_approx(float(settled_projection.get("fleet_debt", 0.0))), "%s restores the docked survey vessel through bounded physical repair production while preserving the pending mission package; blockers=%s projections=%s settled=%s" % [label, JSON.stringify(availability.get("blockers", [])), JSON.stringify(recovery_projections), JSON.stringify(settled_projection)])
 
 
 func _complete_public_survey(location_id: String, target_state: String, ship_id: String, duration_ms: float, label: String) -> void:
@@ -7105,6 +7210,8 @@ func _complete_public_survey(location_id: String, target_state: String, ship_id:
 		return
 	var event_start := observed_events.size()
 	_check(bool(game.start_survey_mission(location_id, target_state, [ship_id], EARTH_LOCATION_ID)), "public Survey starts %s" % label)
+	if failures.size() > 0:
+		return
 	var events := _advance(duration_ms, label)
 	var completion := _first_event(_events_after(event_start), "SurveyMissionCompleted")
 	_check(str(completion.get("target", "")) == location_id and str(completion.get("survey_state", "")) == target_state and _ordered_types(["SurveyMissionStarted", "SurveyMissionCompleted"], _events_after(event_start)), "%s reaches the exact target state; completion=%s events=%s" % [label, JSON.stringify(completion), JSON.stringify(events)])
@@ -7230,21 +7337,48 @@ func _move_asteroid_cobalt_ore_to_jovian(quantity: int, packet: Dictionary, labe
 func _produce_jovian_superalloy_to_earth(quantity: int, packet: Dictionary, label: String) -> void:
 	var jovian_world_id := str(packet.get("jovian_world_id", ""))
 	var jovian_storage_id := str(packet.get("jovian_storage_id", ""))
+	var research_item := _active_research_stage_item("superalloy")
+	var retain_for_research := bool(research_item.get("active", false))
+	var earth_physical_before := int((_snapshot(EARTH_WORLD_ID).get("location_inventory", {}) as Dictionary).get("superalloy", 0))
+	var retained_total := 0
 	var chunk_count := ceili(float(quantity) / 8.0)
 	for chunk_index in range(chunk_count):
 		var chunk := mini(8, quantity - chunk_index * 8)
 		_move_lunar_titanium_to_jovian(chunk, packet, "%s titanium %d/%d" % [label, chunk_index + 1, chunk_count])
+		if failures.size() > 0:
+			return
 		_move_asteroid_cobalt_ore_to_jovian(chunk * 4, packet, "%s cobalt %d/%d" % [label, chunk_index + 1, chunk_count])
+		if failures.size() > 0:
+			return
 		_run_exact_recipe_batches(str(packet.get("jovian_smelter_id", "")), "grid_refine_cobalt", str(packet.get("jovian_power_id", "")), jovian_storage_id, "cobalt_ingot", chunk * 2, mini(16, chunk * 2), "%s cobalt refinement %d/%d" % [label, chunk_index + 1, chunk_count], jovian_storage_id, jovian_world_id)
+		if failures.size() > 0:
+			return
 		_recycle_jovian_cobalt_waste(packet, "%s cobalt-waste recovery %d/%d" % [label, chunk_index + 1, chunk_count])
+		if failures.size() > 0:
+			return
 		_extract_resource_batch(str(packet.get("jovian_methane_extractor_id", "")), "methane", str(packet.get("jovian_power_id", "")), str(packet.get("jovian_fluid_storage_id", "")), chunk, "%s methane extraction %d/%d" % [label, chunk_index + 1, chunk_count], jovian_world_id)
+		if failures.size() > 0:
+			return
 		_run_exact_recipe_batches(str(packet.get("jovian_smelter_id", "")), "grid_refine_superalloy", str(packet.get("jovian_power_id", "")), jovian_storage_id, "superalloy", chunk, chunk, "%s superalloy refinement %d/%d" % [label, chunk_index + 1, chunk_count], "", jovian_world_id, {"methane":str(packet.get("jovian_fluid_storage_id", ""))})
+		if failures.size() > 0:
+			return
 		_transfer_earth_manifest_to_remote_factory("gas_giant_region", jovian_world_id, {"chemical_propellant":5, "repair_material":3}, {"chemical_propellant":5, "repair_material":3}, packet, "%s return reserve %d/%d" % [label, chunk_index + 1, chunk_count], "")
+		if failures.size() > 0:
+			return
 		_export_to_location("superalloy", chunk, "%s source cargo %d/%d" % [label, chunk_index + 1, chunk_count], jovian_world_id, jovian_storage_id)
+		if failures.size() > 0:
+			return
 		var returned := _freight_location_cargo("gas_giant_region", jovian_world_id, EARTH_LOCATION_ID, EARTH_WORLD_ID, "superalloy", chunk, {"chemical_propellant":5, "repair_material":3}, "%s public Earth return %d/%d" % [label, chunk_index + 1, chunk_count])
 		if returned.is_empty() or failures.size() > 0:
 			return
-		_import_from_location("superalloy", chunk, str(packet.get("storage_id", "")), "%s Earth Factory custody %d/%d" % [label, chunk_index + 1, chunk_count])
+		if retain_for_research:
+			retained_total += chunk
+			var earth_physical_after := int((_snapshot(EARTH_WORLD_ID).get("location_inventory", {}) as Dictionary).get("superalloy", 0))
+			_check(earth_physical_after == earth_physical_before + retained_total, "%s leaves the exact returned superalloy in Earth Location ownership for active stage %s instead of bypassing its reservation through Factory import; before=%d retained=%d after=%d reservation=%s" % [label, str(research_item.get("stage_id", "")), earth_physical_before, retained_total, earth_physical_after, JSON.stringify(research_item)])
+		else:
+			_import_from_location("superalloy", chunk, str(packet.get("storage_id", "")), "%s Earth Factory custody %d/%d" % [label, chunk_index + 1, chunk_count])
+		if failures.size() > 0:
+			return
 
 
 func _find_clear_factory_origin(definition_id: String, world_id: String) -> Dictionary:
@@ -7284,10 +7418,29 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 	# Lagrange is a normal three-step survey target.  The Titan's explicit Deep
 	# Survey module is the public capability source for the terminal step.
 	_stage_earth_manifest({"chemical_propellant":1}, packet, "J10 Lagrange DETECTED mission")
+	if failures.size() > 0:
+		return
+	_restore_earth_survey_vessel_readiness("earth_sun_lagrange", "DETECTED", titan_id, packet, "J10 Lagrange detection survey")
+	if failures.size() > 0:
+		return
 	_complete_public_survey("earth_sun_lagrange", "DETECTED", titan_id, 20000.0, "J10 Lagrange detection survey")
-	_stage_earth_manifest({"chemical_propellant":2, "repair_material":1, "industrial_machine_tools":1, "structural_frame":2, "electronics":2}, packet, "J10 Lagrange SURVEYED mission")
+	if failures.size() > 0:
+		return
+	_stage_earth_manifest({"industrial_machine_tools":1, "structural_frame":2, "electronics":2, "chemical_propellant":2, "repair_material":1}, packet, "J10 Lagrange SURVEYED mission")
+	if failures.size() > 0:
+		return
+	_restore_earth_survey_vessel_readiness("earth_sun_lagrange", "SURVEYED", titan_id, packet, "J10 Lagrange industrial survey")
+	if failures.size() > 0:
+		return
 	_complete_public_survey("earth_sun_lagrange", "SURVEYED", titan_id, 40000.0, "J10 Lagrange industrial survey")
-	_stage_earth_manifest({"chemical_propellant":4, "repair_material":2, "electronics":1}, packet, "J10 Lagrange DEEP_SURVEYED mission")
+	if failures.size() > 0:
+		return
+	_stage_earth_manifest({"chemical_propellant":4, "electronics":1, "repair_material":2}, packet, "J10 Lagrange DEEP_SURVEYED mission")
+	if failures.size() > 0:
+		return
+	_restore_earth_survey_vessel_readiness("earth_sun_lagrange", "DEEP_SURVEYED", titan_id, packet, "J10 Lagrange deep survey")
+	if failures.size() > 0:
+		return
 	_complete_public_survey("earth_sun_lagrange", "DEEP_SURVEYED", titan_id, 60000.0, "J10 Lagrange deep survey")
 	if failures.size() > 0:
 		return
@@ -7304,7 +7457,11 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 	# program so capacity, advanced power and cooling remain observable.
 	var research_complex_costs := {"steel_composite":5, "quantum_component":4, "data_core":4}
 	_prepare_external_for_manifest(research_complex_costs, packet, "J10 Research Complex II external closure")
+	if failures.size() > 0:
+		return
 	var research_complex_ii_id := _construct_earth_adapter("grid_research_complex_ii", research_complex_costs, packet, "J10 Research Complex II")
+	if failures.size() > 0 or research_complex_ii_id.is_empty():
+		return
 	_ensure_connection("POWER", str(packet.get("power_source_id", "")), research_complex_ii_id, "")
 	_ensure_connection("POWER", str(packet.get("power_source_id", "")), str(packet.get("assembly_array_id", "")), "")
 	if failures.size() > 0:
@@ -7321,8 +7478,11 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 		var stage := research_stages[research_stage_index] as Dictionary
 		var stage_costs: Dictionary = stage.get("costs", {})
 		if research_stage_index == 2:
-			var route_dark_custody := int((_snapshot(EARTH_WORLD_ID).get("location_available_inventory", {}) as Dictionary).get("dark_matter", 0))
-			_check(route_dark_custody >= 2, "the thermal-routing stage consumes the Deep-route dark-matter reward from explicit Earth Location custody rather than assuming remote Factory output was recovered; available=%d" % route_dark_custody)
+			var route_dark_custody := int((_snapshot(EARTH_WORLD_ID).get("location_inventory", {}) as Dictionary).get("dark_matter", 0))
+			var dark_research_item := _active_research_stage_item("dark_matter")
+			var dark_remaining := int(dark_research_item.get("remaining", 0))
+			var dark_consumed := int(dark_research_item.get("consumed", 0))
+			_check(bool(dark_research_item.get("active", false)) and dark_consumed + dark_remaining == 2 and route_dark_custody >= dark_remaining, "the paused thermal-routing stage accounts for the Deep-route dark-matter reward as consumed plus explicitly reserved Earth Location ownership; physical=%d reservation=%s" % [route_dark_custody, JSON.stringify(dark_research_item)])
 		_prepare_external_for_manifest(stage_costs, packet, "J10 Megastructure research stage %s" % str(stage.get("id", "")))
 		_stage_earth_manifest(stage_costs, packet, "J10 Megastructure research stage %s" % str(stage.get("id", "")))
 		if failures.size() > 0:
@@ -7330,8 +7490,18 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 		var stage_event_start := observed_events.size()
 		if research_stage_index == 0:
 			_check(bool(game.start_research_project("research_megastructures")), "public Research starts the staged Stellar Energy program")
+		else:
+			_check(bool(game.start_research_project("research_megastructures")), "public Research resumes the staged Stellar Energy program for stage %s after deterministic material staging" % str(stage.get("id", "")))
 		var runtime_before: Dictionary = game.research_runtime_snapshot()
-		_check(str(runtime_before.get("project_id", "")) == "research_megastructures" and str(runtime_before.get("stage_id", "")) == str(stage.get("id", "")) and int(stage.get("work_required", 0)) > 0, "public research runtime exposes exact active Megastructure stage %s and its canonical finite work; runtime=%s" % [str(stage.get("id", "")), JSON.stringify(runtime_before)])
+		var stage_physical_before: Dictionary = (_snapshot(EARTH_WORLD_ID).get("location_inventory", {}) as Dictionary).duplicate(true)
+		var stage_consumed_before: Dictionary = (runtime_before.get("stage_consumed", {}) as Dictionary).duplicate(true)
+		var stage_reserved_before: Dictionary = runtime_before.get("reserved_costs", {})
+		var exact_stage_reservation := true
+		for stage_item_value in stage_costs:
+			var stage_item_id := str(stage_item_value)
+			var remaining_cost := int(stage_costs.get(stage_item_id, 0)) - int(stage_consumed_before.get(stage_item_id, 0))
+			exact_stage_reservation = exact_stage_reservation and int(stage_reserved_before.get(stage_item_id, -1)) == remaining_cost and int(stage_physical_before.get(stage_item_id, 0)) >= remaining_cost
+		_check(str(runtime_before.get("project_id", "")) == "research_megastructures" and str(runtime_before.get("stage_id", "")) == str(stage.get("id", "")) and int(stage.get("work_required", 0)) > 0 and exact_stage_reservation, "public research runtime exposes exact active Megastructure stage %s, canonical finite work, and physical custody for every remaining reservation; runtime=%s physical=%s" % [str(stage.get("id", "")), JSON.stringify(runtime_before), JSON.stringify(stage_physical_before)])
 		var stage_events: Array = []
 		var stage_boundary_seen := false
 		# Public research throughput changes with powered capacity.  Poll in at most
@@ -7351,6 +7521,20 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 		else:
 			var completion := _first_event(scoped, "ResearchCompleted")
 			_check(stage_boundary_seen and str(completion.get("project_id", "")) == "research_megastructures" and str(completion.get("technology_id", "")) == "megastructure_engineering", "Megastructure research publishes its exact terminal technology within the bounded public polling window; completion=%s events=%s" % [JSON.stringify(completion), JSON.stringify(stage_events)])
+		var stage_physical_after: Dictionary = _snapshot(EARTH_WORLD_ID).get("location_inventory", {})
+		var exact_stage_debit := true
+		for debit_item_value in stage_costs:
+			var debit_item_id := str(debit_item_value)
+			var remaining_debit := int(stage_costs.get(debit_item_id, 0)) - int(stage_consumed_before.get(debit_item_id, 0))
+			exact_stage_debit = exact_stage_debit and int(stage_physical_after.get(debit_item_id, 0)) == int(stage_physical_before.get(debit_item_id, 0)) - remaining_debit
+		_check(exact_stage_debit, "Megastructure research stage %s converts every remaining reservation into one exact physical Location debit without duplicate staging; consumed_before=%s physical_before=%s physical_after=%s" % [str(stage.get("id", "")), JSON.stringify(stage_consumed_before), JSON.stringify(stage_physical_before), JSON.stringify(stage_physical_after)])
+		if failures.size() > 0:
+			return
+		if research_stage_index < research_stages.size() - 1:
+			_check(bool(game.stop_research()), "public Research pauses after stage %s so the next finite material packet cannot be consumed while it is still being assembled" % str(stage.get("id", "")))
+			var paused_runtime: Dictionary = game.research_runtime_snapshot()
+			var next_stage := research_stages[research_stage_index + 1] as Dictionary
+			_check(str(paused_runtime.get("status", "")) == "PAUSED" and str(paused_runtime.get("stage_id", "")) == str(next_stage.get("id", "")), "the paused Research runtime exposes the exact next stage before material preparation; runtime=%s" % JSON.stringify(paused_runtime))
 		if failures.size() > 0:
 			return
 
@@ -7358,22 +7542,43 @@ func _complete_stellar_energy_program(packet: Dictionary, titan_id: String) -> v
 	# later phase manifests are imported immediately into class-specific Factory
 	# custody so no surveyed Location capacity is bypassed.
 	_transfer_earth_manifest_to_remote_factory("earth_sun_lagrange", lagrange_world_id, {"iron_ingot":10}, {"chemical_propellant":1, "repair_material":1}, packet, "J10 Lagrange Bulk-depot wave", "")
+	if failures.size() > 0:
+		return
 	var lagrange_bulk := _queue_and_fund("grid_bulk_depot", "", _find_clear_factory_origin("grid_bulk_depot", lagrange_world_id), "J10 Lagrange Bulk depot", true, lagrange_world_id, "")
+	if failures.size() > 0:
+		return
 	var lagrange_bulk_id := str(lagrange_bulk.get("entity_id", ""))
-	_advance(90000.0, "J10 Lagrange Bulk-depot construction")
+	var lagrange_bulk_events := _advance(90000.0, "J10 Lagrange Bulk-depot construction")
+	_check(lagrange_bulk_events.any(func(event_value): return str((event_value as Dictionary).get("type", "")) == "FactoryConstructionCompleted" and str((event_value as Dictionary).get("entity_id", "")) == lagrange_bulk_id), "Factory completes the explicit Lagrange Bulk depot in its bounded construction window; events=%s" % JSON.stringify(lagrange_bulk_events))
+	if failures.size() > 0:
+		return
 	_prepare_earth_steel_shortfall(4, packet, "J10 Lagrange Component-depot steel closure")
 	if failures.size() > 0:
 		return
 	_transfer_earth_manifest_to_remote_factory("earth_sun_lagrange", lagrange_world_id, {"steel_composite":4, "electronics":4}, {"chemical_propellant":1, "repair_material":1}, packet, "J10 Lagrange Component-depot wave", "")
+	if failures.size() > 0:
+		return
 	var lagrange_component := _queue_and_fund("grid_component_depot", "", _find_clear_factory_origin("grid_component_depot", lagrange_world_id), "J10 Lagrange Component depot", true, lagrange_world_id, "")
+	if failures.size() > 0:
+		return
 	var lagrange_component_id := str(lagrange_component.get("entity_id", ""))
-	_advance(90000.0, "J10 Lagrange Component-depot construction")
+	var lagrange_component_events := _advance(90000.0, "J10 Lagrange Component-depot construction")
+	_check(lagrange_component_events.any(func(event_value): return str((event_value as Dictionary).get("type", "")) == "FactoryConstructionCompleted" and str((event_value as Dictionary).get("entity_id", "")) == lagrange_component_id), "Factory completes the explicit Lagrange Component depot in its bounded construction window; events=%s" % JSON.stringify(lagrange_component_events))
+	if failures.size() > 0:
+		return
 	_prepare_external_for_manifest({"superalloy":4, "quantum_component":4}, packet, "J10 Lagrange Special-vault external closure")
+	if failures.size() > 0:
+		return
 	_transfer_earth_manifest_to_remote_factory("earth_sun_lagrange", lagrange_world_id, {"superalloy":4, "quantum_component":4}, {"chemical_propellant":1, "repair_material":1}, packet, "J10 Lagrange Special-vault wave", "")
+	if failures.size() > 0:
+		return
 	var lagrange_special := _queue_and_fund("grid_special_vault", "", _find_clear_factory_origin("grid_special_vault", lagrange_world_id), "J10 Lagrange Special vault", true, lagrange_world_id, "")
+	if failures.size() > 0:
+		return
 	var lagrange_special_id := str(lagrange_special.get("entity_id", ""))
 	var lagrange_depot_events := _advance(120000.0, "J10 Lagrange Special-vault construction")
-	_check(str(_entity(_snapshot(lagrange_world_id), lagrange_bulk_id).get("definition_id", "")) == "grid_bulk_depot" and str(_entity(_snapshot(lagrange_world_id), lagrange_component_id).get("definition_id", "")) == "grid_component_depot" and str(_entity(_snapshot(lagrange_world_id), lagrange_special_id).get("definition_id", "")) == "grid_special_vault" and _events_have_type(lagrange_depot_events, "FactoryConstructionCompleted"), "Factory completes all three explicit Lagrange material-custody depots")
+	var lagrange_special_completed := lagrange_depot_events.any(func(event_value): return str((event_value as Dictionary).get("type", "")) == "FactoryConstructionCompleted" and str((event_value as Dictionary).get("entity_id", "")) == lagrange_special_id)
+	_check(lagrange_special_completed and str(_entity(_snapshot(lagrange_world_id), lagrange_bulk_id).get("definition_id", "")) == "grid_bulk_depot" and str(_entity(_snapshot(lagrange_world_id), lagrange_component_id).get("definition_id", "")) == "grid_component_depot" and str(_entity(_snapshot(lagrange_world_id), lagrange_special_id).get("definition_id", "")) == "grid_special_vault", "Factory completes all three explicit Lagrange material-custody depots; special_events=%s" % JSON.stringify(lagrange_depot_events))
 	if failures.size() > 0:
 		return
 
@@ -7511,13 +7716,19 @@ func _prepare_external_for_manifest(manifest: Dictionary, packet: Dictionary, la
 	var external := {}
 	for item_value in manifest:
 		_accumulate_external_requirements(str(item_value), int(manifest.get(str(item_value), 0)), external)
+		if failures.size() > 0:
+			return
 	var storage_id := str(packet.get("storage_id", ""))
 	for item_value in external:
 		var item_id := str(item_value)
 		var required := int(external.get(item_id, 0))
+		var research_item := _active_research_stage_item(item_id)
+		if bool(research_item.get("active", false)):
+			required = int(research_item.get("remaining", 0))
 		var earth_snapshot := _snapshot(EARTH_WORLD_ID)
 		var storage_inventory: Dictionary = _entity(earth_snapshot, storage_id).get("inventory", {})
-		var location_inventory: Dictionary = earth_snapshot.get("location_available_inventory", {})
+		var location_key := "location_inventory" if bool(research_item.get("active", false)) else "location_available_inventory"
+		var location_inventory: Dictionary = earth_snapshot.get(location_key, {})
 		var shortfall := maxi(0, required - int(storage_inventory.get(item_id, 0)) - int(location_inventory.get(item_id, 0)))
 		if shortfall <= 0 or item_id == "dark_matter":
 			continue
@@ -7633,6 +7844,8 @@ func _accumulate_external_requirements(item_id: String, quantity: int, result: D
 	for input_value in recipe.get("inputs", []):
 		var input := input_value as Dictionary
 		_accumulate_external_requirements(str(input.get("item", "")), int(input.get("quantity", 0)) * cycles, result)
+		if failures.size() > 0:
+			return
 
 
 func _return_jovian_cobalt_ingot_to_earth(quantity: int, packet: Dictionary, label: String) -> void:
@@ -7642,10 +7855,20 @@ func _return_jovian_cobalt_ingot_to_earth(quantity: int, packet: Dictionary, lab
 	for chunk_index in range(chunk_count):
 		var chunk := mini(8, quantity - chunk_index * 8)
 		_move_asteroid_cobalt_ore_to_jovian(chunk * 2, packet, "%s ore %d/%d" % [label, chunk_index + 1, chunk_count])
+		if failures.size() > 0:
+			return
 		_run_exact_recipe_batches(str(packet.get("jovian_smelter_id", "")), "grid_refine_cobalt", str(packet.get("jovian_power_id", "")), jovian_storage_id, "cobalt_ingot", chunk, chunk, "%s refinement %d/%d" % [label, chunk_index + 1, chunk_count], jovian_storage_id, jovian_world_id)
+		if failures.size() > 0:
+			return
 		_recycle_jovian_cobalt_waste(packet, "%s cobalt-waste recovery %d/%d" % [label, chunk_index + 1, chunk_count])
+		if failures.size() > 0:
+			return
 		_transfer_earth_manifest_to_remote_factory("gas_giant_region", jovian_world_id, {"chemical_propellant":5, "repair_material":3}, {"chemical_propellant":5, "repair_material":3}, packet, "%s return reserve %d/%d" % [label, chunk_index + 1, chunk_count], "")
+		if failures.size() > 0:
+			return
 		_export_to_location("cobalt_ingot", chunk, "%s source cargo %d/%d" % [label, chunk_index + 1, chunk_count], jovian_world_id, jovian_storage_id)
+		if failures.size() > 0:
+			return
 		var returned := _freight_location_cargo("gas_giant_region", jovian_world_id, EARTH_LOCATION_ID, EARTH_WORLD_ID, "cobalt_ingot", chunk, {"chemical_propellant":5, "repair_material":3}, "%s public return %d/%d" % [label, chunk_index + 1, chunk_count])
 		if returned.is_empty() or failures.size() > 0:
 			return

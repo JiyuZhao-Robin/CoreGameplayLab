@@ -107,9 +107,16 @@ func _notification(what: int) -> void:
 func initialize_factory_world(world_id: String, location_id: String, size_tiles: Vector2i, seed: int = 1) -> bool:
 	if world_id.is_empty() or not state.has_location(location_id) or size_tiles.x <= 0 or size_tiles.y <= 0:
 		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var profile_value: Variant = content.factory_grid_rules.get("world_profiles", {}).get(location_id, null)
+	if not profile_value is Dictionary:
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var profile_size_data: Dictionary = (profile_value as Dictionary).get("size_tiles", {})
+	var profile_size := Vector2i(int(profile_size_data.get("x", 0)), int(profile_size_data.get("y", 0)))
+	if size_tiles.x > profile_size.x or size_tiles.y > profile_size.y:
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
 	if state.factory_worlds.has(world_id):
 		return _reject(I18n.t("notice.factory_world_exists", "Factory world already exists"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	transaction.working_state.factory_worlds[world_id] = simulation.factory_grid.create_world(world_id, location_id, size_tiles, seed)
 	transaction.record({"type":"FactoryWorldInitialized", "world_id":world_id, "location_id":location_id, "size_tiles":{"x":size_tiles.x, "y":size_tiles.y}, "seed":seed})
 	last_notice = I18n.t("notice.factory_world_initialized", "Factory grid initialized: %s") % world_id
@@ -139,15 +146,21 @@ func initialize_surveyed_factory_world(location_id: String) -> bool:
 	var survey_state := str(state.location_state(location_id).get("survey_state", LocationState.UNKNOWN))
 	if location_id != SpaceGameState.MAIN_BASE_LOCATION_ID and simulation.survey_state_rank(survey_state) < simulation.survey_state_rank(LocationState.SURVEYED):
 		return _reject(I18n.t("notice.factory_world_requires_survey", "Complete the Location survey before opening a factory grid"))
-	var starter: Dictionary = content.factory_grid_rules.get("starter_world", {})
-	var starter_size: Dictionary = starter.get("size_tiles", {})
-	var world_id := "%s-grid" % location_id.replace("_", "-")
-	var seed := posmod(location_id.hash(), 2147483646) + 1
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var profile_value: Variant = content.factory_grid_rules.get("world_profiles", {}).get(location_id, null)
+	if not profile_value is Dictionary:
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var profile := profile_value as Dictionary
+	var profile_size: Dictionary = profile.get("size_tiles", {})
+	var world_id := str(profile.get("world_id", ""))
+	var size_tiles := Vector2i(int(profile_size.get("x", 0)), int(profile_size.get("y", 0)))
+	var seed := int(profile.get("seed", 0))
+	if world_id.is_empty() or size_tiles.x <= 0 or size_tiles.y <= 0 or seed <= 0 or state.factory_worlds.has(world_id):
+		return _reject(I18n.t("notice.factory_world_invalid", "Invalid factory world identity, location or bounds"))
+	var transaction := _new_transaction()
 	var world := simulation.factory_grid.create_world(
 		world_id,
 		location_id,
-		Vector2i(maxi(1, int(starter_size.get("x", 20_000_000))), maxi(1, int(starter_size.get("y", 20_000_000)))),
+		size_tiles,
 		seed
 	)
 	var resource_ids: Array[String] = []
@@ -179,7 +192,17 @@ func initialize_surveyed_factory_world(location_id: String) -> bool:
 			return _reject(str(field_result.get("reason", I18n.t("notice.factory_resource_failed", "Resource-field generation failed"))))
 	transaction.working_state.factory_worlds[world_id] = world
 	last_notice = I18n.t("notice.factory_world_initialized", "Factory grid initialized: %s") % world_id
-	transaction.record({"type":"FactoryWorldInitialized", "world_id":world_id, "location_id":location_id, "resource_ids":resource_ids.duplicate()})
+	transaction.record({
+		"type":"FactoryWorldInitialized",
+		"world_id":world_id,
+		"location_id":location_id,
+		"profile_id":str(profile.get("profile_id", "")),
+		"scale_class":str(profile.get("scale_class", "")),
+		"size_tiles":{"x":size_tiles.x, "y":size_tiles.y},
+		"seed":seed,
+		"generator_version":int(world.get("generator_version", 1)),
+		"resource_ids":resource_ids.duplicate()
+	})
 	_commit_transaction(transaction)
 	return true
 
@@ -187,7 +210,7 @@ func initialize_surveyed_factory_world(location_id: String) -> bool:
 func register_factory_resource_field(world_id: String, resource_field_id: String, resource_id: String, origin: Vector2i, size: Vector2i, grade: float = 1.0, potential_density: float = 1.0, resource_category: String = "solid") -> bool:
 	if not state.factory_worlds.has(world_id) or not content.items.has(resource_id):
 		return _reject(I18n.t("notice.factory_resource_unknown", "Unknown factory world or resource"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var result: Dictionary = simulation.factory_grid.add_resource_field(transaction.working_state.factory_worlds[world_id], resource_field_id, resource_id, origin, size, grade, potential_density, resource_category)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_resource_failed", "Resource-field generation failed"))))
@@ -201,11 +224,11 @@ func register_factory_resource_field(world_id: String, resource_field_id: String
 func queue_factory_construction(world_id: String, definition_id: String, origin: Vector2i, recipe_id: String = "", priority: int = 50) -> bool:
 	if not state.factory_worlds.has(world_id) or not content.factory_buildings.has(definition_id):
 		return _reject(I18n.t("notice.factory_building_unknown", "Unknown factory world or building"))
-	if not _factory_definition_available(content.factory_buildings[definition_id]):
+	var transaction := _new_transaction()
+	if not _factory_definition_available(content.factory_buildings[definition_id], transaction.working_state):
 		return _reject(I18n.t("notice.factory_building_locked", "Factory building requirements are not met"))
-	if not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id])):
+	if not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id], transaction.working_state)):
 		return _reject(I18n.t("notice.factory_recipe_locked", "Factory recipe requirements are not met"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
 	var result: Dictionary = simulation.factory_grid.queue_construction(transaction.working_state.factory_worlds[world_id], definition_id, origin, recipe_id, priority)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_construction_rejected", "Factory construction rejected"))))
@@ -218,7 +241,7 @@ func queue_factory_construction(world_id: String, definition_id: String, origin:
 func fund_factory_construction(world_id: String, order_id: String, storage_id: String) -> bool:
 	if not state.factory_worlds.has(world_id):
 		return _reject(I18n.t("notice.factory_world_unknown", "Unknown factory world"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var result: Dictionary = simulation.factory_grid.fund_construction_from_storage(transaction.working_state.factory_worlds[world_id], order_id, storage_id)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_funding_failed", "Construction funding failed"))))
@@ -231,7 +254,7 @@ func fund_factory_construction(world_id: String, order_id: String, storage_id: S
 func connect_factory_entities(world_id: String, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1) -> bool:
 	if not state.factory_worlds.has(world_id):
 		return _reject(I18n.t("notice.factory_world_unknown", "Unknown factory world"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var result: Dictionary = simulation.factory_grid.connect_entities(transaction.working_state.factory_worlds[world_id], kind, source_id, target_id, item_id, capacity_per_second, priority)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_connection_rejected", "Factory connection rejected"))))
@@ -331,11 +354,12 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 	return snapshot
 
 
-func _factory_definition_available(definition: Dictionary) -> bool:
-	if definition.is_empty() or not simulation.definition_revealed(state, definition):
+func _factory_definition_available(definition: Dictionary, candidate_state: SpaceGameState = null) -> bool:
+	var evaluated_state := candidate_state if candidate_state != null else state
+	if definition.is_empty() or not simulation.definition_revealed(evaluated_state, definition):
 		return false
 	for requirement_value in definition.get("requirements", []):
-		if not simulation.requirement_met(state, requirement_value as Dictionary):
+		if not simulation.requirement_met(evaluated_state, requirement_value as Dictionary):
 			return false
 	return true
 
@@ -401,7 +425,7 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 	var current_topology_revision := maxi(0, int(current_world.get("topology_revision", 0)))
 	if int(intent.get("base_topology_revision", -1)) != current_topology_revision:
 		return _factory_command_rejection(command_id, command_kind, world_id, "STALE_TOPOLOGY", I18n.t("factory.reason.stale_topology", "The Factory layout changed; refresh before retrying."))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var world: Dictionary = transaction.working_state.factory_worlds.get(world_id, {})
 	var operation_result: Dictionary
 	var event := {
@@ -416,9 +440,9 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 			var origin_data: Dictionary = payload.get("origin", {})
 			var definition_id := str(payload.get("definition_id", ""))
 			var recipe_id := str(payload.get("recipe_id", ""))
-			if not content.factory_buildings.has(definition_id) or not _factory_definition_available(content.factory_buildings[definition_id]):
+			if not content.factory_buildings.has(definition_id) or not _factory_definition_available(content.factory_buildings[definition_id], transaction.working_state):
 				operation_result = {"ok":false, "reason_code":"BUILDING_LOCKED", "reason":I18n.t("factory.reason.building_locked", "This Factory building is still locked.")}
-			elif not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id])):
+			elif not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id], transaction.working_state)):
 				operation_result = {"ok":false, "reason_code":"RECIPE_LOCKED", "reason":I18n.t("factory.reason.recipe_locked", "This Factory recipe is still locked.")}
 			else:
 				operation_result = simulation.factory_grid.queue_construction(
@@ -473,7 +497,7 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 		"SET_RECIPE":
 			var recipe_entity_id := str(payload.get("entity_id", ""))
 			var configured_recipe_id := str(payload.get("recipe_id", ""))
-			if not content.factory_recipes.has(configured_recipe_id) or not _factory_definition_available(content.factory_recipes[configured_recipe_id]):
+			if not content.factory_recipes.has(configured_recipe_id) or not _factory_definition_available(content.factory_recipes[configured_recipe_id], transaction.working_state):
 				operation_result = {"ok":false, "reason_code":"RECIPE_LOCKED", "reason":I18n.t("factory.reason.recipe_locked", "This Factory recipe is still locked.")}
 			else:
 				operation_result = simulation.factory_grid.set_entity_recipe(world, recipe_entity_id, configured_recipe_id)
@@ -787,7 +811,7 @@ func start_activity(domain_id: String, activity_id: String, formation_id: String
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
 	if not simulation.costs_available(state, activity):
 		return _reject(I18n.t("notice.resources", "Strategic Inventory cannot fund one cycle"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working := transaction.working_state
 	if not _start_expedition(working, activity, formation_id):
 		return false
@@ -804,7 +828,7 @@ func stop_activity(domain_id: String) -> bool:
 		return _reject_removed_aggregate_industry()
 	if domain_id != "expedition":
 		return _reject(I18n.t("notice.unknown_domain", "Unknown operation type"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var runtime := simulation.runtime_for_domain(transaction.working_state, domain_id)
 	if runtime.is_empty() or runtime.get("status", "IDLE") == "IDLE":
 		return _reject(I18n.t("notice.no_active", "No active operation to pause"))
@@ -834,7 +858,7 @@ func set_ship_maintenance_state(instance_id: String, maintenance_state: String) 
 	if String(availability.get("reason_code", "")) == "ALREADY_TARGET_STATE":
 		return true
 	var normalized := maintenance_state.to_upper()
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	for formation_id in transaction.working_state.formation_ids():
 		var roster := transaction.working_state.formation_ship_ids(formation_id)
 		roster.erase(instance_id)
@@ -870,7 +894,7 @@ func start_ship_reactivation(instance_id: String) -> bool:
 	var running_projects := state.ship_service_projects.filter(func(project): return str(project.get("status", "")) == "RUNNING").size()
 	if running_projects >= simulation.ship_service_capacity(state):
 		return _reject(I18n.t("notice.ship_service_capacity_full", "Starport and repair-dock service capacity is fully committed"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
 	var costs := simulation.ship_reactivation_costs(working_ship)
 	var location_id := str(working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
@@ -906,7 +930,7 @@ func set_ship_favorite(instance_id: String, favorite: bool) -> bool:
 		return _reject(I18n.t("notice.ship_missing"))
 	if bool(ship.get("favorite", false)) == favorite:
 		return true
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	transaction.working_state.ship_by_id(instance_id)["favorite"] = favorite
 	last_notice = I18n.t("notice.ship_favorited" if favorite else "notice.ship_unfavorited") % str(ship.get("name", instance_id))
 	transaction.record({"type":"ShipFavoriteChanged", "ship_id":instance_id, "favorite":favorite})
@@ -920,7 +944,7 @@ func set_ship_locked(instance_id: String, locked: bool) -> bool:
 		return _reject(I18n.t("notice.ship_missing"))
 	if bool(ship.get("locked", false)) == locked:
 		return true
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	transaction.working_state.ship_by_id(instance_id)["locked"] = locked
 	last_notice = I18n.t("notice.ship_locked" if locked else "notice.ship_unlocked") % str(ship.get("name", instance_id))
 	transaction.record({"type":"ShipLockChanged", "ship_id":instance_id, "locked":locked})
@@ -951,7 +975,7 @@ func scrap_ship(instance_id: String) -> bool:
 	var availability := ship_scrap_availability(instance_id)
 	if not bool(availability.get("allowed", false)):
 		return _reject(str(availability.get("reason", I18n.t("notice.scrap_ship_invalid"))))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working_ship := transaction.working_state.ship_by_id(instance_id)
 	var recovered: Dictionary = availability.get("recovery", {}).duplicate(true)
 	var location_id := str(availability.get("location_id", working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)))
@@ -1016,7 +1040,7 @@ func create_fleet_formation(formation_name: String) -> bool:
 	var normalized_name := formation_name.strip_edges()
 	if normalized_name.is_empty() or normalized_name.length() > 32:
 		return _reject(I18n.t("notice.formation_name_invalid", "Formation name must contain 1–32 characters"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var serial := maxi(2, transaction.working_state.next_formation_serial)
 	var formation_id := "task_force_%d" % serial
 	while transaction.working_state.fleet_formations.has(formation_id):
@@ -1037,7 +1061,7 @@ func delete_fleet_formation(formation_id: String) -> bool:
 		return _reject(I18n.t("notice.formation_delete_invalid", "The primary formation cannot be deleted"))
 	if formation_is_active(formation_id) or not state.formation_ship_ids(formation_id).is_empty():
 		return _reject(I18n.t("notice.formation_delete_busy", "Recall the formation and move all ships to reserve before deleting it"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var formation_name := str(transaction.working_state.formation_runtime(formation_id).get("name", formation_id))
 	transaction.working_state.fleet_formations.erase(formation_id)
 	transaction.working_state.fleet_logistics.erase(formation_id)
@@ -1054,7 +1078,7 @@ func set_ship_formation_assignment(instance_id: String, formation_id: String) ->
 	var current_formation_id := state.ship_formation_id(instance_id)
 	if current_formation_id == formation_id:
 		return true
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	for candidate_formation_id in transaction.working_state.formation_ids():
 		var roster := transaction.working_state.formation_ship_ids(candidate_formation_id)
 		roster.erase(instance_id)
@@ -1093,7 +1117,7 @@ func set_fleet_supply_plan(item_id: String, quantity: int, fleet_id: String = Sp
 	var current_plan: Dictionary = state.fleet_logistics_runtime(fleet_id).get("supply_plan", {})
 	if int(current_plan.get(item_id, 0)) == quantity:
 		return _reject(I18n.t("notice.supply_plan_unchanged", "The fleet supply target is already set to this quantity"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var logistics := transaction.working_state.fleet_logistics_runtime(fleet_id)
 	var plan: Dictionary = logistics.get("supply_plan", {})
 	plan[item_id] = quantity
@@ -1107,7 +1131,7 @@ func set_ship_combat_zone(ship_id: String, zone: String, fleet_id: String = Spac
 	var normalized_zone := zone.to_upper()
 	if normalized_zone not in ["FRONT", "MID", "REAR"] or state.ship_by_id(ship_id).is_empty() or state.ship_formation_id(ship_id) != fleet_id:
 		return _reject(I18n.t("notice.combat_zone_invalid", "Invalid ship or combat zone"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var formation: Dictionary = transaction.working_state.fleet_logistics_runtime(fleet_id).get("formation", {})
 	var ship_zones: Dictionary = formation.get("ship_zones", {})
 	ship_zones[ship_id] = normalized_zone
@@ -1122,7 +1146,7 @@ func set_fleet_doctrine(doctrine: String, fleet_id: String = SpaceGameState.DEFA
 	var normalized := doctrine.to_upper()
 	if normalized not in ["HOLD_FORMATION", "AGGRESSIVE_PUSH", "MISSILE_SATURATION", "LONG_RANGE_ENGAGEMENT"]:
 		return _reject(I18n.t("notice.fleet_doctrine_invalid", "Invalid fleet doctrine"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var formation: Dictionary = transaction.working_state.fleet_logistics_runtime(fleet_id).get("formation", {})
 	formation["doctrine"] = normalized
 	transaction.working_state.fleet_logistics_runtime(fleet_id)["formation"] = formation
@@ -1135,7 +1159,7 @@ func set_fleet_retreat_policy(mode: String, threshold: float = 0.25, fleet_id: S
 	var normalized := mode.to_upper()
 	if normalized not in ["HULL_THRESHOLD", "NEVER"]:
 		return _reject(I18n.t("notice.retreat_policy_invalid", "Invalid retreat policy"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var formation: Dictionary = transaction.working_state.fleet_logistics_runtime(fleet_id).get("formation", {})
 	formation["retreat_policy"] = {"mode":normalized, "threshold":clampf(threshold, 0.05, 0.95)}
 	transaction.working_state.fleet_logistics_runtime(fleet_id)["formation"] = formation
@@ -1148,7 +1172,7 @@ func auto_resupply_fleet(fleet_id: String = SpaceGameState.DEFAULT_FORMATION_ID,
 	var selected := ship_ids.duplicate()
 	if selected.is_empty():
 		selected = state.formation_ship_ids(fleet_id)
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var moved := _auto_resupply_state(transaction.working_state, fleet_id, selected)
 	last_notice = I18n.t("notice.fleet_resupplied", "Available supplies loaded according to the saved fleet plan")
 	transaction.record({"type":"FleetResupplied", "fleet_id":fleet_id, "ship_ids":selected, "moved":moved.duplicate(true)})
@@ -1162,7 +1186,7 @@ func start_survey_mission(target_location_id: String, target_state: String, ship
 	if not bool(availability.get("allowed", false)):
 		return _reject(I18n.t("notice.survey_mission_blocked", "The survey mission cannot start; verify survey state, vessel capability, fuel and maintenance supplies"))
 	var selected: Array = availability.get("selected_ship_ids", []).duplicate()
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	if not simulation.start_survey_mission(transaction.working_state, target_location_id, target_state, selected, origin_location_id):
 		return _reject(I18n.t("notice.survey_mission_blocked", "The survey mission cannot start; verify survey state, vessel capability, fuel and maintenance supplies"))
 	last_notice = I18n.t("notice.survey_mission_started", "Survey mission started: %s → %s") % [I18n.content(content.regions.get(target_location_id, {"id":target_location_id, "name":target_location_id})), I18n.status(target_state)]
@@ -1305,7 +1329,7 @@ func select_megastructure_site(megastructure_id: String, location_id: String) ->
 	var existing: Dictionary = state.megastructure_projects.get(megastructure_id, {})
 	if not existing.is_empty() and int(existing.get("phase_index", 0)) > 0:
 		return _reject(I18n.t("notice.megastructure_site_locked", "The Megastructure site is locked after construction preparation begins."))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	# Phase zero selects the surveyed site; it does not conjure an outpost. The
 	# finite survey staging package must receive the Phase-one BOM through normal
 	# freight, and the Forward Construction Base creates the first real capacity.
@@ -1345,7 +1369,7 @@ func start_megastructure_phase(megastructure_id: String, priority: int = 90) -> 
 	for requirement_value in activity.get("requirements", []):
 		if not simulation.requirement_met(state, requirement_value as Dictionary):
 			return _reject(I18n.t("notice.requirements_not_met", "Requirements are not met."))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working_project: Dictionary = transaction.working_state.megastructure_projects[megastructure_id]
 	var consumed := {}
 	var source_breakdown := {}
@@ -1507,7 +1531,7 @@ func start_research_project(project_id: String, route_id: String = "") -> bool:
 		return _reject(I18n.t("notice.research_route_unknown", "Unknown R&D engineering route"))
 	if not simulation.research_project_available(state, project, selected_route if bool(state.completed_projects.get(project_id, false)) else ""):
 		return _reject(I18n.t("notice.requirements", "Progression requirements are not met"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var existing: Dictionary = transaction.working_state.research
 	if str(existing.get("project_id", "")) == project_id and str(existing.get("route_id", "")) == selected_route and existing.get("status", "") in ["PAUSED", "BLOCKED"]:
 		existing["status"] = "RUNNING"
@@ -1529,7 +1553,7 @@ func start_research_project(project_id: String, route_id: String = "") -> bool:
 func stop_research() -> bool:
 	if state.research.get("status", "IDLE") not in ["RUNNING", "BLOCKED"]:
 		return _reject(I18n.t("notice.no_active", "No active operation to pause"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	# Already consumed materials remain committed to this project attempt.
 	transaction.working_state.research["status"] = "PAUSED"
 	transaction.working_state.research["blocked_reason"] = "MANUALLY_PAUSED"
@@ -1547,7 +1571,7 @@ func move_shipyard_project(plan_id: String, new_index: int) -> bool:
 	var target := clampi(new_index, 0, state.shipyard_queue.size() - 1)
 	if target == current_index:
 		return true
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var runtime: Dictionary = transaction.working_state.shipyard_queue.pop_at(current_index)
 	transaction.working_state.shipyard_queue.insert(target, runtime)
 	simulation.normalize_shipyard_queue(transaction.working_state)
@@ -1562,7 +1586,7 @@ func enqueue_unlocked_ship_plan(plan_id: String, quantity: int = 1) -> bool:
 		return _reject(I18n.t("notice.shipyard_plan_unknown", "Unknown ship construction plan"))
 	if quantity <= 0 or quantity > 100:
 		return _reject(I18n.t("notice.shipyard_quantity_invalid", "Ship construction quantity must be between 1 and 100"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	if not transaction.working_state.enqueue_ship_plan(plan_id, quantity):
 		return _reject(I18n.t("notice.shipyard_plan_unavailable", "Ship plan is locked, already queued, or already built"))
 	simulation.normalize_shipyard_queue(transaction.working_state)
@@ -1733,7 +1757,7 @@ func save_ship_design(design_id: String, requested_name: String, plan_id: String
 	var validation := ship_design_validation(plan_id, nodes, connections, allow_locked_plan)
 	if not bool(validation.get("allowed", false)):
 		return _reject(str(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var target_id := design_id
 	if target_id.is_empty():
 		target_id = "DESIGN-%04d" % transaction.working_state.next_ship_design_serial
@@ -1764,7 +1788,7 @@ func save_ship_design(design_id: String, requested_name: String, plan_id: String
 func delete_ship_design(design_id: String) -> bool:
 	if not state.ship_designs.has(design_id):
 		return _reject(I18n.t("notice.ship_design_missing", "Saved ship design was not found"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var name := str(transaction.working_state.ship_designs.get(design_id, {}).get("name", design_id))
 	transaction.working_state.ship_designs.erase(design_id)
 	last_notice = I18n.t("notice.ship_design_deleted", "Ship design deleted: %s") % name
@@ -1782,7 +1806,7 @@ func enqueue_saved_ship_design(design_id: String, quantity: int = 1) -> bool:
 	var validation := ship_design_validation(str(design.get("plan_id", "")), design.get("nodes", []), design.get("connections", []))
 	if not bool(validation.get("allowed", false)):
 		return _reject(str(validation.get("reason", I18n.t("notice.ship_design_invalid", "Ship design is invalid"))))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	if not transaction.working_state.enqueue_ship_plan(str(design.get("plan_id", "")), quantity, design_id, validation.get("modules", [])):
 		return _reject(I18n.t("notice.shipyard_plan_unavailable", "Ship plan is locked, already queued, or already built"))
 	simulation.normalize_shipyard_queue(transaction.working_state)
@@ -1895,7 +1919,7 @@ func _ship_design_port_shape(slot: String, mount_role := "") -> String:
 
 
 func cancel_shipyard_project(project_id: String) -> bool:
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working := transaction.working_state
 	var project_index := -1
 	for index in working.shipyard_queue.size():
@@ -1918,7 +1942,7 @@ func set_inventory_reserve(item_id: String, quantity: int, location_id: String =
 		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
 	if not state.has_location(location_id):
 		return _reject(I18n.t("notice.location_unknown", "Unknown location"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	transaction.working_state.set_item_reserve(item_id, quantity, location_id)
 	transaction.record({"type":"InventoryReserveChanged", "location_id":location_id, "item_id":item_id, "quantity":maxi(0, quantity)})
 	_commit_transaction(transaction)
@@ -1931,7 +1955,7 @@ func set_location_logistics_policy(location_id: String, item_id: String, mode: S
 	if not content.items.has(item_id):
 		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
 	var previous_policy: Dictionary = state.location_state(location_id).get("logistics", {}).get("policies", {}).get(item_id, {}).duplicate(true)
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var policy := {
 		"mode":mode,
 		"reserve":reserve,
@@ -1960,7 +1984,7 @@ func configure_logistics_service(route_id: String, transport_mode_id: String, sh
 		return _reject(I18n.t("notice.logistics_route_unknown", "Unknown logistics route"))
 	if not content.transport_modes.has(transport_mode_id):
 		return _reject(I18n.t("notice.transport_mode_unknown", "Unknown transport mode"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	if not simulation.logistics.configure_service(transaction.working_state, route_id, transport_mode_id, ship_ids, priority_strategy):
 		return _reject(I18n.t("notice.transport_service_blocked", "Transport mode requirements or assigned ships are not satisfied"))
 	var route: Dictionary = content.logistics_routes[route_id]
@@ -1974,7 +1998,7 @@ func configure_logistics_service(route_id: String, transport_mode_id: String, sh
 func set_logistics_service_paused(route_id: String, paused: bool) -> bool:
 	if not content.logistics_routes.has(route_id):
 		return _reject(I18n.t("notice.logistics_route_unknown", "Unknown logistics route"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	if not simulation.logistics.set_service_paused(transaction.working_state, route_id, paused):
 		return _reject(I18n.t("notice.logistics_service_state_invalid", "The logistics service state could not be changed"))
 	last_notice = I18n.t("notice.logistics_service_paused", "Logistics service paused: %s") % I18n.content(content.logistics_routes[route_id]) if paused else I18n.t("notice.logistics_service_resumed", "Logistics service resumed: %s") % I18n.content(content.logistics_routes[route_id])
@@ -1988,7 +2012,7 @@ func clear_location_logistics_policy(location_id: String, item_id: String) -> bo
 		var policies: Dictionary = state.location_state(location_id).get("logistics", {}).get("policies", {})
 		if not policies.has(item_id):
 			return _reject(I18n.t("notice.logistics_policy_missing", "There is no logistics policy to clear for this item"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	if not simulation.logistics.clear_policy(transaction.working_state, location_id, item_id):
 		return _reject(I18n.t("notice.logistics_policy_target_invalid", "Invalid logistics policy target"))
 	_detach_template_policy(transaction.working_state, location_id, item_id)
@@ -2044,7 +2068,7 @@ func uninstall_manufacturing_module(facility_id: String, module_id: String, modu
 func toggle_pinned_item(item_id: String) -> bool:
 	if not content.items.has(item_id):
 		return _reject(I18n.t("notice.item_unknown", "Unknown inventory item"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var pins: Array = transaction.working_state.pinned_items.duplicate()
 	if pins.has(item_id):
 		pins.erase(item_id)
@@ -2088,7 +2112,7 @@ func start_expedition_route(route_id: String, ship_ids: Array = [], formation_id
 		selected = state.formation_ship_ids(formation_id)
 	if selected.is_empty():
 		return _reject(I18n.t("notice.expedition_fleet_empty", "Assign ships to a tactical formation at Starport first"))
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	for ship_id in selected:
 		if not transaction.working_state.ship_is_deployment_ready(str(ship_id)) or transaction.working_state.ship_formation_id(str(ship_id)) != formation_id:
 			return _reject(I18n.t("notice.expedition_fleet_unavailable", "Every deployed formation ship must be operational and docked"))
@@ -2124,7 +2148,7 @@ func begin_ship_refit(instance_id: String, desired_module_definitions: Array, ta
 	var validation := _validate_loadout_modules(blueprint_id, desired)
 	if not validation.is_empty():
 		return _reject(validation)
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working := transaction.working_state
 	var working_ship := working.ship_by_id(instance_id)
 	var location_id := str(working_ship.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID))
@@ -2217,7 +2241,7 @@ func begin_ship_refit(instance_id: String, desired_module_definitions: Array, ta
 
 
 func cancel_ship_refit(project_id: String) -> bool:
-	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	var transaction := _new_transaction()
 	var working := transaction.working_state
 	var project_index := -1
 	for index in working.refit_projects.size():
@@ -2350,7 +2374,9 @@ func research_runtime_snapshot() -> Dictionary:
 		"stage_progress_ms":float(runtime.get("stage_progress_ms", 0.0)),
 		"duration_ms":float(runtime.get("duration_ms", stage.get("work_required", 0.0))),
 		"blocked_reason":str(runtime.get("blocked_reason", "")),
-		"blocker":(runtime.get("blocker", {}) as Dictionary).duplicate(true) if runtime.get("blocker", null) is Dictionary else {}
+		"blocker":(runtime.get("blocker", {}) as Dictionary).duplicate(true) if runtime.get("blocker", null) is Dictionary else {},
+		"stage_consumed":(runtime.get("stage_consumed", {}) as Dictionary).duplicate(true),
+		"reserved_costs":(runtime.get("reserved_costs", {}) as Dictionary).duplicate(true)
 	}
 
 
@@ -3139,7 +3165,20 @@ func _reject(reason: String) -> bool:
 	return false
 
 
+func _new_transaction() -> GameStateTransaction:
+	var transaction := GameStateTransaction.new(state, content.domains.keys())
+	# from_dictionary deliberately strips all disposable projections. Rebuild the
+	# working state from authoritative physical/domain state before any command
+	# performs transaction-local validation or mutation.
+	simulation.ensure_frontier_state(transaction.working_state)
+	return transaction
+
+
 func _commit_transaction(transaction: GameStateTransaction) -> void:
+	# Rebuild every disposable runtime view from authoritative Survey markers,
+	# Megastructure projects and physical Factory worlds before publishing state.
+	# This protects non-Factory commands from committing a partial projection.
+	simulation.ensure_frontier_state(transaction.working_state)
 	var committed_state := transaction.commit()
 	simulation.refresh_demand_registry(committed_state)
 	state = committed_state
