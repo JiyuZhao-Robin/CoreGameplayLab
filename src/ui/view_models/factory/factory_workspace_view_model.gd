@@ -1,28 +1,38 @@
 class_name FactoryWorkspaceViewModel
 extends RefCounted
 
-## Presentation-only adapter for the Factory v1 contract.  It deliberately
-## copies all input data so controls cannot accidentally retain mutable state.
+## Presentation-only adapter for the Factory v1 contract. The application
+## creates immutable record dictionaries. This adapter detaches and sorts their
+## containers without deep-copying every runtime record on each UI refresh.
 
 const PROTOCOL_VERSION := 1
+const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
+
+var _buildings_by_id: Dictionary = {}
+var _recipes_by_id: Dictionary = {}
+var _placement_chunk_index := ChunkIndexScript.new()
+var _placement_index_signature := ""
+var _placement_entities_by_id: Dictionary = {}
+var _placement_orders_by_id: Dictionary = {}
 
 
 func build(snapshot: Dictionary) -> Dictionary:
-	var result := snapshot.duplicate(true)
+	var result := snapshot.duplicate(false)
 	if int(result.get("protocol_version", 0)) != PROTOCOL_VERSION:
 		return {"valid":false, "protocol_version":PROTOCOL_VERSION, "reason_code":"UNSUPPORTED_PROTOCOL"}
 	if not bool(result.get("valid", true)):
 		return result
 	for array_key in ["resource_fields", "entities", "links", "construction_orders"]:
-		var rows: Array = result.get(array_key, []) if result.get(array_key, []) is Array else []
+		var rows: Array = (result.get(array_key, []) as Array).duplicate() if result.get(array_key, []) is Array else []
 		rows.sort_custom(func(a, b): return str((a as Dictionary).get("id", "")) < str((b as Dictionary).get("id", "")))
 		result[array_key] = rows
-	var palette: Dictionary = result.get("palette", {}) if result.get("palette", {}) is Dictionary else {}
+	var palette: Dictionary = (result.get("palette", {}) as Dictionary).duplicate(false) if result.get("palette", {}) is Dictionary else {}
 	for array_key in ["buildings", "recipes"]:
-		var rows: Array = palette.get(array_key, []) if palette.get(array_key, []) is Array else []
+		var rows: Array = (palette.get(array_key, []) as Array).duplicate() if palette.get(array_key, []) is Array else []
 		rows.sort_custom(func(a, b): return str((a as Dictionary).get("id", "")) < str((b as Dictionary).get("id", "")))
 		palette[array_key] = rows
 	result["palette"] = palette
+	_rebuild_palette_indexes(result)
 	return result
 
 
@@ -41,21 +51,17 @@ func command_intent(snapshot: Dictionary, command_id: String, kind: String, payl
 
 
 func building_by_id(snapshot: Dictionary, building_id: String) -> Dictionary:
-	var palette: Dictionary = snapshot.get("palette", {}) if snapshot.get("palette", {}) is Dictionary else {}
-	for building_value in palette.get("buildings", []):
-		var building := building_value as Dictionary
-		if str(building.get("id", "")) == building_id:
-			return building.duplicate(true)
-	return {}
+	if _buildings_by_id.is_empty() and not snapshot.is_empty():
+		_rebuild_palette_indexes(snapshot)
+	var building: Dictionary = _buildings_by_id.get(building_id, {})
+	return building.duplicate(false)
 
 
 func recipe_by_id(snapshot: Dictionary, recipe_id: String) -> Dictionary:
-	var palette: Dictionary = snapshot.get("palette", {}) if snapshot.get("palette", {}) is Dictionary else {}
-	for recipe_value in palette.get("recipes", []):
-		var recipe := recipe_value as Dictionary
-		if str(recipe.get("id", "")) == recipe_id:
-			return recipe.duplicate(true)
-	return {}
+	if _recipes_by_id.is_empty() and not snapshot.is_empty():
+		_rebuild_palette_indexes(snapshot)
+	var recipe: Dictionary = _recipes_by_id.get(recipe_id, {})
+	return recipe.duplicate(false)
 
 
 ## This is intentionally a local, conservative preview. The authoritative
@@ -74,13 +80,60 @@ func placement_preview(snapshot: Dictionary, building: Dictionary, origin: Vecto
 	var bounds_size := footprint_size(bounds)
 	if origin.x < bounds_origin.x or origin.y < bounds_origin.y or origin.x + size.x > bounds_origin.x + bounds_size.x or origin.y + size.y > bounds_origin.y + bounds_size.y:
 		return {"valid":false, "reason_code":"OUT_OF_BOUNDS", "footprint":footprint}
-	for entity_value in snapshot.get("entities", []):
-		if footprints_overlap(footprint, (entity_value as Dictionary).get("footprint", {})):
+	_ensure_placement_index(snapshot)
+	var candidates := _placement_chunk_index.query(Rect2(Vector2(origin), Vector2(size)))
+	for entity_id_value in candidates.get("entity_ids", []):
+		var entity: Dictionary = _placement_entities_by_id.get(str(entity_id_value), {})
+		if footprints_overlap(footprint, entity.get("footprint", {})):
 			return {"valid":false, "reason_code":"FOOTPRINT_OCCUPIED", "footprint":footprint}
-	for order_value in snapshot.get("construction_orders", []):
-		if footprints_overlap(footprint, (order_value as Dictionary).get("footprint", {})):
+	for order_id_value in candidates.get("order_ids", []):
+		var order: Dictionary = _placement_orders_by_id.get(str(order_id_value), {})
+		if footprints_overlap(footprint, order.get("footprint", {})):
 			return {"valid":false, "reason_code":"CONSTRUCTION_OCCUPIED", "footprint":footprint}
 	return {"valid":true, "reason_code":"", "footprint":footprint}
+
+
+func _rebuild_palette_indexes(snapshot: Dictionary) -> void:
+	_buildings_by_id.clear()
+	_recipes_by_id.clear()
+	var palette: Dictionary = snapshot.get("palette", {}) if snapshot.get("palette", {}) is Dictionary else {}
+	for building_value in palette.get("buildings", []):
+		if building_value is Dictionary:
+			var building := building_value as Dictionary
+			_buildings_by_id[str(building.get("id", ""))] = building
+	for recipe_value in palette.get("recipes", []):
+		if recipe_value is Dictionary:
+			var recipe := recipe_value as Dictionary
+			_recipes_by_id[str(recipe.get("id", ""))] = recipe
+
+
+func _ensure_placement_index(snapshot: Dictionary) -> void:
+	var bounds: Dictionary = snapshot.get("bounds", {}) if snapshot.get("bounds", {}) is Dictionary else {}
+	var origin := footprint_origin(bounds)
+	var extent := footprint_size(bounds)
+	var signature := "%s:%d:%d:%d,%d:%d,%d" % [
+		str(snapshot.get("world_id", "")),
+		int(snapshot.get("topology_revision", 0)),
+		int(snapshot.get("chunk_size_tiles", 64)),
+		origin.x,
+		origin.y,
+		extent.x,
+		extent.y
+	]
+	if signature == _placement_index_signature:
+		return
+	_placement_index_signature = signature
+	_placement_entities_by_id.clear()
+	_placement_orders_by_id.clear()
+	for entity_value in snapshot.get("entities", []):
+		if entity_value is Dictionary:
+			var entity := entity_value as Dictionary
+			_placement_entities_by_id[str(entity.get("id", ""))] = entity
+	for order_value in snapshot.get("construction_orders", []):
+		if order_value is Dictionary:
+			var order := order_value as Dictionary
+			_placement_orders_by_id[str(order.get("id", ""))] = order
+	_placement_chunk_index.rebuild(snapshot)
 
 
 func compatible_cargo_items(source: Dictionary, target: Dictionary) -> Array:

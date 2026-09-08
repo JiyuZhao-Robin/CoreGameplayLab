@@ -14,6 +14,7 @@ signal tile_hovered(tile: Vector2i)
 signal placement_cancelled
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
+const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
 const CANVAS_COLOR := Color("0b100e")
 const WORLD_COLOR := Color("101814")
 const WORLD_BOUNDARY_COLOR := Color("62b5ae")
@@ -25,16 +26,19 @@ const CARGO_COLOR := Color("d5a45c")
 const POWER_COLOR := Color("62b5ae")
 const BASE_TILE_PIXELS := 4.0
 const MAX_DETAIL_TILE_PIXELS := 10.0
-const MAX_RENDERED_WORLD_AXIS_PIXELS := 4096.0
 const OVERVIEW_PADDING_PIXELS := 24.0
 const FLOW_REDRAW_INTERVAL_SECONDS := 0.05
 const DRAW_CULL_MARGIN_PIXELS := 32.0
 const MAX_ANIMATED_SNAPSHOT_RECORDS := 512
+const MEDIUM_DETAIL_VISIBLE_RECORDS := 160
+const COMPACT_DETAIL_VISIBLE_RECORDS := 480
 
 ## Keep the canvas independently loadable by SceneTree-based component tests.
 @onready var I18n = get_node("/root/I18n")
 
 var _view_model := ViewModelScript.new()
+var _chunk_index := ChunkIndexScript.new()
+var _chunk_index_signature := ""
 var _snapshot: Dictionary = {}
 var _camera := Vector2(0.0, 0.0)
 var _zoom := 1.0
@@ -56,6 +60,8 @@ var _keyboard_tile := Vector2i.ZERO
 var _entities_by_id: Dictionary = {}
 var _links_by_id: Dictionary = {}
 var _resources_by_id: Dictionary = {}
+var _orders_by_id: Dictionary = {}
+var _visible_records: Dictionary = {}
 var _has_active_flow_cache := false
 var _visible_active_flow := false
 var _node_style_cache: Dictionary = {}
@@ -77,6 +83,10 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	var previous_layout_signature := _world_layout_signature()
 	_snapshot = snapshot if already_normalized else _view_model.build(snapshot)
 	_rebuild_snapshot_indexes()
+	var next_chunk_index_signature := _chunk_layout_signature()
+	if next_chunk_index_signature != _chunk_index_signature:
+		_chunk_index.rebuild(_snapshot)
+		_chunk_index_signature = next_chunk_index_signature
 	_selected_node_id = "" if not _has_node(_selected_node_id) else _selected_node_id
 	_selected_link_id = "" if not _has_link(_selected_link_id) else _selected_link_id
 	if previous_layout_signature != _world_layout_signature():
@@ -137,8 +147,14 @@ func clear_placement_preview() -> void:
 	queue_redraw()
 
 
-func set_connection_preview(source_id: String, target_id: String, kind: String) -> void:
-	_connection_preview = {"source_id":source_id, "target_id":target_id, "kind":kind.to_upper()}
+func set_connection_preview(source_id: String, target_id: String, kind: String, valid: bool = false, candidate_ids: Array[String] = []) -> void:
+	_connection_preview = {
+		"source_id":source_id,
+		"target_id":target_id,
+		"kind":kind.to_upper(),
+		"valid":valid,
+		"candidate_ids":candidate_ids.duplicate()
+	}
 	queue_redraw()
 
 
@@ -157,13 +173,16 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
 	_visible_active_flow = false
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
+		_visible_records.clear()
 		_invalidate_hit_geometry()
 		_hit_geometry_dirty = false
 		_draw_empty()
 		return
 	var world_rect := _world_screen_rect()
+	_visible_records = _chunk_index.query(_visible_world_query_rect())
 	draw_rect(world_rect, WORLD_COLOR, true)
 	_draw_grid()
+	_draw_chunk_boundaries()
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
@@ -204,10 +223,32 @@ func _draw_grid() -> void:
 		y += spacing
 
 
+func _draw_chunk_boundaries() -> void:
+	var visible_world := _visible_world_query_rect().intersection(Rect2(Vector2(_bounds_origin()), Vector2(_bounds_size())))
+	if not visible_world.has_area():
+		return
+	var chunk_size := maxi(1, _chunk_index.chunk_size_tiles())
+	var origin := _bounds_origin()
+	var first_chunk_x := floori((visible_world.position.x - float(origin.x)) / float(chunk_size))
+	var last_chunk_x := floori((visible_world.end.x - float(origin.x)) / float(chunk_size))
+	var first_chunk_y := floori((visible_world.position.y - float(origin.y)) / float(chunk_size))
+	var last_chunk_y := floori((visible_world.end.y - float(origin.y)) / float(chunk_size))
+	var screen_world := _world_screen_rect().intersection(Rect2(Vector2.ZERO, size))
+	for chunk_x in range(first_chunk_x, last_chunk_x + 2):
+		var x := _world_to_screen(Vector2(origin.x + chunk_x * chunk_size, 0)).x
+		draw_line(Vector2(x, screen_world.position.y), Vector2(x, screen_world.end.y), Color(WORLD_BOUNDARY_COLOR, 0.26), 1.0)
+	for chunk_y in range(first_chunk_y, last_chunk_y + 2):
+		var y := _world_to_screen(Vector2(0, origin.y + chunk_y * chunk_size)).y
+		draw_line(Vector2(screen_world.position.x, y), Vector2(screen_world.end.x, y), Color(WORLD_BOUNDARY_COLOR, 0.26), 1.0)
+
+
 func _draw_resource_fields() -> void:
 	var visible_rect := _visible_draw_rect()
-	for field_value in _snapshot.get("resource_fields", []):
-		var field := field_value as Dictionary
+	var detail_stage := _detail_stage()
+	for field_id_value in _visible_records.get("resource_ids", []):
+		var field: Dictionary = _resources_by_id.get(str(field_id_value), {})
+		if field.is_empty():
+			continue
 		var rect := _footprint_rect(field.get("footprint", {}), 1.0)
 		if not rect.intersects(visible_rect):
 			continue
@@ -218,15 +259,18 @@ func _draw_resource_fields() -> void:
 		draw_rect(rect, FOCUS_COLOR if selected else Color(color, 0.72), false, 1.4)
 		var font := get_theme_default_font()
 		var resource_id := str(field.get("resource_id", ""))
-		if rect.size.x >= 48.0 and rect.size.y >= 18.0:
+		if detail_stage != "COMPACT" and rect.size.x >= 48.0 and rect.size.y >= 18.0:
 			var label := str(field.get("resource_name", _item_name(resource_id))) + " ×" + ("%.2f" % float(field.get("grade", 1.0)))
 			draw_string(font, rect.position + Vector2(5, 15), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(0.0, rect.size.x - 8.0), 10, Color("d5ddd8"))
 
 
 func _draw_entities() -> void:
 	var visible_rect := _visible_draw_rect()
-	for entity_value in _snapshot.get("entities", []):
-		var entity := entity_value as Dictionary
+	var detail_stage := _detail_stage()
+	for entity_id_value in _visible_records.get("entity_ids", []):
+		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
+		if entity.is_empty():
+			continue
 		var rect := _footprint_rect(entity.get("footprint", {}), 4.0)
 		if not rect.intersects(visible_rect):
 			continue
@@ -235,7 +279,8 @@ func _draw_entities() -> void:
 		var tone := _status_color(status)
 		var selected := _selected_node_id == str(entity.get("id", ""))
 		draw_style_box(_node_style(tone, selected), rect)
-		if rect.size.x < 48.0 or rect.size.y < 34.0:
+		_draw_connection_ports(entity, rect, detail_stage)
+		if detail_stage == "COMPACT" or rect.size.x < 48.0 or rect.size.y < 34.0:
 			draw_circle(rect.get_center(), minf(3.0, minf(rect.size.x, rect.size.y) * 0.25), tone)
 			continue
 		var header_rect := Rect2(rect.position, Vector2(rect.size.x, minf(22.0, rect.size.y)))
@@ -246,6 +291,8 @@ func _draw_entities() -> void:
 		var kind: String = str(I18n.t("factory.kind.%s" % kind_id.to_lower()))
 		draw_string(font, header_rect.position + Vector2(16, 14), kind, HORIZONTAL_ALIGNMENT_LEFT, header_rect.size.x - 18, 9, Color("a5b2ac"))
 		draw_string(font, rect.position + Vector2(8, minf(39.0, rect.size.y - 8.0)), str(entity.get("name", entity.get("id", "Unit"))), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 11, Color("e6eeea"))
+		if detail_stage == "MEDIUM":
+			continue
 		var progress := clampf(float(entity.get("progress", 0.0)), 0.0, 1.0)
 		var bar := Rect2(rect.position + Vector2(8, maxf(45.0, rect.size.y - 14.0)), Vector2(maxf(0.0, rect.size.x - 16.0), 4.0))
 		if bar.position.y + bar.size.y <= rect.end.y - 4.0:
@@ -257,8 +304,10 @@ func _draw_entities() -> void:
 
 func _draw_construction_orders() -> void:
 	var visible_rect := _visible_draw_rect()
-	for order_value in _snapshot.get("construction_orders", []):
-		var order := order_value as Dictionary
+	for order_id_value in _visible_records.get("order_ids", []):
+		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
+		if order.is_empty():
+			continue
 		var rect := _footprint_rect(order.get("footprint", {}), 4.0)
 		if not rect.intersects(visible_rect):
 			continue
@@ -307,15 +356,17 @@ func _draw_connection_preview() -> void:
 	if not Rect2(from, Vector2.ZERO).expand(to).grow(DRAW_CULL_MARGIN_PIXELS).intersects(_visible_draw_rect()):
 		return
 	var kind := str(_connection_preview.get("kind", "CARGO"))
-	var tone := POWER_COLOR if kind == "POWER" else CARGO_COLOR
+	var tone := Color("6fbf92") if bool(_connection_preview.get("valid", false)) else Color("d86e63")
 	draw_dashed_line(from, to, tone, 2.0, 5.0)
 	_draw_link_arrow(from, to, tone)
 
 
 func _draw_links() -> void:
 	var flow_animation_allowed := _flow_animation_allowed()
-	for link_value in _snapshot.get("links", []):
-		var link := link_value as Dictionary
+	for link_id_value in _visible_records.get("link_ids", []):
+		var link: Dictionary = _links_by_id.get(str(link_id_value), {})
+		if link.is_empty():
+			continue
 		var source: Dictionary = _entities_by_id.get(str(link.get("source_id", "")), {})
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
@@ -344,6 +395,29 @@ func _draw_links() -> void:
 			_visible_active_flow = true
 			var packet_position := from.lerp(to, fposmod(_visual_phase * 0.62 + float(str(link.get("id", "")).hash() % 13) / 13.0, 1.0))
 			draw_circle(packet_position, 2.4, Color("f4e7c5") if kind == "CARGO" else Color("d5fffa"))
+
+
+func _draw_connection_ports(entity: Dictionary, rect: Rect2, detail_stage: String) -> void:
+	var entity_id := str(entity.get("id", ""))
+	var is_source := entity_id == str(_connection_preview.get("source_id", ""))
+	var is_target := entity_id == str(_connection_preview.get("target_id", ""))
+	var is_candidate := (_connection_preview.get("candidate_ids", []) as Array).has(entity_id)
+	if is_source or is_target:
+		draw_rect(rect.grow(3.0), Color("d5a45c") if is_source else Color("62b5ae"), false, 2.0)
+	elif is_candidate:
+		draw_rect(rect.grow(2.0), Color("6fbf92", 0.72), false, 1.5)
+	if detail_stage == "COMPACT":
+		return
+	var ports: Dictionary = entity.get("ports", {}) if entity.get("ports", {}) is Dictionary else {}
+	var radius := 4.0 if detail_stage == "FULL" else 3.0
+	if not (ports.get("inputs", []) as Array).is_empty():
+		draw_circle(Vector2(rect.position.x, rect.get_center().y), radius, CARGO_COLOR)
+	if not (ports.get("outputs", []) as Array).is_empty():
+		draw_circle(Vector2(rect.end.x, rect.get_center().y), radius, CARGO_COLOR)
+	if bool(ports.get("accepts_power", false)):
+		draw_circle(Vector2(rect.get_center().x, rect.position.y), radius, POWER_COLOR)
+	if bool(ports.get("provides_power", false)):
+		draw_circle(Vector2(rect.get_center().x, rect.end.y), radius, POWER_COLOR)
 
 
 func _draw_link_arrow(from: Vector2, to: Vector2, color: Color) -> void:
@@ -405,6 +479,13 @@ func _visible_draw_rect() -> Rect2:
 	return Rect2(Vector2.ZERO, size).grow(DRAW_CULL_MARGIN_PIXELS)
 
 
+func _visible_world_query_rect() -> Rect2:
+	var screen_rect := _visible_draw_rect()
+	var first := _screen_to_world(screen_rect.position)
+	var last := _screen_to_world(screen_rect.end)
+	return Rect2(first.min(last), (last - first).abs())
+
+
 func _world_layout_signature() -> String:
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
 		return ""
@@ -412,6 +493,22 @@ func _world_layout_signature() -> String:
 	var bounds_size := _bounds_size()
 	var maximum_size := _maximum_canvas_size()
 	return "%s:%d,%d:%d,%d:%d,%d" % [str(_snapshot.get("world_id", "")), origin.x, origin.y, bounds_size.x, bounds_size.y, maximum_size.x, maximum_size.y]
+
+
+func _chunk_layout_signature() -> String:
+	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
+		return ""
+	var origin := _bounds_origin()
+	var bounds_size := _bounds_size()
+	return "%s:%d:%d:%d,%d:%d,%d" % [
+		str(_snapshot.get("world_id", "")),
+		int(_snapshot.get("topology_revision", 0)),
+		int(_snapshot.get("chunk_size_tiles", 64)),
+		origin.x,
+		origin.y,
+		bounds_size.x,
+		bounds_size.y
+	]
 
 
 func _maximum_canvas_size() -> Vector2i:
@@ -433,18 +530,13 @@ func _overview_zoom() -> float:
 		available.x / (float(reference_size.x) * BASE_TILE_PIXELS),
 		available.y / (float(reference_size.y) * BASE_TILE_PIXELS)
 	)
-	var largest_axis := maxi(_bounds_size().x, _bounds_size().y)
-	var extent_limit := MAX_RENDERED_WORLD_AXIS_PIXELS / (float(largest_axis) * BASE_TILE_PIXELS) if largest_axis > 0 else MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS
-	return maxf(0.000001, minf(fitted_zoom, minf(MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS, extent_limit)))
+	return maxf(0.000001, minf(fitted_zoom, MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS))
 
 
 func _maximum_zoom() -> float:
-	var bounds_size := _bounds_size()
-	var largest_axis := maxi(bounds_size.x, bounds_size.y)
-	if largest_axis <= 0:
-		return MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS
-	var extent_limit := MAX_RENDERED_WORLD_AXIS_PIXELS / (float(largest_axis) * BASE_TILE_PIXELS)
-	return maxf(_overview_zoom(), minf(MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS, extent_limit))
+	# The planet may be wider than the viewport at detail zoom. Spatial chunk
+	# culling, rather than shrinking the whole world, bounds the draw workload.
+	return maxf(_overview_zoom(), MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS)
 
 
 func _clamp_zoom(value: float) -> float:
@@ -501,7 +593,8 @@ func _on_canvas_resized() -> void:
 
 
 func _on_gui_input(event: InputEvent) -> void:
-	if _is_placement_cancel_event(event) and not _placement_preview.is_empty():
+	var connection_active := not str(_connection_preview.get("source_id", "")).is_empty() or not str(_connection_preview.get("target_id", "")).is_empty()
+	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active):
 		placement_cancelled.emit()
 		accept_event()
 		return
@@ -609,28 +702,24 @@ func _ensure_hit_geometry() -> void:
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
 	var visible_rect := _visible_draw_rect()
-	for resource_value in _snapshot.get("resource_fields", []):
-		if resource_value is Dictionary:
-			var resource := resource_value as Dictionary
-			var resource_rect := _footprint_rect(resource.get("footprint", {}), 1.0)
-			if resource_rect.intersects(visible_rect):
-				_node_rects[str(resource.get("id", ""))] = {"rect":resource_rect, "data":resource, "is_entity":false}
-	for entity_value in _snapshot.get("entities", []):
-		if entity_value is Dictionary:
-			var entity := entity_value as Dictionary
-			var entity_rect := _footprint_rect(entity.get("footprint", {}), 4.0)
-			if entity_rect.intersects(visible_rect):
-				_node_rects[str(entity.get("id", ""))] = {"rect":entity_rect, "data":entity, "is_entity":true}
-	for order_value in _snapshot.get("construction_orders", []):
-		if order_value is Dictionary:
-			var order := order_value as Dictionary
-			var order_rect := _footprint_rect(order.get("footprint", {}), 4.0)
-			if order_rect.intersects(visible_rect):
-				_construction_order_rects[str(order.get("id", ""))] = {"rect":order_rect, "data":order}
-	for link_value in _snapshot.get("links", []):
-		if not link_value is Dictionary:
-			continue
-		var link := link_value as Dictionary
+	var visible_records := _chunk_index.query(_visible_world_query_rect())
+	for resource_id_value in visible_records.get("resource_ids", []):
+		var resource: Dictionary = _resources_by_id.get(str(resource_id_value), {})
+		var resource_rect := _footprint_rect(resource.get("footprint", {}), 1.0)
+		if resource_rect.intersects(visible_rect):
+			_node_rects[str(resource.get("id", ""))] = {"rect":resource_rect, "data":resource, "is_entity":false}
+	for entity_id_value in visible_records.get("entity_ids", []):
+		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
+		var entity_rect := _footprint_rect(entity.get("footprint", {}), 4.0)
+		if entity_rect.intersects(visible_rect):
+			_node_rects[str(entity.get("id", ""))] = {"rect":entity_rect, "data":entity, "is_entity":true}
+	for order_id_value in visible_records.get("order_ids", []):
+		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
+		var order_rect := _footprint_rect(order.get("footprint", {}), 4.0)
+		if order_rect.intersects(visible_rect):
+			_construction_order_rects[str(order.get("id", ""))] = {"rect":order_rect, "data":order}
+	for link_id_value in visible_records.get("link_ids", []):
+		var link: Dictionary = _links_by_id.get(str(link_id_value), {})
 		var source: Dictionary = _entities_by_id.get(str(link.get("source_id", "")), {})
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
@@ -772,14 +861,30 @@ func _has_active_flow() -> bool:
 func _flow_animation_allowed() -> bool:
 	if not _has_active_flow_cache or _overview_mode or _tile_scale() < 0.75:
 		return false
-	var record_count := int(_snapshot.get("resource_fields", []).size()) + int(_snapshot.get("entities", []).size()) + int(_snapshot.get("links", []).size()) + int(_snapshot.get("construction_orders", []).size())
+	var record_count := _visible_record_count()
 	return record_count <= MAX_ANIMATED_SNAPSHOT_RECORDS
+
+
+func _visible_record_count() -> int:
+	var records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
+	return int(records.get("resource_ids", []).size()) + int(records.get("entity_ids", []).size()) + int(records.get("link_ids", []).size()) + int(records.get("order_ids", []).size())
+
+
+func _detail_stage() -> String:
+	var visible_count := _visible_record_count()
+	if visible_count >= COMPACT_DETAIL_VISIBLE_RECORDS or _tile_scale() < 0.75:
+		return "COMPACT"
+	if visible_count >= MEDIUM_DETAIL_VISIBLE_RECORDS or _tile_scale() < 1.5:
+		return "MEDIUM"
+	return "FULL"
 
 
 func _rebuild_snapshot_indexes() -> void:
 	_entities_by_id.clear()
 	_links_by_id.clear()
 	_resources_by_id.clear()
+	_orders_by_id.clear()
+	_visible_records.clear()
 	_has_active_flow_cache = false
 	_visible_active_flow = false
 	for entity_value in _snapshot.get("entities", []):
@@ -795,6 +900,10 @@ func _rebuild_snapshot_indexes() -> void:
 		if resource_value is Dictionary:
 			var resource := resource_value as Dictionary
 			_resources_by_id[str(resource.get("id", ""))] = resource
+	for order_value in _snapshot.get("construction_orders", []):
+		if order_value is Dictionary:
+			var order := order_value as Dictionary
+			_orders_by_id[str(order.get("id", ""))] = order
 
 
 func _status_name(status_id: String) -> String:

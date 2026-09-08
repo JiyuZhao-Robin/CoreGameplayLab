@@ -38,6 +38,7 @@ var _preview_tile := Vector2i.ZERO
 var _pending_inspector_refresh := false
 
 var _world_label: Label
+var _world_scale_label: Label
 var _revision_label: Label
 var _feedback_label: Label
 var _building_options: OptionButton
@@ -48,6 +49,8 @@ var _cargo_item_options: OptionButton
 var _connect_button: Button
 var _cargo_mode_button: Button
 var _power_mode_button: Button
+var _building_detail_body: VBoxContainer
+var _connection_status_label: Label
 var _inspector_body: VBoxContainer
 var _canvas
 
@@ -141,7 +144,7 @@ func selected_link_id() -> String:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if _active_tool != "BUILD" or not event.is_action_pressed("ui_cancel"):
+	if _active_tool not in ["BUILD", "CONNECT"] or not event.is_action_pressed("ui_cancel"):
 		return
 	_on_placement_cancelled()
 	get_viewport().set_input_as_handled()
@@ -165,6 +168,9 @@ func _build_interface() -> void:
 	_world_label = _make_label(I18n.t("factory.workspace.label"), Color("d5ddd8"))
 	_world_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(_world_label)
+	_world_scale_label = _make_label("", Color("d5a45c"))
+	_world_scale_label.name = "FactoryWorldScale"
+	toolbar.add_child(_world_scale_label)
 	_revision_label = _make_label(I18n.t("factory.workspace.topology_empty"), Color("9aa6a1"))
 	toolbar.add_child(_revision_label)
 	var reset_camera_button := _make_button(I18n.t("factory.action.reset_view"), I18n.t("factory.tooltip.reset_view"))
@@ -208,6 +214,13 @@ func _build_interface() -> void:
 	_recipe_options.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_recipe_options.item_selected.connect(_on_recipe_selected)
 	palette.add_child(_recipe_options)
+	var building_detail_panel := PanelContainer.new()
+	building_detail_panel.name = "BuildingSelectionCard"
+	building_detail_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_building_detail_body = VBoxContainer.new()
+	_building_detail_body.add_theme_constant_override("separation", 4)
+	building_detail_panel.add_child(_building_detail_body)
+	palette.add_child(building_detail_panel)
 	var placement_help := _make_label(I18n.t("factory.help.placement"), Color("9aa6a1"))
 	placement_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	palette.add_child(placement_help)
@@ -245,6 +258,10 @@ func _build_interface() -> void:
 	_connect_button.name = "CreateConnection"
 	_connect_button.pressed.connect(_request_connection)
 	palette.add_child(_connect_button)
+	_connection_status_label = _make_label("", Color("9aa6a1"))
+	_connection_status_label.name = "ConnectionStatus"
+	_connection_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	palette.add_child(_connection_status_label)
 	var connection_help := _make_label(I18n.t("factory.help.connection"), Color("9aa6a1"))
 	connection_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	palette.add_child(connection_help)
@@ -286,6 +303,7 @@ func _render() -> void:
 	var is_valid := bool(_snapshot.get("valid", false)) and int(_snapshot.get("protocol_version", 0)) == PROTOCOL_VERSION
 	_world_label.text = I18n.t("factory.workspace.world") % str(_snapshot.get("world_id", I18n.t("factory.workspace.unavailable")))
 	_revision_label.text = I18n.t("factory.workspace.revisions") % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+	_refresh_world_scale()
 	_rebuild_palette(is_valid)
 	_rebuild_connection_selectors(is_valid)
 	_refresh_inspector()
@@ -339,6 +357,7 @@ func _rebuild_palette(is_valid: bool) -> void:
 	if _recipe_options.selected < 0:
 		_recipe_options.select(0)
 	_recipe_options.disabled = not is_valid or recipe_index <= 1
+	_refresh_building_card()
 
 
 func _rebuild_connection_selectors(is_valid: bool) -> void:
@@ -370,6 +389,7 @@ func _rebuild_connection_selectors(is_valid: bool) -> void:
 	_power_mode_button.button_pressed = _active_tool == "CONNECT" and _connection_kind == "POWER"
 	_connect_button.disabled = not is_valid or not _connection_is_ready(source, target)
 	_connect_button.text = I18n.t("factory.action.create_kind_connection") % I18n.t("factory.connection.%s" % _connection_kind.to_lower())
+	_refresh_connection_status(source, target)
 
 
 func _populate_entity_options(options: OptionButton, placeholder: String, selected_id: String) -> void:
@@ -387,6 +407,75 @@ func _populate_entity_options(options: OptionButton, placeholder: String, select
 		index += 1
 	if options.selected < 0:
 		options.select(0)
+
+
+func _refresh_world_scale() -> void:
+	if not is_instance_valid(_world_scale_label):
+		return
+	var bounds: Dictionary = _snapshot.get("bounds", {}) if _snapshot.get("bounds", {}) is Dictionary else {}
+	var extent := _view_model.footprint_size(bounds)
+	var chunk_size := maxi(1, int(_snapshot.get("chunk_size_tiles", 64)))
+	var profile: Dictionary = _snapshot.get("world_profile", {}) if _snapshot.get("world_profile", {}) is Dictionary else {}
+	var scale_class := str(profile.get("scale_class", ""))
+	_world_scale_label.text = I18n.t("factory.workspace.scale", "%d × %d tiles · %d × %d chunks · %s") % [
+		extent.x,
+		extent.y,
+		ceili(float(extent.x) / float(chunk_size)),
+		ceili(float(extent.y) / float(chunk_size)),
+		scale_class if not scale_class.is_empty() else I18n.t("factory.workspace.custom_scale", "CUSTOM")
+	]
+
+
+func _refresh_building_card() -> void:
+	if not is_instance_valid(_building_detail_body):
+		return
+	for child in _building_detail_body.get_children():
+		_building_detail_body.remove_child(child)
+		child.queue_free()
+	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
+	if building.is_empty():
+		_building_detail_body.add_child(_make_label(I18n.t("factory.build.empty", "Choose a building to inspect its footprint, cost, power and compatible production."), Color("9aa6a1")))
+		return
+	_building_detail_body.add_child(_make_label(_building_name(_selected_building_id, str(building.get("name", _selected_building_id))), Color("e6eeea")))
+	var footprint := _view_model.footprint_size(building.get("footprint", {}))
+	_add_detail_to(_building_detail_body, I18n.t("factory.field.footprint", "Footprint"), "%d × %d m" % [footprint.x, footprint.y])
+	_add_detail_to(_building_detail_body, I18n.t("factory.field.kind"), _kind_name(str(building.get("kind", "UNKNOWN"))))
+	var generation := float(building.get("power_generation_kw", 0.0))
+	var demand := float(building.get("power_demand_kw", 0.0))
+	_add_detail_to(_building_detail_body, I18n.t("factory.field.power"), "+%.0f kW" % generation if generation > 0.0 else "-%.0f kW" % demand)
+	_add_detail_to(_building_detail_body, I18n.t("factory.field.build_time", "Build work"), "%.0f" % float(building.get("construction_work", 0.0)))
+	var cost_text := _item_amount_rows(building.get("construction_cost", []))
+	_add_detail_to(_building_detail_body, I18n.t("factory.field.required"), cost_text if not cost_text.is_empty() else I18n.t("factory.value.none", "None"))
+	var active := _make_label(I18n.t("factory.build.placing", "Placement active · click a valid tile") if _active_tool == "BUILD" else I18n.t("factory.build.ready", "Ready to place"), Color("6fbf92"))
+	active.name = "PlacementStatus"
+	_building_detail_body.add_child(active)
+	var cancel := _make_button(I18n.t("factory.action.cancel_placement", "Cancel placement"), I18n.t("factory.tooltip.cancel_placement", "Leave construction placement mode."))
+	cancel.name = "CancelPlacement"
+	cancel.visible = _active_tool == "BUILD"
+	cancel.pressed.connect(_on_placement_cancelled)
+	_building_detail_body.add_child(cancel)
+
+
+func _refresh_connection_status(source: Dictionary, target: Dictionary) -> void:
+	if not is_instance_valid(_connection_status_label):
+		return
+	var text_value := I18n.t("factory.connection.choose_mode", "Choose Cargo or Power to start connecting visible node ports.")
+	var tone := Color("9aa6a1")
+	if _active_tool == "CONNECT":
+		if source.is_empty():
+			text_value = I18n.t("factory.connection.step_source", "1/2 · Select an output/source node on the canvas.")
+			tone = Color("d5a45c")
+		elif target.is_empty():
+			text_value = I18n.t("factory.connection.step_target", "2/2 · Select a compatible input/target node.")
+			tone = Color("d5a45c")
+		elif _connection_is_ready(source, target):
+			text_value = I18n.t("factory.connection.ready", "Route valid · confirm the connection.")
+			tone = Color("6fbf92")
+		else:
+			text_value = I18n.t("factory.connection.incompatible", "These ports are incompatible; choose another target or cargo item.")
+			tone = Color("d86e63")
+	_connection_status_label.text = text_value
+	_connection_status_label.add_theme_color_override("font_color", tone)
 
 
 func _on_building_selected(index: int) -> void:
@@ -454,11 +543,14 @@ func _on_tile_selected(tile: Vector2i) -> void:
 
 
 func _on_placement_cancelled() -> void:
-	if _active_tool != "BUILD":
+	if _active_tool not in ["BUILD", "CONNECT"]:
 		return
 	_active_tool = ""
 	_selected_building_id = ""
 	_selected_recipe_id = ""
+	_connection_source_id = ""
+	_connection_target_id = ""
+	_selected_cargo_item_id = ""
 	if _canvas != null:
 		_canvas.clear_placement_preview()
 	_render()
@@ -585,8 +677,21 @@ func _update_placement_preview() -> void:
 
 
 func _update_connection_preview() -> void:
-	if _canvas != null:
-		_canvas.set_connection_preview(_connection_source_id, _connection_target_id, _connection_kind)
+	if _canvas == null:
+		return
+	var source := _entity_by_id(_connection_source_id)
+	var target := _entity_by_id(_connection_target_id)
+	var candidates: Array[String] = []
+	if not source.is_empty():
+		for entity_value in _snapshot.get("entities", []):
+			var entity := entity_value as Dictionary
+			var entity_id := str(entity.get("id", ""))
+			if entity_id == _connection_source_id:
+				continue
+			var compatible := _view_model.is_power_connection_valid(source, entity) if _connection_kind == "POWER" else not _view_model.compatible_cargo_items(source, entity).is_empty()
+			if compatible:
+				candidates.append(entity_id)
+	_canvas.set_connection_preview(_connection_source_id, _connection_target_id, _connection_kind, not source.is_empty() and not target.is_empty() and _connection_is_ready(source, target), candidates)
 
 
 func _clear_missing_selection() -> void:
@@ -688,14 +793,30 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 	_add_detail(I18n.t("factory.field.status"), _status_name(str(entity.get("status", "UNKNOWN"))))
 	_add_detail(I18n.t("factory.field.rate"), "%.2f/s" % float(entity.get("actual_rate", 0.0)))
 	_add_detail(I18n.t("factory.field.power"), "%d%%" % roundi(float(entity.get("power_factor", 1.0)) * 100.0))
+	_add_meter("EntityPowerMeter", I18n.t("factory.field.power"), float(entity.get("power_factor", 1.0)))
 	var current_recipe_id := str(entity.get("recipe_id", ""))
 	if not current_recipe_id.is_empty():
-		_add_detail(I18n.t("factory.field.recipe"), str(_view_model.recipe_by_id(_snapshot, current_recipe_id).get("name", current_recipe_id)))
+		var active_recipe := _view_model.recipe_by_id(_snapshot, current_recipe_id)
+		_add_detail(I18n.t("factory.field.recipe"), str(active_recipe.get("name", current_recipe_id)))
+		_add_detail(I18n.t("factory.field.cycle", "Cycle"), "%.1fs · %d%%" % [float(active_recipe.get("duration_seconds", 0.0)), roundi(float(entity.get("progress", 0.0)) * 100.0)])
+		_add_detail(I18n.t("factory.field.recipe_inputs", "Recipe inputs"), _item_amount_rows(active_recipe.get("inputs", [])))
+		_add_detail(I18n.t("factory.field.recipe_outputs", "Recipe outputs"), _item_amount_rows(active_recipe.get("outputs", [])))
 	if not str(entity.get("blocker_code", "")).is_empty():
 		_add_detail(I18n.t("factory.field.blocker"), _status_name(str(entity.get("blocker_code", ""))))
 	_add_item_dictionary(I18n.t("factory.field.inputs"), entity.get("inputs", {}))
 	_add_item_dictionary(I18n.t("factory.field.outputs"), entity.get("outputs", {}))
 	_add_item_dictionary(I18n.t("factory.field.inventory"), entity.get("inventory", {}))
+	var node_kind := str(entity.get("node_kind", ""))
+	if node_kind == "EXTRACTOR":
+		_add_detail(I18n.t("factory.field.resource", "Resource"), _item_name(str(entity.get("resource_id", ""))))
+		_add_detail(I18n.t("factory.field.coverage", "Resource coverage"), "%d%%" % roundi(float(entity.get("coverage_efficiency", 0.0)) * 100.0))
+		_add_detail(I18n.t("factory.field.grade", "Grade"), "%.2f" % float(entity.get("average_grade", 0.0)))
+		_add_detail(I18n.t("factory.field.sustainable_rate", "Sustainable field rate"), "%.2f/s" % float(entity.get("sustainable_rate_per_second", 0.0)))
+		_add_detail(I18n.t("factory.field.covered_tiles", "Covered resource tiles"), "%d / %d" % [int(entity.get("covered_resource_tiles", 0)), int(entity.get("footprint_tiles", 0))])
+		_add_meter("ExtractorCoverageMeter", I18n.t("factory.field.coverage", "Resource coverage"), float(entity.get("coverage_efficiency", 0.0)))
+	if node_kind == "MACHINE":
+		_add_capacity_detail(I18n.t("factory.field.input_buffer", "Input buffer"), entity.get("inputs", {}), int(entity.get("input_capacity", 0)))
+		_add_capacity_detail(I18n.t("factory.field.output_buffer", "Output buffer"), entity.get("outputs", {}), int(entity.get("output_capacity", 0)))
 	var center_button := _make_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_entity"))
 	center_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {}))))
 	_inspector_body.add_child(center_button)
@@ -740,9 +861,31 @@ func _render_resource_inspector(field: Dictionary) -> void:
 	_add_detail(I18n.t("factory.field.category"), _category_name(str(field.get("resource_category", ""))))
 	_add_detail(I18n.t("factory.field.grade"), "%.2f" % float(field.get("grade", 0.0)))
 	_add_detail(I18n.t("factory.field.density"), "%.2f" % float(field.get("potential_density", 0.0)))
+	_add_detail(I18n.t("factory.field.mapped_potential", "Mapped potential"), "%.2f/s" % float(field.get("mapped_potential_per_second", 0.0)))
+	for building_value in _snapshot.get("palette", {}).get("buildings", []):
+		var building := building_value as Dictionary
+		if str(building.get("kind", "")) != "EXTRACTOR" or not (building.get("resource_categories", []) as Array).has(str(field.get("resource_category", ""))):
+			continue
+		var extractor_id := str(building.get("id", ""))
+		var build_button := _make_button(I18n.t("factory.action.build_extractor", "Place %s") % _building_name(extractor_id, str(building.get("name", extractor_id))), I18n.t("factory.tooltip.build_extractor", "Enter placement mode at this resource field."))
+		build_button.name = "BuildExtractor"
+		build_button.pressed.connect(_select_building_for_field.bind(extractor_id, field.duplicate(true)))
+		_inspector_body.add_child(build_button)
 	var center_button := _make_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_resource"))
 	center_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(field.get("footprint", {}))))
 	_inspector_body.add_child(center_button)
+
+
+func _select_building_for_field(building_id: String, field: Dictionary) -> void:
+	_selected_building_id = building_id
+	_selected_recipe_id = ""
+	_active_tool = "BUILD"
+	_connection_source_id = ""
+	_connection_target_id = ""
+	_selected_cargo_item_id = ""
+	_preview_tile = _view_model.footprint_origin(field.get("footprint", {}))
+	_canvas.focus_tile(_preview_tile)
+	_render()
 
 
 func _render_link_inspector(link: Dictionary) -> void:
@@ -850,7 +993,48 @@ func _location_inventory() -> Dictionary:
 
 
 func _add_detail(label_text: String, value: String) -> void:
-	_inspector_body.add_child(_make_label(I18n.core("diagnostics.economy.demand_entry") % [label_text, value], Color("a5b2ac")))
+	_add_detail_to(_inspector_body, label_text, value)
+
+
+func _add_detail_to(container: Control, label_text: String, value: String) -> void:
+	container.add_child(_make_label(I18n.core("diagnostics.economy.demand_entry") % [label_text, value], Color("a5b2ac")))
+
+
+func _add_meter(node_name: String, label_text: String, ratio: float) -> void:
+	var meter := ProgressBar.new()
+	meter.name = node_name
+	meter.min_value = 0.0
+	meter.max_value = 100.0
+	meter.value = clampf(ratio, 0.0, 1.0) * 100.0
+	meter.show_percentage = false
+	meter.custom_minimum_size = Vector2(0, 8)
+	meter.tooltip_text = "%s · %d%%" % [label_text, roundi(meter.value)]
+	_inspector_body.add_child(meter)
+
+
+func _add_capacity_detail(label_text: String, values: Variant, capacity: int) -> void:
+	var used := 0
+	if values is Dictionary:
+		for quantity_value in (values as Dictionary).values():
+			used += maxi(0, int(quantity_value))
+	_add_detail(label_text, "%d / %d" % [used, maxi(0, capacity)])
+
+
+func _item_amount_rows(value: Variant) -> String:
+	var rows: Array[String] = []
+	if value is Array:
+		for entry_value in value as Array:
+			if not entry_value is Dictionary:
+				continue
+			var entry := entry_value as Dictionary
+			var item_id := str(entry.get("item", entry.get("item_id", "")))
+			if not item_id.is_empty():
+				rows.append(I18n.core("format.item_quantity") % [_item_name(item_id), maxi(0, int(entry.get("quantity", entry.get("amount", 0))))])
+	elif value is Dictionary:
+		for item_id_value in (value as Dictionary).keys():
+			rows.append(I18n.core("format.item_quantity") % [_item_name(str(item_id_value)), maxi(0, int((value as Dictionary).get(item_id_value, 0)))])
+	rows.sort()
+	return ", ".join(rows) if not rows.is_empty() else I18n.t("factory.value.none", "None")
 
 
 func _add_item_dictionary(label_text: String, value: Variant) -> void:

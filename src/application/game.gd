@@ -296,6 +296,14 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 	var max_world_size_value: Variant = content.factory_grid_rules.get("max_world_size_tiles", {})
 	if max_world_size_value is Dictionary:
 		snapshot["canvas_limits"] = {"max_world_size_tiles":(max_world_size_value as Dictionary).duplicate(true)}
+	var profile_value: Variant = content.factory_grid_rules.get("world_profiles", {}).get(str(snapshot.get("location_id", "")), null)
+	if profile_value is Dictionary:
+		var profile := profile_value as Dictionary
+		snapshot["world_profile"] = {
+			"profile_id":str(profile.get("profile_id", "")),
+			"scale_class":str(profile.get("scale_class", "")),
+			"size_tiles":profile.get("size_tiles", {}).duplicate(true)
+		}
 	var location_id := str(snapshot.get("location_id", ""))
 	var unlocked_recipe_ids := {}
 	var unlocked_recipes: Array = []

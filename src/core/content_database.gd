@@ -729,8 +729,6 @@ func _validate_factory_grid_content() -> void:
 	var max_world_height := int(max_world_size.get("y", 0))
 	if max_world_width <= 0 or max_world_height <= 0:
 		errors.append("factory_grid_rules must define a positive maximum world size")
-	elif chunk_size > 0 and (max_world_width % chunk_size != 0 or max_world_height % chunk_size != 0):
-		errors.append("factory_grid_rules maximum world size must align to %d-tile chunks" % chunk_size)
 	if float(factory_grid_rules.get("simulation_step_seconds", 0.0)) <= 0.0:
 		errors.append("factory_grid_rules must define a positive simulation step")
 	if float(factory_grid_rules.get("base_construction_capacity_per_second", -1.0)) < 0.0:
@@ -762,8 +760,6 @@ func _validate_factory_grid_content() -> void:
 			errors.append("factory world profile '%s' must define profile, world, scale and seed identity" % location_id)
 		if width <= 0 or height <= 0:
 			errors.append("factory world profile '%s' must define positive finite bounds" % location_id)
-		elif chunk_size > 0 and (width % chunk_size != 0 or height % chunk_size != 0):
-			errors.append("factory world profile '%s' bounds must align to %d-tile chunks" % [location_id, chunk_size])
 		elif max_world_width > 0 and max_world_height > 0 and (width > max_world_width or height > max_world_height):
 			errors.append("factory world profile '%s' exceeds the maximum canvas size" % location_id)
 		if width > 0 and height > 0:

@@ -1040,6 +1040,8 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		var field_id := str(field_id_value)
 		var resource_field: Dictionary = world.get("resource_fields", {}).get(field_id, {})
 		var resource_id := str(resource_field.get("resource_id", ""))
+		var field_footprint: Dictionary = resource_field.get("footprint", {})
+		var field_size := _point(field_footprint.get("size", {}))
 		resource_fields.append({
 			"id":field_id,
 			"node_kind":"RESOURCE_FIELD",
@@ -1047,9 +1049,10 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"resource_id":resource_id,
 			"resource_category":str(resource_field.get("resource_category", "solid")),
 			"resource_color":str(rules.get("resource_colors", {}).get(resource_id, "#FFFFFF")),
-			"footprint":resource_field.get("footprint", {}).duplicate(true),
+			"footprint":field_footprint.duplicate(true),
 			"grade":float(resource_field.get("grade", 1.0)),
 			"potential_density":float(resource_field.get("potential_density", 1.0)),
+			"mapped_potential_per_second":maxf(0.0, float(field_size.x * field_size.y) * float(resource_field.get("potential_density", 1.0))),
 			"ports":{"inputs":[], "outputs":[], "accepts_power":false}
 		})
 
@@ -1083,6 +1086,11 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"power_demand_kw":maxf(0.0, float(definition.get("power_demand_kw", 0.0))),
 			"resource_id":str(entity.get("resource_id", "")),
 			"coverage_efficiency":clampf(float(entity.get("coverage_efficiency", 0.0)), 0.0, 1.0),
+			"average_grade":maxf(0.0, float(entity.get("average_grade", 0.0))),
+			"sustainable_rate_per_second":maxf(0.0, float(entity.get("sustainable_rate_per_second", 0.0))),
+			"covered_resource_tiles":maxi(0, int(entity.get("covered_resource_tiles", 0))),
+			"footprint_tiles":maxi(0, int(entity.get("footprint_tiles", 0))),
+			"missing_resource_tiles":maxi(0, int(entity.get("missing_resource_tiles", 0))),
 			"ports":_entity_port_snapshot(entity)
 		})
 
@@ -1140,6 +1148,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		"runtime_revision":maxi(0, int(world.get("runtime_revision", 0))),
 		"elapsed_ms":maxf(0.0, float(world.get("elapsed_ms", 0.0))),
 		"tile_size_m":maxi(1, int(world.get("tile_size_m", 1))),
+		"chunk_size_tiles":maxi(1, int(world.get("chunk_size_tiles", DEFAULT_CHUNK_SIZE))),
 		"bounds":world.get("bounds", {}).duplicate(true),
 		"resource_fields":resource_fields,
 		"entities":entities,

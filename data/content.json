@@ -12,7 +12,7 @@
     "tile_size_m":1,
     "generator_version":1,
     "chunk_size_tiles":64,
-    "max_world_size_tiles":{"x":512,"y":384},
+    "max_world_size_tiles":{"x":768,"y":480},
     "terrain_region_scale_tiles":32,
     "simulation_step_seconds":1.0,
     "base_construction_capacity_per_second":1.0,
@@ -52,19 +52,19 @@
       "dark_matter":"separate_dark_matter"
     },
     "world_profiles":{
-      "earth_orbit":{"profile_id":"factory_earth_hub_v1","world_id":"earth-surface-grid","scale_class":"HUB","size_tiles":{"x":512,"y":320},"seed":730201},
-      "lunar_space":{"profile_id":"factory_lunar_industry_v1","world_id":"lunar-space-grid","scale_class":"INDUSTRIAL","size_tiles":{"x":512,"y":384},"seed":730202},
-      "asteroid_belt":{"profile_id":"factory_belt_outpost_v1","world_id":"asteroid-belt-grid","scale_class":"OUTPOST","size_tiles":{"x":384,"y":320},"seed":730203},
-      "gas_giant_region":{"profile_id":"factory_jovian_capital_v1","world_id":"gas-giant-region-grid","scale_class":"CAPITAL","size_tiles":{"x":512,"y":384},"seed":730204},
-      "outer_system":{"profile_id":"factory_outer_frontier_v1","world_id":"outer-system-grid","scale_class":"FRONTIER","size_tiles":{"x":384,"y":320},"seed":730205},
-      "deep_system":{"profile_id":"factory_deep_frontier_v1","world_id":"deep-system-grid","scale_class":"FRONTIER","size_tiles":{"x":384,"y":320},"seed":730206},
-      "earth_sun_lagrange":{"profile_id":"factory_stellar_site_v1","world_id":"earth-sun-lagrange-grid","scale_class":"STELLAR_SITE","size_tiles":{"x":512,"y":384},"seed":730207},
-      "inner_solar_orbit":{"profile_id":"factory_stellar_site_v1","world_id":"inner-solar-orbit-grid","scale_class":"STELLAR_SITE","size_tiles":{"x":512,"y":384},"seed":730208}
+      "earth_orbit":{"profile_id":"factory_earth_hub_v1","world_id":"earth-surface-grid","scale_class":"HUB","size_tiles":{"x":256,"y":160},"seed":730201},
+      "lunar_space":{"profile_id":"factory_lunar_industry_v1","world_id":"lunar-space-grid","scale_class":"INDUSTRIAL","size_tiles":{"x":384,"y":240},"seed":730202},
+      "asteroid_belt":{"profile_id":"factory_belt_outpost_v1","world_id":"asteroid-belt-grid","scale_class":"OUTPOST","size_tiles":{"x":384,"y":240},"seed":730203},
+      "gas_giant_region":{"profile_id":"factory_jovian_capital_v1","world_id":"gas-giant-region-grid","scale_class":"CAPITAL","size_tiles":{"x":768,"y":480},"seed":730204},
+      "outer_system":{"profile_id":"factory_outer_frontier_v1","world_id":"outer-system-grid","scale_class":"FRONTIER","size_tiles":{"x":512,"y":320},"seed":730205},
+      "deep_system":{"profile_id":"factory_deep_frontier_v1","world_id":"deep-system-grid","scale_class":"FRONTIER","size_tiles":{"x":768,"y":480},"seed":730206},
+      "earth_sun_lagrange":{"profile_id":"factory_stellar_site_v1","world_id":"earth-sun-lagrange-grid","scale_class":"STELLAR_SITE","size_tiles":{"x":384,"y":240},"seed":730207},
+      "inner_solar_orbit":{"profile_id":"factory_stellar_site_v1","world_id":"inner-solar-orbit-grid","scale_class":"STELLAR_SITE","size_tiles":{"x":512,"y":320},"seed":730208}
     },
     "starter_world": {
       "world_id":"earth-surface-grid",
       "location_id":"earth_orbit",
-      "size_tiles":{"x":512,"y":320},
+      "size_tiles":{"x":256,"y":160},
       "seed":730201,
       "resource_fields":[
         {"resource_field_id":"starter-iron-field","resource_id":"iron_ore","origin":{"x":32,"y":32},"size":{"x":24,"y":24},"grade":1.0,"potential_density":0.25,"resource_category":"solid"},
