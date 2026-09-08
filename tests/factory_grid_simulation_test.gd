@@ -62,26 +62,34 @@ func _test_sparse_square_world_and_tile_resources() -> void:
 
 func _test_world_profile_contracts() -> void:
 	var expected := {
-		"earth_orbit":Vector2i(512, 320),
-		"lunar_space":Vector2i(512, 384),
-		"asteroid_belt":Vector2i(384, 320),
-		"gas_giant_region":Vector2i(512, 384),
-		"outer_system":Vector2i(384, 320),
-		"deep_system":Vector2i(384, 320),
-		"earth_sun_lagrange":Vector2i(512, 384),
-		"inner_solar_orbit":Vector2i(512, 384)
+		"earth_orbit":Vector2i(256, 160),
+		"lunar_space":Vector2i(384, 240),
+		"asteroid_belt":Vector2i(384, 240),
+		"gas_giant_region":Vector2i(768, 480),
+		"outer_system":Vector2i(512, 320),
+		"deep_system":Vector2i(768, 480),
+		"earth_sun_lagrange":Vector2i(384, 240),
+		"inner_solar_orbit":Vector2i(512, 320)
 	}
 	var profiles: Dictionary = database.factory_grid_rules.get("world_profiles", {})
 	var max_size_data: Dictionary = database.factory_grid_rules.get("max_world_size_tiles", {})
 	var max_size := Vector2i(int(max_size_data.get("x", 0)), int(max_size_data.get("y", 0)))
-	_check(max_size == Vector2i(512, 384), "Factory content defines one finite maximum canvas size")
+	_check(max_size == Vector2i(768, 480), "Factory content defines one finite maximum canvas size")
 	_check(profiles.size() == database.regions.size(), "every Location has exactly one finite factory world profile")
 	for location_id_value in expected.keys():
 		var location_id := str(location_id_value)
 		var profile: Dictionary = profiles.get(location_id, {})
 		var size_data: Dictionary = profile.get("size_tiles", {})
 		var actual_size := Vector2i(int(size_data.get("x", 0)), int(size_data.get("y", 0)))
-		_check(actual_size == expected[location_id] and actual_size.x % 64 == 0 and actual_size.y % 64 == 0 and actual_size.x <= max_size.x and actual_size.y <= max_size.y, "%s uses its designed finite, chunk-aligned canvas within the authored maximum" % location_id)
+		_check(actual_size == expected[location_id] and actual_size.x > 0 and actual_size.y > 0 and actual_size.x <= max_size.x and actual_size.y <= max_size.y, "%s uses its designed finite canvas within the authored maximum" % location_id)
+	var earth_world := factory.create_world("earth-partial-chunk", "earth_orbit", expected["earth_orbit"], 1)
+	_check(
+		factory.chunk_coordinate(earth_world, Vector2i(255, 159)) == Vector2i(3, 2)
+		and factory.chunk_local_coordinate(earth_world, Vector2i(255, 159)) == Vector2i(63, 31)
+		and bool(factory.tile_snapshot(earth_world, Vector2i(255, 159)).get("valid", false))
+		and not bool(factory.tile_snapshot(earth_world, Vector2i(256, 159)).get("valid", true)),
+		"Earth keeps its partial final 64-tile chunk while enforcing the logical edge"
+	)
 
 
 func _test_resource_field_exclusion_and_coverage() -> void:
@@ -284,7 +292,7 @@ func _test_new_game_factory_bootstrap() -> void:
 	var earth_size := Vector2i(int(earth_bounds.get("x", 0)), int(earth_bounds.get("y", 0)))
 	var solar_size := Vector2i(8, 8)
 	var exact_edge := earth_size - solar_size
-	_check(not world.is_empty() and earth_size == Vector2i(512, 320), "new saves bootstrap the smaller finite Earth factory world")
+	_check(not world.is_empty() and earth_size == Vector2i(256, 160), "new saves bootstrap the smaller finite Earth factory world")
 	_check(bool(simulation.factory_grid.can_place_entity(world, "grid_solar_array", exact_edge).get("ok", false)) and str(simulation.factory_grid.can_place_entity(world, "grid_solar_array", exact_edge + Vector2i.RIGHT).get("reason_code", "")) == "OUT_OF_BOUNDS", "Earth bounds accept an exact-edge footprint and reject a footprint one tile beyond it")
 	_check(str(world.get("resource_fields", {}).get("starter-iron-field", {}).get("resource_id", "")) == "iron_ore" and not world.get("entities", {}).has("starter-iron-field"), "new factory bootstrap stores the starter iron field outside the entity registry")
 	_check(int(depot.get("inventory", {}).get("scrap_metal", 0)) == scrap_before and int(depot.get("inventory", {}).get("electronics", 0)) == electronics_before, "founding industrial cargo moves into the starter entity depot")
@@ -299,18 +307,18 @@ func _test_factory_bound_force_crop() -> void:
 	var inside_field: Dictionary = simulation.factory_grid.add_resource_field(legacy_world, "inside-field", "iron_ore", Vector2i(128, 128), Vector2i(24, 24), 1.0, 0.25, "solid")
 	var inside_mine: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_surface_mine", Vector2i(128, 128), "", "inside-mine")
 	var inside_link: Dictionary = simulation.factory_grid.connect_entities(legacy_world, "POWER", "inside-power", "inside-mine")
-	var inside_order: Dictionary = simulation.factory_grid.queue_construction(legacy_world, "grid_solar_array", Vector2i(320, 200))
+	var inside_order: Dictionary = simulation.factory_grid.queue_construction(legacy_world, "grid_solar_array", Vector2i(200, 120))
 	var far_power: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_solar_array", Vector2i(1000, 400), "", "far-power")
-	var orphan_machine: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_arc_smelter", Vector2i(240, 128), "grid_refine_iron", "orphan-machine")
+	var orphan_machine: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_arc_smelter", Vector2i(220, 128), "grid_refine_iron", "orphan-machine")
 	var field_result: Dictionary = simulation.factory_grid.add_resource_field(legacy_world, "legacy-far-field", "iron_ore", Vector2i(1500, 700), Vector2i(24, 24), 1.0, 0.25, "solid")
 	var mine_result: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_surface_mine", Vector2i(1500, 700), "", "legacy-far-mine")
 	var far_link: Dictionary = simulation.factory_grid.connect_entities(legacy_world, "POWER", "far-power", "legacy-far-mine")
 	var cross_link: Dictionary = simulation.factory_grid.connect_entities(legacy_world, "POWER", "inside-power", "legacy-far-mine")
 	var orphan_link: Dictionary = simulation.factory_grid.connect_entities(legacy_world, "POWER", "far-power", "orphan-machine")
 	var order_result: Dictionary = simulation.factory_grid.queue_construction(legacy_world, "grid_solar_array", Vector2i(2000, 800))
-	var partial_entity: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_solar_array", Vector2i(508, 316), "", "partial-power")
-	var partial_field: Dictionary = simulation.factory_grid.add_resource_field(legacy_world, "partial-field", "iron_ore", Vector2i(500, 310), Vector2i(24, 24), 1.0, 0.25, "solid")
-	var partial_order: Dictionary = simulation.factory_grid.queue_construction(legacy_world, "grid_solar_array", Vector2i(500, 316))
+	var partial_entity: Dictionary = simulation.factory_grid.place_entity_immediate(legacy_world, "grid_solar_array", Vector2i(252, 156), "", "partial-power")
+	var partial_field: Dictionary = simulation.factory_grid.add_resource_field(legacy_world, "partial-field", "iron_ore", Vector2i(248, 150), Vector2i(24, 24), 1.0, 0.25, "solid")
+	var partial_order: Dictionary = simulation.factory_grid.queue_construction(legacy_world, "grid_solar_array", Vector2i(240, 156))
 	legacy_world["tile_deltas"]["100:100"] = {"terrain_override":"PLAIN"}
 	legacy_world["tile_deltas"]["2500:900"] = {"terrain_override":"PLAIN"}
 	legacy_world["tile_deltas"]["malformed"] = {"terrain_override":"PLAIN"}
@@ -337,7 +345,7 @@ func _test_factory_bound_force_crop() -> void:
 	var migrated: Dictionary = state.factory_worlds.get("earth-surface-grid", {})
 	var migrated_size_data: Dictionary = migrated.get("bounds", {}).get("size", {})
 	var migrated_size := Vector2i(int(migrated_size_data.get("x", 0)), int(migrated_size_data.get("y", 0)))
-	_check(migrated_size == Vector2i(512, 320), "legacy 20M Earth bounds are force-cropped to the authored Location profile")
+	_check(migrated_size == Vector2i(256, 160), "legacy 20M Earth bounds are force-cropped to the authored Location profile")
 	_check(migrated.get("resource_fields", {}).keys() == ["inside-field"] and migrated.get("entities", {}).has("inside-power") and migrated.get("entities", {}).has("inside-mine") and migrated.get("entities", {}).has("orphan-machine") and migrated.get("entities", {}).size() == 3 and migrated.get("construction_orders", {}).size() == 1, "force crop retains only records whose complete footprints fit the new bounds")
 	_check(migrated.get("links", {}).size() == 1 and migrated.get("links", {}).values().all(func(link): return migrated.get("entities", {}).has(str((link as Dictionary).get("source_id", ""))) and migrated.get("entities", {}).has(str((link as Dictionary).get("target_id", "")))), "force crop removes every link with a discarded endpoint")
 	_check(is_zero_approx(float(migrated.get("entities", {}).get("orphan-machine", {}).get("power_factor", -1.0))) and str(migrated.get("entities", {}).get("orphan-machine", {}).get("status", "")) == "NO_POWER", "force crop immediately refreshes surviving runtime state after removing a power provider")
@@ -358,23 +366,23 @@ func _test_factory_bound_force_crop() -> void:
 	simulation.ensure_frontier_state(alias_state)
 	var alias_world: Dictionary = alias_state.factory_worlds.get("earth-orbit-grid", {})
 	var alias_size: Dictionary = alias_world.get("bounds", {}).get("size", {})
-	_check(alias_state.factory_worlds.size() == 1 and not alias_state.factory_worlds.has("earth-surface-grid") and Vector2i(int(alias_size.get("x", 0)), int(alias_size.get("y", 0))) == Vector2i(512, 320) and int(alias_world.get("topology_revision", 0)) == 1 and int(alias_world.get("runtime_revision", 0)) == 0, "empty legacy Earth world is force-cropped with one topology revision and no false runtime revision")
+	_check(alias_state.factory_worlds.size() == 1 and not alias_state.factory_worlds.has("earth-surface-grid") and Vector2i(int(alias_size.get("x", 0)), int(alias_size.get("y", 0))) == Vector2i(256, 160) and int(alias_world.get("topology_revision", 0)) == 1 and int(alias_world.get("runtime_revision", 0)) == 0, "empty legacy Earth world is force-cropped with one topology revision and no false runtime revision")
 	var restored_alias_state := SpaceGameState.from_dictionary(JSON.parse_string(JSON.stringify(alias_state.to_dictionary())), database.domains.keys(), database.regions)
 	simulation.ensure_frontier_state(restored_alias_state)
 	var restored_alias_world: Dictionary = restored_alias_state.factory_worlds.get("earth-orbit-grid", {})
-	_check(Vector2i(int(restored_alias_world.get("bounds", {}).get("size", {}).get("x", 0)), int(restored_alias_world.get("bounds", {}).get("size", {}).get("y", 0))) == Vector2i(512, 320) and int(restored_alias_world.get("topology_revision", 0)) == int(alias_world.get("topology_revision", -1)), "legacy Earth alias force crop remains idempotent across save reload")
+	_check(Vector2i(int(restored_alias_world.get("bounds", {}).get("size", {}).get("x", 0)), int(restored_alias_world.get("bounds", {}).get("size", {}).get("y", 0))) == Vector2i(256, 160) and int(restored_alias_world.get("topology_revision", 0)) == int(alias_world.get("topology_revision", -1)), "legacy Earth alias force crop remains idempotent across save reload")
 	var custom_state := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	var custom_world := simulation.factory_grid.create_world("custom-earth-grid", "earth_orbit", Vector2i(768, 512), 730201)
 	custom_world["bounds"]["origin"] = {"x":100, "y":200}
-	simulation.factory_grid.place_entity_immediate(custom_world, "grid_solar_array", Vector2i(604, 512), "", "custom-edge-power")
-	simulation.factory_grid.place_entity_immediate(custom_world, "grid_solar_array", Vector2i(700, 400), "", "custom-far-power")
+	simulation.factory_grid.place_entity_immediate(custom_world, "grid_solar_array", Vector2i(348, 352), "", "custom-edge-power")
+	simulation.factory_grid.place_entity_immediate(custom_world, "grid_solar_array", Vector2i(400, 400), "", "custom-far-power")
 	custom_state.factory_worlds["custom-earth-grid"] = custom_world
 	simulation.ensure_frontier_state(custom_state)
 	var custom_cropped: Dictionary = custom_state.factory_worlds.get("custom-earth-grid", {})
 	var custom_size: Dictionary = custom_cropped.get("bounds", {}).get("size", {})
-	_check(Vector2i(int(custom_size.get("x", 0)), int(custom_size.get("y", 0))) == Vector2i(512, 320) and custom_cropped.get("entities", {}).has("custom-edge-power") and not custom_cropped.get("entities", {}).has("custom-far-power"), "custom world IDs and non-zero origins obey the Location profile while retaining an exact-edge footprint")
+	_check(Vector2i(int(custom_size.get("x", 0)), int(custom_size.get("y", 0))) == Vector2i(256, 160) and custom_cropped.get("entities", {}).has("custom-edge-power") and not custom_cropped.get("entities", {}).has("custom-far-power"), "custom world IDs and non-zero origins obey the Location profile while retaining an exact-edge footprint")
 	var undersized_state := SpaceGameState.create_new(database.domains.keys(), database.regions)
-	var undersized_world := simulation.factory_grid.create_world("undersized-earth-grid", "earth_orbit", Vector2i(256, 192), 730201)
+	var undersized_world := simulation.factory_grid.create_world("undersized-earth-grid", "earth_orbit", Vector2i(192, 128), 730201)
 	undersized_state.factory_worlds["undersized-earth-grid"] = undersized_world
 	var undersized_before: Dictionary = undersized_world.duplicate(true)
 	simulation.ensure_frontier_state(undersized_state)
@@ -384,7 +392,7 @@ func _test_factory_bound_force_crop() -> void:
 	simulation.factory_grid.place_entity_immediate(dirty_world, "grid_solar_array", Vector2i(700, 400), "", "hidden-power")
 	dirty_world["tile_deltas"]["700:400"] = {"terrain_override":"PLAIN"}
 	dirty_world["revealed_chunks"]["12:8"] = true
-	dirty_world["bounds"]["size"] = {"x":512, "y":320}
+	dirty_world["bounds"]["size"] = {"x":256, "y":160}
 	var dirty_topology_before := int(dirty_world.get("topology_revision", 0))
 	dirty_state.factory_worlds["dirty-profile-grid"] = dirty_world
 	simulation.ensure_frontier_state(dirty_state)
@@ -396,7 +404,7 @@ func _test_factory_bound_force_crop() -> void:
 	var unprofiled_state := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	unprofiled_state.factory_worlds["unprofiled-grid"] = simulation.factory_grid.create_world("unprofiled-grid", "unknown_location", Vector2i(1024, 768), 730201)
 	simulation.ensure_frontier_state(unprofiled_state)
-	_check(unprofiled_state.factory_worlds.get("unprofiled-grid", {}).get("bounds", {}).get("size", {}) == {"x":512, "y":384}, "the global canvas maximum force-crops even an unprofiled legacy world")
+	_check(unprofiled_state.factory_worlds.get("unprofiled-grid", {}).get("bounds", {}).get("size", {}) == {"x":768, "y":480}, "the global canvas maximum force-crops even an unprofiled legacy world")
 
 
 func _test_application_command_boundary() -> void:
@@ -408,10 +416,10 @@ func _test_application_command_boundary() -> void:
 	game.simulation.ensure_frontier_state(game.state)
 	var earth_workspace: Dictionary = game.factory_workspace_snapshot("earth-surface-grid")
 	var canvas_limit_data: Dictionary = earth_workspace.get("canvas_limits", {}).get("max_world_size_tiles", {})
-	_check(Vector2i(int(canvas_limit_data.get("x", 0)), int(canvas_limit_data.get("y", 0))) == Vector2i(512, 384), "Factory workspace snapshot publishes the authored canvas limit without owning world bounds")
-	_check(not game.initialize_factory_world("oversized-width-grid", "earth_orbit", Vector2i(513, 320), 123), "application boundary rejects a new world wider than the Location profile")
-	_check(not game.initialize_factory_world("oversized-height-grid", "earth_orbit", Vector2i(512, 321), 123), "application boundary rejects a new world taller than the Location profile")
-	_check(game.initialize_factory_world("command-grid", "earth_orbit", Vector2i(256, 256), 123), "Game command creates a factory world transactionally")
+	_check(Vector2i(int(canvas_limit_data.get("x", 0)), int(canvas_limit_data.get("y", 0))) == Vector2i(768, 480), "Factory workspace snapshot publishes the authored canvas limit without owning world bounds")
+	_check(not game.initialize_factory_world("oversized-width-grid", "earth_orbit", Vector2i(257, 160), 123), "application boundary rejects a new world wider than the Location profile")
+	_check(not game.initialize_factory_world("oversized-height-grid", "earth_orbit", Vector2i(256, 161), 123), "application boundary rejects a new world taller than the Location profile")
+	_check(game.initialize_factory_world("command-grid", "earth_orbit", Vector2i(192, 128), 123), "Game command creates a factory world transactionally")
 	_check(game.register_factory_resource_field("command-grid", "command-iron", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid"), "generator-facing Game command registers a tile resource field transactionally")
 	_check(game.queue_factory_construction("command-grid", "grid_surface_mine", Vector2i(34, 34)), "player-facing Game command creates a construction order rather than an instant mine")
 	var command_world: Dictionary = game.state.factory_worlds.get("command-grid", {})
@@ -422,13 +430,13 @@ func _test_application_command_boundary() -> void:
 	game.simulation = SimulationEngine.new(database)
 	game.simulation.ensure_frontier_state(game.state)
 	var expected_remote_sizes := {
-		"lunar_space":Vector2i(512, 384),
-		"asteroid_belt":Vector2i(384, 320),
-		"gas_giant_region":Vector2i(512, 384),
-		"outer_system":Vector2i(384, 320),
-		"deep_system":Vector2i(384, 320),
-		"earth_sun_lagrange":Vector2i(512, 384),
-		"inner_solar_orbit":Vector2i(512, 384)
+		"lunar_space":Vector2i(384, 240),
+		"asteroid_belt":Vector2i(384, 240),
+		"gas_giant_region":Vector2i(768, 480),
+		"outer_system":Vector2i(512, 320),
+		"deep_system":Vector2i(768, 480),
+		"earth_sun_lagrange":Vector2i(384, 240),
+		"inner_solar_orbit":Vector2i(512, 320)
 	}
 	for location_id_value in expected_remote_sizes.keys():
 		var location_id := str(location_id_value)

@@ -36,7 +36,7 @@ func _initialize() -> void:
 
 
 func _test_stable_presentation_snapshot() -> void:
-	var world := factory.create_world("snapshot-grid", "earth_orbit", Vector2i(256, 256), 77)
+	var world := factory.create_world("snapshot-grid", "earth_orbit", Vector2i(256, 160), 77)
 	factory.add_resource_field(world, "z-field", "iron_ore", Vector2i(32, 32), Vector2i(12, 12), 1.25, 0.5, "solid")
 	factory.add_resource_field(world, "a-field", "iron_ore", Vector2i(64, 32), Vector2i(12, 12), 1.0, 0.25, "solid")
 	factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", "z-power")
@@ -52,6 +52,15 @@ func _test_stable_presentation_snapshot() -> void:
 	_check(not bool((fields[0] as Dictionary).get("is_entity", true)) and (fields[0] as Dictionary).get("ports", {}).get("outputs", []).is_empty(), "resource fields cannot masquerade as connectable factory entities")
 	_check(entities.size() == 2 and str((entities[0] as Dictionary).get("id", "")) == "a-mine" and str((entities[1] as Dictionary).get("id", "")) == "z-power", "entity projections are stable identifier-sorted arrays")
 	_check((entities[0] as Dictionary).get("ports", {}).get("outputs", []).has("iron_ore"), "extractor projection exposes its actual physical output port")
+	_check(
+		int(snapshot.get("chunk_size_tiles", 0)) == 64
+		and is_equal_approx(float((fields[1] as Dictionary).get("mapped_potential_per_second", 0.0)), 72.0)
+		and int((entities[0] as Dictionary).get("covered_resource_tiles", 0)) == 9
+		and int((entities[0] as Dictionary).get("footprint_tiles", 0)) == 9
+		and is_equal_approx(float((entities[0] as Dictionary).get("average_grade", 0.0)), 1.25)
+		and is_equal_approx(float((entities[0] as Dictionary).get("sustainable_rate_per_second", 0.0)), 4.5),
+		"workspace publishes authoritative chunk, field-potential, and extractor-coverage metrics for presentation"
+	)
 	_check(not (entities[0] as Dictionary).has("routing_cursor") and not snapshot.has("tile_deltas"), "workspace snapshot hides mutable engine bookkeeping")
 	_check(int(snapshot.get("topology_revision", 0)) == 5 and int(snapshot.get("runtime_revision", 0)) == 1, "topology and runtime revisions advance independently")
 	var building_ids: Array[String] = []
@@ -63,7 +72,7 @@ func _test_stable_presentation_snapshot() -> void:
 
 
 func _test_recipe_reconfiguration_contract() -> void:
-	var world := factory.create_world("recipe-grid", "earth_orbit", Vector2i(256, 256), 79)
+	var world := factory.create_world("recipe-grid", "earth_orbit", Vector2i(256, 160), 79)
 	factory.add_resource_field(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid")
 	factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "mine")
 	factory.place_entity_immediate(world, "grid_engineering_works", Vector2i(70, 32), "grid_refine_iron", "machine")
@@ -105,14 +114,14 @@ func _test_bootstrap_guidance_uses_factory_authority() -> void:
 		"kind":"QUEUE_CONSTRUCTION",
 		"world_id":world_id,
 		"base_topology_revision":int(world.get("topology_revision", 0)),
-		"payload":{"definition_id":"grid_arc_smelter", "recipe_id":"grid_refine_iron", "origin":{"x":300, "y":100}, "priority":50}
+		"payload":{"definition_id":"grid_arc_smelter", "recipe_id":"grid_refine_iron", "origin":{"x":200, "y":100}, "priority":50}
 	})
 	_check(bool(queued.get("accepted", false)), "guidance fixture queues the foundry through the public Factory command")
 	var queued_guidance: Dictionary = game.guidance_snapshot()
 	_check(str(queued_guidance.get("step_id", "")) == "commission_foundry" and str(queued_guidance.get("section", "")) == "factory" and str(queued_guidance.get("focus_entity_id", "")) == str(queued.get("result", {}).get("entity_id", "")), "queued-foundry guidance reads the live Factory construction order identity")
 	world = game.state.factory_worlds.get(world_id, {})
 	world.get("construction_orders", {}).erase(str(queued.get("result", {}).get("order_id", "")))
-	factory.place_entity_immediate(world, "grid_arc_smelter", Vector2i(300, 100), "grid_refine_iron", str(queued.get("result", {}).get("entity_id", "guidance-foundry")))
+	factory.place_entity_immediate(world, "grid_arc_smelter", Vector2i(200, 100), "grid_refine_iron", str(queued.get("result", {}).get("entity_id", "guidance-foundry")))
 	var foundry_complete: Dictionary = game.guidance_snapshot()
 	_check(str(foundry_complete.get("step_id", "")) == "commission_research" and str(foundry_complete.get("section", "")) == "factory" and str(foundry_complete.get("focus_entity_id", "")) == "grid_research_complex", "completed physical foundry advances guidance to Factory-backed research providers")
 	for guidance_value in [initial, first_ore, first_frame, queued_guidance, foundry_complete]:
@@ -125,7 +134,7 @@ func _test_versioned_application_intents() -> void:
 	game.content = database
 	game.simulation = SimulationEngine.new(database)
 	game.state = SpaceGameState.create_new(database.domains.keys(), database.regions)
-	var world := factory.create_world("intent-grid", "earth_orbit", Vector2i(256, 256), 88)
+	var world := factory.create_world("intent-grid", "earth_orbit", Vector2i(256, 160), 88)
 	factory.add_resource_field(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid")
 	factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", "power")
 	factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "mine")
@@ -611,7 +620,7 @@ func _run_multi_world_completion_order(world_ids: Array) -> Dictionary:
 	state.saved_at_ms = 0
 	for world_id_value in world_ids:
 		var world_id := str(world_id_value)
-		var world := factory.create_world(world_id, "earth_orbit", Vector2i(256, 256), 99)
+		var world := factory.create_world(world_id, "earth_orbit", Vector2i(256, 160), 99)
 		var power_id := "%s-power" % world_id
 		var machine_id := "%s-machine" % world_id
 		factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", power_id)
@@ -680,17 +689,17 @@ func _test_surveyed_world_initialization() -> void:
 	game.state.technologies["heavy_extraction"] = true
 	game.state.facilities["assembly_yard"] = {"level":99, "status":"ACTIVE", "factory_power_factor":1.0, "factory_providers":[]}
 	var earth_orders_before_forgery: int = int(earth_world.get("construction_orders", {}).size())
-	_check(not game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(400, 260), "grid_fabricate_quantum_component"), "a forged marked Factory adapter cannot satisfy transaction-local recipe ownership")
+	_check(not game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(200, 120), "grid_fabricate_quantum_component"), "a forged marked Factory adapter cannot satisfy transaction-local recipe ownership")
 	_check(game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {}).size() == earth_orders_before_forgery, "rejected forged ownership queues no physical construction")
 	game.state.facilities.erase("assembly_yard")
-	var assembly_placed: Dictionary = game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_assembly_array", Vector2i(450, 260), "grid_fabricate_quantum_component", "transaction-assembly")
+	var assembly_placed: Dictionary = game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_assembly_array", Vector2i(224, 120), "grid_fabricate_quantum_component", "transaction-assembly")
 	_check(bool(assembly_placed.get("ok", false)), "transaction fixture places a physical Assembly Array in the existing Earth world")
 	game.simulation.refresh_factory_runtime_views(game.state)
 	var assembly_ownership_requirement := {"type":"own_facility", "id":"assembly_yard"}
 	var quantum_recipe_visible_before := (game.factory_workspace_snapshot("earth-surface-grid").get("palette", {}).get("recipes", []) as Array).any(func(recipe_value): return str((recipe_value as Dictionary).get("id", "")) == "grid_fabricate_quantum_component")
 	_check(game.simulation.requirement_met(game.state, assembly_ownership_requirement) and str(game.state.facilities.get("assembly_yard", {}).get("status", "")) == "INACTIVE" and quantum_recipe_visible_before, "unpowered physical Assembly Array ownership exposes its canonical recipe before an unrelated world transaction")
 	game.state.facilities.erase("assembly_yard")
-	_check(game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(400, 260), "grid_fabricate_quantum_component"), "transaction pre-projection accepts physical ownership even when the live compatibility adapter is missing")
+	_check(game.queue_factory_construction("earth-surface-grid", "grid_assembly_array", Vector2i(200, 120), "grid_fabricate_quantum_component"), "transaction pre-projection accepts physical ownership even when the live compatibility adapter is missing")
 	var archive_before: Dictionary = game.state.retired_aggregate_industry_archive.duplicate(true)
 	var current_round_trip := SpaceGameState.from_dictionary(game.state.to_dictionary(), database.domains.keys(), database.regions)
 	_check(current_round_trip.retired_aggregate_industry_archive == archive_before and not current_round_trip.facilities.has("assembly_yard"), "current-schema save normalization discards derived Factory adapters without fabricating retired migration evidence")
@@ -752,7 +761,7 @@ func _test_factory_construction_intents() -> void:
 	game.content = database
 	game.simulation = SimulationEngine.new(database)
 	game.state = SpaceGameState.create_new(database.domains.keys(), database.regions)
-	var world := factory.create_world("construction-intent-grid", "earth_orbit", Vector2i(256, 256), 99)
+	var world := factory.create_world("construction-intent-grid", "earth_orbit", Vector2i(256, 160), 99)
 	_check(bool(factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(80, 32), "", "funding-depot").get("ok", false)), "construction intent fixture places Factory storage")
 	world["entities"]["funding-depot"]["inventory"] = {"scrap_metal":2}
 	game.state.factory_worlds["construction-intent-grid"] = world
@@ -1016,9 +1025,9 @@ func _test_factory_progression_adapters() -> void:
 	game.simulation.ensure_frontier_state(game.state)
 	_check(not game.state.facilities.has("makeshift_workshop"), "stale aggregate facility data cannot survive without its physical grid entity")
 	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex", Vector2i(160, 32), "", "adapter-research").get("ok", false)), "service fixture places a physical Research Complex")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(300, 32), "", "adapter-power").get("ok", false)), "service fixture places physical generation")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(300, 50), "", "adapter-research-power").get("ok", false)), "service fixture places independent Research generation")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_cooling_service", Vector2i(330, 32), "", "adapter-cooling").get("ok", false)), "service fixture places a physical cooling unit")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(192, 32), "", "adapter-power").get("ok", false)), "service fixture places physical generation")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(192, 50), "", "adapter-research-power").get("ok", false)), "service fixture places independent Research generation")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_cooling_service", Vector2i(210, 32), "", "adapter-cooling").get("ok", false)), "service fixture places a physical cooling unit")
 	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_engineering_works", Vector2i(220, 100), "grid_refine_iron", "adapter-research-load").get("ok", false)), "service fixture places a competing physical power load")
 	game.simulation.ensure_frontier_state(game.state)
 	_check(game.state.facilities.has("research_complex") and is_zero_approx(game.simulation.research_capacity(game.state)), "an installed but unpowered Research Complex contributes zero runnable research capacity")
@@ -1093,8 +1102,8 @@ func _test_factory_progression_adapters() -> void:
 	# local fixture reference before continuing direct Factory-domain adapter
 	# assertions against the authoritative committed world.
 	world = game.state.factory_worlds.get("earth-surface-grid", {})
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_power_substation_ii", Vector2i(500, 100), "", "adapter-module-power").get("ok", false)), "module fixture places independent physical generation")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex_ii", Vector2i(400, 100), "", "adapter-research-ii").get("ok", false)), "progression fixture places the physical Research Complex II provider")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_power_substation_ii", Vector2i(240, 100), "", "adapter-module-power").get("ok", false)), "module fixture places independent physical generation")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex_ii", Vector2i(160, 100), "", "adapter-research-ii").get("ok", false)), "progression fixture places the physical Research Complex II provider")
 	var base_research_power_link: Dictionary = game.simulation.factory_grid.connect_entities(world, "POWER", "adapter-module-power", "adapter-research")
 	_check(bool(base_research_power_link.get("ok", false)), "advanced Research fixture powers only the base Research Complex first")
 	game.simulation.factory_grid.advance_world(world, 1000.0)
@@ -1109,8 +1118,8 @@ func _test_factory_progression_adapters() -> void:
 	game.simulation.factory_grid.advance_world(world, 1000.0)
 	game.simulation.ensure_frontier_state(game.state)
 	_check(is_equal_approx(game.simulation.research_capacity(game.state), 1.0), "disconnecting Research Complex II immediately falls back to the powered base complex")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_electronics_works", Vector2i(440, 100), "grid_fabricate_data_core", "adapter-electronics").get("ok", false)), "module fixture places the owning physical Electronics Works")
-	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_fusion_test_rig", Vector2i(470, 100), "", "adapter-fusion-rig").get("ok", false)), "module fixture places a physical Fusion Test Rig")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_electronics_works", Vector2i(182, 100), "grid_fabricate_data_core", "adapter-electronics").get("ok", false)), "module fixture places the owning physical Electronics Works")
+	_check(bool(game.simulation.factory_grid.place_entity_immediate(world, "grid_fusion_test_rig", Vector2i(200, 100), "", "adapter-fusion-rig").get("ok", false)), "module fixture places a physical Fusion Test Rig")
 	_check(bool(game.simulation.factory_grid.connect_entities(world, "POWER", "adapter-module-power", "adapter-electronics").get("ok", false)), "module fixture powers the owning Electronics Works separately")
 	game.simulation.refresh_factory_runtime_views(game.state)
 	var module_requirement := {"type":"manufacturing_module_installed", "facility":"electronics_facility", "id":"fusion_component_test_rig"}
@@ -1201,8 +1210,8 @@ func _run_advanced_research_window(game: Variant, chunks: Array) -> Dictionary:
 	game.state = SpaceGameState.create_new(database.domains.keys(), database.regions)
 	game.simulation.ensure_frontier_state(game.state)
 	var world: Dictionary = game.state.factory_worlds["earth-surface-grid"]
-	game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(260, 0), "", "boundary-research-power")
-	game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex", Vector2i(260, 40), "", "boundary-research-complex")
+	game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(200, 0), "", "boundary-research-power")
+	game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex", Vector2i(200, 40), "", "boundary-research-complex")
 	game.simulation.factory_grid.connect_entities(world, "POWER", "boundary-research-power", "boundary-research-complex")
 	game.simulation.refresh_factory_runtime_views(game.state)
 	game.state.technologies["industrial_coordination"] = true
@@ -1237,10 +1246,10 @@ func _run_research_factory_gate_window(game: Variant, chunks: Array) -> Dictiona
 	game.state = SpaceGameState.create_new(database.domains.keys(), database.regions)
 	game.simulation.ensure_frontier_state(game.state)
 	var world: Dictionary = game.state.factory_worlds["earth-surface-grid"]
-	game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(260, 0), "", "gate-power-a")
-	game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(280, 0), "", "gate-power-b")
-	game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex", Vector2i(260, 40), "", "gate-research")
-	game.simulation.factory_grid.place_entity_immediate(world, "grid_electronics_works", Vector2i(300, 40), "grid_fabricate_propulsion_test_article", "gate-prototype-machine")
+	game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(200, 0), "", "gate-power-a")
+	game.simulation.factory_grid.place_entity_immediate(world, "grid_solar_array", Vector2i(220, 0), "", "gate-power-b")
+	game.simulation.factory_grid.place_entity_immediate(world, "grid_research_complex", Vector2i(200, 40), "", "gate-research")
+	game.simulation.factory_grid.place_entity_immediate(world, "grid_electronics_works", Vector2i(224, 40), "grid_fabricate_propulsion_test_article", "gate-prototype-machine")
 	game.simulation.factory_grid.connect_entities(world, "POWER", "gate-power-a", "gate-research")
 	game.simulation.factory_grid.connect_entities(world, "POWER", "gate-power-b", "gate-research")
 	game.simulation.factory_grid.connect_entities(world, "POWER", "gate-power-a", "gate-prototype-machine")

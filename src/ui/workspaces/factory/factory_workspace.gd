@@ -36,6 +36,8 @@ var _selected_cargo_item_id := ""
 var _selection := {"kind":"", "id":"", "data":{}}
 var _preview_tile := Vector2i.ZERO
 var _pending_inspector_refresh := false
+var _pending_link_selection_id := ""
+var _pending_order_selection_id := ""
 
 var _world_label: Label
 var _world_scale_label: Label
@@ -74,6 +76,7 @@ func _process(_delta: float) -> void:
 	_pending_inspector_refresh = false
 	set_process(false)
 	_clear_missing_selection()
+	_apply_pending_command_selection()
 	_render()
 
 
@@ -88,11 +91,13 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 		_pending_inspector_refresh = true
 		set_process(true)
 		_world_label.text = I18n.t("factory.workspace.world") % str(_snapshot.get("world_id", I18n.t("factory.workspace.unavailable")))
+		_refresh_world_scale()
 		_revision_label.text = I18n.t("factory.workspace.revisions") % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
 		return
 	_pending_inspector_refresh = false
 	set_process(false)
 	_clear_missing_selection()
+	_apply_pending_command_selection()
 	_render()
 
 
@@ -109,6 +114,15 @@ func apply_command_result(result: Dictionary) -> void:
 		message = I18n.t("factory.feedback.unsupported_protocol")
 	if accepted:
 		_set_feedback("ACCEPTED", message if not message.is_empty() else I18n.t("factory.feedback.accepted"), Color("6fbf92"))
+		var operation_result: Dictionary = result.get("result", {}) if result.get("result", {}) is Dictionary else {}
+		if str(result.get("command_kind", "")) == "CONNECT_ENTITIES":
+			_pending_link_selection_id = str(operation_result.get("link_id", ""))
+			_active_tool = ""
+			_connection_source_id = ""
+			_connection_target_id = ""
+			_selected_cargo_item_id = ""
+		elif str(result.get("command_kind", "")) == "QUEUE_CONSTRUCTION":
+			_pending_order_selection_id = str(operation_result.get("order_id", ""))
 	else:
 		var rejection_code := reason_code if not reason_code.is_empty() else "COMMAND_REJECTED"
 		var rejection_key := "factory.reason.%s" % rejection_code.to_lower()
@@ -361,8 +375,8 @@ func _rebuild_palette(is_valid: bool) -> void:
 
 
 func _rebuild_connection_selectors(is_valid: bool) -> void:
-	_populate_entity_options(_source_options, I18n.t("factory.select.source"), _connection_source_id)
-	_populate_entity_options(_target_options, I18n.t("factory.select.target"), _connection_target_id)
+	_populate_entity_options(_source_options, I18n.t("factory.select.source"), _connection_source_id, "SOURCE")
+	_populate_entity_options(_target_options, I18n.t("factory.select.target"), _connection_target_id, "TARGET")
 	_source_options.disabled = not is_valid
 	_target_options.disabled = not is_valid
 	_cargo_item_options.clear()
@@ -392,7 +406,7 @@ func _rebuild_connection_selectors(is_valid: bool) -> void:
 	_refresh_connection_status(source, target)
 
 
-func _populate_entity_options(options: OptionButton, placeholder: String, selected_id: String) -> void:
+func _populate_entity_options(options: OptionButton, placeholder: String, selected_id: String, role: String) -> void:
 	options.clear()
 	options.add_item(placeholder)
 	options.set_item_metadata(0, "")
@@ -400,6 +414,8 @@ func _populate_entity_options(options: OptionButton, placeholder: String, select
 	for entity_value in _snapshot.get("entities", []):
 		var entity := entity_value as Dictionary
 		var entity_id := str(entity.get("id", ""))
+		if not _entity_is_connection_candidate(entity, role):
+			continue
 		options.add_item(str(entity.get("name", entity_id)) + I18n.core("format.slash_separator") + entity_id)
 		options.set_item_metadata(index, entity_id)
 		if entity_id == selected_id:
@@ -407,6 +423,19 @@ func _populate_entity_options(options: OptionButton, placeholder: String, select
 		index += 1
 	if options.selected < 0:
 		options.select(0)
+
+
+func _entity_is_connection_candidate(entity: Dictionary, role: String) -> bool:
+	var entity_id := str(entity.get("id", ""))
+	if role == "TARGET" and entity_id == _connection_source_id:
+		return false
+	var ports: Dictionary = entity.get("ports", {}) if entity.get("ports", {}) is Dictionary else {}
+	if role == "SOURCE":
+		return bool(ports.get("provides_power", false)) if _connection_kind == "POWER" else not (ports.get("outputs", []) as Array).is_empty()
+	var source := _entity_by_id(_connection_source_id)
+	if source.is_empty():
+		return bool(ports.get("accepts_power", false)) if _connection_kind == "POWER" else not (ports.get("inputs", []) as Array).is_empty()
+	return _view_model.is_power_connection_valid(source, entity) if _connection_kind == "POWER" else not _view_model.compatible_cargo_items(source, entity).is_empty()
 
 
 func _refresh_world_scale() -> void:
@@ -459,7 +488,7 @@ func _refresh_building_card() -> void:
 func _refresh_connection_status(source: Dictionary, target: Dictionary) -> void:
 	if not is_instance_valid(_connection_status_label):
 		return
-	var text_value := I18n.t("factory.connection.choose_mode", "Choose Cargo or Power to start connecting visible node ports.")
+	var text_value: String = str(I18n.t("factory.connection.choose_mode", "Choose Cargo or Power to start connecting visible node ports."))
 	var tone := Color("9aa6a1")
 	if _active_tool == "CONNECT":
 		if source.is_empty():
@@ -472,7 +501,11 @@ func _refresh_connection_status(source: Dictionary, target: Dictionary) -> void:
 			text_value = I18n.t("factory.connection.ready", "Route valid · confirm the connection.")
 			tone = Color("6fbf92")
 		else:
-			text_value = I18n.t("factory.connection.incompatible", "These ports are incompatible; choose another target or cargo item.")
+			var reason_code := _connection_validation_reason(source, target)
+			var reason_key := "factory.reason.%s" % reason_code.to_lower()
+			text_value = str(I18n.t(reason_key))
+			if text_value == reason_key:
+				text_value = I18n.t("factory.connection.incompatible", "These ports are incompatible; choose another target or cargo item.")
 			tone = Color("d86e63")
 	_connection_status_label.text = text_value
 	_connection_status_label.add_theme_color_override("font_color", tone)
@@ -499,6 +532,9 @@ func _set_connection_mode(kind: String) -> void:
 	_active_tool = "CONNECT"
 	_selected_building_id = ""
 	_selected_recipe_id = ""
+	_connection_source_id = ""
+	_connection_target_id = ""
+	_selected_cargo_item_id = ""
 	if _canvas != null:
 		_canvas.clear_placement_preview()
 	_render()
@@ -530,6 +566,8 @@ func _on_cargo_item_selected(index: int) -> void:
 
 func _on_tile_hovered(tile: Vector2i) -> void:
 	if _active_tool == "BUILD":
+		if _preview_tile == tile:
+			return
 		_preview_tile = tile
 		_update_placement_preview()
 
@@ -560,11 +598,17 @@ func _on_entity_selected(entity: Dictionary) -> void:
 	var entity_id := str(entity.get("id", ""))
 	if _active_tool == "CONNECT":
 		if _connection_source_id.is_empty():
-			_connection_source_id = entity_id
+			if _entity_is_connection_candidate(entity, "SOURCE"):
+				_connection_source_id = entity_id
+			else:
+				_set_feedback("INVALID_ENDPOINT", I18n.t("factory.feedback.invalid_connection"), Color("d86e63"))
 		elif _connection_target_id.is_empty() and entity_id != _connection_source_id:
-			_connection_target_id = entity_id
+			if _entity_is_connection_candidate(entity, "TARGET"):
+				_connection_target_id = entity_id
+			else:
+				_set_feedback("INVALID_ENDPOINT", I18n.t("factory.feedback.invalid_connection"), Color("d86e63"))
 		else:
-			_connection_source_id = entity_id
+			_connection_source_id = entity_id if _entity_is_connection_candidate(entity, "SOURCE") else ""
 			_connection_target_id = ""
 		_selected_cargo_item_id = ""
 		_rebuild_connection_selectors(bool(_snapshot.get("valid", false)))
@@ -588,7 +632,12 @@ func _request_construction(tile: Vector2i) -> void:
 	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
 	var preview := _view_model.placement_preview(_snapshot, building, tile)
 	if not bool(preview.get("valid", false)):
-		_set_feedback(str(preview.get("reason_code", "INVALID_PLACEMENT")), I18n.t("factory.feedback.invalid_placement"), Color("d86e63"))
+		var reason_code := str(preview.get("reason_code", "INVALID_PLACEMENT"))
+		var reason_key := "factory.reason.%s" % reason_code.to_lower()
+		var reason_text := str(I18n.t(reason_key))
+		if reason_text == reason_key:
+			reason_text = I18n.t("factory.feedback.invalid_placement")
+		_set_feedback(reason_code, reason_text, Color("d86e63"))
 		return
 	_emit_command("QUEUE_CONSTRUCTION", {
 		"definition_id":_selected_building_id,
@@ -601,8 +650,13 @@ func _request_construction(tile: Vector2i) -> void:
 func _request_connection() -> void:
 	var source := _entity_by_id(_connection_source_id)
 	var target := _entity_by_id(_connection_target_id)
-	if not _connection_is_ready(source, target):
-		_set_feedback("INVALID_CONNECTION", I18n.t("factory.feedback.invalid_connection"), Color("d86e63"))
+	var reason_code := _connection_validation_reason(source, target)
+	if not reason_code.is_empty():
+		var reason_key := "factory.reason.%s" % reason_code.to_lower()
+		var reason_text := str(I18n.t(reason_key))
+		if reason_text == reason_key:
+			reason_text = I18n.t("factory.feedback.invalid_connection")
+		_set_feedback(reason_code, reason_text, Color("d86e63"))
 		return
 	var payload := {
 		"link_kind":_connection_kind,
@@ -658,11 +712,31 @@ func _emit_command(kind: String, payload: Dictionary) -> void:
 
 
 func _connection_is_ready(source: Dictionary, target: Dictionary) -> bool:
+	return _connection_validation_reason(source, target).is_empty()
+
+
+func _connection_validation_reason(source: Dictionary, target: Dictionary) -> String:
 	if source.is_empty() or target.is_empty() or _connection_source_id == _connection_target_id:
-		return false
+		return "INVALID_LINK"
+	var item_id := _selected_cargo_item_id if _connection_kind == "CARGO" else ""
 	if _connection_kind == "POWER":
-		return _view_model.is_power_connection_valid(source, target)
-	return not _selected_cargo_item_id.is_empty() and _view_model.compatible_cargo_items(source, target).has(_selected_cargo_item_id)
+		if not _view_model.is_power_connection_valid(source, target):
+			return "INVALID_LINK"
+	elif item_id.is_empty() or not _view_model.compatible_cargo_items(source, target).has(item_id):
+		return "CARGO_INCOMPATIBLE"
+	for link_value in _snapshot.get("links", []):
+		var link := link_value as Dictionary
+		if str(link.get("kind", "")) == _connection_kind \
+				and str(link.get("source_id", "")) == _connection_source_id \
+				and str(link.get("target_id", "")) == _connection_target_id \
+				and str(link.get("item_id", "")) == item_id:
+			return "DUPLICATE_LINK"
+		if _connection_kind == "CARGO" \
+				and str(link.get("kind", "")) == "CARGO" \
+				and str(link.get("target_id", "")) == _connection_target_id \
+				and str(link.get("item_id", "")) == item_id:
+			return "CARGO_INPUT_OCCUPIED"
+	return ""
 
 
 func _update_placement_preview() -> void:
@@ -678,6 +752,9 @@ func _update_placement_preview() -> void:
 
 func _update_connection_preview() -> void:
 	if _canvas == null:
+		return
+	if _active_tool != "CONNECT":
+		_canvas.set_connection_preview("", "", "")
 		return
 	var source := _entity_by_id(_connection_source_id)
 	var target := _entity_by_id(_connection_target_id)
@@ -728,6 +805,21 @@ func _clear_missing_selection() -> void:
 			_replace_selection_without_render("", "", {})
 		else:
 			_replace_selection_without_render("CONSTRUCTION_ORDER", selection_id, order)
+
+
+func _apply_pending_command_selection() -> void:
+	if not _pending_link_selection_id.is_empty():
+		var link := _link_by_id(_pending_link_selection_id)
+		if not link.is_empty():
+			_replace_selection_without_render("LINK", _pending_link_selection_id, link)
+			if _canvas != null:
+				_canvas.select_link(_pending_link_selection_id)
+			_pending_link_selection_id = ""
+	if not _pending_order_selection_id.is_empty():
+		var order := _order_by_id(_pending_order_selection_id)
+		if not order.is_empty():
+			_replace_selection_without_render("CONSTRUCTION_ORDER", _pending_order_selection_id, order)
+			_pending_order_selection_id = ""
 
 
 func _replace_selection_without_render(kind: String, selection_id: String, data: Dictionary) -> void:
@@ -897,6 +989,16 @@ func _render_link_inspector(link: Dictionary) -> void:
 	_add_detail(I18n.t("factory.field.item"), _item_name(item_id) if not item_id.is_empty() else "-")
 	_add_detail(I18n.t("factory.field.status"), _status_name(str(link.get("status", "IDLE"))))
 	_add_detail(I18n.t("factory.field.flow"), "%.2f / %.2f" % [float(link.get("last_flow", 0.0)), float(link.get("capacity_per_second", 0.0))])
+	for endpoint in [
+		{"id":str(link.get("source_id", "")), "action":"factory.action.center_source", "tooltip":"factory.tooltip.center_source"},
+		{"id":str(link.get("target_id", "")), "action":"factory.action.center_target", "tooltip":"factory.tooltip.center_target"}
+	]:
+		var entity := _entity_by_id(str(endpoint.get("id", "")))
+		if entity.is_empty():
+			continue
+		var focus_button := _make_button(I18n.t(str(endpoint.get("action", ""))), I18n.t(str(endpoint.get("tooltip", ""))))
+		focus_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {}))))
+		_inspector_body.add_child(focus_button)
 	var remove_button := _make_button(I18n.t("factory.action.remove_link"), I18n.t("factory.tooltip.remove_link"))
 	remove_button.pressed.connect(func() -> void: _request_remove_link(link_id))
 	_inspector_body.add_child(remove_button)
@@ -1008,7 +1110,7 @@ func _add_meter(node_name: String, label_text: String, ratio: float) -> void:
 	meter.value = clampf(ratio, 0.0, 1.0) * 100.0
 	meter.show_percentage = false
 	meter.custom_minimum_size = Vector2(0, 8)
-	meter.tooltip_text = "%s · %d%%" % [label_text, roundi(meter.value)]
+	meter.tooltip_text = I18n.t("factory.format.meter_tooltip") % [label_text, roundi(meter.value)]
 	_inspector_body.add_child(meter)
 
 
@@ -1017,7 +1119,7 @@ func _add_capacity_detail(label_text: String, values: Variant, capacity: int) ->
 	if values is Dictionary:
 		for quantity_value in (values as Dictionary).values():
 			used += maxi(0, int(quantity_value))
-	_add_detail(label_text, "%d / %d" % [used, maxi(0, capacity)])
+	_add_detail(label_text, I18n.t("factory.format.capacity") % [used, maxi(0, capacity)])
 
 
 func _item_amount_rows(value: Variant) -> String:

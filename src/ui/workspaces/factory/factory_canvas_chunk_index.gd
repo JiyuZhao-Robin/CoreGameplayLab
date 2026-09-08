@@ -12,9 +12,11 @@ var _entity_ids_by_chunk: Dictionary = {}
 var _order_ids_by_chunk: Dictionary = {}
 var _link_ids_by_chunk: Dictionary = {}
 var _entities_by_id: Dictionary = {}
+var _rebuild_count := 0
 
 
 func rebuild(snapshot: Dictionary) -> void:
+	_rebuild_count += 1
 	_chunk_size_tiles = maxi(1, int(snapshot.get("chunk_size_tiles", 64)))
 	var bounds_value: Variant = snapshot.get("bounds", {})
 	var bounds: Dictionary = bounds_value as Dictionary if bounds_value is Dictionary else {}
@@ -49,9 +51,12 @@ func rebuild(snapshot: Dictionary) -> void:
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
 			continue
-		var source_center := _footprint_rect(source.get("footprint", {})).get_center()
-		var target_center := _footprint_rect(target.get("footprint", {})).get_center()
-		var link_bounds := Rect2(source_center, Vector2.ZERO).expand(target_center).grow(0.001)
+		# Canvas draws from edge ports, not entity centers. Index the conservative
+		# union of both endpoint footprints so every chunk touched by any possible
+		# port-to-port segment can discover and precisely cull the link.
+		var source_bounds := _footprint_rect(source.get("footprint", {}))
+		var target_bounds := _footprint_rect(target.get("footprint", {}))
+		var link_bounds := source_bounds.merge(target_bounds).grow(0.001)
 		_add_record(_link_ids_by_chunk, str(link.get("id", "")), link_bounds)
 
 
@@ -89,6 +94,10 @@ func indexed_chunk_count() -> int:
 		for key_value in (index as Dictionary).keys():
 			keys[str(key_value)] = true
 	return keys.size()
+
+
+func rebuild_count() -> int:
+	return _rebuild_count
 
 
 func _add_record(index: Dictionary, record_id: String, world_rect: Rect2) -> void:

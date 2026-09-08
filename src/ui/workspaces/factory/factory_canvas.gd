@@ -32,6 +32,8 @@ const DRAW_CULL_MARGIN_PIXELS := 32.0
 const MAX_ANIMATED_SNAPSHOT_RECORDS := 512
 const MEDIUM_DETAIL_VISIBLE_RECORDS := 160
 const COMPACT_DETAIL_VISIBLE_RECORDS := 480
+const MEDIUM_DETAIL_EXIT_RECORDS := 128
+const COMPACT_DETAIL_EXIT_RECORDS := 400
 
 ## Keep the canvas independently loadable by SceneTree-based component tests.
 @onready var I18n = get_node("/root/I18n")
@@ -56,6 +58,7 @@ var _link_hit_rects := {}
 var _construction_order_rects := {}
 var _placement_preview: Dictionary = {}
 var _connection_preview := {"source_id":"", "target_id":"", "kind":""}
+var _connection_candidate_ids: Dictionary = {}
 var _keyboard_tile := Vector2i.ZERO
 var _entities_by_id: Dictionary = {}
 var _links_by_id: Dictionary = {}
@@ -66,6 +69,7 @@ var _has_active_flow_cache := false
 var _visible_active_flow := false
 var _node_style_cache: Dictionary = {}
 var _hit_geometry_dirty := true
+var _detail_stage_cache := "FULL"
 
 
 func _ready() -> void:
@@ -91,6 +95,7 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	_selected_link_id = "" if not _has_link(_selected_link_id) else _selected_link_id
 	if previous_layout_signature != _world_layout_signature():
 		_overview_mode = true
+		_detail_stage_cache = "FULL"
 		_keyboard_tile = _bounds_origin()
 		_zoom = _overview_zoom()
 		_camera = Vector2.ZERO
@@ -113,6 +118,13 @@ func selected_node_id() -> String:
 
 func selected_link_id() -> String:
 	return _selected_link_id
+
+
+func select_link(link_id: String) -> void:
+	_selected_link_id = link_id if _has_link(link_id) else ""
+	if not _selected_link_id.is_empty():
+		_selected_node_id = ""
+	queue_redraw()
 
 
 func focus_tile(tile: Vector2i) -> void:
@@ -148,6 +160,9 @@ func clear_placement_preview() -> void:
 
 
 func set_connection_preview(source_id: String, target_id: String, kind: String, valid: bool = false, candidate_ids: Array[String] = []) -> void:
+	_connection_candidate_ids.clear()
+	for candidate_id in candidate_ids:
+		_connection_candidate_ids[candidate_id] = true
 	_connection_preview = {
 		"source_id":source_id,
 		"target_id":target_id,
@@ -230,16 +245,26 @@ func _draw_chunk_boundaries() -> void:
 	var chunk_size := maxi(1, _chunk_index.chunk_size_tiles())
 	var origin := _bounds_origin()
 	var first_chunk_x := floori((visible_world.position.x - float(origin.x)) / float(chunk_size))
-	var last_chunk_x := floori((visible_world.end.x - float(origin.x)) / float(chunk_size))
+	var last_chunk_x := floori((visible_world.end.x - 0.0001 - float(origin.x)) / float(chunk_size))
 	var first_chunk_y := floori((visible_world.position.y - float(origin.y)) / float(chunk_size))
-	var last_chunk_y := floori((visible_world.end.y - float(origin.y)) / float(chunk_size))
+	var last_chunk_y := floori((visible_world.end.y - 0.0001 - float(origin.y)) / float(chunk_size))
 	var screen_world := _world_screen_rect().intersection(Rect2(Vector2.ZERO, size))
-	for chunk_x in range(first_chunk_x, last_chunk_x + 2):
-		var x := _world_to_screen(Vector2(origin.x + chunk_x * chunk_size, 0)).x
+	for boundary_offset in _chunk_boundary_offsets(_bounds_size().x, first_chunk_x, last_chunk_x, chunk_size):
+		var x := _world_to_screen(Vector2(origin.x + boundary_offset, 0)).x
 		draw_line(Vector2(x, screen_world.position.y), Vector2(x, screen_world.end.y), Color(WORLD_BOUNDARY_COLOR, 0.26), 1.0)
-	for chunk_y in range(first_chunk_y, last_chunk_y + 2):
-		var y := _world_to_screen(Vector2(0, origin.y + chunk_y * chunk_size)).y
+	for boundary_offset in _chunk_boundary_offsets(_bounds_size().y, first_chunk_y, last_chunk_y, chunk_size):
+		var y := _world_to_screen(Vector2(0, origin.y + boundary_offset)).y
 		draw_line(Vector2(screen_world.position.x, y), Vector2(screen_world.end.x, y), Color(WORLD_BOUNDARY_COLOR, 0.26), 1.0)
+
+
+func _chunk_boundary_offsets(extent: int, first_chunk: int, last_chunk: int, chunk_size: int) -> Array[int]:
+	var result: Array[int] = []
+	var chunk_count := ceili(float(maxi(0, extent)) / float(maxi(1, chunk_size)))
+	var first_boundary := maxi(1, first_chunk)
+	var last_boundary := mini(chunk_count - 1, last_chunk + 1)
+	for boundary_index in range(first_boundary, last_boundary + 1):
+		result.append(boundary_index * chunk_size)
+	return result
 
 
 func _draw_resource_fields() -> void:
@@ -338,7 +363,7 @@ func _draw_placement_preview() -> void:
 	draw_dashed_line(Vector2(rect.end.x, rect.position.y), rect.end, tone, 2.0, 5.0)
 	draw_dashed_line(rect.end, Vector2(rect.position.x, rect.end.y), tone, 2.0, 5.0)
 	draw_dashed_line(Vector2(rect.position.x, rect.end.y), rect.position, tone, 2.0, 5.0)
-	var status := _status_name("READY" if is_valid else str(_placement_preview.get("reason_code", "BLOCKED")))
+	var status := _status_name("READY") if is_valid else _placement_reason_name(str(_placement_preview.get("reason_code", "BLOCKED")))
 	draw_string(get_theme_default_font(), rect.position + Vector2(4, -4), status, HORIZONTAL_ALIGNMENT_LEFT, 160, 10, tone)
 
 
@@ -351,8 +376,9 @@ func _draw_connection_preview() -> void:
 	var target := _entity_by_id(target_id)
 	if source.is_empty() or target.is_empty():
 		return
-	var from := _footprint_rect(source.get("footprint", {}), 4.0).get_center()
-	var to := _footprint_rect(target.get("footprint", {}), 4.0).get_center()
+	var endpoints := _connection_endpoints(source, target, str(_connection_preview.get("kind", "CARGO")))
+	var from: Vector2 = endpoints[0]
+	var to: Vector2 = endpoints[1]
 	if not Rect2(from, Vector2.ZERO).expand(to).grow(DRAW_CULL_MARGIN_PIXELS).intersects(_visible_draw_rect()):
 		return
 	var kind := str(_connection_preview.get("kind", "CARGO"))
@@ -371,8 +397,9 @@ func _draw_links() -> void:
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
 			continue
-		var from := _footprint_rect(source.get("footprint", {}), 4.0).get_center()
-		var to := _footprint_rect(target.get("footprint", {}), 4.0).get_center()
+		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")))
+		var from: Vector2 = endpoints[0]
+		var to: Vector2 = endpoints[1]
 		var hit := Rect2(from, Vector2.ZERO).expand(to).grow(7.0)
 		if not hit.intersects(_visible_draw_rect()):
 			continue
@@ -401,11 +428,13 @@ func _draw_connection_ports(entity: Dictionary, rect: Rect2, detail_stage: Strin
 	var entity_id := str(entity.get("id", ""))
 	var is_source := entity_id == str(_connection_preview.get("source_id", ""))
 	var is_target := entity_id == str(_connection_preview.get("target_id", ""))
-	var is_candidate := (_connection_preview.get("candidate_ids", []) as Array).has(entity_id)
+	var is_candidate := _connection_candidate_ids.has(entity_id)
 	if is_source or is_target:
 		draw_rect(rect.grow(3.0), Color("d5a45c") if is_source else Color("62b5ae"), false, 2.0)
 	elif is_candidate:
-		draw_rect(rect.grow(2.0), Color("6fbf92", 0.72), false, 1.5)
+		# Candidate means structurally compatible. The selected route turns green
+		# only after duplicate/input-occupancy preflight also passes.
+		draw_rect(rect.grow(2.0), Color(FOCUS_COLOR, 0.72), false, 1.5)
 	if detail_stage == "COMPACT":
 		return
 	var ports: Dictionary = entity.get("ports", {}) if entity.get("ports", {}) is Dictionary else {}
@@ -428,6 +457,14 @@ func _draw_link_arrow(from: Vector2, to: Vector2, color: Color) -> void:
 	var side := Vector2(-direction.y, direction.x)
 	var triangle := PackedVector2Array([center + direction * 6.0, center - direction * 4.0 + side * 3.0, center - direction * 4.0 - side * 3.0])
 	draw_colored_polygon(triangle, color)
+
+
+func _connection_endpoints(source: Dictionary, target: Dictionary, kind: String) -> Array[Vector2]:
+	var source_rect := _footprint_rect(source.get("footprint", {}), 4.0)
+	var target_rect := _footprint_rect(target.get("footprint", {}), 4.0)
+	if kind == "POWER":
+		return [Vector2(source_rect.get_center().x, source_rect.end.y), Vector2(target_rect.get_center().x, target_rect.position.y)]
+	return [Vector2(source_rect.end.x, source_rect.get_center().y), Vector2(target_rect.position.x, target_rect.get_center().y)]
 
 
 func _footprint_rect(footprint_value: Variant, minimum_tiles: float) -> Rect2:
@@ -593,7 +630,7 @@ func _on_canvas_resized() -> void:
 
 
 func _on_gui_input(event: InputEvent) -> void:
-	var connection_active := not str(_connection_preview.get("source_id", "")).is_empty() or not str(_connection_preview.get("target_id", "")).is_empty()
+	var connection_active := not str(_connection_preview.get("kind", "")).is_empty()
 	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active):
 		placement_cancelled.emit()
 		accept_event()
@@ -625,7 +662,7 @@ func _on_gui_input(event: InputEvent) -> void:
 			accept_event()
 			return
 		var hovered_tile := _screen_to_tile(motion.position)
-		if _tile_in_bounds(hovered_tile):
+		if _tile_in_bounds(hovered_tile) and hovered_tile != _keyboard_tile:
 			_keyboard_tile = hovered_tile
 			tile_hovered.emit(_keyboard_tile)
 	elif event is InputEventKey:
@@ -724,8 +761,9 @@ func _ensure_hit_geometry() -> void:
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
 			continue
-		var from := _footprint_rect(source.get("footprint", {}), 4.0).get_center()
-		var to := _footprint_rect(target.get("footprint", {}), 4.0).get_center()
+		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")))
+		var from: Vector2 = endpoints[0]
+		var to: Vector2 = endpoints[1]
 		var hit := Rect2(from, Vector2.ZERO).expand(to).grow(7.0)
 		if hit.intersects(visible_rect):
 			_link_hit_rects[str(link.get("id", ""))] = hit
@@ -803,8 +841,9 @@ func _distance_to_link(point: Vector2, link_id: String) -> float:
 	var target := _entity_by_id(str(link.get("target_id", "")))
 	if source.is_empty() or target.is_empty():
 		return INF
-	var from := _footprint_rect(source.get("footprint", {}), 4.0).get_center()
-	var to := _footprint_rect(target.get("footprint", {}), 4.0).get_center()
+	var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")))
+	var from: Vector2 = endpoints[0]
+	var to: Vector2 = endpoints[1]
 	return Geometry2D.get_closest_point_to_segment(point, from, to).distance_to(point)
 
 
@@ -872,11 +911,17 @@ func _visible_record_count() -> int:
 
 func _detail_stage() -> String:
 	var visible_count := _visible_record_count()
-	if visible_count >= COMPACT_DETAIL_VISIBLE_RECORDS or _tile_scale() < 0.75:
-		return "COMPACT"
-	if visible_count >= MEDIUM_DETAIL_VISIBLE_RECORDS or _tile_scale() < 1.5:
-		return "MEDIUM"
-	return "FULL"
+	if _tile_scale() < 0.75 \
+			or visible_count >= COMPACT_DETAIL_VISIBLE_RECORDS \
+			or (_detail_stage_cache == "COMPACT" and visible_count >= COMPACT_DETAIL_EXIT_RECORDS):
+		_detail_stage_cache = "COMPACT"
+	elif _tile_scale() < 1.5 \
+			or visible_count >= MEDIUM_DETAIL_VISIBLE_RECORDS \
+			or (_detail_stage_cache in ["MEDIUM", "COMPACT"] and visible_count >= MEDIUM_DETAIL_EXIT_RECORDS):
+		_detail_stage_cache = "MEDIUM"
+	else:
+		_detail_stage_cache = "FULL"
+	return _detail_stage_cache
 
 
 func _rebuild_snapshot_indexes() -> void:
@@ -908,6 +953,12 @@ func _rebuild_snapshot_indexes() -> void:
 
 func _status_name(status_id: String) -> String:
 	return I18n.status(status_id)
+
+
+func _placement_reason_name(reason_code: String) -> String:
+	var key := "factory.reason.%s" % reason_code.to_lower()
+	var localized := str(I18n.t(key))
+	return _status_name(reason_code) if localized == key else localized
 
 
 func _item_name(item_id: String) -> String:
