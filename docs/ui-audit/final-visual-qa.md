@@ -1,9 +1,14 @@
 # Final Visual QA - Independent Post-fix Review
 
+> Historical evidence only. This review predates the fixed 1440×900
+> `canvas_items + keep` production contract and must not be treated as current
+> certification. A fresh matrix including the authored 1440×900 baseline is
+> required for current visual sign-off.
+
 Date: 2026-08-28  
 Reviewer role: independent Visual QA; no UI or Domain implementation performed.
 
-## Verdict
+## Historical verdict (not current certification)
 
 **Overall Visual QA: PASS. No P0 or P1 visual blocker remains in the supplied final evidence.**
 

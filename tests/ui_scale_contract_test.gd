@@ -2,7 +2,7 @@ extends Node
 
 const MainScene := preload("res://src/ui/main.tscn")
 const UiTokens := preload("res://src/ui/ui_theme_tokens.gd")
-const ResponsivePolicy := preload("res://src/ui/responsive_ui_policy.gd")
+const FixedPolicy := preload("res://src/ui/responsive_ui_policy.gd")
 
 var failures: Array[String] = []
 
@@ -17,23 +17,18 @@ func _run() -> void:
 	Engine.time_scale = 0.0
 	Game.reset_game()
 	_clear_scale_session()
-
 	_test_scale_math()
-	var default_main := await _spawn_main(-1.0, Vector2(1440.0, 900.0))
-	await _test_default_shell(default_main)
-	default_main.queue_free()
-	await get_tree().process_frame
 
-	_clear_scale_session()
-	var large_main := await _spawn_main(2.0, Vector2(2560.0, 1440.0))
-	_test_large_shell(large_main)
-	large_main.queue_free()
+	var main := await _spawn_main(UiTokens.DEFAULT_UI_SCALE)
+	_test_fixed_shell_contract(main)
+	_test_resize_is_presentation_only(main)
+	main.queue_free()
 	await get_tree().process_frame
-
 	_clear_scale_session()
-	var constrained_main := await _spawn_main(2.0, Vector2(1280.0, 720.0))
-	_test_constrained_manual_shell(constrained_main)
-	constrained_main.queue_free()
+
+	var accessibility_main := await _spawn_main(2.0)
+	_test_explicit_accessibility_scale(accessibility_main)
+	accessibility_main.queue_free()
 	await get_tree().process_frame
 
 	_clear_scale_session()
@@ -47,17 +42,13 @@ func _run() -> void:
 		get_tree().quit(1)
 
 
-func _spawn_main(scale_value: float, viewport_size: Vector2) -> Control:
-	if scale_value > 0.0:
-		get_tree().root.set_meta(UiTokens.UI_SCALE_SESSION_META, scale_value)
+func _spawn_main(scale_value: float) -> Control:
+	get_tree().root.set_meta(UiTokens.UI_SCALE_SESSION_META, scale_value)
 	var main: Control = MainScene.instantiate()
-	# MainScene is normally the viewport root. Under this Node-based harness it
-	# has no Control parent, so assign the production baseline explicitly.
 	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	main.size = viewport_size
+	main.size = FixedPolicy.DESIGN_VIEWPORT_SIZE
 	add_child(main)
 	await get_tree().process_frame
-	await get_tree().create_timer(0.25, true, false, true).timeout
 	await get_tree().process_frame
 	return main
 
@@ -68,106 +59,97 @@ func _test_scale_math() -> void:
 		_check(is_equal_approx(UiTokens.sanitize_ui_scale(float(UiTokens.SUPPORTED_UI_SCALES[index])), expected[index]), "supported UI scale %d%% remains stable" % int(expected[index] * 100.0))
 	_check(is_equal_approx(UiTokens.sanitize_ui_scale(125.0), 1.25), "percentage-form UI scale values normalize to factors")
 	_check(is_equal_approx(UiTokens.sanitize_ui_scale(0.75), 0.9), "the retired 75% step migrates safely to the supported 90% floor")
-	_check(is_equal_approx(UiTokens.sanitize_ui_scale(1.31), 1.25), "unsupported UI scale values snap to the nearest supported step")
 	UiTokens.set_ui_scale(1.25)
 	_check(UiTokens.font_size(15) == 19, "125% converts the 15px base font to a readable 19px theme font")
-	_check(UiTokens.layout_px(40.0) == 45, "layout geometry uses the moderated scale instead of doubling every panel")
+	_check(UiTokens.layout_px(40.0) == 45, "accessibility geometry retains its moderated explicit scale")
 
 
-func _test_default_shell(main: Control) -> void:
-	var tabs := main.find_child("CentralWorkspace", true, false) as Control
-	var system_page := main.find_child("system_map", true, false) as ScrollContainer
-	_check(main.size.y >= 890.0 and tabs != null and tabs.size.y > 0.0 and system_page != null and system_page.size.y > 0.0, "the 1440x900 baseline retains a non-zero central gameplay workspace (root=%s, center=%s, page=%s)" % [main.size, tabs.size if tabs != null else Vector2.ZERO, system_page.size if system_page != null else Vector2.ZERO])
-	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
-	_check(selector != null and selector.item_count == 8, "the global header exposes AUTO plus the seven approved manual scale steps")
-	_check(selector != null and selector.get_item_id(selector.selected) == ResponsivePolicy.AUTO_SELECTOR_ID, "new installations default to AUTO without exposing a layout-profile control")
-	var auto_index := selector.get_item_index(ResponsivePolicy.AUTO_SELECTOR_ID) if selector != null else -1
-	_check(auto_index >= 0 and selector.get_item_text(auto_index) == "自动", "AUTO has a localized Chinese selector label")
-	I18n.set_locale("en")
-	_check(auto_index >= 0 and selector.get_item_text(auto_index) == "AUTO", "AUTO selector text refreshes during a live locale change")
-	I18n.set_locale("zh_CN")
+func _test_fixed_shell_contract(main: Control) -> void:
 	var snapshot: Dictionary = main.call("ui_responsive_snapshot")
-	_check(String(snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_AUTO and is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 1.25) and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 1.25), "AUTO keeps preferred, manual, and effective scale as distinct state at the 1440x900 baseline")
-	main.call("_on_ui_scale_selected", selector.get_item_index(125))
-	snapshot = main.call("ui_responsive_snapshot")
-	_check(String(snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_MANUAL and is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 1.25), "selecting a percentage changes preferred mode to MANUAL without altering its safe value")
-	main.call("_on_ui_scale_selected", selector.get_item_index(ResponsivePolicy.AUTO_SELECTOR_ID))
-	snapshot = main.call("ui_responsive_snapshot")
-	_check(String(snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_AUTO and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), float(snapshot.get("recommended_scale", 0.0))), "selecting AUTO makes effective scale follow the recommendation")
-	var responsive_timer := main.find_child("ResponsiveUiDebounce", true, false) as Timer
-	_check(responsive_timer != null and responsive_timer.one_shot and responsive_timer.ignore_time_scale and is_equal_approx(responsive_timer.wait_time, 0.2), "Main owns a one-shot 200ms resize debounce independent of simulation speed")
-	_check(main.theme != null and main.theme.default_font_size == 19, "the selected scale reaches the inherited Godot theme")
-	_check(is_equal_approx(float(get_tree().root.content_scale_factor), 1.0), "responsive scaling leaves Window content_scale_factor at native scale")
-	var speed := main.find_child("Speed1", true, false) as Button
-	_check(speed != null and speed.custom_minimum_size.y >= 38.0, "button hit areas grow with the UI scale")
+	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
+	var selector_ids: Array[int] = []
+	if selector != null:
+		for index in selector.item_count:
+			selector_ids.append(selector.get_item_id(index))
+	_check(main.size.is_equal_approx(FixedPolicy.DESIGN_VIEWPORT_SIZE), "Main is authored on the 1440x900 logical canvas")
+	_check(selector != null and selector.item_count == UiTokens.SUPPORTED_UI_SCALES.size(), "the header exposes only explicit UI scale choices")
+	_check(not selector_ids.has(FixedPolicy.AUTO_SELECTOR_ID), "window-driven AUTO is absent from the player selector")
+	_check(selector != null and selector.get_item_id(selector.selected) == 125, "the fixed layout starts at the explicit 125% preference")
+	_check(String(snapshot.get("preferred_mode", "")) == FixedPolicy.MODE_MANUAL, "the runtime owns one MANUAL Theme scale mode")
+	_check(is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 1.25) and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 1.25), "manual and effective Theme scales agree at startup")
+	_check(String(snapshot.get("layout_profile", "")) == FixedPolicy.PROFILE_STANDARD, "the runtime owns one authored STANDARD layout profile")
+	_check(Vector2(snapshot.get("design_viewport_size", Vector2.ZERO)).is_equal_approx(FixedPolicy.DESIGN_VIEWPORT_SIZE), "the runtime reports its fixed design viewport")
+	_check(main.find_child("ResponsiveUiDebounce", true, false) == null, "window resize cannot schedule a Theme reload")
+	_check(main.theme != null and main.theme.default_font_size == 19, "the explicit scale reaches the inherited Godot Theme")
+	_check(main.scale.is_equal_approx(Vector2.ONE), "Main does not add a second Control transform on top of Window content scaling")
 	var left := main.find_child("ResourceRailSurface", true, false) as Control
-	_check(left != null and left.custom_minimum_size.x > UiTokens.RESOURCE_RAIL_WIDTH, "desktop side rails grow with the UI scale")
-	var flow := main.find_child("WorkspaceNavigationFlow", true, false) as HFlowContainer
-	_check(flow != null, "workspace navigation uses a wrapping flow at readable scales")
-	_check(main.scale.is_equal_approx(Vector2.ONE), "UI scale does not transform the root gameplay canvas")
-	var map := main.find_child("SystemMapView", true, false) as Control
-	_check(map == null or map.scale.is_equal_approx(Vector2.ONE), "system-map coordinates retain their independent canvas scale")
-	main.size.x = 1300.0
-	# Drawer behavior is synchronous; stop this fixture's AUTO debounce before
-	# advancing frames so the test scene itself is not reloaded for a scale change.
-	responsive_timer = main.find_child("ResponsiveUiDebounce", true, false) as Timer
-	if responsive_timer != null:
-		responsive_timer.stop()
-	await get_tree().process_frame
-	await get_tree().process_frame
 	var right := main.find_child("ContextInspectorSurface", true, false) as Control
-	_check(right != null and right.custom_minimum_size.x <= UiTokens.layout_px(UiTokens.COLLAPSED_RAIL_WIDTH) + 1.0, "resizing below the three-region width switches sidebars to drawer mode")
+	_check(left != null and right != null and left.visible and right.visible, "the fixed baseline keeps both side regions available")
 
 
-func _test_large_shell(main: Control) -> void:
+func _test_resize_is_presentation_only(main: Control) -> void:
+	var before_snapshot: Dictionary = main.call("ui_responsive_snapshot")
+	var before_geometry := _shell_geometry(main)
+	var before_id := main.get_instance_id()
 	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
-	_check(selector != null and selector.get_item_id(selector.selected) == 200, "the session preference restores 200% without Domain-save coupling")
+	var selector_id := selector.get_instance_id() if selector != null else 0
+	main.call("_on_root_resized")
+	var after_snapshot: Dictionary = main.call("ui_responsive_snapshot")
+	_check(main.get_instance_id() == before_id, "resize keeps the Main scene instance")
+	_check(selector != null and selector.get_instance_id() == selector_id, "resize keeps existing header controls")
+	_check(_shell_geometry(main) == before_geometry, "resize leaves shell geometry unchanged in design coordinates")
+	_check(is_equal_approx(float(before_snapshot.get("effective_scale", 0.0)), float(after_snapshot.get("effective_scale", -1.0))), "resize leaves effective Theme scale unchanged")
+	_check(String(after_snapshot.get("layout_profile", "")) == FixedPolicy.PROFILE_STANDARD, "resize leaves the layout profile unchanged")
+	var right := main.find_child("ContextInspectorSurface", true, false) as Control
+	_check(right != null and right.visible, "resize does not turn the right inspector into an automatic drawer")
+
+
+func _test_explicit_accessibility_scale(main: Control) -> void:
 	var snapshot: Dictionary = main.call("ui_responsive_snapshot")
-	_check(String(snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_MANUAL and is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 2.0) and is_equal_approx(float(snapshot.get("recommended_scale", 0.0)), 1.75) and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 2.0), "a supported legacy 200% session migrates to MANUAL while recommendation remains advisory")
-	var header_status := main.find_child("HeaderStatus", true, false) as Label
-	_check(header_status != null and not header_status.visible, "high UI scales release header space for primary controls")
+	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
+	_check(is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 2.0), "a fresh Main applies the explicit player 200% scale")
+	_check(main.theme != null and main.theme.default_font_size == 30, "200% rerasterizes the inherited Theme instead of stretching a 125% texture")
+	_check(selector != null and selector.get_item_id(selector.selected) == 200, "the selector presents the actual explicit 200% preference")
+	var instance_id := main.get_instance_id()
+	main.call("_on_root_resized")
+	var resized_snapshot: Dictionary = main.call("ui_responsive_snapshot")
+	_check(main.get_instance_id() == instance_id, "resize keeps the 200% Main instance")
+	_check(is_equal_approx(float(resized_snapshot.get("effective_scale", 0.0)), 2.0), "later Window resize cannot project the explicit scale down")
+	var header := main.find_child("TopStatusBar", true, false) as Control
 	var navigation := main.find_child("WorkspaceNavigationBar", true, false) as Control
-	_check(navigation != null and navigation.custom_minimum_size.y >= 120.0, "high UI scales reserve a multi-line navigation region")
-	var left := main.find_child("ResourceRailSurface", true, false) as Control
-	var right := main.find_child("ContextInspectorSurface", true, false) as Control
-	_check(left != null and right != null, "the 2560x1440 minimum contract keeps both 200% shell regions available")
-	var shell_regions_inside_window := left != null and right != null and main.get_global_rect().grow(1.0).encloses(left.get_global_rect()) and main.get_global_rect().grow(1.0).encloses(right.get_global_rect())
-	_check(shell_regions_inside_window, "high-scale sidebars remain inside the physical window")
-	var all_navigation_visible := true
-	if navigation != null:
-		var bounds := navigation.get_global_rect().grow(1.0)
-		for candidate in main.find_children("Navigation_*", "Button", true, false):
-			var button := candidate as Button
-			all_navigation_visible = all_navigation_visible and button.is_visible_in_tree() and bounds.encloses(button.get_global_rect())
-	_check(all_navigation_visible, "all core workspaces remain visible inside the navigation region at 200%")
+	var header_controls: Array = [
+		main.find_child("UIScaleSelector", true, false),
+		main.find_child("SaveButton", true, false),
+		main.find_child("RestartButton", true, false)
+	]
+	var navigation_controls: Array = main.find_children("Navigation_*", "Button", true, false)
+	_check(_controls_inside(header, header_controls), "200% keeps persistent header actions reachable inside the fixed design canvas")
+	_check(_controls_inside(navigation, navigation_controls), "200% keeps every workspace navigation action reachable inside its authored region")
 
 
-func _test_constrained_manual_shell(main: Control) -> void:
-	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
-	var snapshot: Dictionary = main.call("ui_responsive_snapshot")
-	_check(selector != null and selector.get_item_id(selector.selected) == 200, "an unsupported saved Manual choice remains the player's visible preference")
-	_check(String(snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_MANUAL and is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 2.0), "small-window safety does not overwrite the saved Manual 200% preference")
-	var recommended := float(snapshot.get("recommended_scale", 0.0))
-	var usable_size: Vector2 = snapshot.get("usable_size", Vector2.ZERO)
-	_check(ResponsivePolicy.candidate_is_auto_safe(recommended, main.size, usable_size) and recommended <= 1.25 and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 1.25), "1280x720 keeps its active-page recommendation advisory and projects Manual 200% to the highest safe 125% step")
-	_check(main.theme != null and main.theme.default_font_size == 19, "the safe effective scale, not the unsupported preference, reaches the Theme")
-	_check(main.scale.is_equal_approx(Vector2.ONE) and is_equal_approx(float(get_tree().root.content_scale_factor), 1.0), "manual safety projection does not add a Control or viewport multiplier")
-	main.size = Vector2(2560.0, 1440.0)
-	main.call("_apply_responsive_state", false, true)
-	snapshot = main.call("ui_responsive_snapshot")
-	_check(is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 2.0) and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 2.0), "Manual 200% automatically becomes effective again when the window returns to its supported contract")
-	main.size = Vector2(1280.0, 720.0)
-	main.call("_apply_responsive_state", false, true)
-	snapshot = main.call("ui_responsive_snapshot")
-	_check(is_equal_approx(float(snapshot.get("manual_scale", 0.0)), 2.0) and is_equal_approx(float(snapshot.get("effective_scale", 0.0)), 1.25), "a later compact resize still preserves Manual 200% while restoring the safe effective projection")
-	var responsive_timer := main.find_child("ResponsiveUiDebounce", true, false) as Timer
-	if responsive_timer != null:
-		responsive_timer.stop()
+func _shell_geometry(main: Control) -> Dictionary:
+	var result := {}
+	for node_name in ["TopStatusBar", "ResourceRailSurface", "CentralWorkspace", "ContextInspectorSurface", "CommandDockSurface"]:
+		var control := main.find_child(node_name, true, false) as Control
+		if control != null:
+			result[node_name] = control.get_rect()
+	return result
+
+
+func _controls_inside(parent: Control, controls: Array) -> bool:
+	if parent == null:
+		return false
+	var bounds := parent.get_global_rect().grow(1.0)
+	for control_value in controls:
+		var control := control_value as Control
+		if control == null or not control.is_visible_in_tree() or not bounds.encloses(control.get_global_rect()):
+			return false
+	return true
 
 
 func _clear_scale_session() -> void:
 	get_tree().root.remove_meta(UiTokens.UI_SCALE_SESSION_META)
-	get_tree().root.remove_meta(ResponsivePolicy.SESSION_STATE_META)
+	get_tree().root.remove_meta(FixedPolicy.SESSION_STATE_META)
 
 
 func _check(condition: bool, description: String) -> void:

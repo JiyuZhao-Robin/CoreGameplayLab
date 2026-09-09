@@ -81,7 +81,7 @@ func _write_phase() -> void:
 	_check(FileAccess.file_exists(audit_root.path_join("space_idle_save.json")) and Game.state.revision > revision_before, "visible SaveButton writes the isolated LocalSaveRepository")
 	var ui_preferences := ConfigFile.new()
 	var ui_preferences_loaded := ui_preferences.load(audit_root.path_join("core_gameplay_ui.cfg")) == OK
-	_check(ui_preferences_loaded and String(ui_preferences.get_value("display", "ui_scale_mode", "")) == "auto" and is_equal_approx(float(ui_preferences.get_value("display", "manual_ui_scale", 0.0)), 1.25), "AUTO mode and the independent Manual preference persist in the isolated device-local preference file")
+	_check(ui_preferences_loaded and String(ui_preferences.get_value("display", "ui_scale_mode", "")) == "manual" and is_equal_approx(float(ui_preferences.get_value("display", "manual_ui_scale", 0.0)), 1.25), "fixed MANUAL mode and its explicit scale persist in the isolated device-local preference file")
 	_check(ui_preferences_loaded and is_equal_approx(float(ui_preferences.get_value("display", "ui_scale", 0.0)), 1.25), "the legacy ui_scale rollback shadow stores the Manual preference")
 	_check(ui_preferences_loaded and not ui_preferences.has_section_key("display", "recommended_ui_scale") and not ui_preferences.has_section_key("display", "effective_ui_scale"), "environment-dependent recommended and effective scales are never persisted")
 	_check(ui_preferences_loaded and String(ui_preferences.get_value("ship_registry", "search_query", "")) == "ISS" and String(ui_preferences.get_value("ship_registry", "ship_type_filter", "")) == "FRIGATE" and String(ui_preferences.get_value("ship_registry", "formation_filter", "")) == "__UNASSIGNED__" and String(ui_preferences.get_value("ship_registry", "sort_mode", "")) == "NAME_ASCENDING", "STEP 09 presentation state uses the existing device-local UI preference file without changing the Domain save schema")
@@ -126,8 +126,8 @@ func _read_phase() -> void:
 	_check(inventory_page != null and inventory_page.is_visible_in_tree(), "UI preferences restore the last active core page")
 	var ui_scale_selector := main.find_child("UIScaleSelector", true, false) as OptionButton
 	var responsive_snapshot: Dictionary = main.call("ui_responsive_snapshot")
-	_check(ui_scale_selector != null and ui_scale_selector.get_item_id(ui_scale_selector.selected) == ResponsivePolicy.AUTO_SELECTOR_ID, "UI preferences restore AUTO independently of the Domain save")
-	_check(String(responsive_snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_AUTO and is_equal_approx(float(responsive_snapshot.get("manual_scale", 0.0)), 1.25), "AUTO restore retains the player's dormant Manual preference")
+	_check(ui_scale_selector != null and ui_scale_selector.get_item_id(ui_scale_selector.selected) == 125, "UI preferences restore the explicit 125% scale independently of the Domain save")
+	_check(String(responsive_snapshot.get("preferred_mode", "")) == ResponsivePolicy.MODE_MANUAL and is_equal_approx(float(responsive_snapshot.get("manual_scale", 0.0)), 1.25), "fixed layout restore keeps the player's explicit Manual preference")
 	_check(not Game.offline_report.is_empty() and float(Game.offline_report.get("simulated_ms", 0.0)) > 1000.0, "startup processes elapsed offline time through the shared orchestrator")
 	var sidebar_text := _visible_text(main)
 	_check(not Game.offline_report.is_empty() and sidebar_text.contains(I18n.core("sidebar.offline")), "the loaded UI visibly presents the offline-return report")

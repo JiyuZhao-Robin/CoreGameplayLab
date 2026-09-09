@@ -3,6 +3,9 @@ extends Node
 const MainScene := preload("res://src/ui/main.tscn")
 const UiTokens := preload("res://src/ui/ui_theme_tokens.gd")
 
+# Legacy Ship Registry geometry fixture. The explicit 1672x941 Control bounds
+# below audit accepted component geometry, not production Window resize behavior.
+# Production stretch ownership is covered by responsive_ui_matrix_test.gd.
 var failures: Array[String] = []
 
 
@@ -39,7 +42,7 @@ func _run() -> void:
 	var readiness := main.find_child("FleetRosterReadinessPanel", true, false) as Control
 	var footer := main.find_child("FleetRosterFooterActions", true, false) as Control
 
-	_check(main.scale.is_equal_approx(Vector2.ONE) and is_equal_approx(main.get_window().content_scale_factor, 1.0), "STEP 11 uses native layout and rerasterized fonts without Control/content transforms")
+	_check(main.scale.is_equal_approx(Vector2.ONE) and is_equal_approx(main.get_window().content_scale_factor, 1.0), "STEP 11 isolated component fixture adds no nested Control/content transforms")
 	var row_ship_id := String(Game.state.ships[0].get("instance_id", "")) if not Game.state.ships.is_empty() else ""
 	var row_content_controls: Array = [
 		main.find_child("FleetRosterSelectionControl_%s" % row_ship_id, true, false),

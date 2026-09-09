@@ -81,7 +81,7 @@
       "requiredContext": ["surveyed Factory world", "revealed building", "valid empty footprint"],
       "uiEntryPoints": ["Industry > Factory > Construction palette and canvas (src/ui/workspaces/factory/factory_workspace.gd:_request_construction; src/ui/main.gd:_on_factory_command_requested)"],
       "unlockedBy": ["building requirements met"],
-      "expectedSuccessResult": "A versioned, replay-safe Factory construction order is queued at the selected grid footprint.",
+      "expectedSuccessResult": "A versioned, replay-safe Factory construction order is queued at the selected grid footprint; the player UI requests deterministic same-location auto-funding so affordable starter buildings begin construction immediately.",
       "expectedFailureReasons": ["UNSUPPORTED_PROTOCOL", "MISSING_COMMAND_ID", "INVALID_PAYLOAD", "UNKNOWN_FACTORY_WORLD", "COMMAND_ID_CONFLICT", "STALE_TOPOLOGY", "BUILDING_LOCKED", "RECIPE_LOCKED", "INCOMPATIBLE_RECIPE", "OUT_OF_BOUNDS", "FOOTPRINT_OCCUPIED", "CONSTRUCTION_OCCUPIED", "RESOURCE_REQUIRED", "MIXED_RESOURCE_COVERAGE", "RESOURCE_INCOMPATIBLE"],
       "saveRelevant": true,
       "coreGameplay": true,
@@ -130,7 +130,7 @@
       "uiEntryPoints": ["Industry > Factory > Connection tool (src/ui/workspaces/factory/factory_workspace.gd:_request_connection; src/ui/main.gd:_on_factory_command_requested)"],
       "unlockedBy": [],
       "expectedSuccessResult": "A deterministic physical cargo or power edge is created between compatible ports.",
-      "expectedFailureReasons": ["UNSUPPORTED_PROTOCOL", "MISSING_COMMAND_ID", "INVALID_PAYLOAD", "UNKNOWN_FACTORY_WORLD", "COMMAND_ID_CONFLICT", "STALE_TOPOLOGY", "INVALID_LINK", "MISSING_ENDPOINT", "DUPLICATE_LINK", "INVALID_CARGO_LINK", "CARGO_INCOMPATIBLE", "CARGO_INPUT_OCCUPIED"],
+      "expectedFailureReasons": ["UNSUPPORTED_PROTOCOL", "MISSING_COMMAND_ID", "INVALID_PAYLOAD", "UNKNOWN_FACTORY_WORLD", "COMMAND_ID_CONFLICT", "STALE_TOPOLOGY", "INVALID_LINK", "MISSING_ENDPOINT", "DUPLICATE_LINK", "INVALID_CARGO_LINK", "CARGO_INCOMPATIBLE", "CARGO_INPUT_OCCUPIED", "CARGO_OUTPUT_OCCUPIED", "INVALID_SOURCE_PORT", "INVALID_TARGET_PORT", "INVALID_LANE_COUNT", "INVALID_LINK_TIER", "INVALID_LINK_PATH", "PATH_OUT_OF_BOUNDS"],
       "saveRelevant": true,
       "coreGameplay": true,
       "verified": true

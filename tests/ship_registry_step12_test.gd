@@ -3,6 +3,9 @@ extends Node
 const MainScene := preload("res://src/ui/main.tscn")
 const UiTokens := preload("res://src/ui/ui_theme_tokens.gd")
 
+# Legacy Ship Registry component stress matrix. Its SubViewport sizes are
+# deliberate isolated fixture bounds, not production Window layout profiles.
+# Production resize/stretch behavior is owned by responsive_ui_matrix_test.gd.
 const MATRIX_VIEWPORTS := [
 	Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1440, 900),
 	Vector2i(1600, 900), Vector2i(1672, 941), Vector2i(1920, 1080),
@@ -54,6 +57,8 @@ func _run() -> void:
 
 
 func _test_scale_policy() -> void:
+	# These minimums classify which isolated component fixtures are meaningful;
+	# Main no longer uses them to project Theme scale after a Window resize.
 	_check(UiTokens.minimum_viewport_for_ui_scale(1.0) == Vector2i(1280, 720), "100% supports the audited compact minimum")
 	_check(UiTokens.minimum_viewport_for_ui_scale(1.5) == Vector2i(1600, 900), "150% declares its measured minimum viewport")
 	_check(UiTokens.minimum_viewport_for_ui_scale(2.0) == Vector2i(2560, 1440), "200% declares its measured minimum viewport")
@@ -98,7 +103,7 @@ func _test_matrix_combination(viewport_size: Vector2i, scale_value: float) -> vo
 		inspector_host.scroll_vertical = int(inspector_host.get_v_scroll_bar().max_value)
 		await _settle()
 		footer_accessible = inspector_host.get_global_rect().grow(1.0).intersects(footer.get_global_rect())
-	_check(main.size.is_equal_approx(Vector2(viewport_size)), "%s/%d%% root follows the actual usable viewport" % [viewport_size, int(scale_value * 100.0)])
+	_check(main.size.is_equal_approx(Vector2(viewport_size)), "%s/%d%% isolated component fixture fills its explicit SubViewport" % [viewport_size, int(scale_value * 100.0)])
 	_check(transforms_native, "%s/%d%% uses native Control geometry without nested scale transforms" % [viewport_size, int(scale_value * 100.0)])
 	_check(is_equal_approx(main.get_window().content_scale_factor, 1.0), "%s/%d%% keeps content_scale_factor at 1" % [viewport_size, int(scale_value * 100.0)])
 	_check(shell_inside and no_page_scroll and no_horizontal_scroll, "%s/%d%% keeps the roster shell inside the viewport without page/horizontal scroll" % [viewport_size, int(scale_value * 100.0)])
@@ -123,9 +128,8 @@ func _test_scale_roundtrip() -> void:
 
 
 func _test_live_resize_and_transients() -> void:
-	# This fixture audits transient geometry, not Theme reconstruction. Keep its
-	# Manual preference valid across every compact/grown resize in the sequence;
-	# unsafe high-scale fallback/recovery has a dedicated responsive contract test.
+	# This fixture audits transient component geometry inside explicit SubViewports,
+	# not production Window resize or Theme reconstruction.
 	var fixture := await _spawn_roster(Vector2i(1672, 941), 1.0)
 	var viewport := fixture.viewport as SubViewport
 	var main := fixture.main as Control

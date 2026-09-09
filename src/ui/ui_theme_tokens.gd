@@ -76,16 +76,15 @@ const NETWORK_NODE_GAP_Y := 28
 const NETWORK_GRID_MINOR_SIZE := 24
 const NETWORK_GRID_MAJOR_EVERY := 5
 
-# UI scale is deliberately separate from the project viewport and from every
-# interactive graph/canvas zoom. Fonts follow the selected scale directly;
-# shell geometry uses a moderated scale so the 1440x900 minimum layout remains
-# operable while larger windows gain a more readable desktop UI.
+# Explicit player UI scale is separate from the fixed project viewport and from
+# every interactive graph/canvas zoom. Physical Window resizing never changes
+# this value. Fonts follow the selected scale directly; shell geometry uses a
+# moderated scale inside the one 1440x900 authored layout.
 const SUPPORTED_UI_SCALES := [0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
 const DEFAULT_UI_SCALE := 1.25
 const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"
-# Manual presets remain globally available, but each has one explicit minimum
-# usable viewport. This keeps compact windows honest without changing the saved
-# player preference or introducing a hidden automatic scale multiplier.
+# Kept for compatibility with existing accessibility audits. Production Window
+# resize no longer uses this table to project the player's selected scale.
 const UI_SCALE_MINIMUM_VIEWPORTS := {
 	90:Vector2i(1280, 720),
 	100:Vector2i(1280, 720),
@@ -201,8 +200,8 @@ static func control_style(background: Color, border: Color, radius := 4) -> Styl
 static func build_theme(scale_value: float = DEFAULT_UI_SCALE, exact_scale := false) -> Theme:
 	# Production shell preferences snap to the supported manual steps. Focused
 	# presentation surfaces may request an exact player-selected native scale.
-	# ResponsiveUiPolicy resolves the effective value before this call; Theme
-	# construction itself stays geometry-agnostic and rerasterizes fonts.
+	# Main resolves the explicit player value before this call; Theme construction
+	# stays independent of physical Window geometry and rerasterizes fonts.
 	if exact_scale:
 		_ui_scale = clampf(scale_value, 0.5, 4.0)
 	else:

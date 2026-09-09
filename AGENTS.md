@@ -147,6 +147,32 @@ Factory-to-Location/Logistics port transfer are single-owner integration work.
 They may run alongside isolated UI or content work, but must not be divided among
 concurrent writers.
 
+### Fixed UI layout contract
+
+- The production UI is authored in one `1440 × 900` logical design viewport.
+- Physical Window resizing may only apply one uniform CanvasItem scale and
+  centered letterbox/pillarbox offset. It must not change panel ratios, Theme
+  scale, font preset, layout profile, visibility, or sidebar collapse state.
+- `project.godot` is the authority for application-level scaling and must keep
+  `display/window/stretch/mode="canvas_items"` together with
+  `display/window/stretch/aspect="keep"`. Do not add a second root Control scale,
+  `Window.content_scale_factor`, or production SubViewport scaling layer.
+- Workspaces use the design coordinate system. Factory, System Map, Research,
+  Ship Assembly, and Planet Surface pan/zoom are independent content-camera
+  transforms and must not compensate for Window scaling.
+- UI scale changes are explicit player accessibility actions. Window size, DPI,
+  page changes, locale changes, and sidebar changes must not automatically
+  change the effective UI scale or reload the Main scene.
+- Overflow is handled inside the authored layout with scrolling, clipping,
+  wrapping, ellipsis, or an explicit player-controlled collapse. Do not add
+  physical-window breakpoints or automatic compact/expanded rearrangements.
+- Popup and input fixes must convert coordinates at one boundary when required;
+  never multiply or divide Factory/world input coordinates in individual
+  workspaces to compensate for the global stretch.
+- UI layout changes must run the focused fixed-layout policy, scale-contract,
+  and window-matrix tests. Do not use the J1-J10 journey chain as a substitute
+  for these feature-specific checks.
+
 ### Handoff and integration
 
 - A subagent reports concise results to the primary agent; it does not declare the

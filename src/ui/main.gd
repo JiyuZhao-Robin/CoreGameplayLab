@@ -162,8 +162,6 @@ var _recommended_ui_scale := UiTokens.DEFAULT_UI_SCALE
 var _ui_scale := UiTokens.DEFAULT_UI_SCALE
 var _ui_scale_selector: OptionButton
 var _layout_profile := ResponsivePolicy.DEFAULT_PROFILE
-var _responsive_resize_timer: Timer
-var _responsive_state_initialized := false
 var _responsive_session_restored := false
 var _ui_scale_cli_override := false
 var _ui_scale_preference_source := "default"
@@ -183,9 +181,8 @@ const MIN_PRODUCTION_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 
 func _ready() -> void:
-	# Evidence capture may use an exact application SubViewport, but normal play
-	# always lays out against the real Window and enforces the audited desktop
-	# minimum instead of trapping production inside the reviewer viewport.
+	# Production UI always lays out in the fixed 1440x900 design viewport declared
+	# in project.godot. The physical Window only applies one uniform canvas scale.
 	get_window().min_size = MIN_PRODUCTION_VIEWPORT_SIZE
 	_load_ui_preferences()
 	for argument in OS.get_cmdline_user_args():
@@ -196,7 +193,10 @@ func _ready() -> void:
 		elif String(argument).begins_with("--ui-scale="):
 			var requested_scale := String(argument).trim_prefix("--ui-scale=").strip_edges()
 			if requested_scale.to_upper() == ResponsivePolicy.MODE_AUTO:
-				_ui_scale_mode = ResponsivePolicy.MODE_AUTO
+				# AUTO was window-driven in older builds. Keep the CLI spelling as a
+				# compatibility alias for the fixed default scale.
+				_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+				_manual_ui_scale = UiTokens.DEFAULT_UI_SCALE
 				_ui_scale_cli_override = true
 				_ui_scale_preference_source = "cli"
 			elif requested_scale.is_valid_float():
@@ -213,16 +213,13 @@ func _ready() -> void:
 	_build_theme()
 	_store_responsive_session_state()
 	_build_shell()
-	_setup_responsive_timer()
-	resized.connect(_on_root_resized)
 	var application_window := get_window()
-	if is_instance_valid(application_window) and application_window.has_signal("dpi_changed"):
-		application_window.connect("dpi_changed", Callable(self, "_on_window_dpi_changed"))
+	if is_instance_valid(application_window):
+		application_window.size_changed.connect(_on_root_resized)
 	_connect_game_signals()
 	_append_log(I18n.core("timeline.lab_started"))
 	_rebuild_all()
 	call_deferred("_focus_active_navigation_if_empty")
-	call_deferred("_reconcile_responsive_state_after_layout")
 	_record_telemetry("ScreenOpen", {"screen":_active_page_key, "initial":true})
 	var capture_requested := OS.get_cmdline_user_args().has("--capture-map") or OS.get_cmdline_user_args().has("--capture-location")
 	for argument in OS.get_cmdline_user_args():
@@ -304,8 +301,6 @@ func _build_shell() -> void:
 	_shell.build()
 	_shell.left_rail_toggled.connect(_on_left_rail_toggled)
 	_shell.right_inspector_toggled.connect(_on_right_inspector_toggled)
-	if _requires_single_sidebar() and not _ui_state.left_rail_collapsed and not _ui_state.right_inspector_collapsed:
-		_ui_state.right_inspector_collapsed = true
 	_shell.set_left_collapsed(_ui_state.left_rail_collapsed)
 	_shell.set_right_collapsed(_ui_state.right_inspector_collapsed)
 	_shell.header_slot.add_child(_build_header())
@@ -417,7 +412,6 @@ func _switch_page(key: String, record_history: bool = true) -> void:
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
 	_update_navigation_state()
-	_schedule_responsive_refresh()
 	_record_telemetry("ScreenOpen", {"screen":key})
 
 
@@ -492,7 +486,6 @@ func _build_header() -> Control:
 	_ui_scale_selector.custom_minimum_size.x = UiTokens.layout_px(92)
 	_ui_scale_selector.tooltip_text = I18n.core("shell.ui_scale_tooltip", "Scale interface text and controls without changing map or canvas zoom.")
 	_ui_scale_selector.accessibility_name = I18n.core("shell.ui_scale", "UI scale")
-	_ui_scale_selector.add_item(I18n.core("shell.ui_scale_auto", "AUTO"), ResponsivePolicy.AUTO_SELECTOR_ID)
 	for scale_value in UiTokens.SUPPORTED_UI_SCALES:
 		var percent := int(round(float(scale_value) * 100.0))
 		_ui_scale_selector.add_item("%d%%" % percent, percent)
@@ -914,7 +907,7 @@ func _rebuild_system_map() -> void:
 	map_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_view.location_selected.connect(_open_location)
 	box.add_child(map_view)
-	map_view.custom_minimum_size.y = 430.0 if get_window().size.y <= 800 else 560.0
+	map_view.custom_minimum_size.y = 560.0
 	map_view.configure(map_locations, map_routes, _selected_location_id)
 
 	box.add_child(_section_title(I18n.core("system.production_logistics")))
@@ -1600,33 +1593,26 @@ func _capture_requested_view() -> void:
 
 
 func _set_capture_viewport_size(target: Vector2i) -> void:
-	# On macOS the decorated window client area can differ from a requested
-	# window size by one physical pixel. Audit captures are viewport-direct, so
-	# converge on the requested client area instead of resizing the saved PNG.
-	# A borderless audit window removes that decoration quantization and still
-	# renders the complete application shell.
-	get_window().borderless = true
-	await get_tree().process_frame
-	var requested_window_size := target
-	for _attempt in range(4):
-		get_window().size = requested_window_size
-		await get_tree().process_frame
-		await get_tree().process_frame
-		var actual := Vector2i(get_viewport().get_visible_rect().size.round())
-		if actual == target:
-			return
-		requested_window_size += target - actual
-	# Some macOS display modes quantize a decorated client area to even pixel
-	# heights. Render the live scene through an exact-size application viewport
-	# in that case; this is still a direct viewport capture, never an image resize.
+	# Capture output size and UI design size are separate contracts. Use one
+	# exact-size audit viewport, then reproduce the production keep-aspect transform
+	# around the unchanged 1440x900 Main root. This avoids OS window decoration
+	# quantization without turning the capture target into a new layout size.
 	var audit_viewport := SubViewport.new()
 	audit_viewport.name = "AuditCaptureViewport"
 	audit_viewport.size = target
 	audit_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	audit_viewport.gui_embed_subwindows = true
 	get_tree().root.add_child(audit_viewport)
-	reparent(audit_viewport)
-	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var capture_surface := Control.new()
+	capture_surface.name = "AuditCaptureSurface"
+	capture_surface.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	audit_viewport.add_child(capture_surface)
+	reparent(capture_surface)
+	set_anchors_preset(Control.PRESET_TOP_LEFT)
+	position = ResponsivePolicy.canvas_content_rect(Vector2(target)).position
+	size = ResponsivePolicy.DESIGN_VIEWPORT_SIZE
+	var uniform_scale := ResponsivePolicy.uniform_canvas_scale(Vector2(target))
+	scale = Vector2(uniform_scale, uniform_scale)
 	await get_tree().process_frame
 	await get_tree().process_frame
 
@@ -3024,7 +3010,6 @@ func _select_fleet_section(section: String) -> void:
 	_sync_blueprint_workspace_chrome()
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
-	_schedule_responsive_refresh()
 
 
 func _sync_blueprint_workspace_chrome() -> void:
@@ -6038,8 +6023,8 @@ func _load_ui_preferences() -> void:
 			_manual_ui_scale = float(migrated.get("manual_scale", UiTokens.DEFAULT_UI_SCALE))
 			_ui_scale_preference_source = String(migrated.get("source", "default"))
 			if bool(migrated.get("migration_required", false)):
-				# Complete the device-local migration immediately. Recommended and
-				# effective values remain session-only because they depend on geometry.
+				# Complete the device-local migration immediately. The explicit player
+				# scale is the only scale persisted by the fixed-layout runtime.
 				_ui_config.set_value("display", "ui_scale_mode", _ui_scale_mode.to_lower())
 				_ui_config.set_value("display", "manual_ui_scale", _manual_ui_scale)
 				_ui_config.set_value("display", "ui_scale", _manual_ui_scale)
@@ -6092,7 +6077,6 @@ func _restore_responsive_session_state() -> bool:
 			_layout_profile = ResponsivePolicy.normalize_profile(session.get("layout_profile", ResponsivePolicy.DEFAULT_PROFILE))
 			_ui_scale_cli_override = not bool(session.get("persist", true))
 			_ui_scale_preference_source = String(session.get("source", "session"))
-			_responsive_state_initialized = true
 			return true
 	if has_legacy_scale and ResponsivePolicy.scale_value_is_valid(legacy_value):
 		_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
@@ -6143,42 +6127,21 @@ func _ui_config_path() -> String:
 
 
 func _initialize_ui_scale_for_current_window() -> void:
-	var window_size := _responsive_window_size()
-	var raw_recommendation := ResponsivePolicy.recommend_ui_scale(window_size, window_size, _responsive_dpi_hint())
-	if _ui_scale_mode == ResponsivePolicy.MODE_AUTO:
-		if not _responsive_session_restored or not ResponsivePolicy.candidate_is_auto_safe(_recommended_ui_scale, window_size, window_size):
-			_recommended_ui_scale = raw_recommendation
-		_ui_scale = _recommended_ui_scale
-	else:
-		_recommended_ui_scale = raw_recommendation
-		_ui_scale = ResponsivePolicy.safe_manual_effective_scale(_manual_ui_scale, window_size)
-
-
-func _setup_responsive_timer() -> void:
-	_responsive_resize_timer = Timer.new()
-	_responsive_resize_timer.name = "ResponsiveUiDebounce"
-	_responsive_resize_timer.one_shot = true
-	_responsive_resize_timer.wait_time = ResponsivePolicy.RESIZE_DEBOUNCE_SECONDS
-	_responsive_resize_timer.ignore_time_scale = true
-	_responsive_resize_timer.process_callback = Timer.TIMER_PROCESS_IDLE
-	_responsive_resize_timer.timeout.connect(_on_responsive_debounce_timeout)
-	add_child(_responsive_resize_timer)
+	# The saved/manual Theme scale is independent of physical Window geometry.
+	# Godot's canvas_items + keep stretch owns Window scaling exactly once.
+	_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+	_ui_scale = UiTokens.sanitize_ui_scale(_manual_ui_scale)
+	_recommended_ui_scale = _ui_scale
+	_layout_profile = ResponsivePolicy.PROFILE_STANDARD
 
 
 func _responsive_window_size() -> Vector2:
-	if size.x > 0.0 and size.y > 0.0:
-		return size
-	var visible_size := get_viewport().get_visible_rect().size
-	return visible_size if visible_size.x > 0.0 and visible_size.y > 0.0 else Vector2(MIN_PRODUCTION_VIEWPORT_SIZE)
-
-
-func _responsive_usable_size() -> Vector2:
-	var active_page := _page_controls.get(_active_page_key) as Control
-	if is_instance_valid(active_page) and active_page.size.x > 1.0 and active_page.size.y > 1.0:
-		return active_page.size
-	if is_instance_valid(_tabs) and _tabs.size.x > 1.0 and _tabs.size.y > 1.0:
-		return _tabs.size
-	return _responsive_window_size()
+	if get_viewport() is SubViewport and get_viewport().name == "AuditCaptureViewport":
+		return Vector2((get_viewport() as SubViewport).size)
+	var application_window := get_window()
+	if is_instance_valid(application_window) and application_window.size.x > 0 and application_window.size.y > 0:
+		return Vector2(application_window.size)
+	return ResponsivePolicy.DESIGN_VIEWPORT_SIZE
 
 
 func _responsive_dpi_hint() -> float:
@@ -6205,65 +6168,47 @@ func _store_responsive_session_state() -> void:
 func _select_ui_scale_preference() -> void:
 	if not is_instance_valid(_ui_scale_selector):
 		return
-	var item_id := ResponsivePolicy.AUTO_SELECTOR_ID if _ui_scale_mode == ResponsivePolicy.MODE_AUTO else int(round(_manual_ui_scale * 100.0))
+	var item_id := int(round(_manual_ui_scale * 100.0))
 	var item_index := _ui_scale_selector.get_item_index(item_id)
 	if item_index >= 0:
 		_ui_scale_selector.select(item_index)
 
 
-func _schedule_responsive_refresh() -> void:
-	if is_instance_valid(_responsive_resize_timer):
-		_responsive_resize_timer.start(ResponsivePolicy.RESIZE_DEBOUNCE_SECONDS)
-
-
-func _on_responsive_debounce_timeout() -> void:
-	await get_tree().process_frame
-	_apply_responsive_state(true)
-
-
-func _reconcile_responsive_state_after_layout() -> void:
-	await get_tree().process_frame
-	_apply_responsive_state(true)
-
-
-func _apply_responsive_state(allow_theme_reload := true, bypass_scale_hysteresis := false) -> bool:
-	var window_size := _responsive_window_size()
-	var usable_size := _responsive_usable_size()
-	var dpi_value := _responsive_dpi_hint()
-	var raw_recommendation := ResponsivePolicy.recommend_ui_scale(window_size, usable_size, dpi_value)
-	var next_recommendation := raw_recommendation
-	if _responsive_state_initialized and not bypass_scale_hysteresis:
-		next_recommendation = ResponsivePolicy.stabilize_auto_scale(_recommended_ui_scale, raw_recommendation, window_size, usable_size, dpi_value)
-	_recommended_ui_scale = next_recommendation
-	var next_effective := _recommended_ui_scale if _ui_scale_mode == ResponsivePolicy.MODE_AUTO else ResponsivePolicy.safe_manual_effective_scale(_manual_ui_scale, window_size)
+func _apply_responsive_state(allow_theme_reload := true, _bypass_scale_hysteresis := false) -> bool:
+	# Compatibility entry point for tests and older callers. Only an explicit
+	# player preference may change Theme scale; Window geometry is never an input.
+	var next_effective := UiTokens.sanitize_ui_scale(_manual_ui_scale)
 	var scale_changed := not is_equal_approx(next_effective, _ui_scale)
 	_ui_scale = next_effective
-	var logical_size := ResponsivePolicy.logical_usable_size(usable_size, _ui_scale)
-	var previous_profile := _layout_profile
-	_layout_profile = ResponsivePolicy.resolve_profile(logical_size, _layout_profile if _responsive_state_initialized else "")
-	_responsive_state_initialized = true
+	_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
+	_recommended_ui_scale = _ui_scale
+	_layout_profile = ResponsivePolicy.PROFILE_STANDARD
 	_store_responsive_session_state()
 	_select_ui_scale_preference()
-	if _layout_profile != previous_profile:
-		layout_profile_changed.emit(_layout_profile, logical_size)
 	if scale_changed and allow_theme_reload:
 		call_deferred("_reload_ui_for_scale")
 	return scale_changed
 
 
 func ui_responsive_snapshot() -> Dictionary:
-	var usable_size := _responsive_usable_size()
+	var physical_window_size := _responsive_window_size()
+	var content_rect := ResponsivePolicy.canvas_content_rect(physical_window_size)
 	return {
 		"preferred_mode":_ui_scale_mode,
 		"manual_scale":_manual_ui_scale,
 		"recommended_scale":_recommended_ui_scale,
 		"effective_scale":_ui_scale,
 		"layout_profile":_layout_profile,
-		"window_size":_responsive_window_size(),
-		"usable_size":usable_size,
-		"logical_usable_size":ResponsivePolicy.logical_usable_size(usable_size, _ui_scale),
+		"window_size":physical_window_size,
+		"physical_window_size":physical_window_size,
+		"design_viewport_size":ResponsivePolicy.DESIGN_VIEWPORT_SIZE,
+		"usable_size":ResponsivePolicy.DESIGN_VIEWPORT_SIZE,
+		"logical_usable_size":ResponsivePolicy.DESIGN_VIEWPORT_SIZE,
+		"uniform_canvas_scale":ResponsivePolicy.uniform_canvas_scale(physical_window_size),
+		"canvas_content_rect":content_rect,
+		"letterbox_offset":content_rect.position,
 		"dpi_hint":_responsive_dpi_hint(),
-		"debounce_seconds":ResponsivePolicy.RESIZE_DEBOUNCE_SECONDS,
+		"debounce_seconds":0.0,
 		"preference_source":_ui_scale_preference_source
 	}
 
@@ -6290,53 +6235,18 @@ func _synchronize_factory_world_with_location() -> void:
 
 func _on_left_rail_toggled(collapsed: bool) -> void:
 	_ui_state.left_rail_collapsed = collapsed
-	if not collapsed and _requires_single_sidebar() and not _ui_state.right_inspector_collapsed:
-		_ui_state.right_inspector_collapsed = true
-		_shell.set_right_collapsed(true)
 	_save_ui_preferences()
-	_schedule_responsive_refresh()
 
 
 func _on_right_inspector_toggled(collapsed: bool) -> void:
 	_ui_state.right_inspector_collapsed = collapsed
-	if not collapsed and _requires_single_sidebar() and not _ui_state.left_rail_collapsed:
-		_ui_state.left_rail_collapsed = true
-		_shell.set_left_collapsed(true)
 	_save_ui_preferences()
-	_schedule_responsive_refresh()
-
-
-func _requires_single_sidebar() -> bool:
-	# System Map is the widest non-scaled gameplay canvas. Preserve its usable
-	# width and switch the two sidebars to mutually exclusive drawers only when
-	# the physical window cannot contain all three regions.
-	var required_width := (
-		UiTokens.layout_px(UiTokens.RESOURCE_RAIL_WIDTH)
-		+ UiTokens.layout_px(UiTokens.INSPECTOR_WIDTH)
-		+ 760
-		+ UiTokens.layout_px(24)
-	)
-	return size.x < required_width
 
 
 func _on_root_resized() -> void:
+	# The logical root stays 1440x900. Resize only affects the Window's uniform
+	# canvas transform, which Godot applies before dispatching Control input.
 	call_deferred("_reposition_fleet_roster_transients")
-	_sync_ui_scale_selector_availability()
-	if is_instance_valid(_shell) and _requires_single_sidebar():
-		if not _ui_state.left_rail_collapsed and not _ui_state.right_inspector_collapsed:
-			_ui_state.right_inspector_collapsed = true
-			_shell.set_right_collapsed(true)
-	var viewport_size := Vector2i(_responsive_window_size().round())
-	if not UiTokens.ui_scale_supported_for_viewport(_ui_scale, viewport_size):
-		# An unsafe Theme scale must not survive the debounce interval. Preserve the
-		# preference, then project an effective fallback on the next layout frame.
-		call_deferred("_apply_responsive_state", true, true)
-	else:
-		_schedule_responsive_refresh()
-
-
-func _on_window_dpi_changed() -> void:
-	_schedule_responsive_refresh()
 
 
 func _reposition_fleet_roster_transients() -> void:
@@ -6364,15 +6274,8 @@ func _on_ui_scale_selected(index: int) -> void:
 	if not is_instance_valid(_ui_scale_selector) or index < 0:
 		return
 	var selected_id := _ui_scale_selector.get_item_id(index)
-	if selected_id == ResponsivePolicy.AUTO_SELECTOR_ID:
-		_ui_scale_mode = ResponsivePolicy.MODE_AUTO
-	else:
-		var next_scale := UiTokens.sanitize_ui_scale(float(selected_id))
-		if not UiTokens.ui_scale_supported_for_viewport(next_scale, Vector2i(_responsive_window_size().round())):
-			_select_ui_scale_preference()
-			return
-		_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
-		_manual_ui_scale = next_scale
+	_manual_ui_scale = UiTokens.sanitize_ui_scale(float(selected_id))
+	_ui_scale_mode = ResponsivePolicy.MODE_MANUAL
 	_ui_scale_cli_override = false
 	_ui_scale_preference_source = "user"
 	var scale_changed := _apply_responsive_state(false, true)
@@ -6384,14 +6287,8 @@ func _on_ui_scale_selected(index: int) -> void:
 func _sync_ui_scale_selector_availability() -> void:
 	if not is_instance_valid(_ui_scale_selector):
 		return
-	var viewport_size := Vector2i(size.round())
 	for item_index in _ui_scale_selector.item_count:
-		var item_id := _ui_scale_selector.get_item_id(item_index)
-		if item_id == ResponsivePolicy.AUTO_SELECTOR_ID:
-			_ui_scale_selector.set_item_disabled(item_index, false)
-			continue
-		var factor := float(item_id) / 100.0
-		_ui_scale_selector.set_item_disabled(item_index, not UiTokens.ui_scale_supported_for_viewport(factor, viewport_size))
+		_ui_scale_selector.set_item_disabled(item_index, false)
 	_select_ui_scale_preference()
 
 
@@ -6415,7 +6312,6 @@ func _on_locale_changed(_locale: String) -> void:
 		_factory_workspace.queue_free()
 		_factory_workspace = null
 	_request_active_page_refresh(true)
-	_schedule_responsive_refresh()
 
 
 func _refresh_shell_locale() -> void:
@@ -6451,9 +6347,6 @@ func _refresh_shell_locale() -> void:
 	if is_instance_valid(_ui_scale_selector):
 		_ui_scale_selector.tooltip_text = I18n.core("shell.ui_scale_tooltip", "Scale interface text and controls without changing map or canvas zoom.")
 		_ui_scale_selector.accessibility_name = I18n.core("shell.ui_scale", "UI scale")
-		var auto_index := _ui_scale_selector.get_item_index(ResponsivePolicy.AUTO_SELECTOR_ID)
-		if auto_index >= 0:
-			_ui_scale_selector.set_item_text(auto_index, I18n.core("shell.ui_scale_auto", "AUTO"))
 	var dock_title := find_child("CommandDockTitle", true, false) as Label
 	if is_instance_valid(dock_title):
 		dock_title.text = I18n.core("shell.command_dock", "COMMAND DOCK")

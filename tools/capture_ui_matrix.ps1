@@ -38,8 +38,8 @@ $FullPages = @(
     "diagnostics"
 )
 $QuickPages = @("system_map", "megastructure")
-$FullResolutions = @("1920x1080", "2560x1440", "1366x768")
-$QuickResolutions = @("1920x1080", "1366x768")
+$FullResolutions = @("1440x900", "1920x1080", "2560x1440", "1366x768")
+$QuickResolutions = @("1440x900", "1920x1080", "1366x768")
 $Locales = @("en", "zh_CN")
 
 if (-not (Test-Path -LiteralPath $GodotPath -PathType Leaf)) {

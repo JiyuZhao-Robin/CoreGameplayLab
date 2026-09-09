@@ -12,8 +12,11 @@ signal construction_order_selected(order: Dictionary)
 signal tile_selected(tile: Vector2i)
 signal tile_hovered(tile: Vector2i)
 signal placement_cancelled
-## Emitted only after a drag from a concrete output port onto a compatible input
-## port.  The workspace converts this gesture into a versioned command intent.
+signal machine_configuration_copy_requested(entity: Dictionary)
+signal machine_configuration_paste_requested(entity: Dictionary)
+## Port gestures are presentation-only. The workspace supplies authoritative
+## candidate/preflight state and converts a completed gesture into a command.
+signal port_drag_started(entity_id: String, port: Dictionary, visible_candidates: Array)
 signal port_connection_requested(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary)
 signal port_drag_preview(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary, valid: bool)
 
@@ -38,6 +41,9 @@ const MEDIUM_DETAIL_VISIBLE_RECORDS := 160
 const COMPACT_DETAIL_VISIBLE_RECORDS := 480
 const MEDIUM_DETAIL_EXIT_RECORDS := 128
 const COMPACT_DETAIL_EXIT_RECORDS := 400
+const POINTER_DRAG_THRESHOLD_PIXELS := 8.0
+const PORT_START_HIT_RADIUS_PIXELS := 10.0
+const PORT_SNAP_HIT_RADIUS_PIXELS := 24.0
 
 ## Keep the canvas independently loadable by SceneTree-based component tests.
 @onready var I18n = get_node("/root/I18n")
@@ -69,6 +75,7 @@ var _entities_by_id: Dictionary = {}
 var _links_by_id: Dictionary = {}
 var _resources_by_id: Dictionary = {}
 var _orders_by_id: Dictionary = {}
+var _recipe_names_by_id: Dictionary = {}
 var _visible_records: Dictionary = {}
 var _has_active_flow_cache := false
 var _visible_active_flow := false
@@ -76,6 +83,9 @@ var _node_style_cache: Dictionary = {}
 var _hit_geometry_dirty := true
 var _detail_stage_cache := "FULL"
 var _port_drag: Dictionary = {}
+var _left_pointer: Dictionary = {}
+var _configuration_gestures_enabled := true
+var _port_connections_enabled := true
 
 
 func _ready() -> void:
@@ -91,8 +101,11 @@ func _ready() -> void:
 
 func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> void:
 	var previous_layout_signature := _world_layout_signature()
+	var previous_topology_signature := _topology_signature()
 	_snapshot = snapshot if already_normalized else _view_model.build(snapshot)
 	_rebuild_snapshot_indexes()
+	if not _port_drag.is_empty() and previous_topology_signature != _topology_signature():
+		cancel_port_drag()
 	var next_chunk_index_signature := _chunk_layout_signature()
 	if next_chunk_index_signature != _chunk_index_signature:
 		_chunk_index.rebuild(_snapshot)
@@ -116,6 +129,16 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 func set_reduced_motion(enabled: bool) -> void:
 	_reduced_motion = enabled
 	queue_redraw()
+
+
+func set_configuration_gestures_enabled(enabled: bool) -> void:
+	_configuration_gestures_enabled = enabled
+
+
+func set_port_connections_enabled(enabled: bool) -> void:
+	_port_connections_enabled = enabled
+	if not enabled:
+		cancel_port_drag()
 
 
 func selected_node_id() -> String:
@@ -167,6 +190,30 @@ func clear_placement_preview() -> void:
 
 func cancel_port_drag() -> void:
 	_port_drag.clear()
+	queue_redraw()
+
+
+## The workspace calls these synchronously from the drag signals. This keeps
+## duplicate/fan-in/fan-out rules out of the canvas while ensuring the color the
+## player sees is the same result that controls submission.
+func set_port_drag_validation(valid: bool, reason_code: String = "") -> void:
+	if _port_drag.is_empty() or str(_port_drag.get("target_id", "")).is_empty():
+		return
+	_port_drag["valid"] = valid
+	_port_drag["reason_code"] = reason_code
+	queue_redraw()
+
+
+func set_port_drag_candidates(candidate_keys: Array[String]) -> void:
+	if _port_drag.is_empty():
+		return
+	var candidates: Dictionary = {}
+	var candidate_entities: Dictionary = {}
+	for key in candidate_keys:
+		candidates[key] = true
+		candidate_entities[key.get_slice(":", 0)] = true
+	_port_drag["candidate_keys"] = candidates
+	_port_drag["candidate_entity_ids"] = candidate_entities
 	queue_redraw()
 
 
@@ -328,7 +375,15 @@ func _draw_entities() -> void:
 		var font := get_theme_default_font()
 		var kind_id := str(entity.get("node_kind", "UNIT"))
 		var kind: String = str(I18n.t("factory.kind.%s" % kind_id.to_lower()))
-		draw_string(font, header_rect.position + Vector2(16, 14), kind, HORIZONTAL_ALIGNMENT_LEFT, header_rect.size.x - 18, 9, Color("a5b2ac"))
+		var kind_width := header_rect.size.x - 18.0
+		var recipe_label := ""
+		if kind_id == "MACHINE":
+			var recipe_id := str(entity.get("recipe_id", ""))
+			recipe_label = str(_recipe_names_by_id.get(recipe_id, recipe_id)) if not recipe_id.is_empty() else I18n.t("factory.node.unconfigured", "UNCONFIGURED")
+			kind_width = maxf(24.0, header_rect.size.x * 0.42)
+		draw_string(font, header_rect.position + Vector2(16, 14), kind, HORIZONTAL_ALIGNMENT_LEFT, kind_width, 9, Color("a5b2ac"))
+		if kind_id == "MACHINE":
+			draw_string(font, header_rect.position + Vector2(kind_width + 8.0, 14), recipe_label, HORIZONTAL_ALIGNMENT_RIGHT, maxf(0.0, header_rect.size.x - kind_width - 14.0), 8, Color("e0ae5c") if str(entity.get("recipe_id", "")).is_empty() else Color("d5a45c"))
 		draw_string(font, rect.position + Vector2(8, minf(39.0, rect.size.y - 8.0)), str(entity.get("name", entity.get("id", I18n.t("factory.value.unit", "Unit")))), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 11, Color("e6eeea"))
 		if detail_stage == "MEDIUM":
 			continue
@@ -443,22 +498,35 @@ func _draw_port_drag_preview() -> void:
 	var source_id := str(_port_drag.get("source_id", ""))
 	var source := _entity_by_id(source_id)
 	var source_port: Dictionary = _port_drag.get("source_port", {}) as Dictionary
-	if source.is_empty() or source_port.is_empty():
+	var origin_id := str(_port_drag.get("origin_id", ""))
+	var origin := _entity_by_id(origin_id)
+	var origin_port: Dictionary = _port_drag.get("origin_port", {}) as Dictionary
+	if origin.is_empty() or origin_port.is_empty():
 		return
-	var source_rect := _footprint_rect(source.get("footprint", {}), 4.0)
-	var from := _port_center(source, source_port, source_rect, "OUTPUT", str(source_port.get("kind", "CARGO")))
+	var origin_direction := str(origin_port.get("direction", "OUTPUT"))
+	var origin_center := _port_center(origin, origin_port, _footprint_rect(origin.get("footprint", {}), 4.0), origin_direction, str(origin_port.get("kind", "CARGO")))
+	var from := origin_center
 	var target_id := str(_port_drag.get("target_id", ""))
 	var target_port: Dictionary = _port_drag.get("target_port", {}) as Dictionary
 	var to := Vector2(_port_drag.get("pointer", from))
+	if not source.is_empty() and not source_port.is_empty():
+		from = _port_center(source, source_port, _footprint_rect(source.get("footprint", {}), 4.0), "OUTPUT", str(source_port.get("kind", "CARGO")))
 	if not target_id.is_empty() and not target_port.is_empty():
 		var target := _entity_by_id(target_id)
 		if not target.is_empty():
 			to = _port_center(target, target_port, _footprint_rect(target.get("footprint", {}), 4.0), "INPUT", str(target_port.get("kind", "CARGO")))
+	elif origin_direction == "INPUT":
+		to = origin_center
+		from = Vector2(_port_drag.get("pointer", origin_center))
 	var valid := bool(_port_drag.get("valid", false))
-	var tone := Color("6fbf92") if valid else Color("d86e63") if not target_id.is_empty() else Color("d5a45c")
+	var has_hover := not str(_port_drag.get("hover_key", "")).is_empty()
+	var tone := Color("8de0a9") if valid else Color("ef9b8f") if has_hover else Color("79d9ca")
 	var route := _orthogonal_route(from, to)
+	_draw_orthogonal_route(route, Color(tone, 0.20), 6.0, false)
 	_draw_orthogonal_route(route, tone, 2.0, true)
 	_draw_link_arrow(route, tone)
+	draw_circle(to, 5.0, Color(tone, 0.22))
+	draw_circle(to, 5.0, tone, false, 1.5)
 
 
 func _draw_links() -> void:
@@ -512,16 +580,18 @@ func _draw_connection_ports(entity: Dictionary, rect: Rect2, detail_stage: Strin
 	var entity_id := str(entity.get("id", ""))
 	var is_source := entity_id == str(_connection_preview.get("source_id", ""))
 	var is_target := entity_id == str(_connection_preview.get("target_id", ""))
-	var is_candidate := _connection_candidate_ids.has(entity_id)
+	var drag_candidates: Dictionary = _port_drag.get("candidate_entity_ids", {}) if _port_drag.get("candidate_entity_ids", {}) is Dictionary else {}
+	var drag_related := entity_id == str(_port_drag.get("origin_id", "")) or entity_id == str(_port_drag.get("hover_id", ""))
+	var is_candidate := _connection_candidate_ids.has(entity_id) or drag_candidates.has(entity_id)
 	if is_source or is_target:
 		draw_rect(rect.grow(3.0), Color("d5a45c") if is_source else Color("62b5ae"), false, 2.0)
 	elif is_candidate:
 		# Candidate means structurally compatible. The selected route turns green
 		# only after duplicate/input-occupancy preflight also passes.
 		draw_rect(rect.grow(2.0), Color(FOCUS_COLOR, 0.72), false, 1.5)
-	if detail_stage == "COMPACT":
+	if detail_stage == "COMPACT" and not drag_related and not is_candidate:
 		return
-	var radius := 4.0 if detail_stage == "FULL" else 3.0
+	var radius := 4.0 if detail_stage == "FULL" or drag_related or is_candidate else 3.0
 	_draw_entity_ports(entity, rect, "INPUT", radius)
 	_draw_entity_ports(entity, rect, "OUTPUT", radius)
 
@@ -550,16 +620,27 @@ func _draw_entity_ports(entity: Dictionary, rect: Rect2, direction: String, radi
 
 func _draw_port_marker(entity: Dictionary, port: Dictionary, center: Vector2, radius: float, color: Color) -> void:
 	var key := "%s:%s" % [str(entity.get("id", "")), str(port.get("id", ""))]
-	var is_drag_source := key == str(_port_drag.get("source_key", ""))
-	var is_drag_target := key == str(_port_drag.get("target_key", ""))
-	var tone := FOCUS_COLOR if is_drag_target else Color("d5a45c") if is_drag_source else color
-	draw_circle(center, radius + (1.5 if is_drag_source or is_drag_target else 0.0), tone)
+	var is_drag_origin := key == str(_port_drag.get("origin_key", ""))
+	var is_drag_hover := key == str(_port_drag.get("hover_key", ""))
+	var candidate_keys: Dictionary = _port_drag.get("candidate_keys", {}) if _port_drag.get("candidate_keys", {}) is Dictionary else {}
+	var is_candidate := candidate_keys.has(key)
+	var tone := color
+	if is_drag_origin:
+		tone = Color("d5a45c")
+	elif is_drag_hover:
+		tone = Color("8de0a9") if bool(_port_drag.get("valid", false)) else Color("ef9b8f")
+	elif is_candidate:
+		tone = Color("8de0a9")
+	elif not _port_drag.is_empty():
+		tone = Color(color, 0.34)
+	draw_circle(center, radius + (1.5 if is_drag_origin or is_drag_hover else 0.0), tone)
 	_register_port_hit(entity, port, center, radius)
 
 
 func _register_port_hit(entity: Dictionary, port: Dictionary, center: Vector2, radius: float) -> void:
 	var key := "%s:%s" % [str(entity.get("id", "")), str(port.get("id", ""))]
-	_port_hit_rects[key] = {"rect":Rect2(center - Vector2.ONE * maxf(7.0, radius + 3.0), Vector2.ONE * maxf(14.0, (radius + 3.0) * 2.0)), "entity_id":str(entity.get("id", "")), "port":port.duplicate(false), "center":center}
+	var hit_radius := maxf(PORT_SNAP_HIT_RADIUS_PIXELS, radius + 3.0)
+	_port_hit_rects[key] = {"rect":Rect2(center - Vector2.ONE * hit_radius, Vector2.ONE * hit_radius * 2.0), "entity_id":str(entity.get("id", "")), "port":port.duplicate(false), "center":center}
 
 
 func _register_entity_port_hits(entity: Dictionary, rect: Rect2, radius: float) -> void:
@@ -830,6 +911,12 @@ func _world_layout_signature() -> String:
 	return "%s:%d,%d:%d,%d:%d,%d" % [str(_snapshot.get("world_id", "")), origin.x, origin.y, bounds_size.x, bounds_size.y, maximum_size.x, maximum_size.y]
 
 
+func _topology_signature() -> String:
+	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
+		return ""
+	return "%s:%d" % [str(_snapshot.get("world_id", "")), int(_snapshot.get("topology_revision", 0))]
+
+
 func _chunk_layout_signature() -> String:
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
 		return ""
@@ -929,14 +1016,33 @@ func _on_canvas_resized() -> void:
 
 func _on_gui_input(event: InputEvent) -> void:
 	var connection_active := not str(_connection_preview.get("kind", "")).is_empty()
-	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty()):
+	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty() or not _left_pointer.is_empty()):
+		_left_pointer.clear()
+		_dragging = false
 		cancel_port_drag()
-		placement_cancelled.emit()
+		if not _placement_preview.is_empty() or connection_active:
+			placement_cancelled.emit()
 		accept_event()
 		return
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.shift_pressed and _configuration_gestures_allowed():
+			if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+				var copy_entity := _machine_at(mouse_event.position)
+				if not copy_entity.is_empty():
+					machine_configuration_copy_requested.emit(copy_entity)
+					accept_event()
+					return
+			if mouse_event.button_index == MOUSE_BUTTON_LEFT:
+				var paste_entity := _machine_at(mouse_event.position)
+				if not paste_entity.is_empty():
+					machine_configuration_paste_requested.emit(paste_entity)
+					accept_event()
+					return
 		if mouse_event.button_index == MOUSE_BUTTON_MIDDLE:
+			if mouse_event.pressed:
+				_left_pointer.clear()
+				cancel_port_drag()
 			_dragging = mouse_event.pressed
 			_last_pointer = mouse_event.position
 			if mouse_event.pressed:
@@ -948,13 +1054,28 @@ func _on_gui_input(event: InputEvent) -> void:
 			accept_event()
 			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			if _dragging:
+				accept_event()
+				return
 			if mouse_event.pressed:
+				if bool(_port_drag.get("click_mode", false)):
+					_finish_port_drag(mouse_event.position, true)
+					accept_event()
+					return
 				if _begin_port_drag(mouse_event.position):
 					accept_event()
 					return
-				_select_at(mouse_event.position)
+				if _point_has_interactive_hit(mouse_event.position):
+					_select_at(mouse_event.position)
+				else:
+					_left_pointer = {"start":mouse_event.position, "last":mouse_event.position, "moved":false}
 			elif not _port_drag.is_empty():
 				_finish_port_drag(mouse_event.position)
+			elif not _left_pointer.is_empty():
+				var was_moved := bool(_left_pointer.get("moved", false))
+				_left_pointer.clear()
+				if not was_moved:
+					_select_at(mouse_event.position)
 			accept_event()
 	elif event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
@@ -968,6 +1089,20 @@ func _on_gui_input(event: InputEvent) -> void:
 			return
 		if not _port_drag.is_empty():
 			_update_port_drag(motion.position)
+			accept_event()
+			return
+		if not _left_pointer.is_empty():
+			var start: Vector2 = _left_pointer.get("start", motion.position)
+			if not bool(_left_pointer.get("moved", false)) and start.distance_to(motion.position) > POINTER_DRAG_THRESHOLD_PIXELS:
+				_left_pointer["moved"] = true
+				_overview_mode = false
+			if bool(_left_pointer.get("moved", false)):
+				var last: Vector2 = _left_pointer.get("last", motion.position)
+				_camera += motion.position - last
+				_clamp_camera_to_bounds()
+				_invalidate_hit_geometry()
+				queue_redraw()
+			_left_pointer["last"] = motion.position
 			accept_event()
 			return
 		var hovered_tile := _screen_to_tile(motion.position)
@@ -1003,24 +1138,67 @@ func _on_gui_input(event: InputEvent) -> void:
 			accept_event()
 
 
-func _begin_port_drag(point: Vector2) -> bool:
+func _configuration_gestures_allowed() -> bool:
+	return not _dragging and _configuration_gestures_enabled and _placement_preview.is_empty() and str(_connection_preview.get("kind", "")).is_empty() and _port_drag.is_empty()
+
+
+func _machine_at(point: Vector2) -> Dictionary:
 	_ensure_hit_geometry()
-	var row := _port_at(point, "OUTPUT")
+	var node_ids: Array = _node_rects.keys()
+	node_ids.reverse()
+	for node_id_value in node_ids:
+		var node_id := str(node_id_value)
+		var row: Dictionary = _node_rects.get(node_id, {})
+		if not bool(row.get("is_entity", false)):
+			continue
+		var entity: Dictionary = row.get("data", {}) as Dictionary
+		if str(entity.get("node_kind", "")) != "MACHINE":
+			continue
+		var rect: Rect2 = row.get("rect", Rect2())
+		if rect.has_point(point):
+			return entity.duplicate(true)
+	return {}
+
+
+func _begin_port_drag(point: Vector2) -> bool:
+	if not _port_connections_enabled or not _placement_preview.is_empty() or _dragging:
+		return false
+	_ensure_hit_geometry()
+	# A wide target snap radius makes dense layouts forgiving, but using that
+	# same radius for activation would turn the center of a small entity into a
+	# hidden port. Keep a body-safe inspector region and a tighter start radius.
+	if _point_in_entity_safe_body(point):
+		return false
+	var row := _port_at(point, "", false, PORT_START_HIT_RADIUS_PIXELS)
 	if row.is_empty():
 		return false
 	var port: Dictionary = row.get("port", {}) as Dictionary
-	if str(port.get("direction", "")) != "OUTPUT":
+	var direction := str(port.get("direction", "")).to_upper()
+	if direction not in ["INPUT", "OUTPUT"]:
 		return false
+	var entity_id := str(row.get("entity_id", ""))
+	var port_key := "%s:%s" % [entity_id, str(port.get("id", ""))]
 	_port_drag = {
-		"source_id":str(row.get("entity_id", "")),
-		"source_port":port.duplicate(false),
-		"source_key":"%s:%s" % [str(row.get("entity_id", "")), str(port.get("id", ""))],
-		"target_id":"",
-		"target_port":{},
-		"target_key":"",
+		"origin_id":entity_id,
+		"origin_port":port.duplicate(false),
+		"origin_key":port_key,
+		"source_id":entity_id if direction == "OUTPUT" else "",
+		"source_port":port.duplicate(false) if direction == "OUTPUT" else {},
+		"target_id":entity_id if direction == "INPUT" else "",
+		"target_port":port.duplicate(false) if direction == "INPUT" else {},
+		"hover_id":"",
+		"hover_key":"",
 		"pointer":point,
-		"valid":false
+		"start_pointer":point,
+		"moved":false,
+		"click_mode":false,
+		"candidate_keys":{},
+		"candidate_entity_ids":{},
+		"valid":false,
+		"reason_code":""
 	}
+	var visible_candidates := _set_structural_port_candidates()
+	port_drag_started.emit(entity_id, port.duplicate(false), visible_candidates)
 	queue_redraw()
 	return true
 
@@ -1028,29 +1206,64 @@ func _begin_port_drag(point: Vector2) -> bool:
 func _update_port_drag(point: Vector2) -> void:
 	if _port_drag.is_empty():
 		return
-	var row := _port_at(point, "INPUT")
-	var source := _entity_by_id(str(_port_drag.get("source_id", "")))
-	var source_port: Dictionary = _port_drag.get("source_port", {}) as Dictionary
-	var target_id := ""
-	var target_port: Dictionary = {}
+	var origin_port: Dictionary = _port_drag.get("origin_port", {}) as Dictionary
+	var origin_direction := str(origin_port.get("direction", "")).to_upper()
+	var opposite_direction := "INPUT" if origin_direction == "OUTPUT" else "OUTPUT"
+	var previous_hover_key := str(_port_drag.get("hover_key", ""))
+	var row := _port_at(point, opposite_direction, true, PORT_SNAP_HIT_RADIUS_PIXELS)
+	var pair: Dictionary = {}
+	var hover_id := ""
+	var hover_port: Dictionary = {}
 	if not row.is_empty():
-		var candidate: Dictionary = row.get("port", {}) as Dictionary
-		var candidate_id := str(row.get("entity_id", ""))
-		var target := _entity_by_id(candidate_id)
-		if candidate_id != str(_port_drag.get("source_id", "")) and _view_model.compatible_port_pair(source, source_port, target, candidate):
-			target_id = candidate_id
-			target_port = candidate.duplicate(false)
-	var valid := not target_id.is_empty()
+		hover_port = (row.get("port", {}) as Dictionary).duplicate(false)
+		hover_id = str(row.get("entity_id", ""))
+		if hover_id != str(_port_drag.get("origin_id", "")):
+			pair = _normalized_port_pair(str(_port_drag.get("origin_id", "")), origin_port, hover_id, hover_port)
+	var structural_valid := false
+	if not pair.is_empty():
+		structural_valid = _view_model.compatible_port_pair(
+			_entity_by_id(str(pair.get("source_id", ""))),
+			pair.get("source_port", {}) as Dictionary,
+			_entity_by_id(str(pair.get("target_id", ""))),
+			pair.get("target_port", {}) as Dictionary
+		)
+	_port_drag["moved"] = bool(_port_drag.get("moved", false)) or Vector2(_port_drag.get("start_pointer", point)).distance_to(point) > POINTER_DRAG_THRESHOLD_PIXELS
 	_port_drag["pointer"] = point
-	_port_drag["target_id"] = target_id
-	_port_drag["target_port"] = target_port
-	_port_drag["target_key"] = "%s:%s" % [target_id, str(target_port.get("id", ""))] if valid else ""
-	_port_drag["valid"] = valid
-	port_drag_preview.emit(str(_port_drag.get("source_id", "")), source_port.duplicate(false), target_id, target_port.duplicate(false), valid)
+	_port_drag["hover_id"] = hover_id
+	var hover_key := "%s:%s" % [hover_id, str(hover_port.get("id", ""))] if not hover_id.is_empty() else ""
+	_port_drag["hover_key"] = hover_key
+	if pair.is_empty():
+		_reset_port_drag_endpoint()
+	else:
+		_port_drag["source_id"] = str(pair.get("source_id", ""))
+		_port_drag["source_port"] = (pair.get("source_port", {}) as Dictionary).duplicate(false)
+		_port_drag["target_id"] = str(pair.get("target_id", ""))
+		_port_drag["target_port"] = (pair.get("target_port", {}) as Dictionary).duplicate(false)
+	if hover_key != previous_hover_key:
+		_port_drag["valid"] = structural_valid
+		_port_drag["reason_code"] = "" if structural_valid else "CARGO_INCOMPATIBLE" if not hover_id.is_empty() else ""
+		port_drag_preview.emit(
+			str(_port_drag.get("source_id", "")),
+			(_port_drag.get("source_port", {}) as Dictionary).duplicate(false),
+			str(_port_drag.get("target_id", "")),
+			(_port_drag.get("target_port", {}) as Dictionary).duplicate(false),
+			structural_valid
+		)
 	queue_redraw()
 
 
-func _finish_port_drag(point: Vector2) -> void:
+func _finish_port_drag(point: Vector2, force_click_commit: bool = false) -> void:
+	if _port_drag.is_empty():
+		return
+	var stationary := Vector2(_port_drag.get("start_pointer", point)).distance_to(point) <= POINTER_DRAG_THRESHOLD_PIXELS and not bool(_port_drag.get("moved", false))
+	if not force_click_commit and not bool(_port_drag.get("click_mode", false)) and stationary:
+		_port_drag["click_mode"] = true
+		_port_drag["pointer"] = point
+		_port_drag["hover_id"] = ""
+		_port_drag["hover_key"] = ""
+		_reset_port_drag_endpoint()
+		queue_redraw()
+		return
 	_update_port_drag(point)
 	var source_id := str(_port_drag.get("source_id", ""))
 	var source_port: Dictionary = _port_drag.get("source_port", {}) as Dictionary
@@ -1063,7 +1276,7 @@ func _finish_port_drag(point: Vector2) -> void:
 		port_connection_requested.emit(source_id, source_port.duplicate(false), target_id, target_port.duplicate(false))
 
 
-func _port_at(point: Vector2, preferred_direction: String = "") -> Dictionary:
+func _port_at(point: Vector2, preferred_direction: String = "", require_direction: bool = false, maximum_distance: float = PORT_SNAP_HIT_RADIUS_PIXELS) -> Dictionary:
 	var best: Dictionary = {}
 	var best_direction_rank := 2
 	var best_distance_squared := INF
@@ -1074,9 +1287,13 @@ func _port_at(point: Vector2, preferred_direction: String = "") -> Dictionary:
 		if not rect.has_point(point):
 			continue
 		var port: Dictionary = row.get("port", {}) as Dictionary
+		if require_direction and str(port.get("direction", "")).to_upper() != preferred_direction.to_upper():
+			continue
 		var direction_rank := 0 if preferred_direction.is_empty() or str(port.get("direction", "")) == preferred_direction else 1
 		var center: Vector2 = row.get("center", rect.get_center())
 		var distance_squared := center.distance_squared_to(point)
+		if distance_squared > maximum_distance * maximum_distance:
+			continue
 		var key := str(key_value)
 		if best.is_empty() \
 				or direction_rank < best_direction_rank \
@@ -1087,6 +1304,69 @@ func _port_at(point: Vector2, preferred_direction: String = "") -> Dictionary:
 			best_distance_squared = distance_squared
 			best_key = key
 	return best
+
+
+func _point_in_entity_safe_body(point: Vector2) -> bool:
+	for row_value in _node_rects.values():
+		var row := row_value as Dictionary
+		if not bool(row.get("is_entity", false)):
+			continue
+		var rect: Rect2 = row.get("rect", Rect2())
+		var inset := minf(8.0, minf(rect.size.x, rect.size.y) * 0.30)
+		if inset > 0.0 and rect.grow(-inset).has_point(point):
+			return true
+	return false
+
+
+func _normalized_port_pair(first_id: String, first_port: Dictionary, second_id: String, second_port: Dictionary) -> Dictionary:
+	var first_direction := str(first_port.get("direction", "")).to_upper()
+	var second_direction := str(second_port.get("direction", "")).to_upper()
+	if first_direction == "OUTPUT" and second_direction == "INPUT":
+		return {"source_id":first_id, "source_port":first_port, "target_id":second_id, "target_port":second_port}
+	if first_direction == "INPUT" and second_direction == "OUTPUT":
+		return {"source_id":second_id, "source_port":second_port, "target_id":first_id, "target_port":first_port}
+	return {}
+
+
+func _reset_port_drag_endpoint() -> void:
+	var origin_id := str(_port_drag.get("origin_id", ""))
+	var origin_port: Dictionary = _port_drag.get("origin_port", {}) as Dictionary
+	if str(origin_port.get("direction", "")).to_upper() == "OUTPUT":
+		_port_drag["source_id"] = origin_id
+		_port_drag["source_port"] = origin_port.duplicate(false)
+		_port_drag["target_id"] = ""
+		_port_drag["target_port"] = {}
+	else:
+		_port_drag["source_id"] = ""
+		_port_drag["source_port"] = {}
+		_port_drag["target_id"] = origin_id
+		_port_drag["target_port"] = origin_port.duplicate(false)
+	_port_drag["valid"] = false
+	_port_drag["reason_code"] = ""
+
+
+func _set_structural_port_candidates() -> Array:
+	var origin_id := str(_port_drag.get("origin_id", ""))
+	var origin_port: Dictionary = _port_drag.get("origin_port", {}) as Dictionary
+	var opposite_direction := "INPUT" if str(origin_port.get("direction", "")).to_upper() == "OUTPUT" else "OUTPUT"
+	var candidate_keys: Array[String] = []
+	var candidate_rows: Array = []
+	for key_value in _port_hit_rects.keys():
+		var row: Dictionary = _port_hit_rects.get(key_value, {}) as Dictionary
+		var candidate_id := str(row.get("entity_id", ""))
+		var candidate_port: Dictionary = row.get("port", {}) as Dictionary
+		if candidate_id == origin_id or str(candidate_port.get("direction", "")).to_upper() != opposite_direction:
+			continue
+		var pair := _normalized_port_pair(origin_id, origin_port, candidate_id, candidate_port)
+		if not pair.is_empty() and _view_model.compatible_port_pair(
+				_entity_by_id(str(pair.get("source_id", ""))),
+				pair.get("source_port", {}) as Dictionary,
+				_entity_by_id(str(pair.get("target_id", ""))),
+				pair.get("target_port", {}) as Dictionary):
+			candidate_keys.append(str(key_value))
+			candidate_rows.append({"entity_id":candidate_id, "port":candidate_port.duplicate(false)})
+	set_port_drag_candidates(candidate_keys)
+	return candidate_rows
 
 
 func _is_placement_cancel_event(event: InputEvent) -> bool:
@@ -1173,15 +1453,11 @@ func _ensure_hit_geometry() -> void:
 
 func _select_at(point: Vector2) -> void:
 	_ensure_hit_geometry()
-	for link_id_value in _link_hit_rects.keys():
-		var link_id := str(link_id_value)
-		var hit: Rect2 = _link_hit_rects.get(link_id, Rect2())
-		if hit.has_point(point) and _distance_to_link(point, link_id) <= 8.0:
-			_selected_link_id = link_id
-			_selected_node_id = ""
-			link_selected.emit(_link_by_id(link_id))
-			queue_redraw()
-			return
+	# The visible build preview is the topmost action surface. It must win over
+	# fields, entities and routes beneath it.
+	if _placement_preview_contains(point):
+		_select_tile(point)
+		return
 	# Construction orders are drawn above resource fields.  Their inspector must
 	# remain reachable when an in-progress build occupies an extraction field.
 	for order_id_value in _construction_order_rects.keys():
@@ -1196,25 +1472,71 @@ func _select_at(point: Vector2) -> void:
 			return
 	var node_ids: Array = _node_rects.keys()
 	node_ids.reverse()
-	for node_id_value in node_ids:
-		var node_id := str(node_id_value)
-		var row: Dictionary = _node_rects.get(node_id, {})
-		var rect: Rect2 = row.get("rect", Rect2())
-		if rect.has_point(point):
-			# A valid placement preview on a resource field (notably an
-			# extractor) is an intentional build gesture, not field selection.
-			if not bool(row.get("is_entity", false)) and _placement_preview_contains(point):
-				_select_tile(point)
-				return
+	# Entities are drawn above resource fields, and both are drawn above links.
+	for entity_pass in [true, false]:
+		for node_id_value in node_ids:
+			var node_id := str(node_id_value)
+			var row: Dictionary = _node_rects.get(node_id, {})
+			if bool(row.get("is_entity", false)) != entity_pass:
+				continue
+			var rect: Rect2 = row.get("rect", Rect2())
+			if not rect.has_point(point):
+				continue
 			_selected_node_id = node_id
 			_selected_link_id = ""
-			if bool(row.get("is_entity", false)):
+			if entity_pass:
 				entity_selected.emit((row.get("data", {}) as Dictionary).duplicate(true))
 			else:
 				resource_field_selected.emit((row.get("data", {}) as Dictionary).duplicate(true))
 			queue_redraw()
 			return
+	var link_id := _nearest_link_at(point)
+	if not link_id.is_empty():
+		_selected_link_id = link_id
+		_selected_node_id = ""
+		link_selected.emit(_link_by_id(link_id))
+		queue_redraw()
+		return
 	_select_tile(point)
+
+
+func _point_has_interactive_hit(point: Vector2) -> bool:
+	_ensure_hit_geometry()
+	if _placement_preview_hit(point):
+		return true
+	if _port_connections_enabled and not _point_in_entity_safe_body(point) and not _port_at(point, "", false, PORT_START_HIT_RADIUS_PIXELS).is_empty():
+		return true
+	for order_value in _construction_order_rects.values():
+		var order_row := order_value as Dictionary
+		var order_rect: Rect2 = order_row.get("rect", Rect2())
+		if order_rect.has_point(point):
+			return true
+	for node_value in _node_rects.values():
+		var node_row := node_value as Dictionary
+		var node_rect: Rect2 = node_row.get("rect", Rect2())
+		if node_rect.has_point(point):
+			return true
+	return not _nearest_link_at(point).is_empty()
+
+
+func _nearest_link_at(point: Vector2) -> String:
+	var best_id := ""
+	var best_distance := INF
+	for link_id_value in _link_hit_rects.keys():
+		var link_id := str(link_id_value)
+		var hit: Rect2 = _link_hit_rects.get(link_id, Rect2())
+		if not hit.has_point(point):
+			continue
+		var distance := _distance_to_link(point, link_id)
+		if distance <= 8.0 and (best_id.is_empty() or distance < best_distance - 0.001 or (is_equal_approx(distance, best_distance) and link_id < best_id)):
+			best_id = link_id
+			best_distance = distance
+	return best_id
+
+
+func _placement_preview_hit(point: Vector2) -> bool:
+	var footprint_value: Variant = _placement_preview.get("footprint", {})
+	return footprint_value is Dictionary and _footprint_rect(footprint_value, 2.0).has_point(point)
 
 
 func _placement_preview_contains(point: Vector2) -> bool:
@@ -1266,7 +1588,7 @@ func _node_style(tone: Color, selected: bool) -> StyleBoxFlat:
 func _status_color(status: String) -> Color:
 	match status:
 		"RUNNING", "FLOWING", "CONNECTED", "READY": return Color("6fbf92")
-		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY": return Color("e0ae5c")
+		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY", "NO_RECIPE": return Color("e0ae5c")
 		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return Color("d86e63")
 	return Color("7f9289")
 
@@ -1332,6 +1654,7 @@ func _rebuild_snapshot_indexes() -> void:
 	_links_by_id.clear()
 	_resources_by_id.clear()
 	_orders_by_id.clear()
+	_recipe_names_by_id.clear()
 	_visible_records.clear()
 	_has_active_flow_cache = false
 	_visible_active_flow = false
@@ -1352,6 +1675,11 @@ func _rebuild_snapshot_indexes() -> void:
 		if order_value is Dictionary:
 			var order := order_value as Dictionary
 			_orders_by_id[str(order.get("id", ""))] = order
+	var palette: Dictionary = _snapshot.get("palette", {}) if _snapshot.get("palette", {}) is Dictionary else {}
+	for recipe_value in palette.get("recipes", []):
+		if recipe_value is Dictionary:
+			var recipe := recipe_value as Dictionary
+			_recipe_names_by_id[str(recipe.get("id", ""))] = str(recipe.get("name", recipe.get("id", "")))
 
 
 func _status_name(status_id: String) -> String:

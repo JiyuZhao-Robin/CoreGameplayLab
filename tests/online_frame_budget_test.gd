@@ -11,12 +11,17 @@ func _ready() -> void:
 	Game.simulation.ensure_frontier_state(Game.state)
 	Game._simulation_accumulator_ms = 0.0
 	Game._autosave_accumulator_ms = 0.0
+	var state_change_count := [0]
+	var count_state_change := func() -> void: state_change_count[0] += 1
+	Game.state_changed.connect(count_state_change)
 	Game._process(1000.0)
 	var first_elapsed := float(Game.state.total_elapsed_ms)
 	var first_debt := float(Game._simulation_accumulator_ms)
 	Game._process(0.0)
 	_check(is_equal_approx(first_elapsed, 15000.0) and is_equal_approx(float(Game.state.total_elapsed_ms), 30000.0), "online simulation processes at most one bounded deterministic window per rendered frame")
 	_check(first_debt > 900000.0 and float(Game._simulation_accumulator_ms) < first_debt, "online simulation retains excess elapsed time as debt and consumes it on later frames without loss")
+	_check(int(state_change_count[0]) == 2, "each simulated online window notifies throttled UI subscribers even when no discrete domain event completes")
+	Game.state_changed.disconnect(count_state_change)
 	_finish()
 
 

@@ -98,7 +98,11 @@ func _process(delta: float) -> void:
 		_simulation_accumulator_ms = maxf(0.0, _simulation_accumulator_ms - frame_request + float(report.get("unprocessed_ms", 0.0)))
 		var events: Array = report.get("events", [])
 		_publish_events(events)
-		if not events.is_empty():
+		# Simulation progress changes authoritative runtime state even between
+		# discrete domain events. Notify the throttled UI refresh loop after every
+		# window that actually advanced so progress meters stay live without a
+		# manual refresh; Main still coalesces rebuilds to its configured interval.
+		if float(report.get("simulated_ms", 0.0)) > 0.0:
 			state_changed.emit()
 	if persistence_enabled and _autosave_accumulator_ms >= AUTOSAVE_INTERVAL_MS:
 		save_game()
@@ -433,7 +437,13 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 			# Receipts written before canonical request records were introduced
 			# used a payload-only fingerprint. Continue to replay those saves while
 			# all newly written receipts use the stricter revision-aware identity.
-			request_matches = str(previous_receipt.get("request_fingerprint", "")) == _legacy_factory_command_request_fingerprint(protocol_version, command_kind, world_id, payload)
+			var legacy_payload := payload.duplicate(true)
+			# AUTO funding was added after legacy receipts existed. The old
+			# canonical QUEUE payload had no policy field, so omit today's MANUAL
+			# default while comparing that historical fingerprint.
+			if command_kind == "QUEUE_CONSTRUCTION" and str(legacy_payload.get("funding_policy", "")) == "MANUAL":
+				legacy_payload.erase("funding_policy")
+			request_matches = str(previous_receipt.get("request_fingerprint", "")) == _legacy_factory_command_request_fingerprint(protocol_version, command_kind, world_id, legacy_payload)
 		if str(previous_receipt.get("command_kind", "")) != command_kind or not request_matches:
 			return _factory_command_rejection(command_id, command_kind, world_id, "COMMAND_ID_CONFLICT", I18n.t("factory.reason.command_id_conflict", "This Factory command ID was already used for another action."))
 		var replay_message_key := str(previous_receipt.get("message_key", FACTORY_COMMAND_SUCCESS_KEYS.get(command_kind, "")))
@@ -459,6 +469,7 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 			var origin_data: Dictionary = payload.get("origin", {})
 			var definition_id := str(payload.get("definition_id", ""))
 			var recipe_id := str(payload.get("recipe_id", ""))
+			var funding_policy := str(payload.get("funding_policy", "MANUAL"))
 			if not content.factory_buildings.has(definition_id) or not _factory_definition_available(content.factory_buildings[definition_id], transaction.working_state):
 				operation_result = {"ok":false, "reason_code":"BUILDING_LOCKED", "reason":I18n.t("factory.reason.building_locked", "This Factory building is still locked.")}
 			elif not recipe_id.is_empty() and (not content.factory_recipes.has(recipe_id) or not _factory_definition_available(content.factory_recipes[recipe_id], transaction.working_state)):
@@ -471,12 +482,19 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 					recipe_id,
 					int(payload.get("priority", 50))
 				)
+				if bool(operation_result.get("ok", false)) and funding_policy == "AUTO_SAME_LOCATION":
+					operation_result["funding"] = _auto_fund_factory_construction(
+						transaction.working_state,
+						world,
+						str(operation_result.get("order_id", ""))
+					)
 			event.merge({
 				"type":"FactoryConstructionQueued",
 				"order_id":str(operation_result.get("order_id", "")),
 				"entity_id":str(operation_result.get("entity_id", "")),
 				"definition_id":definition_id,
-				"origin":{"x":int(origin_data.get("x", 0)), "y":int(origin_data.get("y", 0))}
+				"origin":{"x":int(origin_data.get("x", 0)), "y":int(origin_data.get("y", 0))},
+				"funding":operation_result.get("funding", {}).duplicate(true)
 			})
 		"FUND_CONSTRUCTION":
 			var order_id := str(payload.get("order_id", ""))
@@ -740,6 +758,67 @@ func _factory_command_success_message(command_kind: String) -> String:
 	return I18n.t("factory.feedback.accepted")
 
 
+## A placement action may stage its materials immediately, matching the direct
+## build flow used by automation games while preserving physical custody. Same-
+## world storages are consumed in stable identifier order before the Location
+## inventory; economic consumption is still recorded only when construction
+## completes in FactoryGridSimulation.
+func _auto_fund_factory_construction(candidate_state: SpaceGameState, world: Dictionary, order_id: String) -> Dictionary:
+	var moved_from_storage := {}
+	var entities: Dictionary = world.get("entities", {})
+	var storage_ids: Array = entities.keys()
+	storage_ids.sort_custom(func(left, right): return str(left) < str(right))
+	for storage_id_value in storage_ids:
+		var order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+		if str(order.get("status", "")) == "READY":
+			break
+		var storage_id := str(storage_id_value)
+		var storage: Dictionary = entities.get(storage_id_value, {})
+		if str(storage.get("kind", "")) != "STORAGE" or str(storage.get("status", "")) == "UNDER_CONSTRUCTION":
+			continue
+		var storage_funding: Dictionary = simulation.factory_grid.fund_construction_from_storage(world, order_id, storage_id)
+		if bool(storage_funding.get("ok", false)):
+			moved_from_storage[storage_id] = storage_funding.get("moved", {}).duplicate(true)
+
+	var moved_from_location := {}
+	var location_id := str(world.get("location_id", ""))
+	var staged_order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+	if str(staged_order.get("status", "")) != "READY" and candidate_state.has_location(location_id):
+		var available_items := {}
+		var location_inventory: Dictionary = candidate_state.location_inventory(location_id)
+		var item_ids: Array = location_inventory.keys()
+		item_ids.sort_custom(func(left, right): return str(left) < str(right))
+		for item_id_value in item_ids:
+			var item_id := str(item_id_value)
+			var available := candidate_state.available_item_quantity(item_id, location_id)
+			if available > 0:
+				available_items[item_id] = available
+		var location_funding: Dictionary = simulation.factory_grid.fund_construction_from_external(world, order_id, available_items)
+		if bool(location_funding.get("ok", false)):
+			moved_from_location = location_funding.get("moved", {}).duplicate(true)
+			for item_id_value in moved_from_location.keys():
+				var item_id := str(item_id_value)
+				location_inventory[item_id] = int(location_inventory.get(item_id, 0)) - int(moved_from_location.get(item_id_value, 0))
+
+	var final_order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+	var remaining := {}
+	var required_item_ids: Array = final_order.get("required_items", {}).keys()
+	required_item_ids.sort_custom(func(left, right): return str(left) < str(right))
+	for item_id_value in required_item_ids:
+		var item_id := str(item_id_value)
+		var quantity := maxi(0, int(final_order.get("required_items", {}).get(item_id_value, 0)) - int(final_order.get("delivered_items", {}).get(item_id, 0)))
+		if quantity > 0:
+			remaining[item_id] = quantity
+	return {
+		"policy":"AUTO_SAME_LOCATION",
+		"moved_from_storage":moved_from_storage,
+		"moved_from_location":moved_from_location,
+		"remaining":remaining,
+		"fully_funded":not final_order.is_empty() and str(final_order.get("status", "")) == "READY",
+		"status_after":str(final_order.get("status", ""))
+	}
+
+
 func _normalize_factory_command_payload(command_kind: String, raw_payload: Dictionary) -> Dictionary:
 	var text_types := [TYPE_STRING, TYPE_STRING_NAME]
 	var number_types := [TYPE_INT, TYPE_FLOAT]
@@ -751,13 +830,18 @@ func _normalize_factory_command_payload(command_kind: String, raw_payload: Dicti
 			var origin := origin_value as Dictionary
 			if typeof(raw_payload.get("definition_id", "")) not in text_types \
 					or typeof(raw_payload.get("recipe_id", "")) not in text_types \
+					or typeof(raw_payload.get("funding_policy", "MANUAL")) not in text_types \
 					or typeof(origin.get("x", 0)) not in number_types \
 					or typeof(origin.get("y", 0)) not in number_types \
 					or typeof(raw_payload.get("priority", 50)) not in number_types:
 				return {"ok":false}
+			var funding_policy := str(raw_payload.get("funding_policy", "MANUAL")).to_upper()
+			if funding_policy not in ["MANUAL", "AUTO_SAME_LOCATION"]:
+				return {"ok":false}
 			return {"ok":true, "payload":{
 				"definition_id":str(raw_payload.get("definition_id", "")),
 				"recipe_id":str(raw_payload.get("recipe_id", "")),
+				"funding_policy":funding_policy,
 				"origin":{"x":int(origin.get("x", 0)), "y":int(origin.get("y", 0))},
 				"priority":clampi(int(raw_payload.get("priority", 50)), 0, 100)
 			}}

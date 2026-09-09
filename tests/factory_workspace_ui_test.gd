@@ -32,12 +32,17 @@ func _run() -> void:
 
 	_test_chunk_spatial_index()
 	_test_initial_render(workspace)
+	await _test_bottom_build_palette(workspace, intents)
 	_test_finite_canvas_bounds(workspace)
 	await _test_canvas_scale_contract(workspace)
+	await _test_left_mouse_pan(workspace, intents)
 	_test_factory_information_controls(workspace)
 	_test_hover_deduplication(workspace)
 	_test_construction_intent(workspace, intents)
 	_test_recipe_change_intent(workspace, intents)
+	_test_machine_configuration_clipboard(workspace, intents)
+	_test_machine_configuration_target_isolation(workspace, intents)
+	_test_canvas_configuration_gestures(workspace, intents)
 	await _test_runtime_refresh_preserves_inspector_focus(workspace)
 	_test_build_placement_cancel(workspace, intents)
 	_test_connection_cancel(workspace, intents)
@@ -60,10 +65,12 @@ func _run() -> void:
 
 func _test_initial_render(workspace) -> void:
 	var building_palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	var recipe_palette: Node = workspace.find_child("RecipePalette", true, false)
 	var source_selector := workspace.find_child("ConnectionSource", true, false) as OptionButton
 	var target_selector := workspace.find_child("ConnectionTarget", true, false) as OptionButton
 	var canvas = workspace.canvas()
 	_check(building_palette != null and building_palette.item_count == 4, "Factory workspace renders the versioned construction palette")
+	_check(recipe_palette == null, "construction palette does not expose a global recipe selector")
 	_check(source_selector != null and target_selector != null and source_selector.item_count == 4 and target_selector.item_count == 3, "Factory workspace renders deterministic port-filtered connection selectors")
 	var exposes_resource_field := false
 	for index in source_selector.item_count:
@@ -75,6 +82,94 @@ func _test_initial_render(workspace) -> void:
 	var connection_status := workspace.find_child("ConnectionStatus", true, false) as Label
 	_check(scale_label != null and scale_label.text.contains("256 × 160") and scale_label.text.contains("4 × 3") and building_card != null and connection_status != null and not connection_status.text.is_empty(), "Factory workspace exposes planet scale, construction card, and guided connection status")
 	_check(canvas != null and canvas.selected_node_id().is_empty() and canvas.selected_link_id().is_empty(), "Factory canvas starts with an empty presentation-only selection")
+	var bottom_palette := workspace.find_child("FactoryBuildPalette", true, false) as Control
+	var center_column := workspace.find_child("FactoryCenterColumn", true, false) as VBoxContainer
+	_check(bottom_palette != null and center_column != null and bottom_palette.get_parent() == center_column and canvas.get_parent() == center_column, "Factory canvas and building browser share the fixed center column")
+	_check(bottom_palette != null and bottom_palette.position.y >= canvas.position.y + canvas.size.y - 0.5, "construction browser is docked below the canvas instead of consuming a left rail")
+	_check(bottom_palette != null and center_column != null and bottom_palette.position.y + bottom_palette.size.y <= center_column.size.y + 0.5, "fixed construction dock remains fully visible inside the Factory center column")
+
+
+func _test_bottom_build_palette(workspace, intents: Array) -> void:
+	var palette = workspace.find_child("FactoryBuildPalette", true, false)
+	_check(palette != null and palette.visible_building_ids() == ["grid_arc_smelter", "grid_solar_array", "grid_surface_mine"], "ALL filter exposes every unlocked buildable definition in deterministic snapshot order")
+	var before_filter_intents := intents.size()
+	var power_filter := workspace.find_child("FactoryBuildFilterPower", true, false) as Button
+	if power_filter != null:
+		power_filter.pressed.emit()
+	_check(palette.active_filter_id() == "POWER" and palette.visible_building_ids() == ["grid_solar_array"] and intents.size() == before_filter_intents, "role filters change only the visible card projection and never issue gameplay commands")
+	var all_filter := workspace.find_child("FactoryBuildFilterAll", true, false) as Button
+	if all_filter != null:
+		all_filter.pressed.emit()
+	var mine_card := workspace.find_child("FactoryBuildCardGridSurfaceMine", true, false) as Button
+	var mine_icon := mine_card.icon as AtlasTexture if mine_card != null else null
+	_check(mine_icon != null and mine_icon.region.position == Vector2.ZERO and mine_icon.region.size == Vector2(362, 362), "bottom-dock cards slice the generated transparent 4 × 3 building atlas deterministically")
+	if mine_card != null:
+		mine_card.pressed.emit()
+	_check(
+		mine_card != null
+		and mine_card.get_theme_stylebox("normal") == palette.get("_card_selected_style")
+		and str(workspace.get("_selected_building_id")) == "grid_surface_mine"
+		and str(workspace.get("_active_tool")) == "BUILD"
+		and intents.size() == before_filter_intents,
+		"clicking a bottom-dock building card keeps a selected visual state and enters continuous placement without bypassing the canvas command boundary"
+	)
+	workspace._on_placement_cancelled()
+	var runtime_snapshot := _fixture_snapshot()
+	runtime_snapshot["runtime_revision"] = int(runtime_snapshot.get("runtime_revision", 0)) + 1
+	workspace.apply_snapshot(runtime_snapshot)
+	_check(workspace.find_child("FactoryBuildCardGridSurfaceMine", true, false) == mine_card, "runtime-only snapshot refresh preserves building card instances and avoids palette reconstruction")
+	var quick_filter := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	if power_filter != null:
+		power_filter.pressed.emit()
+	_select_metadata(quick_filter, "grid_arc_smelter")
+	_check(palette.active_filter_id() == "ALL" and palette.visible_building_ids() == ["grid_arc_smelter"] and str(workspace.get("_selected_building_id")) == "grid_arc_smelter", "quick picker resets a prior role filter and isolates the selected building")
+	workspace._on_placement_cancelled()
+	var reduced_buildings: Array = ((workspace.get("_snapshot") as Dictionary).get("palette", {}) as Dictionary).get("buildings", []).duplicate(true)
+	for index in range(reduced_buildings.size() - 1, -1, -1):
+		if str((reduced_buildings[index] as Dictionary).get("id", "")) == "grid_arc_smelter":
+			reduced_buildings.remove_at(index)
+	palette.set_buildings(reduced_buildings, true, "")
+	_check(palette.visible_building_ids() == ["grid_solar_array", "grid_surface_mine"] and quick_filter.selected == 0, "an unavailable single-building filter falls back to the remaining unlocked ALL projection")
+	palette.set_buildings([
+		{"id":"grid_cargo_splitter", "name":"Splitter", "kind":"ROUTER", "footprint":{"width":4, "height":4}},
+		{"id":"grid_bulk_depot", "name":"Depot", "kind":"STORAGE", "footprint":{"width":20, "height":20}},
+		{"id":"grid_research_complex", "name":"Research", "kind":"STORAGE", "footprint":{"width":18, "height":16}},
+		{"id":"grid_construction_yard", "name":"Construction", "kind":"CONSTRUCTION", "footprint":{"width":24, "height":20}}
+	], true, "")
+	var logistics_filter := workspace.find_child("FactoryBuildFilterLogistics", true, false) as Button
+	if logistics_filter != null:
+		logistics_filter.pressed.emit()
+	_check(palette.visible_building_ids() == ["grid_cargo_splitter", "grid_bulk_depot"], "logistics filter includes routers and canonical storage facilities")
+	var support_filter := workspace.find_child("FactoryBuildFilterSupport", true, false) as Button
+	if support_filter != null:
+		support_filter.pressed.emit()
+	_check(palette.visible_building_ids() == ["grid_research_complex", "grid_construction_yard"], "support filter keeps research/service STORAGE definitions out of logistics")
+	if all_filter != null:
+		all_filter.pressed.emit()
+	palette.set_buildings([
+		{"id":"grid_electronics_works", "name":"High-Energy Electronics Works", "kind":"MACHINE", "footprint":{"width":18, "height":14}},
+		{"id":"grid_research_complex_ii", "name":"Research Complex Expansion II", "kind":"STORAGE", "footprint":{"width":22, "height":18}}
+	], true, "")
+	await _settle()
+	var long_card := workspace.find_child("FactoryBuildCardGridElectronicsWorks", true, false) as Button
+	var second_long_card := workspace.find_child("FactoryBuildCardGridResearchComplexIi", true, false) as Button
+	var filter_scroll := workspace.find_child("BuildPaletteFiltersScroll", true, false) as ScrollContainer
+	var center_column := workspace.find_child("FactoryCenterColumn", true, false) as Control
+	var inspector_scroll := workspace.find_child("InspectorScroll", true, false) as Control
+	var workspace_rect: Rect2 = workspace.get_global_rect()
+	_check(
+		long_card != null and second_long_card != null
+		and long_card.clip_text and long_card.text_overrun_behavior == TextServer.OVERRUN_TRIM_ELLIPSIS
+		and is_equal_approx(long_card.get_parent().size.x, second_long_card.get_parent().size.x)
+		and center_column != null and inspector_scroll != null
+		and palette.get_global_rect().end.x <= inspector_scroll.get_global_rect().position.x + 0.5
+		and inspector_scroll.get_global_rect().end.x <= workspace_rect.end.x + 0.5
+		and filter_scroll != null and filter_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO,
+		"long localized building and category names remain in equal fixed-width cards without widening the Factory page"
+	)
+	workspace.apply_snapshot(_fixture_snapshot())
+	if all_filter != null:
+		all_filter.pressed.emit()
 
 
 func _test_chunk_spatial_index() -> void:
@@ -177,6 +272,34 @@ func _test_factory_information_controls(workspace) -> void:
 		build_extractor.pressed.emit()
 	_check(str(workspace.get("_active_tool")) == "BUILD" and str(workspace.get("_selected_building_id")) == "grid_surface_mine", "resource inspector starts an extractor placement preview without mutating factory state")
 	workspace._on_placement_cancelled()
+
+
+func _test_left_mouse_pan(workspace, intents: Array) -> void:
+	var canvas = workspace.canvas()
+	canvas.apply_snapshot(_fixture_snapshot())
+	canvas.reset_camera()
+	for _step in range(24):
+		canvas._adjust_zoom(1.14)
+	canvas.focus_tile(Vector2i(128, 80))
+	await _force_canvas_draw(canvas)
+	var start: Vector2 = canvas.size * 0.5 + Vector2.ONE * canvas._tile_scale() * 0.5
+	_check(not canvas._point_has_interactive_hit(start), "left-pan fixture starts on empty canvas space")
+	var before_camera: Vector2 = canvas.get("_camera")
+	var before_intents := intents.size()
+	var selected_tiles: Array[Vector2i] = []
+	canvas.tile_selected.connect(func(tile: Vector2i) -> void: selected_tiles.append(tile))
+	canvas._on_gui_input(_left_button(start, true))
+	canvas._on_gui_input(_mouse_motion(start + Vector2(42, 26)))
+	canvas._on_gui_input(_left_button(start + Vector2(42, 26), false))
+	var after_camera: Vector2 = canvas.get("_camera")
+	_check(after_camera.distance_to(before_camera) > 20.0 and selected_tiles.is_empty() and intents.size() == before_intents, "holding left mouse on empty space pans the finite canvas without selecting or issuing a command")
+	var click_point: Vector2 = canvas.size * 0.5 + Vector2(70, 40)
+	_check(not canvas._point_has_interactive_hit(click_point), "stationary-click fixture remains on empty canvas space after panning")
+	canvas._on_gui_input(_left_button(click_point, true))
+	canvas._on_gui_input(_mouse_motion(click_point + Vector2(3, 2)))
+	canvas._on_gui_input(_left_button(click_point + Vector2(3, 2), false))
+	_check(selected_tiles.size() == 1 and (canvas.get("_left_pointer") as Dictionary).is_empty(), "movement below the 8px screen threshold remains a normal tile click")
+	canvas.reset_camera()
 
 
 func _test_hover_deduplication(workspace) -> void:
@@ -348,8 +471,10 @@ func _test_construction_intent(workspace, intents: Array) -> void:
 		and int(intent.get("base_topology_revision", -1)) == 17
 		and int(intent.get("base_runtime_revision", -1)) == 9
 		and str(payload.get("definition_id", "")) == "grid_solar_array"
+		and str(payload.get("recipe_id", "not-empty")) == ""
+		and str(payload.get("funding_policy", "")) == "AUTO_SAME_LOCATION"
 		and int((payload.get("origin", {}) as Dictionary).get("x", -1)) == 100,
-		"construction intent preserves protocol, immutable revision, and selected footprint origin"
+		"construction intent preserves protocol, immutable revision, empty recipe, automatic same-location funding, and selected footprint origin"
 	)
 
 
@@ -357,14 +482,131 @@ func _test_recipe_change_intent(workspace, intents: Array) -> void:
 	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
 	var selector := workspace.find_child("EntityRecipeSelector", true, false) as OptionButton
 	var apply_button := workspace.find_child("ApplyEntityRecipe", true, false) as Button
-	_check(selector != null and apply_button != null, "machine inspector exposes recipe reconfiguration controls")
-	if selector == null or apply_button == null:
+	_check(selector != null and apply_button == null, "machine inspector applies a recipe directly from the entity selector")
+	if selector == null:
 		return
 	_select_metadata(selector, "grid_refine_copper")
-	apply_button.pressed.emit()
 	var intent: Dictionary = intents.back() as Dictionary
 	var payload: Dictionary = intent.get("payload", {})
 	_check(str(intent.get("kind", "")) == "SET_RECIPE" and str(payload.get("entity_id", "")) == "smelter-a" and str(payload.get("recipe_id", "")) == "grid_refine_copper", "machine inspector emits only a versioned SET_RECIPE intent")
+
+
+func _test_machine_configuration_clipboard(workspace, intents: Array) -> void:
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
+	var copy_button := workspace.find_child("CopyMachineConfiguration", true, false) as Button
+	var paste_button := workspace.find_child("PasteMachineConfiguration", true, false) as Button
+	_check(copy_button != null and paste_button != null, "machine Inspector exposes stable copy and paste configuration controls")
+	if copy_button == null or paste_button == null:
+		return
+	copy_button.pressed.emit()
+	var copied: Dictionary = workspace.get("_copied_machine_config")
+	_check(str(copied.get("recipe_id", "")) == "grid_refine_iron" and not copied.has("inventory") and not copied.has("progress") and not copied.has("links"), "copy stores only safe recipe metadata and never runtime cargo or topology")
+	var before_paste := intents.size()
+	paste_button = workspace.find_child("PasteMachineConfiguration", true, false) as Button
+	if paste_button != null:
+		paste_button.pressed.emit()
+	var pasted: Dictionary = intents.back() as Dictionary if intents.size() > before_paste else {}
+	_check(intents.size() == before_paste + 1 and str(pasted.get("kind", "")) == "SET_RECIPE" and str((pasted.get("payload", {}) as Dictionary).get("entity_id", "")) == "smelter-a" and str((pasted.get("payload", {}) as Dictionary).get("recipe_id", "")) == "grid_refine_iron", "compatible paste reuses the existing SET_RECIPE intent")
+	workspace._on_entity_selected(_snapshot_entity(workspace, "power-a"))
+	var before_incompatible := intents.size()
+	workspace._paste_machine_configuration()
+	_check(intents.size() == before_incompatible and str((workspace.get("_feedback_label") as Label).text).contains("MACHINE_CONFIG_REQUIRES_MACHINE"), "incompatible paste is rejected locally without emitting a command")
+
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
+	workspace.set("_copied_machine_config", {})
+	var text_input := LineEdit.new()
+	text_input.name = "MachineConfigShortcutTextInput"
+	workspace.add_child(text_input)
+	text_input.grab_focus()
+	var blocked_copy := InputEventKey.new()
+	blocked_copy.pressed = true
+	blocked_copy.ctrl_pressed = true
+	blocked_copy.keycode = KEY_C
+	workspace._unhandled_key_input(blocked_copy)
+	_check((workspace.get("_copied_machine_config") as Dictionary).is_empty(), "Ctrl/Cmd+C is not hijacked while a text input owns focus")
+	text_input.release_focus()
+	text_input.queue_free()
+	workspace._on_placement_cancelled()
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
+	workspace.grab_focus()
+	workspace._unhandled_key_input(blocked_copy)
+	_check(not (workspace.get("_copied_machine_config") as Dictionary).is_empty(), "Ctrl/Cmd+C copies the selected machine configuration when workspace owns focus")
+	var before_shortcut_paste := intents.size()
+	var shortcut_paste := InputEventKey.new()
+	shortcut_paste.pressed = true
+	shortcut_paste.meta_pressed = true
+	shortcut_paste.keycode = KEY_V
+	workspace._unhandled_key_input(shortcut_paste)
+	_check(intents.size() == before_shortcut_paste + 1 and str((intents.back() as Dictionary).get("kind", "")) == "SET_RECIPE", "Ctrl/Cmd+V pastes the copied recipe through the existing machine command")
+	var building_palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
+	_select_metadata(building_palette, "grid_solar_array")
+	var before_build_shortcut := intents.size()
+	workspace._unhandled_key_input(shortcut_paste)
+	_check(intents.size() == before_build_shortcut, "machine configuration shortcuts do not fire while BUILD placement is active")
+	workspace._on_placement_cancelled()
+	workspace.set("_copied_machine_config", {})
+	workspace._set_connection_mode("CARGO")
+	workspace._unhandled_key_input(blocked_copy)
+	_check((workspace.get("_copied_machine_config") as Dictionary).is_empty(), "machine configuration shortcuts do not fire while CONNECT routing is active")
+	workspace._on_placement_cancelled()
+
+
+func _test_canvas_configuration_gestures(workspace, intents: Array) -> void:
+	workspace._on_placement_cancelled()
+	var canvas = workspace.canvas()
+	var machine := _snapshot_entity(workspace, "smelter-a")
+	var point: Vector2 = canvas._footprint_rect(machine.get("footprint", {}), 4.0).get_center()
+	var shift_copy := _right_click(point)
+	shift_copy.shift_pressed = true
+	canvas._on_gui_input(shift_copy)
+	_check(str((workspace.get("_selection") as Dictionary).get("id", "")) == "smelter-a" and str((workspace.get("_feedback_label") as Label).text).contains("MACHINE_CONFIG_COPIED"), "Shift+right-click copies a visible machine recipe in neutral canvas mode")
+	var before_paste := intents.size()
+	var shift_paste := _left_click(point)
+	shift_paste.shift_pressed = true
+	canvas._on_gui_input(shift_paste)
+	_check(intents.size() == before_paste + 1 and str((intents.back() as Dictionary).get("kind", "")) == "SET_RECIPE", "Shift+left-click pastes a compatible machine configuration through SET_RECIPE")
+	workspace.set("_copied_machine_config", {})
+	canvas._on_gui_input(_middle_button(point, true))
+	canvas._on_gui_input(shift_copy)
+	canvas._on_gui_input(_middle_button(point, false))
+	_check((workspace.get("_copied_machine_config") as Dictionary).is_empty(), "middle-button panning keeps Shift machine-configuration gestures mutually exclusive")
+
+
+func _test_machine_configuration_target_isolation(workspace, intents: Array) -> void:
+	var multi_machine_snapshot := _fixture_snapshot()
+	var target := _entity("smelter-b", "MACHINE", "Second Arc Smelter", Vector2i(90, 50), {"inputs":["copper_ore"], "outputs":["copper_ingot"], "accepts_power":true, "provides_power":false}, {"iron_ingot":3}, "grid_arc_smelter", "grid_refine_copper")
+	target["inputs"] = {"copper_ore":7}
+	target["outputs"] = {"copper_ingot":2}
+	target["progress"] = 0.65
+	var incompatible := _entity("engineering-a", "MACHINE", "Engineering Works", Vector2i(120, 50), {"inputs":["copper_ore"], "outputs":["copper_ingot"], "accepts_power":true, "provides_power":false}, {}, "grid_engineering_works", "grid_refine_copper")
+	(multi_machine_snapshot.get("entities", []) as Array).append(target)
+	(multi_machine_snapshot.get("entities", []) as Array).append(incompatible)
+	(multi_machine_snapshot.get("palette", {}).get("buildings", []) as Array).append({"id":"grid_engineering_works", "name":"Engineering Works", "kind":"MACHINE", "footprint":{"width":12, "height":10}, "recipe_ids":["grid_refine_copper"]})
+	workspace.apply_snapshot(multi_machine_snapshot)
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
+	workspace._copy_selected_machine_configuration()
+	var copied: Dictionary = workspace.get("_copied_machine_config")
+	_check(copied.size() == 4 and copied.has("schema_version") and copied.has("world_id") and copied.has("recipe_id") and copied.has("recipe_name"), "machine clipboard is a strict configuration whitelist without source entity state")
+
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-b"))
+	var target_before := JSON.stringify(_snapshot_entity(workspace, "smelter-b"))
+	var before_target_paste := intents.size()
+	workspace._paste_machine_configuration()
+	var target_intent: Dictionary = intents.back() as Dictionary if intents.size() > before_target_paste else {}
+	_check(
+		intents.size() == before_target_paste + 1
+		and str((target_intent.get("payload", {}) as Dictionary).get("entity_id", "")) == "smelter-b"
+		and str((target_intent.get("payload", {}) as Dictionary).get("recipe_id", "")) == "grid_refine_iron"
+		and JSON.stringify(_snapshot_entity(workspace, "smelter-b")) == target_before,
+		"pasting to a second machine emits only its SET_RECIPE intent and cannot overwrite target buffers, inventory, progress, identity, or snapshot state"
+	)
+
+	workspace._on_entity_selected(_snapshot_entity(workspace, "engineering-a"))
+	var before_incompatible := intents.size()
+	workspace._paste_machine_configuration()
+	_check(intents.size() == before_incompatible and str((workspace.get("_feedback_label") as Label).text).contains("MACHINE_CONFIG_INCOMPATIBLE"), "pasting onto an incompatible MACHINE is rejected locally without a command")
+	workspace.apply_snapshot(_fixture_snapshot())
+	workspace._on_entity_selected(_snapshot_entity(workspace, "smelter-a"))
 
 
 func _test_runtime_refresh_preserves_inspector_focus(workspace) -> void:
@@ -402,7 +644,7 @@ func _test_runtime_refresh_preserves_inspector_focus(workspace) -> void:
 	_check(refreshed_selector != null and not is_instance_valid(stable_selector), "Inspector rebuilds after the focused interaction ends (selection=%s children=%s)" % [str(workspace.get("_selection")), str(inspector_child_names)])
 	_check(refreshed_selector != null and str(refreshed_selector.get_item_metadata(refreshed_selector.selected)) == "grid_refine_iron", "deferred Inspector rebuild uses the newest snapshot payload (selected=%s)" % str(refreshed_selector.get_item_metadata(refreshed_selector.selected) if refreshed_selector != null else "missing"))
 	_check(revision_label != null and revision_label.text.contains("11"), "deferred Inspector rebuild exposes the newest runtime revision")
-	var focused_button := workspace.find_child("ApplyEntityRecipe", true, false) as Button
+	var focused_button := workspace.find_child("CopyMachineConfiguration", true, false) as Button
 	if focused_button != null:
 		focused_button.grab_focus()
 	var button_runtime_update := _fixture_snapshot()
@@ -675,9 +917,13 @@ func _mouse_motion(point: Vector2) -> InputEventMouseMotion:
 
 
 func _left_click(point: Vector2) -> InputEventMouseButton:
+	return _left_button(point, true)
+
+
+func _left_button(point: Vector2, pressed: bool) -> InputEventMouseButton:
 	var event := InputEventMouseButton.new()
 	event.button_index = MOUSE_BUTTON_LEFT
-	event.pressed = true
+	event.pressed = pressed
 	event.position = point
 	return event
 
@@ -686,6 +932,14 @@ func _right_click(point: Vector2) -> InputEventMouseButton:
 	var event := InputEventMouseButton.new()
 	event.button_index = MOUSE_BUTTON_RIGHT
 	event.pressed = true
+	event.position = point
+	return event
+
+
+func _middle_button(point: Vector2, pressed: bool) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_MIDDLE
+	event.pressed = pressed
 	event.position = point
 	return event
 

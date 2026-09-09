@@ -2,6 +2,11 @@
 
 分析日期：2026-09-04
 
+> 历史分析，非现行实现契约。项目当前采用固定 1440×900 逻辑画布、
+> `canvas_items + keep` 等比缩放和居中留边；窗口驱动 AUTO scale、布局
+> profile 与自动侧栏抽屉已经退役。现行规范见 `AGENTS.md` 的
+> “Fixed UI layout contract”和 `docs/ui-audit/ui-architecture.md`。
+
 > 快照说明：项目在分析开始前已经存在未提交修改，且分析期间另有外部进程继续更新部分 UI 与测试文件。本报告采用分析结束时可见的生产代码快照。分析阶段没有修改项目文件；本 Markdown 报告是用户后续明确要求新增的唯一文件。
 
 ## 1. Executive Summary

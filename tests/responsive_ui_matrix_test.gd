@@ -3,6 +3,12 @@ extends Node
 const MainScene := preload("res://src/ui/main.tscn")
 const Policy := preload("res://src/ui/responsive_ui_policy.gd")
 const UiTokens := preload("res://src/ui/ui_theme_tokens.gd")
+const WINDOW_MATRIX := [
+	Vector2i(1440, 900),
+	Vector2i(1920, 1080),
+	Vector2i(2560, 1440),
+	Vector2i(1366, 768)
+]
 
 var failures: Array[String] = []
 
@@ -15,16 +21,67 @@ func _run() -> void:
 	Game.persistence_enabled = false
 	Engine.time_scale = 0.0
 	Game.reset_game()
-	var cases := [
-		{"window":Vector2(1280, 720), "scale":1.1, "profile":Policy.PROFILE_COMPACT},
-		{"window":Vector2(1600, 900), "scale":1.25, "profile":Policy.PROFILE_COMPACT},
-		{"window":Vector2(1920, 1080), "scale":1.5, "profile":Policy.PROFILE_COMPACT},
-		{"window":Vector2(2560, 1440), "scale":1.75, "profile":Policy.PROFILE_STANDARD},
-		{"window":Vector2(3440, 1440), "scale":1.75, "profile":Policy.PROFILE_STANDARD},
-		{"window":Vector2(3840, 2160), "scale":2.0, "profile":Policy.PROFILE_EXPANDED}
-	]
-	for test_case in cases:
-		await _audit_case(test_case)
+	_clear_scale_session()
+	_check_project_contract()
+
+	var original_window_size := get_window().size
+	get_window().size = Vector2i(1440, 900)
+	await get_tree().process_frame
+	var main: Control = MainScene.instantiate()
+	get_tree().root.add_child(main)
+	get_tree().current_scene = main
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var baseline := _shell_geometry(main)
+	var main_instance_id := main.get_instance_id()
+	var selector := main.find_child("UIScaleSelector", true, false) as OptionButton
+	var selector_instance_id := selector.get_instance_id() if selector != null else 0
+	var active_workspace := main.find_child("SystemMap2D", true, false) as Control
+	var active_workspace_id := active_workspace.get_instance_id() if active_workspace != null else 0
+	var system_map_signature := _system_map_signature(active_workspace)
+	var ui_state = main.get("_ui_state")
+	_check(not baseline.is_empty(), "fixed-layout matrix captured the five-region shell baseline")
+	_check(main.find_child("ResponsiveUiDebounce", true, false) == null, "Main no longer owns a resize debounce that can reload the UI")
+	_check(get_tree().root.find_child("AuditCaptureViewport", false, false) == null, "ordinary startup creates no capture-only SubViewport")
+	_check(not bool(ui_state.left_rail_collapsed) and not bool(ui_state.right_inspector_collapsed), "fixed-layout baseline starts with both authored side regions expanded")
+
+	for physical_size in WINDOW_MATRIX:
+		get_window().size = physical_size
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var snapshot: Dictionary = main.call("ui_responsive_snapshot")
+		var content_rect: Rect2 = snapshot.get("canvas_content_rect", Rect2())
+		var logical_visible_size := get_viewport().get_visible_rect().size
+		_check(get_window().size == physical_size, "%s becomes the actual physical Window client size" % physical_size)
+		_check(get_window().content_scale_size == Vector2i(1440, 900), "%s keeps the runtime content-scale design size" % physical_size)
+		_check(get_window().content_scale_mode == Window.CONTENT_SCALE_MODE_CANVAS_ITEMS, "%s keeps CanvasItem runtime scaling" % physical_size)
+		_check(get_window().content_scale_aspect == Window.CONTENT_SCALE_ASPECT_KEEP, "%s keeps the runtime aspect policy" % physical_size)
+		_check(logical_visible_size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s keeps the actual logical viewport at 1440x900" % physical_size)
+		_check(is_instance_valid(main) and main.get_instance_id() == main_instance_id, "%s resize keeps the existing Main scene instance" % physical_size)
+		_check(selector != null and is_instance_valid(selector) and selector.get_instance_id() == selector_instance_id, "%s resize does not rebuild header controls" % physical_size)
+		_check(active_workspace != null and is_instance_valid(active_workspace) and active_workspace.get_instance_id() == active_workspace_id, "%s resize keeps the active workspace instance" % physical_size)
+		_check(main.size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s keeps the logical root at 1440x900" % physical_size)
+		_check(_geometry_matches(_shell_geometry(main), baseline), "%s preserves all shell rectangles in design coordinates" % physical_size)
+		_check(_system_map_signature(active_workspace) == system_map_signature, "%s preserves System Map world and button coordinates" % physical_size)
+		_check(not bool(ui_state.left_rail_collapsed) and not bool(ui_state.right_inspector_collapsed), "%s cannot auto-collapse either authored side region" % physical_size)
+		_check(String(snapshot.get("preferred_mode", "")) == Policy.MODE_MANUAL, "%s keeps the fixed MANUAL scale mode" % physical_size)
+		_check(is_equal_approx(float(snapshot.get("effective_scale", 0.0)), UiTokens.DEFAULT_UI_SCALE), "%s cannot change the effective Theme scale" % physical_size)
+		_check(String(snapshot.get("layout_profile", "")) == Policy.PROFILE_STANDARD, "%s cannot switch the authored layout profile" % physical_size)
+		_check(Vector2(snapshot.get("design_viewport_size", Vector2.ZERO)).is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s reports the fixed design viewport" % physical_size)
+		_check(is_equal_approx(content_rect.size.aspect(), Policy.DESIGN_VIEWPORT_SIZE.aspect()), "%s uses uniform keep-aspect scaling" % physical_size)
+		_check(content_rect.position.x >= -0.01 and content_rect.position.y >= -0.01, "%s centers letterbox/pillarbox space outside the UI" % physical_size)
+
+	await _check_factory_canvas_invariance(main)
+	await _check_ship_assembly_invariance(main)
+	var audit_viewport := await _check_capture_surface_contract(main)
+	get_tree().current_scene = self
+	get_window().size = original_window_size
+	if audit_viewport != null:
+		audit_viewport.queue_free()
+	else:
+		main.queue_free()
+	await get_tree().process_frame
 	_clear_scale_session()
 	UiTokens.set_ui_scale(UiTokens.DEFAULT_UI_SCALE)
 	Engine.time_scale = 1.0
@@ -36,36 +93,134 @@ func _run() -> void:
 		get_tree().quit(1)
 
 
-func _audit_case(test_case: Dictionary) -> void:
-	_clear_scale_session()
-	var window_size: Vector2 = test_case.get("window", Vector2.ZERO)
-	var expected_scale := float(test_case.get("scale", 0.0))
-	# Build the real shell with a fresh AUTO preference. The initial Window pass
-	# and post-layout active-page pass must converge on the same effective scale.
-	var main: Control = MainScene.instantiate()
-	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	main.size = window_size
-	add_child(main)
+func _check_project_contract() -> void:
+	_check(int(ProjectSettings.get_setting("display/window/size/viewport_width", 0)) == 1440, "project design viewport width is 1440")
+	_check(int(ProjectSettings.get_setting("display/window/size/viewport_height", 0)) == 900, "project design viewport height is 900")
+	_check(String(ProjectSettings.get_setting("display/window/stretch/mode", "")) == "canvas_items", "project uses CanvasItem content scaling")
+	_check(String(ProjectSettings.get_setting("display/window/stretch/aspect", "")) == "keep", "project preserves the 16:10 design aspect")
+
+
+func _check_factory_canvas_invariance(main: Control) -> void:
+	get_window().size = Vector2i(1440, 900)
+	main.call("_switch_page", "industry")
+	await _settle()
+	var canvas := main.find_child("FactoryCanvas", true, false) as Control
+	_check(canvas != null, "Factory workspace exposes its independent canvas")
+	if canvas == null:
+		return
+	var canvas_id := canvas.get_instance_id()
+	var camera_before: Vector2 = canvas.get("_camera")
+	var zoom_before := float(canvas.get("_zoom"))
+	var origin_before: Vector2 = canvas.call("_world_to_screen", Vector2.ZERO)
+	var sample_before: Vector2 = canvas.call("_world_to_screen", Vector2(256.0, 160.0))
+	for physical_size in WINDOW_MATRIX:
+		get_window().size = physical_size
+		await _settle()
+		_check(is_instance_valid(canvas) and canvas.get_instance_id() == canvas_id, "%s keeps the Factory Canvas instance" % physical_size)
+		_check(Vector2(canvas.get("_camera")).is_equal_approx(camera_before) and is_equal_approx(float(canvas.get("_zoom")), zoom_before), "%s preserves Factory camera and zoom" % physical_size)
+		_check(Vector2(canvas.call("_world_to_screen", Vector2.ZERO)).is_equal_approx(origin_before) and Vector2(canvas.call("_world_to_screen", Vector2(256.0, 160.0))).is_equal_approx(sample_before), "%s preserves Factory world-to-design projection" % physical_size)
+
+
+func _check_ship_assembly_invariance(main: Control) -> void:
+	get_window().size = Vector2i(1440, 900)
+	main.call("_switch_page", "fleet")
+	main.call("_select_fleet_section", "shipyard")
+	await _settle()
+	var canvas := main.find_child("ShipAssemblyMap", true, false) as GraphEdit
+	_check(canvas != null, "Ship Assembly exposes its independent engineering canvas")
+	if canvas == null:
+		return
+	canvas.call("_drop_data", Vector2(620.0, 260.0), {"ship_assembly_palette":true, "kind":"hull", "plan_id":"construct_lunar_pathfinder", "definition_id":"lunar_pathfinder"})
+	canvas.call("_drop_data", Vector2(120.0, 160.0), {"ship_assembly_palette":true, "kind":"module", "definition_id":"light_autocannon"})
+	canvas.call("request_module_connection", "ship_design_module_0001", "socket_weapon_0")
+	await _settle()
+	var canvas_id := canvas.get_instance_id()
+	var zoom_before := canvas.zoom
+	var scroll_before := canvas.scroll_offset
+	var draft_before: Dictionary = canvas.call("draft_snapshot")
+	var draft_nodes := draft_before.get("nodes", []) as Array
+	var draft_connections := draft_before.get("connections", []) as Array
+	_check(draft_nodes.size() == 2 and draft_connections.size() == 1, "Ship Assembly resize fixture contains a positioned hull, module, and authored connection")
+	_check(_draft_has_distinct_positions(draft_nodes), "Ship Assembly resize fixture owns distinct non-empty world coordinates")
+	for physical_size in WINDOW_MATRIX:
+		get_window().size = physical_size
+		await _settle()
+		_check(is_instance_valid(canvas) and canvas.get_instance_id() == canvas_id, "%s keeps the Ship Assembly canvas instance" % physical_size)
+		_check(is_equal_approx(canvas.zoom, zoom_before) and canvas.scroll_offset.is_equal_approx(scroll_before), "%s preserves Ship Assembly zoom and scroll center" % physical_size)
+		_check((canvas.call("draft_snapshot") as Dictionary) == draft_before, "%s preserves Ship Assembly draft coordinates" % physical_size)
+
+
+func _draft_has_distinct_positions(nodes: Array) -> bool:
+	if nodes.size() < 2:
+		return false
+	var seen := {}
+	for node_value in nodes:
+		var node := node_value as Dictionary
+		var position_value = node.get("position", {})
+		if not position_value is Dictionary:
+			return false
+		var key := "%s,%s" % [position_value.get("x", 0.0), position_value.get("y", 0.0)]
+		seen[key] = true
+	return seen.size() == nodes.size()
+
+
+func _check_capture_surface_contract(main: Control) -> SubViewport:
+	var shell_before := _shell_geometry(main)
+	await main.call("_set_capture_viewport_size", Vector2i(1920, 1080))
+	var audit_viewport := main.get_viewport() as SubViewport
+	_check(audit_viewport != null and audit_viewport.name == "AuditCaptureViewport" and audit_viewport.size == Vector2i(1920, 1080), "capture path owns an exact physical output viewport")
+	_check(main.size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "capture output does not become a new logical UI layout size")
+	_check(main.scale.is_equal_approx(Vector2(1.2, 1.2)) and main.position.is_equal_approx(Vector2(96, 0)), "1920x1080 capture applies one centered 16:10 keep-aspect transform")
+	_check(_geometry_matches(_shell_geometry(main), shell_before), "capture transform preserves internal shell geometry")
+	return audit_viewport
+
+
+func _system_map_signature(system_map: Control) -> String:
+	if system_map == null:
+		return ""
+	var parts: Array[String] = [str(system_map.size), str(system_map.get("_positions"))]
+	for child_value in system_map.get_children():
+		var child := child_value as Control
+		if child != null and child.name.begins_with("Location_"):
+			parts.append("%s:%s" % [child.name, child.get_rect()])
+	return "|".join(parts)
+
+
+func _settle() -> void:
 	await get_tree().process_frame
-	await get_tree().create_timer(0.24, true, false, true).timeout
 	await get_tree().process_frame
-	var snapshot: Dictionary = main.call("ui_responsive_snapshot")
-	var usable_size: Vector2 = snapshot.get("usable_size", Vector2.ZERO)
-	var logical_size: Vector2 = snapshot.get("logical_usable_size", Vector2.ZERO)
-	var recommended := float(snapshot.get("recommended_scale", 0.0))
-	var effective := float(snapshot.get("effective_scale", 0.0))
-	var profile := String(snapshot.get("layout_profile", ""))
-	_check(String(snapshot.get("preferred_mode", "")) == Policy.MODE_AUTO and is_equal_approx(recommended, expected_scale) and is_equal_approx(effective, expected_scale), "%dx%d AUTO recommendation/effective scale converges on %d%% after measuring the real active page" % [int(window_size.x), int(window_size.y), int(expected_scale * 100.0)])
-	_check(profile == String(test_case.get("profile", "")), "%dx%d resolves the expected presentation profile from both logical dimensions" % [int(window_size.x), int(window_size.y)])
-	_check(main.scale.is_equal_approx(Vector2.ONE) and is_equal_approx(float(get_tree().root.content_scale_factor), 1.0), "%dx%d keeps root and viewport transforms native" % [int(window_size.x), int(window_size.y)])
-	print("RESPONSIVE_ACTUAL_MATRIX window=%dx%d usable=%dx%d logical=%dx%d recommended=%d profile=%s" % [
-		int(window_size.x), int(window_size.y),
-		int(round(usable_size.x)), int(round(usable_size.y)),
-		int(round(logical_size.x)), int(round(logical_size.y)),
-		int(round(recommended * 100.0)), profile
-	])
-	main.queue_free()
 	await get_tree().process_frame
+
+
+func _shell_geometry(main: Control) -> Dictionary:
+	var names := [
+		"TopStatusBar",
+		"ResourceRailSurface",
+		"CentralWorkspace",
+		"ContextInspectorSurface",
+		"CommandDockSurface"
+	]
+	var result := {}
+	for node_name in names:
+		var control := main.find_child(node_name, true, false) as Control
+		if control == null:
+			return {}
+		result[node_name] = control.get_rect()
+	return result
+
+
+func _geometry_matches(current: Dictionary, expected: Dictionary) -> bool:
+	if current.size() != expected.size():
+		return false
+	for key_value in expected.keys():
+		var key := String(key_value)
+		if not current.has(key):
+			return false
+		var current_rect: Rect2 = current.get(key, Rect2())
+		var expected_rect: Rect2 = expected.get(key, Rect2())
+		if not current_rect.is_equal_approx(expected_rect):
+			return false
+	return true
 
 
 func _clear_scale_session() -> void:

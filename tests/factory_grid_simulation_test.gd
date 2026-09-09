@@ -16,6 +16,7 @@ func _initialize() -> void:
 	_test_world_profile_contracts()
 	_test_resource_field_exclusion_and_coverage()
 	_test_placement_and_port_contracts()
+	_test_unconfigured_machine_contracts()
 	_test_fair_and_priority_routing()
 	_test_transport_capacity_does_not_bank()
 	_test_resource_potential_caps_high_grade_extraction()
@@ -134,6 +135,46 @@ func _test_placement_and_port_contracts() -> void:
 	_check(bool(factory.connect_entities(world, "CARGO", "mine", "smelter", "iron_ore", 8.0).get("ok", false)), "cargo link accepts a compatible item route")
 	var second_input := factory.connect_entities(world, "CARGO", "depot", "smelter", "iron_ore", 8.0)
 	_check(not bool(second_input.get("ok", true)) and str(second_input.get("reason_code", "")) == "CARGO_INPUT_OCCUPIED", "ordinary item input ports cannot silently fan in and bypass a merger")
+
+
+func _test_unconfigured_machine_contracts() -> void:
+	var world := factory.create_world("unconfigured-machine", "earth_orbit", Vector2i(128, 128), 43)
+	var machine := factory.place_entity_immediate(world, "grid_engineering_works", Vector2i(0, 0), "", "unconfigured")
+	var entity: Dictionary = world.get("entities", {}).get("unconfigured", {})
+	_check(bool(machine.get("ok", false)) and str(entity.get("recipe_id", "")) == "" and str(entity.get("status", "")) == "NO_RECIPE" and is_zero_approx(float(entity.get("actual_rate", -1.0))), "a MACHINE can be placed without a recipe and is immediately authoritative NO_RECIPE at zero rate")
+
+	var snapshot_entity: Dictionary = {}
+	for entity_value in factory.workspace_snapshot(world).get("entities", []):
+		var candidate := entity_value as Dictionary
+		if str(candidate.get("id", "")) == "unconfigured":
+			snapshot_entity = candidate
+			break
+	var cargo_port_count := 0
+	var ports: Dictionary = snapshot_entity.get("ports", {})
+	for port_value in ports.get("input_ports", []):
+		if str((port_value as Dictionary).get("channel", "")) == "ITEM":
+			cargo_port_count += 1
+	for port_value in ports.get("output_ports", []):
+		if str((port_value as Dictionary).get("channel", "")) == "ITEM":
+			cargo_port_count += 1
+	_check(str(snapshot_entity.get("status", "")) == "NO_RECIPE" and is_zero_approx(float(snapshot_entity.get("actual_rate", -1.0))) and cargo_port_count == 0, "an unconfigured MACHINE snapshot exposes NO_RECIPE, zero production rate and no cargo input/output ports")
+
+	var source := factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(30, 0), "", "source")
+	var cargo := factory.connect_entities(world, "CARGO", "source", "unconfigured", "iron_ingot", 1.0)
+	_check(bool(source.get("ok", false)) and not bool(cargo.get("ok", true)) and str(cargo.get("reason_code", "")) == "CARGO_INCOMPATIBLE", "an unconfigured MACHINE cannot accept cargo before a recipe creates item ports")
+
+	var queued := factory.queue_construction(world, "grid_engineering_works", Vector2i(60, 0), "")
+	var order_id := str(queued.get("order_id", ""))
+	var order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+	if bool(queued.get("ok", false)) and not order.is_empty():
+		order["delivered_items"] = order.get("required_items", {}).duplicate(true)
+	factory.advance_world(world, 20_000.0)
+	var completed: Dictionary = world.get("entities", {}).get(str(queued.get("entity_id", "")), {})
+	_check(bool(queued.get("ok", false)) and not completed.is_empty() and str(completed.get("recipe_id", "")) == "" and str(completed.get("status", "")) == "NO_RECIPE" and is_zero_approx(float(completed.get("actual_rate", -1.0))), "a queued empty-recipe MACHINE completes while retaining NO_RECIPE and zero production rate")
+
+	var incompatible_place := factory.place_entity_immediate(world, "grid_engineering_works", Vector2i(60, 30), "grid_refine_titanium")
+	var incompatible_queue := factory.queue_construction(world, "grid_engineering_works", Vector2i(60, 45), "grid_refine_titanium")
+	_check(not bool(incompatible_place.get("ok", true)) and str(incompatible_place.get("reason_code", "")) == "INCOMPATIBLE_RECIPE" and not bool(incompatible_queue.get("ok", true)) and str(incompatible_queue.get("reason_code", "")) == "INCOMPATIBLE_RECIPE", "non-empty recipes remain required to exist and be compatible for both immediate placement and queued construction")
 
 
 func _test_mining_production_power_and_conservation() -> void:

@@ -12,6 +12,7 @@ signal selection_changed(selection: Dictionary)
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const CanvasScript = preload("res://src/ui/workspaces/factory/factory_canvas.gd")
+const BuildPaletteScript = preload("res://src/ui/workspaces/factory/factory_build_palette.gd")
 const PROTOCOL_VERSION := 1
 
 ## Resolve the localization autoload at runtime so this standalone component
@@ -28,7 +29,7 @@ var _snapshot: Dictionary = {}
 var _reduced_motion := false
 var _active_tool := ""
 var _selected_building_id := ""
-var _selected_recipe_id := ""
+var _copied_machine_config: Dictionary = {}
 var _connection_kind := "CARGO"
 var _connection_source_id := ""
 var _connection_target_id := ""
@@ -37,20 +38,19 @@ var _connection_target_port_id := ""
 var _selected_cargo_item_id := ""
 var _active_subworkspace := "CANVAS"
 var _production_filter := "ALL"
-var _recipe_query := ""
 var _selection := {"kind":"", "id":"", "data":{}}
 var _preview_tile := Vector2i.ZERO
 var _pending_inspector_refresh := false
 var _pending_link_selection_id := ""
 var _pending_order_selection_id := ""
 var _canvas_snapshot_dirty := true
+var _building_card_signature := ""
 
 var _world_label: Label
 var _world_scale_label: Label
 var _revision_label: Label
 var _feedback_label: Label
 var _building_options: OptionButton
-var _recipe_options: OptionButton
 var _source_options: OptionButton
 var _target_options: OptionButton
 var _cargo_item_options: OptionButton
@@ -58,6 +58,7 @@ var _connect_button: Button
 var _cargo_mode_button: Button
 var _power_mode_button: Button
 var _building_detail_body: VBoxContainer
+var _build_palette
 var _connection_status_label: Label
 var _inspector_body: VBoxContainer
 var _canvas
@@ -65,15 +66,15 @@ var _canvas_page: HBoxContainer
 var _production_page: VBoxContainer
 var _production_rows: VBoxContainer
 var _production_filter_options: OptionButton
-var _recipe_page: VBoxContainer
-var _recipe_search: LineEdit
-var _recipe_rows: VBoxContainer
 var _construction_page: VBoxContainer
 var _construction_rows: VBoxContainer
 var _workspace_tabs: Dictionary = {}
 var _entities_by_id: Dictionary = {}
 var _links_by_id: Dictionary = {}
 var _orders_by_id: Dictionary = {}
+var _exact_connection_keys: Dictionary = {}
+var _cargo_source_item_keys: Dictionary = {}
+var _cargo_target_item_keys: Dictionary = {}
 
 
 func _ready() -> void:
@@ -103,6 +104,8 @@ func _process(_delta: float) -> void:
 func apply_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = _view_model.build(snapshot)
 	_rebuild_snapshot_lookups()
+	if not _copied_machine_config.is_empty() and str(_copied_machine_config.get("world_id", "")) != str(_snapshot.get("world_id", "")):
+		_copied_machine_config.clear()
 	_canvas_snapshot_dirty = true
 	if _active_subworkspace == "CANVAS":
 		_apply_canvas_snapshot()
@@ -135,8 +138,16 @@ func apply_command_result(result: Dictionary) -> void:
 		reason_code = "UNSUPPORTED_PROTOCOL"
 		message = I18n.t("factory.feedback.unsupported_protocol")
 	if accepted:
-		_set_feedback("ACCEPTED", message if not message.is_empty() else I18n.t("factory.feedback.accepted"), Color("6fbf92"))
 		var operation_result: Dictionary = result.get("result", {}) if result.get("result", {}) is Dictionary else {}
+		var accepted_message: String = message if not message.is_empty() else I18n.t("factory.feedback.accepted")
+		if str(result.get("command_kind", "")) == "QUEUE_CONSTRUCTION" and operation_result.get("funding", {}) is Dictionary:
+			var funding: Dictionary = operation_result.get("funding", {})
+			if str(funding.get("policy", "")) == "AUTO_SAME_LOCATION":
+				if bool(funding.get("fully_funded", false)):
+					accepted_message = I18n.t("factory.feedback.construction_auto_started", "Materials staged automatically; construction has started.")
+				else:
+					accepted_message = I18n.t("factory.feedback.construction_auto_partial", "Available materials staged; still missing: %s") % _item_amount_rows(funding.get("remaining", {}))
+		_set_feedback("ACCEPTED", accepted_message, Color("6fbf92"))
 		if str(result.get("command_kind", "")) == "CONNECT_ENTITIES":
 			_pending_link_selection_id = str(operation_result.get("link_id", ""))
 			_active_tool = ""
@@ -180,10 +191,38 @@ func selected_link_id() -> String:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if _active_tool not in ["BUILD", "CONNECT"] or not event.is_action_pressed("ui_cancel"):
+	if not is_visible_in_tree():
 		return
-	_on_placement_cancelled()
-	get_viewport().set_input_as_handled()
+	if event.is_action_pressed("ui_cancel") and _active_tool in ["BUILD", "CONNECT"]:
+		_on_placement_cancelled()
+		get_viewport().set_input_as_handled()
+		return
+	if _active_tool in ["BUILD", "CONNECT"]:
+		return
+	if not event is InputEventKey or _shortcut_focus_blocked():
+		return
+	var key_event := event as InputEventKey
+	if not key_event.pressed or key_event.echo or not (key_event.ctrl_pressed or key_event.meta_pressed):
+		return
+	if key_event.keycode == KEY_C:
+		_copy_selected_machine_configuration()
+		get_viewport().set_input_as_handled()
+	elif key_event.keycode == KEY_V:
+		_paste_machine_configuration()
+		get_viewport().set_input_as_handled()
+
+
+func _shortcut_focus_blocked() -> bool:
+	if not is_inside_tree():
+		return false
+	var focused := get_viewport().gui_get_focus_owner()
+	if is_instance_valid(focused) and (focused is LineEdit or focused is TextEdit):
+		return true
+	for option_value in find_children("*", "OptionButton", true, false):
+		var option := option_value as OptionButton
+		if option.get_popup().visible:
+			return true
+	return false
 
 
 func canvas() -> Control:
@@ -222,14 +261,14 @@ func _build_interface() -> void:
 	motion_toggle.toggled.connect(set_reduced_motion)
 	toolbar.add_child(motion_toggle)
 
-	# The factory is a control room, not just a build palette.  Keep the four
+	# The factory is a control room, not just a build palette. Keep the three
 	# workspaces mounted and switch visibility so selector focus and canvas state
 	# survive tab changes and runtime snapshot refreshes.
 	var tabs := HBoxContainer.new()
 	tabs.name = "FactoryWorkspaceTabs"
 	tabs.add_theme_constant_override("separation", 5)
 	root.add_child(tabs)
-	for workspace_id in ["CANVAS", "PRODUCTION", "RECIPES", "CONSTRUCTION"]:
+	for workspace_id in ["CANVAS", "PRODUCTION", "CONSTRUCTION"]:
 		var tab := _make_button(
 			I18n.t("factory.tab.%s" % workspace_id.to_lower(), workspace_id.capitalize()),
 			I18n.t("factory.tooltip.open_%s" % workspace_id.to_lower(), "Open %s workspace" % workspace_id.to_lower())
@@ -246,44 +285,23 @@ func _build_interface() -> void:
 	root.add_child(body)
 	_canvas_page = body
 
-	var palette_scroll := ScrollContainer.new()
-	palette_scroll.name = "PaletteScroll"
-	palette_scroll.custom_minimum_size = Vector2(238, 0)
-	palette_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	body.add_child(palette_scroll)
-	var palette := VBoxContainer.new()
-	palette.name = "FactoryPalette"
-	palette.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	palette.add_theme_constant_override("separation", 7)
-	palette_scroll.add_child(palette)
-	palette.add_child(_make_section_label(I18n.t("factory.palette.construction")))
-	_building_options = OptionButton.new()
-	_building_options.name = "BuildingPalette"
-	_building_options.tooltip_text = I18n.t("factory.tooltip.building_palette")
-	_building_options.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_building_options.item_selected.connect(_on_building_selected)
-	palette.add_child(_building_options)
-	_recipe_options = OptionButton.new()
-	_recipe_options.name = "RecipePalette"
-	_recipe_options.tooltip_text = I18n.t("factory.tooltip.recipe_palette")
-	_recipe_options.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_recipe_options.item_selected.connect(_on_recipe_selected)
-	palette.add_child(_recipe_options)
-	var building_detail_panel := PanelContainer.new()
-	building_detail_panel.name = "BuildingSelectionCard"
-	building_detail_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_building_detail_body = VBoxContainer.new()
-	_building_detail_body.add_theme_constant_override("separation", 4)
-	building_detail_panel.add_child(_building_detail_body)
-	palette.add_child(building_detail_panel)
-	var placement_help := _make_label(I18n.t("factory.help.placement"), Color("9aa6a1"))
-	placement_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	palette.add_child(placement_help)
+	var center_column := VBoxContainer.new()
+	center_column.name = "FactoryCenterColumn"
+	center_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	center_column.add_theme_constant_override("separation", 6)
+	body.add_child(center_column)
 
-	palette.add_child(HSeparator.new())
-	palette.add_child(_make_section_label(I18n.t("factory.palette.connections")))
+	# Direct canvas ports are the primary route workflow. Keep the selectors as a
+	# compact keyboard/accessibility fallback without sacrificing canvas width.
+	var connection_panel := PanelContainer.new()
+	connection_panel.name = "FactoryConnectionAssist"
+	center_column.add_child(connection_panel)
 	var connection_modes := HBoxContainer.new()
-	palette.add_child(connection_modes)
+	connection_modes.name = "FactoryConnectionTools"
+	connection_modes.add_theme_constant_override("separation", 5)
+	connection_panel.add_child(connection_modes)
+	connection_modes.add_child(_make_section_label(I18n.t("factory.palette.connections")))
 	_cargo_mode_button = _make_button(I18n.t("factory.connection.cargo"), I18n.t("factory.tooltip.cargo"))
 	_cargo_mode_button.name = "CargoConnectionMode"
 	_cargo_mode_button.toggle_mode = true
@@ -297,29 +315,34 @@ func _build_interface() -> void:
 	_source_options = OptionButton.new()
 	_source_options.name = "ConnectionSource"
 	_source_options.tooltip_text = I18n.t("factory.tooltip.connection_source")
+	_source_options.fit_to_longest_item = false
+	_source_options.custom_minimum_size.x = 126
 	_source_options.item_selected.connect(_on_source_selected)
-	palette.add_child(_source_options)
+	connection_modes.add_child(_source_options)
 	_target_options = OptionButton.new()
 	_target_options.name = "ConnectionTarget"
 	_target_options.tooltip_text = I18n.t("factory.tooltip.connection_target")
+	_target_options.fit_to_longest_item = false
+	_target_options.custom_minimum_size.x = 126
 	_target_options.item_selected.connect(_on_target_selected)
-	palette.add_child(_target_options)
+	connection_modes.add_child(_target_options)
 	_cargo_item_options = OptionButton.new()
 	_cargo_item_options.name = "CargoItem"
 	_cargo_item_options.tooltip_text = I18n.t("factory.tooltip.cargo_item")
+	_cargo_item_options.fit_to_longest_item = false
+	_cargo_item_options.custom_minimum_size.x = 112
 	_cargo_item_options.item_selected.connect(_on_cargo_item_selected)
-	palette.add_child(_cargo_item_options)
+	connection_modes.add_child(_cargo_item_options)
 	_connect_button = _make_button(I18n.t("factory.action.create_connection"), I18n.t("factory.tooltip.create_connection"))
 	_connect_button.name = "CreateConnection"
 	_connect_button.pressed.connect(_request_connection)
-	palette.add_child(_connect_button)
+	connection_modes.add_child(_connect_button)
 	_connection_status_label = _make_label("", Color("9aa6a1"))
 	_connection_status_label.name = "ConnectionStatus"
-	_connection_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	palette.add_child(_connection_status_label)
-	var connection_help := _make_label(I18n.t("factory.help.connection"), Color("9aa6a1"))
-	connection_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	palette.add_child(connection_help)
+	_connection_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_connection_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_connection_status_label.tooltip_text = I18n.t("factory.help.connection")
+	connection_modes.add_child(_connection_status_label)
 
 	_canvas = CanvasScript.new()
 	_canvas.name = "FactoryCanvas"
@@ -333,9 +356,19 @@ func _build_interface() -> void:
 	_canvas.tile_hovered.connect(_on_tile_hovered)
 	_canvas.tile_selected.connect(_on_tile_selected)
 	_canvas.placement_cancelled.connect(_on_placement_cancelled)
+	_canvas.machine_configuration_copy_requested.connect(_on_canvas_machine_configuration_copy_requested)
+	_canvas.machine_configuration_paste_requested.connect(_on_canvas_machine_configuration_paste_requested)
+	_canvas.port_drag_started.connect(_on_port_drag_started)
 	_canvas.port_connection_requested.connect(_on_port_connection_requested)
 	_canvas.port_drag_preview.connect(_on_port_drag_preview)
-	body.add_child(_canvas)
+	center_column.add_child(_canvas)
+
+	_build_palette = BuildPaletteScript.new()
+	_build_palette.building_selected.connect(_select_building_id)
+	center_column.add_child(_build_palette)
+	_build_palette.ensure_built()
+	_building_options = _build_palette.quick_filter()
+	_building_detail_body = _build_palette.detail_body()
 
 	var inspector_scroll := ScrollContainer.new()
 	inspector_scroll.name = "InspectorScroll"
@@ -349,7 +382,6 @@ func _build_interface() -> void:
 	inspector_scroll.add_child(_inspector_body)
 
 	_build_production_workspace(root)
-	_build_recipe_workspace(root)
 	_build_construction_workspace(root)
 
 	_feedback_label = _make_label(I18n.t("factory.feedback.waiting"), Color("9aa6a1"))
@@ -391,37 +423,6 @@ func _build_production_workspace(root: VBoxContainer) -> void:
 	scroll.add_child(_production_rows)
 
 
-func _build_recipe_workspace(root: VBoxContainer) -> void:
-	_recipe_page = VBoxContainer.new()
-	_recipe_page.name = "FactoryRecipeWorkspace"
-	_recipe_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_recipe_page.add_theme_constant_override("separation", 8)
-	root.add_child(_recipe_page)
-	var header := HBoxContainer.new()
-	_recipe_page.add_child(header)
-	var title := _make_section_label(I18n.t("factory.recipes.title", "Recipe workspace"))
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-	_recipe_search = LineEdit.new()
-	_recipe_search.name = "RecipeSearch"
-	_recipe_search.placeholder_text = I18n.t("factory.recipes.search", "Search recipe, input, output")
-	_recipe_search.text_changed.connect(func(value: String) -> void:
-		_recipe_query = value
-		_refresh_recipe_workspace()
-	)
-	header.add_child(_recipe_search)
-	var scroll := ScrollContainer.new()
-	scroll.name = "RecipeScroll"
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_recipe_page.add_child(scroll)
-	_recipe_rows = VBoxContainer.new()
-	_recipe_rows.name = "RecipeRows"
-	_recipe_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_recipe_rows.add_theme_constant_override("separation", 7)
-	scroll.add_child(_recipe_rows)
-
-
 func _build_construction_workspace(root: VBoxContainer) -> void:
 	_construction_page = VBoxContainer.new()
 	_construction_page.name = "FactoryConstructionWorkspace"
@@ -443,13 +444,11 @@ func _build_construction_workspace(root: VBoxContainer) -> void:
 
 
 func _set_active_subworkspace(workspace_id: String) -> void:
-	_active_subworkspace = workspace_id if workspace_id in ["CANVAS", "PRODUCTION", "RECIPES", "CONSTRUCTION"] else "CANVAS"
+	_active_subworkspace = workspace_id if workspace_id in ["CANVAS", "PRODUCTION", "CONSTRUCTION"] else "CANVAS"
 	if _canvas_page != null:
 		_canvas_page.visible = _active_subworkspace == "CANVAS"
 	if _production_page != null:
 		_production_page.visible = _active_subworkspace == "PRODUCTION"
-	if _recipe_page != null:
-		_recipe_page.visible = _active_subworkspace == "RECIPES"
 	if _construction_page != null:
 		_construction_page.visible = _active_subworkspace == "CONSTRUCTION"
 	for workspace_id_value in _workspace_tabs.keys():
@@ -460,8 +459,6 @@ func _set_active_subworkspace(workspace_id: String) -> void:
 		_apply_canvas_snapshot()
 	elif _active_subworkspace == "PRODUCTION":
 		_refresh_production_workspace()
-	elif _active_subworkspace == "RECIPES":
-		_refresh_recipe_workspace()
 	elif _active_subworkspace == "CONSTRUCTION":
 		_refresh_construction_workspace()
 
@@ -477,6 +474,8 @@ func _render() -> void:
 	_rebuild_connection_selectors(is_valid)
 	_refresh_inspector()
 	_set_active_subworkspace(_active_subworkspace)
+	_canvas.set_configuration_gestures_enabled(_active_tool not in ["BUILD", "CONNECT"])
+	_canvas.set_port_connections_enabled(_active_tool != "BUILD")
 	_update_placement_preview()
 	_update_connection_preview()
 
@@ -492,42 +491,8 @@ func _apply_canvas_snapshot() -> void:
 
 
 func _rebuild_palette(is_valid: bool) -> void:
-	_building_options.clear()
-	_building_options.add_item(I18n.t("factory.select.building"))
-	_building_options.set_item_metadata(0, "")
 	var palette: Dictionary = _snapshot.get("palette", {}) if _snapshot.get("palette", {}) is Dictionary else {}
-	var index := 1
-	for building_value in palette.get("buildings", []):
-		var building := building_value as Dictionary
-		var building_id := str(building.get("id", ""))
-		_building_options.add_item(str(building.get("name", building_id)) + I18n.core("format.slash_separator") + str(building.get("kind", "")))
-		_building_options.set_item_metadata(index, building_id)
-		if building_id == _selected_building_id:
-			_building_options.select(index)
-		index += 1
-	if _building_options.selected < 0:
-		_building_options.select(0)
-	_building_options.disabled = not is_valid
-
-	_recipe_options.clear()
-	_recipe_options.add_item(I18n.t("factory.select.no_recipe"))
-	_recipe_options.set_item_metadata(0, "")
-	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
-	var recipe_index := 1
-	for recipe_id_value in building.get("recipe_ids", []):
-		var recipe_id := str(recipe_id_value)
-		var recipe := _view_model.recipe_by_id(_snapshot, recipe_id)
-		_recipe_options.add_item(str(recipe.get("name", recipe_id)))
-		_recipe_options.set_item_metadata(recipe_index, recipe_id)
-		if recipe_id == _selected_recipe_id:
-			_recipe_options.select(recipe_index)
-		recipe_index += 1
-	if recipe_index > 1 and _selected_recipe_id.is_empty():
-		_selected_recipe_id = str(_recipe_options.get_item_metadata(1))
-		_recipe_options.select(1)
-	if _recipe_options.selected < 0:
-		_recipe_options.select(0)
-	_recipe_options.disabled = not is_valid or recipe_index <= 1
+	_build_palette.set_buildings(palette.get("buildings", []) as Array, is_valid, _selected_building_id)
 	_refresh_building_card()
 
 
@@ -615,31 +580,50 @@ func _refresh_world_scale() -> void:
 func _refresh_building_card() -> void:
 	if not is_instance_valid(_building_detail_body):
 		return
+	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
+	var next_signature := "%s|%s|%s" % [_selected_building_id, _active_tool, JSON.stringify(building)]
+	if next_signature == _building_card_signature:
+		return
+	_building_card_signature = next_signature
 	for child in _building_detail_body.get_children():
 		_building_detail_body.remove_child(child)
 		child.queue_free()
-	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
 	if building.is_empty():
-		_building_detail_body.add_child(_make_label(I18n.t("factory.build.empty", "Choose a building to inspect its footprint, cost, power and compatible production."), Color("9aa6a1")))
+		var empty := _make_label(I18n.t("factory.build.empty", "Choose a building to inspect its footprint, cost, power and compatible production."), Color("9aa6a1"))
+		empty.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		empty.tooltip_text = empty.text
+		_building_detail_body.add_child(empty)
+		var empty_help := _make_label(I18n.t("factory.help.placement"), Color("7f9289"))
+		empty_help.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		empty_help.tooltip_text = empty_help.text
+		_building_detail_body.add_child(empty_help)
 		return
 	_building_detail_body.add_child(_make_label(_building_name(_selected_building_id, str(building.get("name", _selected_building_id))), Color("e6eeea")))
 	var footprint := _view_model.footprint_size(building.get("footprint", {}))
-	_add_detail_to(_building_detail_body, I18n.t("factory.field.footprint", "Footprint"), "%d × %d m" % [footprint.x, footprint.y])
-	_add_detail_to(_building_detail_body, I18n.t("factory.field.kind"), _kind_name(str(building.get("kind", "UNKNOWN"))))
 	var generation := float(building.get("power_generation_kw", 0.0))
 	var demand := float(building.get("power_demand_kw", 0.0))
-	_add_detail_to(_building_detail_body, I18n.t("factory.field.power"), "+%.0f kW" % generation if generation > 0.0 else "-%.0f kW" % demand)
-	_add_detail_to(_building_detail_body, I18n.t("factory.field.build_time", "Build work"), "%.0f" % float(building.get("construction_work", 0.0)))
 	var cost_text := _item_amount_rows(building.get("construction_cost", []))
-	_add_detail_to(_building_detail_body, I18n.t("factory.field.required"), cost_text if not cost_text.is_empty() else I18n.t("factory.value.none", "None"))
+	var power_text := "+%.0f kW" % generation if generation > 0.0 else "-%.0f kW" % demand
+	var compact_summary := "%s · %d × %d · %s · %s" % [
+		_kind_name(str(building.get("kind", "UNKNOWN"))), footprint.x, footprint.y, power_text,
+		cost_text.replace("\n", " · ") if not cost_text.is_empty() else I18n.t("factory.value.none", "None")
+	]
+	var summary := _make_label(compact_summary, Color("a5b2ac"))
+	summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	summary.tooltip_text = compact_summary
+	_building_detail_body.add_child(summary)
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 6)
+	_building_detail_body.add_child(footer)
 	var active := _make_label(I18n.t("factory.build.placing", "Placement active · click a valid tile") if _active_tool == "BUILD" else I18n.t("factory.build.ready", "Ready to place"), Color("6fbf92"))
 	active.name = "PlacementStatus"
-	_building_detail_body.add_child(active)
+	active.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.add_child(active)
 	var cancel := _make_button(I18n.t("factory.action.cancel_placement", "Cancel placement"), I18n.t("factory.tooltip.cancel_placement", "Leave construction placement mode."))
 	cancel.name = "CancelPlacement"
 	cancel.visible = _active_tool == "BUILD"
 	cancel.pressed.connect(_on_placement_cancelled)
-	_building_detail_body.add_child(cancel)
+	footer.add_child(cancel)
 
 
 func _refresh_connection_status(source: Dictionary, target: Dictionary) -> void:
@@ -792,57 +776,6 @@ func _refresh_production_workspace() -> void:
 		_production_rows.add_child(_make_label(I18n.t("factory.production.empty", "No units match this status filter."), Color("9aa6a1")))
 
 
-func _refresh_recipe_workspace() -> void:
-	if _recipe_rows == null:
-		return
-	_clear_rows(_recipe_rows)
-	var term := _recipe_query.strip_edges().to_lower()
-	var recipes: Array = (_snapshot.get("palette", {}) as Dictionary).get("recipes", []) if _snapshot.get("palette", {}) is Dictionary else []
-	for recipe_value in recipes:
-		if not recipe_value is Dictionary:
-			continue
-		var recipe: Dictionary = recipe_value as Dictionary
-		var recipe_id := str(recipe.get("id", ""))
-		var haystack := "%s %s %s" % [str(recipe.get("name", recipe_id)), _item_amount_rows(recipe.get("inputs", [])), _item_amount_rows(recipe.get("outputs", []))]
-		if not term.is_empty() and not haystack.to_lower().contains(term):
-			continue
-		var panel := PanelContainer.new()
-		panel.name = "RecipeCard%s" % recipe_id
-		_recipe_rows.add_child(panel)
-		var body := VBoxContainer.new()
-		body.add_theme_constant_override("separation", 3)
-		panel.add_child(body)
-		var header := HBoxContainer.new()
-		body.add_child(header)
-		var select := _make_button(str(recipe.get("name", recipe_id)), I18n.t("factory.tooltip.select_recipe", "Select recipe for construction or inspection"))
-		select.name = "SelectRecipe%s" % recipe_id
-		select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		select.pressed.connect(_select_recipe_from_workspace.bind(recipe_id))
-		header.add_child(select)
-		header.add_child(_make_label("%.1fs" % float(recipe.get("duration_seconds", 0.0)), Color("d5a45c")))
-		body.add_child(_make_label(I18n.t("factory.recipes.input", "Input: %s") % _item_amount_rows(recipe.get("inputs", [])), Color("a5b2ac")))
-		body.add_child(_make_label(I18n.t("factory.recipes.output", "Output: %s") % _item_amount_rows(recipe.get("outputs", [])), Color("a5b2ac")))
-		var compatible: Array[String] = []
-		for building_value in (_snapshot.get("palette", {}) as Dictionary).get("buildings", []):
-			var building: Dictionary = building_value as Dictionary
-			if (building.get("recipe_ids", []) as Array).has(recipe_id):
-				compatible.append(str(building.get("name", building.get("id", ""))))
-		body.add_child(_make_label(I18n.t("factory.recipes.machines", "Machines: %s") % (", ".join(compatible) if not compatible.is_empty() else I18n.t("factory.value.none", "None")), Color("9aa6a1")))
-		var running := HBoxContainer.new()
-		body.add_child(running)
-		for entity_value in _snapshot.get("entities", []):
-			var entity: Dictionary = entity_value as Dictionary
-			if str(entity.get("recipe_id", "")) != recipe_id:
-				continue
-			var focus := _make_button(I18n.t("factory.action.focus_named", "Focus %s") % str(entity.get("name", entity.get("id", ""))), I18n.t("factory.tooltip.focus_machine", "Locate running machine"))
-			focus.pressed.connect(_focus_entity_from_workspace.bind(entity.duplicate(true)))
-			running.add_child(focus)
-		if running.get_child_count() == 0:
-			running.queue_free()
-	if _recipe_rows.get_child_count() == 0:
-		_recipe_rows.add_child(_make_label(I18n.t("factory.recipes.empty", "No recipe matches this search."), Color("9aa6a1")))
-
-
 func _refresh_construction_workspace() -> void:
 	if _construction_rows == null:
 		return
@@ -898,12 +831,6 @@ func _refresh_construction_workspace() -> void:
 		_construction_rows.add_child(_make_label(I18n.t("factory.construction.empty", "No construction orders are queued."), Color("9aa6a1")))
 
 
-func _select_recipe_from_workspace(recipe_id: String) -> void:
-	_selected_recipe_id = recipe_id
-	_set_feedback("RECIPE_SELECTED", I18n.t("factory.recipes.selected", "Recipe selected: %s") % recipe_id, Color("6fbf92"))
-	_refresh_recipe_workspace()
-
-
 func _focus_entity_from_workspace(entity: Dictionary) -> void:
 	if entity.is_empty():
 		return
@@ -914,8 +841,11 @@ func _focus_entity_from_workspace(entity: Dictionary) -> void:
 
 
 func _on_building_selected(index: int) -> void:
-	_selected_building_id = str(_building_options.get_item_metadata(index))
-	_selected_recipe_id = ""
+	_select_building_id(str(_building_options.get_item_metadata(index)))
+
+
+func _select_building_id(building_id: String, render_now: bool = true) -> void:
+	_selected_building_id = building_id
 	_active_tool = "BUILD" if not _selected_building_id.is_empty() else ""
 	if _active_tool == "BUILD":
 		_connection_source_id = ""
@@ -923,19 +853,16 @@ func _on_building_selected(index: int) -> void:
 		_connection_source_port_id = ""
 		_connection_target_port_id = ""
 		_selected_cargo_item_id = ""
-	_render()
-
-
-func _on_recipe_selected(index: int) -> void:
-	_selected_recipe_id = str(_recipe_options.get_item_metadata(index))
-	_update_placement_preview()
+	if _build_palette != null:
+		_build_palette.set_selected_building(_selected_building_id)
+	if render_now:
+		_render()
 
 
 func _set_connection_mode(kind: String) -> void:
 	_connection_kind = kind.to_upper()
 	_active_tool = "CONNECT"
 	_selected_building_id = ""
-	_selected_recipe_id = ""
 	_connection_source_id = ""
 	_connection_target_id = ""
 	_connection_source_port_id = ""
@@ -994,7 +921,6 @@ func _on_placement_cancelled() -> void:
 		return
 	_active_tool = ""
 	_selected_building_id = ""
-	_selected_recipe_id = ""
 	_connection_source_id = ""
 	_connection_target_id = ""
 	_connection_source_port_id = ""
@@ -1029,6 +955,16 @@ func _on_entity_selected(entity: Dictionary) -> void:
 	_set_selection("ENTITY", entity_id, entity)
 
 
+func _on_canvas_machine_configuration_copy_requested(entity: Dictionary) -> void:
+	_on_entity_selected(entity)
+	_copy_selected_machine_configuration()
+
+
+func _on_canvas_machine_configuration_paste_requested(entity: Dictionary) -> void:
+	_on_entity_selected(entity)
+	_paste_machine_configuration()
+
+
 func _on_resource_field_selected(field: Dictionary) -> void:
 	_set_selection("RESOURCE_FIELD", str(field.get("id", "")), field)
 
@@ -1054,9 +990,10 @@ func _request_construction(tile: Vector2i) -> void:
 		return
 	_emit_command("QUEUE_CONSTRUCTION", {
 		"definition_id":_selected_building_id,
-		"recipe_id":_selected_recipe_id,
+		"recipe_id":"",
 		"origin":{"x":tile.x, "y":tile.y},
-		"priority":50
+		"priority":50,
+		"funding_policy":"AUTO_SAME_LOCATION"
 	})
 
 
@@ -1126,8 +1063,78 @@ func _request_configure_link(link_id: String, priority: int) -> void:
 	_emit_command("CONFIGURE_LINK", {"link_id":link_id, "priority":clampi(priority, 0, 2)})
 
 
+func _selected_machine_entity() -> Dictionary:
+	if str(_selection.get("kind", "")) != "ENTITY":
+		return {}
+	var entity := _entity_by_id(str(_selection.get("id", "")))
+	return entity if str(entity.get("node_kind", "")) == "MACHINE" else {}
+
+
+func _copied_machine_configuration_reason(entity: Dictionary) -> String:
+	if _copied_machine_config.is_empty():
+		return "MACHINE_CONFIG_EMPTY"
+	if entity.is_empty() or str(entity.get("node_kind", "")) != "MACHINE":
+		return "MACHINE_CONFIG_REQUIRES_MACHINE"
+	if str(_copied_machine_config.get("world_id", "")) != str(_snapshot.get("world_id", "")):
+		return "MACHINE_CONFIG_STALE"
+	var recipe_id := str(_copied_machine_config.get("recipe_id", ""))
+	if recipe_id.is_empty() or _view_model.recipe_by_id(_snapshot, recipe_id).is_empty():
+		return "MACHINE_CONFIG_STALE"
+	var building := _view_model.building_by_id(_snapshot, str(entity.get("definition_id", "")))
+	if building.is_empty() or not (building.get("recipe_ids", []) as Array).has(recipe_id):
+		return "MACHINE_CONFIG_INCOMPATIBLE"
+	return ""
+
+
+func _copied_machine_configuration_compatible(entity: Dictionary) -> bool:
+	return _copied_machine_configuration_reason(entity).is_empty()
+
+
+func _copy_selected_machine_configuration() -> void:
+	var entity := _selected_machine_entity()
+	if entity.is_empty():
+		_set_feedback("MACHINE_CONFIG_REQUIRES_MACHINE", I18n.t("factory.feedback.machine_config_requires_machine", "Select a machine before copying its configuration."), Color("d5a45c"))
+		return
+	var recipe_id := str(entity.get("recipe_id", ""))
+	if recipe_id.is_empty() or _view_model.recipe_by_id(_snapshot, recipe_id).is_empty():
+		_set_feedback("MACHINE_CONFIG_EMPTY", I18n.t("factory.feedback.machine_config_empty", "This machine has no recipe to copy."), Color("d5a45c"))
+		return
+	_copied_machine_config = {
+		"schema_version":1,
+		"world_id":str(_snapshot.get("world_id", "")),
+		"recipe_id":recipe_id,
+		"recipe_name":str(_view_model.recipe_by_id(_snapshot, recipe_id).get("name", recipe_id))
+	}
+	_set_feedback("MACHINE_CONFIG_COPIED", I18n.t("factory.feedback.machine_config_copied", "Copied machine recipe: %s") % str(_copied_machine_config.get("recipe_name", recipe_id)), Color("6fbf92"))
+	_refresh_inspector()
+
+
+func _paste_machine_configuration() -> void:
+	var entity := _selected_machine_entity()
+	var reason_code := _copied_machine_configuration_reason(entity)
+	if not reason_code.is_empty():
+		var reason_key := "factory.feedback.%s" % reason_code.to_lower()
+		var reason_text := str(I18n.t(reason_key))
+		if reason_text == reason_key:
+			reason_text = I18n.t("factory.reason.incompatible_recipe")
+		_set_feedback(reason_code, reason_text, Color("d86e63"))
+		return
+	_request_set_recipe(str(entity.get("id", "")), str(_copied_machine_config.get("recipe_id", "")))
+
+
 func _request_set_recipe(entity_id: String, recipe_id: String) -> void:
 	if entity_id.is_empty() or recipe_id.is_empty():
+		_set_feedback("INCOMPATIBLE_RECIPE", I18n.t("factory.reason.incompatible_recipe"), Color("d86e63"))
+		return
+	var entity := _entity_by_id(entity_id)
+	if entity.is_empty():
+		_set_feedback("UNKNOWN_ENTITY", I18n.t("factory.reason.unknown_entity"), Color("d86e63"))
+		return
+	if str(entity.get("node_kind", "")) != "MACHINE":
+		_set_feedback("INVALID_MACHINE", I18n.t("factory.reason.invalid_machine"), Color("d86e63"))
+		return
+	var building := _view_model.building_by_id(_snapshot, str(entity.get("definition_id", "")))
+	if building.is_empty() or not (building.get("recipe_ids", []) as Array).has(recipe_id) or _view_model.recipe_by_id(_snapshot, recipe_id).is_empty():
 		_set_feedback("INCOMPATIBLE_RECIPE", I18n.t("factory.reason.incompatible_recipe"), Color("d86e63"))
 		return
 	_emit_command("SET_RECIPE", {"entity_id":entity_id, "recipe_id":recipe_id})
@@ -1160,18 +1167,42 @@ func _connection_is_ready(source: Dictionary, target: Dictionary) -> bool:
 
 
 func _connection_validation_reason(source: Dictionary, target: Dictionary) -> String:
-	if source.is_empty() or target.is_empty() or _connection_source_id == _connection_target_id:
+	return _connection_validation_reason_for(
+		_connection_source_id,
+		_connection_source_port_id,
+		_connection_target_id,
+		_connection_target_port_id,
+		_connection_kind,
+		_selected_cargo_item_id,
+		source,
+		target
+	)
+
+
+func _connection_validation_reason_for(
+		source_id: String,
+		source_port_id: String,
+		target_id: String,
+		target_port_id: String,
+		kind: String,
+		item_id: String,
+		source_override: Dictionary = {},
+		target_override: Dictionary = {}) -> String:
+	var source := source_override if not source_override.is_empty() else _entity_by_id(source_id)
+	var target := target_override if not target_override.is_empty() else _entity_by_id(target_id)
+	var normalized_kind := kind.to_upper()
+	if source.is_empty() or target.is_empty() or source_id == target_id:
 		return "INVALID_LINK"
-	var source_port := _view_model.connection_port_by_id(source, _connection_source_port_id, "OUTPUT") if not _connection_source_port_id.is_empty() else {}
-	var target_port := _view_model.connection_port_by_id(target, _connection_target_port_id, "INPUT") if not _connection_target_port_id.is_empty() else {}
-	if not _connection_source_port_id.is_empty() or not _connection_target_port_id.is_empty():
+	var source_port := _view_model.connection_port_by_id(source, source_port_id, "OUTPUT") if not source_port_id.is_empty() else {}
+	var target_port := _view_model.connection_port_by_id(target, target_port_id, "INPUT") if not target_port_id.is_empty() else {}
+	if not source_port_id.is_empty() or not target_port_id.is_empty():
 		if source_port.is_empty() or target_port.is_empty() or not _view_model.compatible_port_pair(source, source_port, target, target_port):
 			return "CARGO_INCOMPATIBLE"
-	var item_id := _selected_cargo_item_id if _connection_kind == "CARGO" else ""
-	if _connection_kind == "POWER":
+	var cargo_item_id := item_id if normalized_kind == "CARGO" else ""
+	if normalized_kind == "POWER":
 		if not _view_model.is_power_connection_valid(source, target) or (not source_port.is_empty() and str(source_port.get("kind", "")) != "POWER"):
 			return "INVALID_LINK"
-	elif item_id.is_empty() or (not source_port.is_empty() and not _view_model.compatible_cargo_items_for_ports(source_port, target_port, source, _catalog_item_ids()).has(item_id)) or (source_port.is_empty() and not _view_model.compatible_cargo_items(source, target, _catalog_item_ids()).has(item_id)):
+	elif cargo_item_id.is_empty() or (not source_port.is_empty() and not _view_model.compatible_cargo_items_for_ports(source_port, target_port, source, _catalog_item_ids()).has(cargo_item_id)) or (source_port.is_empty() and not _view_model.compatible_cargo_items(source, target, _catalog_item_ids()).has(cargo_item_id)):
 		return "CARGO_INCOMPATIBLE"
 	var source_kind := str(source.get("node_kind", source.get("kind", ""))).to_upper()
 	var target_kind := str(target.get("node_kind", target.get("kind", ""))).to_upper()
@@ -1179,26 +1210,52 @@ func _connection_validation_reason(source: Dictionary, target: Dictionary) -> St
 	var target_router_mode := str(target.get("router_mode", "BIDIRECTIONAL")).to_upper()
 	var source_allows_fan_out := source_kind == "STORAGE" or (source_kind == "ROUTER" and source_router_mode != "MERGE")
 	var target_allows_fan_in := target_kind == "ROUTER" and target_router_mode != "SPLIT"
-	for link_value in _snapshot.get("links", []):
-		var link := link_value as Dictionary
-		if str(link.get("kind", "")) == _connection_kind \
-				and str(link.get("source_id", "")) == _connection_source_id \
-				and str(link.get("target_id", "")) == _connection_target_id \
-				and str(link.get("item_id", "")) == item_id:
-			return "DUPLICATE_LINK"
-		if _connection_kind != "CARGO" or str(link.get("kind", "")) != "CARGO" or str(link.get("item_id", "")) != item_id:
-			continue
-		if str(link.get("source_id", "")) == _connection_source_id and not source_allows_fan_out:
+	if _exact_connection_keys.has(_exact_connection_key(normalized_kind, source_id, target_id, cargo_item_id)):
+		return "DUPLICATE_LINK"
+	if normalized_kind == "CARGO":
+		if not source_allows_fan_out and _cargo_source_item_keys.has(_endpoint_item_key(source_id, cargo_item_id)):
 			return "CARGO_OUTPUT_OCCUPIED"
-		if str(link.get("target_id", "")) == _connection_target_id and not target_allows_fan_in:
+		if not target_allows_fan_in and _cargo_target_item_keys.has(_endpoint_item_key(target_id, cargo_item_id)):
 			return "CARGO_INPUT_OCCUPIED"
 	return ""
+
+
+func _exact_connection_key(kind: String, source_id: String, target_id: String, item_id: String) -> String:
+	return "\n".join(PackedStringArray([kind.to_upper(), source_id, target_id, item_id]))
+
+
+func _endpoint_item_key(entity_id: String, item_id: String) -> String:
+	return "\n".join(PackedStringArray([entity_id, item_id]))
+
+
+func _on_port_drag_started(origin_id: String, origin_port: Dictionary, visible_candidates: Array) -> void:
+	var candidate_keys: Array[String] = []
+	for candidate_value in visible_candidates:
+		var candidate := candidate_value as Dictionary
+		var entity_id := str(candidate.get("entity_id", ""))
+		var candidate_port: Dictionary = candidate.get("port", {}) as Dictionary
+		var pair := _normalized_connection_pair(origin_id, origin_port, entity_id, candidate_port)
+		if pair.is_empty():
+			continue
+		var preflight := _port_pair_preflight(
+			str(pair.get("source_id", "")),
+			pair.get("source_port", {}) as Dictionary,
+			str(pair.get("target_id", "")),
+			pair.get("target_port", {}) as Dictionary
+		)
+		if bool(preflight.get("valid", false)):
+			candidate_keys.append("%s:%s" % [entity_id, str(candidate_port.get("id", ""))])
+	_canvas.set_port_drag_candidates(candidate_keys)
 
 
 func _on_port_connection_requested(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary) -> void:
 	var source := _entity_by_id(source_id)
 	var target := _entity_by_id(target_id)
 	if source.is_empty() or target.is_empty():
+		return
+	var preflight := _port_pair_preflight(source_id, source_port, target_id, target_port)
+	if not bool(preflight.get("valid", false)):
+		_set_connection_reason_feedback(str(preflight.get("reason_code", "INVALID_LINK")))
 		return
 	_connection_source_id = source_id
 	_connection_target_id = target_id
@@ -1208,7 +1265,7 @@ func _on_port_connection_requested(source_id: String, source_port: Dictionary, t
 	_active_tool = "CONNECT"
 	var submit_immediately := _connection_kind == "POWER"
 	if _connection_kind == "CARGO":
-		var items := _view_model.compatible_cargo_items_for_ports(source_port, target_port, source, _catalog_item_ids())
+		var items: Array = preflight.get("item_ids", []) as Array
 		_selected_cargo_item_id = str(items[0]) if items.size() == 1 else ""
 		submit_immediately = items.size() == 1
 	else:
@@ -1221,9 +1278,66 @@ func _on_port_connection_requested(source_id: String, source_port: Dictionary, t
 		_set_feedback("SELECT_CARGO_ITEM", I18n.t("factory.connection.choose_item", "Choose the item carried by this route, then confirm the connection."), Color("d5a45c"))
 
 
-func _on_port_drag_preview(_source_id: String, _source_port: Dictionary, target_id: String, _target_port: Dictionary, valid: bool) -> void:
-	if valid:
+func _on_port_drag_preview(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary, structural_valid: bool) -> void:
+	if source_id.is_empty() or target_id.is_empty():
+		return
+	if not structural_valid:
+		_canvas.set_port_drag_validation(false, "CARGO_INCOMPATIBLE")
+		_set_connection_reason_feedback("CARGO_INCOMPATIBLE")
+		return
+	var preflight := _port_pair_preflight(source_id, source_port, target_id, target_port)
+	var valid := bool(preflight.get("valid", false))
+	var reason_code := str(preflight.get("reason_code", ""))
+	_canvas.set_port_drag_validation(valid, reason_code)
+	if not valid:
+		_set_connection_reason_feedback(reason_code)
+		return
+	var item_ids: Array = preflight.get("item_ids", []) as Array
+	if item_ids.size() > 1:
+		_set_feedback("SELECT_CARGO_ITEM", I18n.t("factory.connection.choose_item", "Choose the item carried by this route, then confirm the connection."), Color("d5a45c"))
+	else:
 		_set_feedback("PORT_READY", I18n.t("factory.connection.port_ready", "Compatible input port: %s") % target_id, Color("6fbf92"))
+
+
+func _normalized_connection_pair(first_id: String, first_port: Dictionary, second_id: String, second_port: Dictionary) -> Dictionary:
+	var first_direction := str(first_port.get("direction", "")).to_upper()
+	var second_direction := str(second_port.get("direction", "")).to_upper()
+	if first_direction == "OUTPUT" and second_direction == "INPUT":
+		return {"source_id":first_id, "source_port":first_port, "target_id":second_id, "target_port":second_port}
+	if first_direction == "INPUT" and second_direction == "OUTPUT":
+		return {"source_id":second_id, "source_port":second_port, "target_id":first_id, "target_port":first_port}
+	return {}
+
+
+func _port_pair_preflight(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary) -> Dictionary:
+	var source := _entity_by_id(source_id)
+	var target := _entity_by_id(target_id)
+	if source.is_empty() or target.is_empty() or not _view_model.compatible_port_pair(source, source_port, target, target_port):
+		return {"valid":false, "reason_code":"CARGO_INCOMPATIBLE", "item_ids":[]}
+	var kind := str(source_port.get("kind", "CARGO")).to_upper()
+	if kind == "POWER":
+		var power_reason := _connection_validation_reason_for(source_id, str(source_port.get("id", "")), target_id, str(target_port.get("id", "")), kind, "", source, target)
+		return {"valid":power_reason.is_empty(), "reason_code":power_reason, "item_ids":[]}
+	var compatible_items := _view_model.compatible_cargo_items_for_ports(source_port, target_port, source, _catalog_item_ids())
+	var valid_items: Array[String] = []
+	var first_reason := "CARGO_INCOMPATIBLE"
+	for item_value in compatible_items:
+		var item_id := str(item_value)
+		var reason := _connection_validation_reason_for(source_id, str(source_port.get("id", "")), target_id, str(target_port.get("id", "")), kind, item_id, source, target)
+		if reason.is_empty():
+			valid_items.append(item_id)
+		elif first_reason == "CARGO_INCOMPATIBLE":
+			first_reason = reason
+	return {"valid":not valid_items.is_empty(), "reason_code":"" if not valid_items.is_empty() else first_reason, "item_ids":valid_items}
+
+
+func _set_connection_reason_feedback(reason_code: String) -> void:
+	var normalized_reason := reason_code if not reason_code.is_empty() else "INVALID_LINK"
+	var reason_key := "factory.reason.%s" % normalized_reason.to_lower()
+	var reason_text := str(I18n.t(reason_key))
+	if reason_text == reason_key:
+		reason_text = I18n.t("factory.feedback.invalid_connection")
+	_set_feedback(normalized_reason, reason_text, Color("d86e63"))
 
 
 func _update_placement_preview() -> void:
@@ -1267,7 +1381,6 @@ func _clear_missing_selection() -> void:
 		_selected_cargo_item_id = ""
 	if not _selected_building_id.is_empty() and _view_model.building_by_id(_snapshot, _selected_building_id).is_empty():
 		_selected_building_id = ""
-		_selected_recipe_id = ""
 		if _active_tool == "BUILD":
 			_active_tool = ""
 	var selection_kind := str(_selection.get("kind", ""))
@@ -1429,12 +1542,29 @@ func _add_entity_recipe_controls(entity: Dictionary) -> void:
 			selected_index = index
 		index += 1
 	recipe_options.select(selected_index)
+	recipe_options.item_selected.connect(func(selected: int) -> void:
+		var recipe_id := str(recipe_options.get_item_metadata(selected))
+		if recipe_id.is_empty():
+			return
+		_request_set_recipe(str(entity.get("id", "")), recipe_id)
+	)
 	_inspector_body.add_child(recipe_options)
-	var apply_button := _make_button(I18n.t("factory.action.set_recipe"), I18n.t("factory.tooltip.set_recipe"))
-	apply_button.name = "ApplyEntityRecipe"
-	apply_button.disabled = index <= 1
-	apply_button.pressed.connect(func() -> void: _request_set_recipe(str(entity.get("id", "")), str(recipe_options.get_item_metadata(recipe_options.selected))))
-	_inspector_body.add_child(apply_button)
+	var recipe_status := _make_label(
+		I18n.t("factory.machine.unconfigured", "No recipe configured") if current_recipe_id.is_empty() else I18n.t("factory.machine.recipe_selection_hint", "Select a recipe to apply it immediately."),
+		Color("e0ae5c") if current_recipe_id.is_empty() else Color("9aa6a1")
+	)
+	recipe_status.name = "MachineRecipeStatus"
+	_inspector_body.add_child(recipe_status)
+	var copy_button := _make_button(I18n.t("factory.action.copy_machine_configuration", "Copy machine configuration"), I18n.t("factory.tooltip.copy_machine_configuration", "Copy this machine's recipe without copying inventory, progress, or connections."))
+	copy_button.name = "CopyMachineConfiguration"
+	copy_button.disabled = current_recipe_id.is_empty() or _view_model.recipe_by_id(_snapshot, current_recipe_id).is_empty()
+	copy_button.pressed.connect(_copy_selected_machine_configuration)
+	_inspector_body.add_child(copy_button)
+	var paste_button := _make_button(I18n.t("factory.action.paste_machine_configuration", "Paste machine configuration"), I18n.t("factory.tooltip.paste_machine_configuration", "Apply the copied recipe if it is compatible with this machine."))
+	paste_button.name = "PasteMachineConfiguration"
+	paste_button.disabled = not _copied_machine_configuration_compatible(entity)
+	paste_button.pressed.connect(_paste_machine_configuration)
+	_inspector_body.add_child(paste_button)
 
 
 func _render_resource_inspector(field: Dictionary) -> void:
@@ -1460,12 +1590,7 @@ func _render_resource_inspector(field: Dictionary) -> void:
 
 
 func _select_building_for_field(building_id: String, field: Dictionary) -> void:
-	_selected_building_id = building_id
-	_selected_recipe_id = ""
-	_active_tool = "BUILD"
-	_connection_source_id = ""
-	_connection_target_id = ""
-	_selected_cargo_item_id = ""
+	_select_building_id(building_id, false)
 	_preview_tile = _view_model.footprint_origin(field.get("footprint", {}))
 	_canvas.focus_tile(_preview_tile)
 	_render()
@@ -1684,12 +1809,23 @@ func _rebuild_snapshot_lookups() -> void:
 	_entities_by_id.clear()
 	_links_by_id.clear()
 	_orders_by_id.clear()
+	_exact_connection_keys.clear()
+	_cargo_source_item_keys.clear()
+	_cargo_target_item_keys.clear()
 	for entity_value in _snapshot.get("entities", []):
 		var entity := entity_value as Dictionary
 		_entities_by_id[str(entity.get("id", ""))] = entity
 	for link_value in _snapshot.get("links", []):
 		var link := link_value as Dictionary
 		_links_by_id[str(link.get("id", ""))] = link
+		var kind := str(link.get("kind", "")).to_upper()
+		var source_id := str(link.get("source_id", ""))
+		var target_id := str(link.get("target_id", ""))
+		var item_id := str(link.get("item_id", "")) if kind == "CARGO" else ""
+		_exact_connection_keys[_exact_connection_key(kind, source_id, target_id, item_id)] = true
+		if kind == "CARGO":
+			_cargo_source_item_keys[_endpoint_item_key(source_id, item_id)] = true
+			_cargo_target_item_keys[_endpoint_item_key(target_id, item_id)] = true
 	for order_value in _snapshot.get("construction_orders", []):
 		var order := order_value as Dictionary
 		_orders_by_id[str(order.get("id", ""))] = order

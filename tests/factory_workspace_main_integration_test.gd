@@ -26,8 +26,8 @@ func _run() -> void:
 		_finish(null)
 		return
 
-	# Exercise the real pointer route at a normal desktop size first; compact
-	# reachability is checked separately below after resizing the same Main tree.
+	# Exercise the real pointer route at a non-design physical size so the test
+	# crosses Godot's Window-to-logical input transform.
 	root.size = Vector2i(1400, 900)
 	var main_scene := load("res://src/ui/main.tscn") as PackedScene
 	_check(main_scene != null, "MainScene loads after application autoload initialization")
@@ -71,13 +71,48 @@ func _run() -> void:
 	)
 	var palette := main.find_child("BuildingPalette", true, false) as OptionButton
 	var canvas := main.find_child("FactoryCanvas", true, false) as Control
-	var order_count_before: int = game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {}).size()
+	var orders_before: Dictionary = game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {}).duplicate(true)
+	var order_count_before := orders_before.size()
 	_check(live_workspace != null and _select_option_metadata(palette, "grid_solar_array"), "real Main Factory palette selects a physical building")
+	await _settle()
+	canvas = main.find_child("FactoryCanvas", true, false) as Control
 	var pointer_placement_dispatched := false
 	if canvas != null:
 		pointer_placement_dispatched = await _place_valid_canvas_tile_with_pointer(canvas)
 	await _settle()
-	_check(pointer_placement_dispatched and game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {}).size() == order_count_before + 1, "Main navigation, real palette signal, and routed mouse placement execute a versioned Factory intent against Game")
+	var orders_after: Dictionary = game.state.factory_worlds.get("earth-surface-grid", {}).get("construction_orders", {})
+	_check(pointer_placement_dispatched and orders_after.size() == order_count_before + 1, "Main navigation, real palette signal, and routed mouse placement execute a versioned Factory intent against Game")
+	var live_order_id := ""
+	for order_id_value in orders_after.keys():
+		if not orders_before.has(order_id_value):
+			live_order_id = str(order_id_value)
+			break
+	game.set_process(false)
+	game._simulation_accumulator_ms = 0.0
+	if live_workspace != null:
+		live_workspace.call("_set_active_subworkspace", "CONSTRUCTION")
+	await _settle()
+	var progress_before := main.find_child("ConstructionProgress", true, false) as ProgressBar
+	var progress_value_before := float(progress_before.value) if progress_before != null else -1.0
+	var tick_events: Array = []
+	var capture_tick_event := func(event: Dictionary) -> void: tick_events.append(event.duplicate(true))
+	game.domain_event.connect(capture_tick_event)
+	game._process(0.1)
+	game.domain_event.disconnect(capture_tick_event)
+	# Force only Main's already-authorized coalesced refresh window due; do not
+	# invoke the Factory refresh button or call apply_snapshot directly.
+	main.set("_last_refresh_ms", 0)
+	main.call("_process", 0.0)
+	await _settle()
+	var progress_after := main.find_child("ConstructionProgress", true, false) as ProgressBar
+	var progress_value_after := float(progress_after.value) if progress_after != null else -1.0
+	_check(
+		not live_order_id.is_empty() and tick_events.is_empty()
+		and progress_value_before >= 0.0 and progress_value_after > progress_value_before and progress_value_after < 100.0,
+		"an in-progress Factory order updates its visible progress without a domain event or manual refresh (%s: %.1f -> %.1f, events=%s)" % [live_order_id, progress_value_before, progress_value_after, str(tick_events)]
+	)
+	if live_workspace != null:
+		live_workspace.call("_set_active_subworkspace", "CANVAS")
 	var world_selector := main.find_child("FactoryWorldSelector", true, false) as OptionButton
 	_check(_select_option_metadata(world_selector, lunar_world_ids[0]), "real Factory world selector chooses the surveyed Lunar workspace")
 	await _settle()
@@ -122,11 +157,15 @@ func _run() -> void:
 		]
 	)
 
-	root.size = Vector2i(800, 600)
+	root.size = Vector2i(1366, 768)
 	await _settle()
 	var industry_scroll := main.find_child("industry", true, false) as ScrollContainer
-	_check(industry_scroll != null and industry_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO and industry_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO, "compact Factory layout keeps both axes reachable through bounded scrolling")
-	_check(main.find_child("BuildingPalette", true, false) != null and main.find_child("FactoryCanvas", true, false) != null and main.find_child("FactoryInspector", true, false) != null, "compact Factory layout retains palette, canvas, and inspector controls")
+	_check(industry_scroll != null and industry_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO and industry_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO, "fixed Factory layout keeps bounded overflow reachable without a compact reflow")
+	_check(main.find_child("BuildingPalette", true, false) != null and main.find_child("FactoryCanvas", true, false) != null and main.find_child("FactoryInspector", true, false) != null, "1366x768 physical output retains the authored palette, canvas, and inspector controls")
+	var bottom_palette := main.find_child("FactoryBuildPalette", true, false) as Control
+	canvas = main.find_child("FactoryCanvas", true, false) as Control
+	_check(bottom_palette != null and canvas != null and bottom_palette.get_parent() == canvas.get_parent() and bottom_palette.position.y >= canvas.position.y + canvas.size.y - 0.5, "1366x768 keeps the authored construction dock below the canvas without breakpoint reflow")
+	_check(bottom_palette != null and bottom_palette.position.y + bottom_palette.size.y <= (bottom_palette.get_parent() as Control).size.y + 0.5, "1366x768 keeps the complete construction dock inside the authored Factory column")
 
 	var construction_navigation := main.find_child("Navigation_construction", true, false) as Button
 	if construction_navigation != null:
@@ -232,14 +271,15 @@ func _place_valid_canvas_tile_with_pointer(canvas: Control) -> bool:
 	if canvas == null or canvas.size.x < 32.0 or canvas.size.y < 32.0:
 		return false
 	# Tile (1,1) is a stable empty starter-world coordinate: resource fields begin
-	# at x=32/72 and the depot at x=110. Route viewport-space pointer events
-	# through the Window so Control hit testing and the full mouse branch run.
+	# at x=32/72 and the depot at x=110. Inject the physical pointer position at
+	# the Window boundary; Viewport dispatch must map it back to the logical canvas.
 	var local_point: Vector2 = canvas.call("_world_to_screen", Vector2(1, 1)) + Vector2(2, 2)
-	var viewport_point := canvas.get_global_rect().position + local_point
+	var canvas_point := canvas.get_global_transform_with_canvas() * local_point
+	var physical_point := canvas.get_viewport().get_screen_transform() * canvas_point
 	var motion := InputEventMouseMotion.new()
-	motion.position = viewport_point
-	motion.global_position = viewport_point
-	root.push_input(motion, false)
+	motion.position = physical_point
+	motion.global_position = physical_point
+	Input.parse_input_event(motion)
 	await process_frame
 	var preview: Dictionary = canvas.get("_placement_preview")
 	if not bool(preview.get("valid", false)):
@@ -247,16 +287,16 @@ func _place_valid_canvas_tile_with_pointer(canvas: Control) -> bool:
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
-	press.position = viewport_point
-	press.global_position = viewport_point
-	root.push_input(press, false)
+	press.position = physical_point
+	press.global_position = physical_point
+	Input.parse_input_event(press)
 	await process_frame
 	var release := InputEventMouseButton.new()
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
-	release.position = viewport_point
-	release.global_position = viewport_point
-	root.push_input(release, false)
+	release.position = physical_point
+	release.global_position = physical_point
+	Input.parse_input_event(release)
 	return true
 
 
@@ -275,7 +315,7 @@ func _finish(main: Control) -> void:
 	if main != null:
 		main.queue_free()
 	if failures.is_empty():
-		print("PASS: Factory MainScene world selection, compact reachability, and zh-CN inspector integration")
+		print("PASS: Factory MainScene world selection, fixed-layout reachability, and zh-CN inspector integration")
 		quit(0)
 		return
 	for failure in failures:

@@ -31,9 +31,9 @@ func _run() -> void:
 	_test_small_router_overlapping_port_hits(workspace)
 	_test_workspace_tabs(workspace)
 	_test_hidden_canvas_defers_snapshot_rebuild(workspace)
-	_test_production_and_recipe_views(workspace)
+	_test_production_view(workspace)
 	_test_construction_intents(workspace, intents)
-	_test_structured_port_drag_intent(workspace, intents)
+	await _test_structured_port_drag_intent(workspace, intents)
 	_test_router_accepts_multiple_inputs(workspace, intents)
 	_test_router_mode_connection_validation(workspace)
 	_test_empty_wildcard_ports_use_catalog(workspace, intents)
@@ -123,14 +123,19 @@ func _test_small_router_overlapping_port_hits(workspace) -> void:
 	var drag: Dictionary = canvas.get("_port_drag")
 	_check(began and str(drag.get("source_port", {}).get("id", "")) == "small-out", "A 4x4 router at low detail selects the nearest OUTPUT hit even when input/output hit boxes overlap")
 	canvas.cancel_port_drag()
+	var forgiving_point := output_center + Vector2(15, 0)
+	_check(canvas._port_at(forgiving_point, "", false, canvas.PORT_START_HIT_RADIUS_PIXELS).is_empty() and not canvas._port_at(forgiving_point).is_empty(), "port activation stays tight while target snapping retains the DSP-style 24px radius")
 	canvas._invalidate_hit_geometry()
 
 
 func _test_workspace_tabs(workspace) -> void:
-	for workspace_id in ["CANVAS", "PRODUCTION", "RECIPES", "CONSTRUCTION"]:
+	for workspace_id in ["CANVAS", "PRODUCTION", "CONSTRUCTION"]:
 		workspace._set_active_subworkspace(workspace_id)
 		_check(str(workspace.get("_active_subworkspace")) == workspace_id, "Factory tab %s is stable" % workspace_id)
-	_check(workspace.find_child("FactoryTabCanvas", true, false) != null and workspace.find_child("FactoryTabProduction", true, false) != null and workspace.find_child("FactoryTabRecipes", true, false) != null and workspace.find_child("FactoryTabConstruction", true, false) != null, "Factory exposes four persistent workspaces")
+	_check(workspace.find_child("FactoryTabCanvas", true, false) != null and workspace.find_child("FactoryTabProduction", true, false) != null and workspace.find_child("FactoryTabConstruction", true, false) != null, "Factory exposes its three persistent workspaces")
+	_check(workspace.find_child("FactoryTabRecipes", true, false) == null and workspace.find_child("FactoryRecipeWorkspace", true, false) == null, "Factory no longer exposes a separate recipe page")
+	workspace._set_active_subworkspace("RECIPES")
+	_check(str(workspace.get("_active_subworkspace")) == "CANVAS", "obsolete recipe-page navigation safely falls back to the Canvas")
 
 
 func _test_hidden_canvas_defers_snapshot_rebuild(workspace) -> void:
@@ -145,18 +150,11 @@ func _test_hidden_canvas_defers_snapshot_rebuild(workspace) -> void:
 	_check(int((canvas.get("_snapshot") as Dictionary).get("runtime_revision", -1)) == before_revision + 10, "Canvas applies the newest deferred snapshot when the player returns")
 
 
-func _test_production_and_recipe_views(workspace) -> void:
+func _test_production_view(workspace) -> void:
 	workspace._set_active_subworkspace("PRODUCTION")
 	_check(workspace.find_child("ProductionStatusSummary", true, false) != null and workspace.find_child("ProductionRows", true, false) != null, "Production workspace shows operating summary and rows")
 	var filter := workspace.find_child("ProductionStatusFilter", true, false) as OptionButton
 	_check(filter != null and filter.item_count >= 6, "Production workspace exposes state filters")
-	workspace._set_active_subworkspace("RECIPES")
-	var search := workspace.find_child("RecipeSearch", true, false) as LineEdit
-	_check(search != null and workspace.find_child("RecipeRows", true, false) != null, "Recipe workspace exposes searchable recipe catalog")
-	if search != null:
-		search.text = "iron"
-		search.text_changed.emit(search.text)
-	_check(workspace.find_child("SelectRecipegrid_refine_iron", true, false) != null, "Recipe workspace shows cycle, IO, machines, and selectable recipe")
 
 
 func _test_construction_intents(workspace, intents: Array) -> void:
@@ -168,11 +166,78 @@ func _test_construction_intents(workspace, intents: Array) -> void:
 
 
 func _test_structured_port_drag_intent(workspace, intents: Array) -> void:
+	workspace._set_active_subworkspace("CANVAS")
+	var canvas = workspace.canvas()
+	canvas.reset_camera()
+	await _force_canvas_draw(canvas)
+	var entity_center: Vector2 = canvas._footprint_rect(workspace._entity_by_id("smelter-a").get("footprint", {}), 4.0).get_center()
+	canvas._on_gui_input(_left_button(entity_center, true))
+	canvas._on_gui_input(_left_button(entity_center, false))
+	_check((canvas.get("_port_drag") as Dictionary).is_empty() and str((workspace.get("_selection") as Dictionary).get("id", "")) == "smelter-a", "a real click in a small entity's safe body opens its Inspector instead of starting a hidden port draft")
+	var source_point := _canvas_port_point(workspace, "smelter-a", "smelter-out-ingot", "OUTPUT")
+	var target_point := _canvas_port_point(workspace, "depot-a", "depot-in-any", "INPUT")
 	var before := intents.size()
-	workspace.canvas().port_connection_requested.emit("smelter-a", {"id":"smelter-out-ingot", "direction":"OUTPUT", "kind":"CARGO", "item_id":"iron_ingot"}, "depot-a", {"id":"depot-in-any", "direction":"INPUT", "kind":"CARGO", "item_id":"*"})
+	canvas._on_gui_input(_left_button(source_point, true))
+	canvas._on_gui_input(_mouse_motion(target_point))
+	var active_drag: Dictionary = canvas.get("_port_drag")
+	_check(bool(active_drag.get("valid", false)) and str(active_drag.get("target_id", "")) == "depot-a", "DSP-style port drag snaps to the exact compatible target and uses authoritative green preflight")
+	canvas._on_gui_input(_left_button(target_point, false))
 	var intent: Dictionary = intents.back() as Dictionary if intents.size() > before else {}
 	var payload: Dictionary = intent.get("payload", {}) as Dictionary
-	_check(str(intent.get("kind", "")) == "CONNECT_ENTITIES" and str(payload.get("source_port_id", "")) == "smelter-out-ingot" and str(payload.get("target_port_id", "")) == "depot-in-any", "Dragging compatible structured ports emits CONNECT_ENTITIES with concrete port ids")
+	_check(intents.size() == before + 1 and str(intent.get("kind", "")) == "CONNECT_ENTITIES" and str(payload.get("source_port_id", "")) == "smelter-out-ingot" and str(payload.get("target_port_id", "")) == "depot-in-any", "real output-to-input mouse drag emits one CONNECT_ENTITIES intent with exact port ids")
+
+	var reverse_input := _canvas_port_point(workspace, "depot-b", "depot-b-in-any", "INPUT")
+	var reverse_output := _canvas_port_point(workspace, "mine-c", "mine-c-out-iron", "OUTPUT")
+	var before_reverse_drag := intents.size()
+	canvas._on_gui_input(_left_button(reverse_input, true))
+	canvas._on_gui_input(_mouse_motion(reverse_output))
+	canvas._on_gui_input(_left_button(reverse_output, false))
+	var reverse_drag_intent: Dictionary = intents.back() as Dictionary if intents.size() > before_reverse_drag else {}
+	var reverse_drag_payload: Dictionary = reverse_drag_intent.get("payload", {}) as Dictionary
+	_check(intents.size() == before_reverse_drag + 1 and str(reverse_drag_payload.get("source_id", "")) == "mine-c" and str(reverse_drag_payload.get("target_id", "")) == "depot-b", "real input-to-output drag normalizes direction and emits one exact connection intent")
+
+	var click_source := _canvas_port_point(workspace, "smelter-a", "smelter-out-ingot", "OUTPUT")
+	var click_target := _canvas_port_point(workspace, "depot-b", "depot-b-in-any", "INPUT")
+	var before_click_connect := intents.size()
+	canvas._on_gui_input(_left_button(click_source, true))
+	canvas._on_gui_input(_left_button(click_source, false))
+	_check(bool((canvas.get("_port_drag") as Dictionary).get("click_mode", false)), "stationary output-port click enters persistent click-to-connect preview")
+	canvas._on_gui_input(_mouse_motion(click_target))
+	canvas._on_gui_input(_left_button(click_target, true))
+	var reverse_intent: Dictionary = intents.back() as Dictionary if intents.size() > before_click_connect else {}
+	var reverse_payload: Dictionary = reverse_intent.get("payload", {}) as Dictionary
+	_check(intents.size() == before_click_connect + 1 and str(reverse_payload.get("source_id", "")) == "smelter-a" and str(reverse_payload.get("target_id", "")) == "depot-b", "output-first click connection submits on the second port click")
+
+	var power_source := _canvas_port_point(workspace, "power-a", "power-out", "OUTPUT")
+	var power_target := _canvas_port_point(workspace, "mine-c", "power-in", "INPUT")
+	var before_power := intents.size()
+	canvas._on_gui_input(_left_button(power_source, true))
+	canvas._on_gui_input(_mouse_motion(power_target))
+	canvas._on_gui_input(_left_button(power_target, false))
+	var power_intent: Dictionary = intents.back() as Dictionary if intents.size() > before_power else {}
+	var power_payload: Dictionary = power_intent.get("payload", {}) as Dictionary
+	_check(intents.size() == before_power + 1 and str(power_payload.get("link_kind", "")) == "POWER" and str(power_payload.get("source_port_id", "")) == "power-out" and str(power_payload.get("target_port_id", "")) == "power-in", "real Power-port drag uses the same snap, preflight and exact CONNECT_ENTITIES path")
+
+	var occupied_source := _canvas_port_point(workspace, "mine-a", "mine-out-iron", "OUTPUT")
+	var occupied_target := _canvas_port_point(workspace, "depot-b", "depot-b-in-any", "INPUT")
+	var before_invalid := intents.size()
+	canvas._on_gui_input(_left_button(occupied_source, true))
+	var candidate_keys: Dictionary = (canvas.get("_port_drag") as Dictionary).get("candidate_keys", {}) as Dictionary
+	canvas._on_gui_input(_mouse_motion(occupied_target))
+	var invalid_drag: Dictionary = canvas.get("_port_drag")
+	_check(not candidate_keys.has("depot-b:depot-b-in-any") and not bool(invalid_drag.get("valid", true)) and str(invalid_drag.get("reason_code", "")) == "CARGO_OUTPUT_OCCUPIED", "occupied producer output is excluded from candidates and displays the same rejection used by submission")
+	canvas._on_gui_input(_left_button(occupied_target, false))
+	_check(intents.size() == before_invalid, "invalid red port drag cancels without emitting a command")
+
+	canvas._on_gui_input(_left_button(source_point, true))
+	canvas._on_gui_input(_right_button(source_point))
+	_check((canvas.get("_port_drag") as Dictionary).is_empty() and intents.size() == before_invalid, "right-click cancels a direct port draft without a trailing connection")
+
+	canvas._on_gui_input(_left_button(source_point, true))
+	var updated_snapshot := _fixture()
+	updated_snapshot["topology_revision"] = int(updated_snapshot.get("topology_revision", 0)) + 1
+	workspace.apply_snapshot(updated_snapshot)
+	_check((canvas.get("_port_drag") as Dictionary).is_empty(), "topology revision changes cancel a stale in-progress port gesture")
 
 
 func _test_router_accepts_multiple_inputs(workspace, intents: Array) -> void:
@@ -202,7 +267,7 @@ func _probe_cargo_connection(workspace, source_id: String, source_port_id: Strin
 
 func _test_empty_wildcard_ports_use_catalog(workspace, intents: Array) -> void:
 	var before := intents.size()
-	workspace.canvas().port_connection_requested.emit("router-a", {"id":"router-out-any", "direction":"OUTPUT", "kind":"CARGO", "item_id":"*"}, "depot-a", {"id":"depot-in-any", "direction":"INPUT", "kind":"CARGO", "item_id":"*"})
+	workspace.canvas().port_connection_requested.emit("router-a", {"id":"router-out-any", "direction":"OUTPUT", "kind":"CARGO", "item_id":"*"}, "depot-b", {"id":"depot-b-in-any", "direction":"INPUT", "kind":"CARGO", "item_id":"*"})
 	var selector := workspace.find_child("CargoItem", true, false) as OptionButton
 	_check(intents.size() == before and selector != null and selector.item_count > 2, "Ambiguous wildcard routes wait for an explicit cargo choice")
 	if selector != null and selector.item_count > 1:
@@ -242,6 +307,7 @@ func _fixture() -> Dictionary:
 			_entity("smelter-a", "MACHINE", "Arc smelter", Vector2i(60, 20), {"inputs":["iron_ore"], "outputs":["iron_ingot"], "input_ports":[{"id":"smelter-in-iron", "direction":"INPUT", "channel":"ITEM", "item_id":"iron_ore"}], "output_ports":[{"id":"smelter-out-ingot", "direction":"OUTPUT", "channel":"ITEM", "item_id":"iron_ingot"}], "accepts_power":true}),
 			_entity("depot-a", "STORAGE", "Bulk depot", Vector2i(100, 20), {"inputs":["*"], "outputs":["*"], "input_ports":[{"id":"depot-in-any", "direction":"INPUT", "channel":"ITEM", "item_id":"*"}], "output_ports":[{"id":"depot-out-any", "direction":"OUTPUT", "channel":"ITEM", "item_id":"*"}]}),
 			_entity("depot-b", "STORAGE", "Bulk depot B", Vector2i(135, 20), {"inputs":["*"], "outputs":["*"], "input_ports":[{"id":"depot-b-in-any", "direction":"INPUT", "channel":"ITEM", "item_id":"*"}], "output_ports":[{"id":"depot-b-out-any", "direction":"OUTPUT", "channel":"ITEM", "item_id":"*"}]}),
+			_entity("power-a", "POWER", "Solar array", Vector2i(150, 80), {"inputs":[], "outputs":[], "provides_power":true}),
 			_entity("router-a", "ROUTER", "Cargo merger", Vector2i(100, 50), {"inputs":["*"], "outputs":["*"], "input_ports":[{"id":"router-in-any", "direction":"INPUT", "channel":"ITEM", "item_id":"*"}], "output_ports":[{"id":"router-out-any", "direction":"OUTPUT", "channel":"ITEM", "item_id":"*"}]}, "MERGE", Vector2i(4, 4)),
 			_entity("splitter-a", "ROUTER", "Cargo splitter", Vector2i(100, 80), {"inputs":["*"], "outputs":["*"], "input_ports":[{"id":"splitter-in-any", "direction":"INPUT", "channel":"ITEM", "item_id":"*"}], "output_ports":[{"id":"splitter-out-any", "direction":"OUTPUT", "channel":"ITEM", "item_id":"*"}]}, "SPLIT", Vector2i(4, 4))
 		],
@@ -261,6 +327,43 @@ func _fixture() -> Dictionary:
 
 func _entity(entity_id: String, node_kind: String, title: String, origin: Vector2i, ports: Dictionary, router_mode: String = "BIDIRECTIONAL", footprint_size: Vector2i = Vector2i(8, 8)) -> Dictionary:
 	return {"id":entity_id, "node_kind":node_kind, "router_mode":router_mode if node_kind == "ROUTER" else "", "name":title, "definition_id":"grid_arc_smelter", "recipe_id":"grid_refine_iron" if node_kind == "MACHINE" else "", "footprint":{"origin":{"x":origin.x, "y":origin.y}, "size":{"x":footprint_size.x, "y":footprint_size.y}}, "ports":ports, "status":"READY", "inputs":{}, "outputs":{}, "inventory":{}, "actual_rate":0.0, "power_factor":1.0}
+
+
+func _canvas_port_point(workspace, entity_id: String, port_id: String, direction: String) -> Vector2:
+	var canvas = workspace.canvas()
+	canvas._ensure_hit_geometry()
+	var entity: Dictionary = workspace._entity_by_id(entity_id)
+	var view_model = canvas.get("_view_model")
+	var port: Dictionary = view_model.connection_port_by_id(entity, port_id, direction)
+	return canvas._port_center(entity, port, canvas._footprint_rect(entity.get("footprint", {}), 4.0), direction, str(port.get("kind", "CARGO")))
+
+
+func _force_canvas_draw(canvas) -> void:
+	canvas.queue_redraw()
+	RenderingServer.force_draw(false)
+	await process_frame
+
+
+func _mouse_motion(point: Vector2) -> InputEventMouseMotion:
+	var event := InputEventMouseMotion.new()
+	event.position = point
+	return event
+
+
+func _left_button(point: Vector2, pressed: bool) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = pressed
+	event.position = point
+	return event
+
+
+func _right_button(point: Vector2) -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_RIGHT
+	event.pressed = true
+	event.position = point
+	return event
 
 
 func _check(condition: bool, message: String) -> void:

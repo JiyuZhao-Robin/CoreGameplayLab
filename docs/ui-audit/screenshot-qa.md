@@ -1,12 +1,16 @@
 # Screenshot Matrix 与 Visual QA
 
+> 本文的 2026-08-28 结论与图片均是固定画布启用前的历史证据，不能认证
+> 当前 1440×900、`canvas_items + keep` 生产路径。现行自动矩阵必须重新生成，
+> 并按下文记录 logical design size、uniform scale 与安全留边。
+
 审查日期：2026-08-28  
 Reviewer：UI-F Visual QA  
 基线截图：`artifacts/ui/inspection/megastructure_en_1920x1080.png`（文件实际为 **1728×1080**）
 
-## 结论
+## 历史结论（不适用于当前固定画布）
 
-最新 post-fix quick 批次 `artifacts/ui/matrix/ui-f-quick-postfix-20260828` 的 8 张图为 **TARGETED PASS / overall CONDITIONAL PASS**：此前 System Map 卡片重叠、1366 pillarbox/不可读缩放、中文 `R&D` / `MEGA` / `Phase` / task-ID 泄漏均已关闭，巨构阶段也已改为稳定的 4×2 网格。本轮在 System/Megastructure × 1920/1366 × en/zh_CN 中没有残留 P1。
+当时的 post-fix quick 批次 `artifacts/ui/matrix/ui-f-quick-postfix-20260828` 的 8 张图为 **TARGETED PASS / overall CONDITIONAL PASS**：此前 System Map 卡片重叠、1366 pillarbox/不可读缩放、中文 `R&D` / `MEGA` / `Phase` / task-ID 泄漏均已关闭，巨构阶段也已改为稳定的 4×2 网格。本轮在 System/Megastructure × 1920/1366 × en/zh_CN 中没有残留 P1。
 
 整体仍保留 P2：1366 没有折叠三栏，次级字号、按钮高度和 Inspector 密度偏紧；巨构详情仍需要纵向滚动。Full 的其余九页、2560×1440 和交互态仍为 `UNVERIFIED`，不能由本次 targeted PASS 外推为全 UI 认证。
 
@@ -17,10 +21,10 @@ Reviewer：UI-F Visual QA
 脚本：`tools/capture_ui_matrix.ps1`
 
 ```powershell
-# 8 张：System + Megastructure × 1920×1080 / 1366×768 × en / zh_CN
+# 12 张：System + Megastructure × 1440×900 / 1920×1080 / 1366×768 × en / zh_CN
 & 'D:\Projects\standalone\core_gameplay_lab\tools\capture_ui_matrix.ps1' -Mode quick
 
-# 66 张：11 个公开核心页 × 3 个分辨率 × en / zh_CN
+# 88 张：11 个公开核心页 × 4 个分辨率 × en / zh_CN
 & 'D:\Projects\standalone\core_gameplay_lab\tools\capture_ui_matrix.ps1' -Mode full
 ```
 
@@ -32,7 +36,7 @@ artifacts/ui/matrix/<RunId>/<locale>/<resolution>/<page>.png
 
 脚本固定使用 `D:\Godot\godot.exe` 和绝对 `--path D:\Projects\standalone\core_gameplay_lab`，以普通 windowed 模式启动；不使用 `--headless`。它在 Windows DPI 下强制精确 client area，保存 Godot 的真实最终 viewport，不缩放内容，再按引擎保持比例的位置补齐完整 client 边缘。每张图均等待 Godot 到达最终渲染探针并自行退出，检查退出码、`SCRIPT ERROR` / autoload 错误、黑帧颜色采样、文件存在性与 PNG 像素尺寸。`--no-persistence` 防止截图批次写入游戏存档。
 
-项目基准 viewport 为 1440×900（16:10）。旧工作树保持比例时，Godot 的 `get_viewport().get_texture()` 在 1920×1080 窗口内只产生 1728×1080 内容图；这正是旧截图名为 1920×1080、实际却为 1728×1080 的原因。第一批 DSPONLINE 风格重构移除了整体 `canvas_items` stretch，改用原生窗口像素与 Container/anchor 响应布局；后续矩阵仍须保留 client 尺寸和 inset 检查，避免裁切或等比缩小回归。
+项目基准 viewport 为 1440×900（16:10）。生产运行重新统一为 `canvas_items + keep`：1920×1080 窗口中的逻辑内容为 1728×1080，左右各保留 96 px 安全边；2560×1440 中的逻辑内容为 2304×1440，左右各保留 128 px。截图矩阵必须同时记录物理 client 尺寸、逻辑设计尺寸、uniform scale 和 inset，不能为了填满 16:9 输出而二次拉伸或重排 UI。
 
 ### 覆盖集合
 
@@ -117,7 +121,11 @@ Full 批次应逐图检查：顶栏动作是否完整；导航标签是否裁切
 - **本地化**：英文 quick 未出现 CJK，但可见原始 task ID；中文可见 `R&D`、`MEGA`、`Phase 0` 和 task ID。截图层面的中文门禁失败。
 - **未验证**：Full 的其余九页、2560×1440、滚动末端、hover/focus、tooltip、Modal 和动态极值仍保持 `UNVERIFIED`。
 
-## Post-fix Quick 复核（当前）
+## Post-fix Quick 复核（历史证据，已被固定画布契约取代）
+
+> 本节记录的是启用固定画布之前的原生 16:9 布局批次，不能用于认证
+> 当前 `canvas_items + keep` 路径；其中 `inset=0` 和“无 pillarbox”的结论
+> 已明确失效，保留内容仅用于视觉历史对照。
 
 有效批次：`artifacts/ui/matrix/ui-f-quick-postfix-20260828`  
 执行结果：`UI_MATRIX_PASS mode=quick run=ui-f-quick-postfix-20260828 captured=8`。8 张图均通过 Godot 退出码、`SCRIPT ERROR` / autoload、最终帧探针、黑帧颜色采样和精确像素尺寸门禁。Godot 仍打印已知的 `8 resources still in use` 退出清理信息，本批没有脚本或运行时错误。

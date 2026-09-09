@@ -365,8 +365,11 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 	if definition.is_empty() or str(definition.get("kind", "")) not in ENTITY_KINDS:
 		return _failure("UNKNOWN_BUILDING", "Unknown or invalid building definition")
 	if str(definition.get("kind", "")) == "MACHINE":
+		# A machine may be placed before its recipe is configured.  An explicitly
+		# supplied recipe still has to exist and be declared compatible by the
+		# building; the empty value is the intentional unconfigured state.
 		var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
-		if recipe.is_empty() or not definition.get("recipe_ids", []).has(recipe_id):
+		if not recipe_id.is_empty() and (recipe.is_empty() or not definition.get("recipe_ids", []).has(recipe_id)):
 			return _failure("INCOMPATIBLE_RECIPE", "Machine requires a compatible recipe")
 	var size_data: Dictionary = definition.get("footprint", {})
 	var footprint := _footprint(origin, Vector2i(maxi(1, int(size_data.get("width", 1))), maxi(1, int(size_data.get("height", 1)))))
@@ -1812,13 +1815,15 @@ func _status_tone(status: String) -> String:
 func _create_entity(entity_id: String, definition_id: String, origin: Vector2i, recipe_id: String) -> Dictionary:
 	var definition: Dictionary = building_definitions.get(definition_id, {})
 	var size_data: Dictionary = definition.get("footprint", {})
+	var kind := str(definition.get("kind", ""))
+	var initial_status := "NO_RECIPE" if kind == "MACHINE" and recipe_id.is_empty() else "IDLE"
 	return {
 		"id":entity_id,
-		"kind":str(definition.get("kind", "")),
+		"kind":kind,
 		"definition_id":definition_id,
 		"recipe_id":recipe_id,
 		"footprint":_footprint(origin, Vector2i(maxi(1, int(size_data.get("width", 1))), maxi(1, int(size_data.get("height", 1))))),
-		"status":"IDLE",
+		"status":initial_status,
 		"inputs":{},
 		"outputs":{},
 		"inventory":{},
