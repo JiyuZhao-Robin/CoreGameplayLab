@@ -32,12 +32,18 @@ var _selected_recipe_id := ""
 var _connection_kind := "CARGO"
 var _connection_source_id := ""
 var _connection_target_id := ""
+var _connection_source_port_id := ""
+var _connection_target_port_id := ""
 var _selected_cargo_item_id := ""
+var _active_subworkspace := "CANVAS"
+var _production_filter := "ALL"
+var _recipe_query := ""
 var _selection := {"kind":"", "id":"", "data":{}}
 var _preview_tile := Vector2i.ZERO
 var _pending_inspector_refresh := false
 var _pending_link_selection_id := ""
 var _pending_order_selection_id := ""
+var _canvas_snapshot_dirty := true
 
 var _world_label: Label
 var _world_scale_label: Label
@@ -55,6 +61,19 @@ var _building_detail_body: VBoxContainer
 var _connection_status_label: Label
 var _inspector_body: VBoxContainer
 var _canvas
+var _canvas_page: HBoxContainer
+var _production_page: VBoxContainer
+var _production_rows: VBoxContainer
+var _production_filter_options: OptionButton
+var _recipe_page: VBoxContainer
+var _recipe_search: LineEdit
+var _recipe_rows: VBoxContainer
+var _construction_page: VBoxContainer
+var _construction_rows: VBoxContainer
+var _workspace_tabs: Dictionary = {}
+var _entities_by_id: Dictionary = {}
+var _links_by_id: Dictionary = {}
+var _orders_by_id: Dictionary = {}
 
 
 func _ready() -> void:
@@ -83,7 +102,10 @@ func _process(_delta: float) -> void:
 ## The host may call this before or after adding this workspace to the tree.
 func apply_snapshot(snapshot: Dictionary) -> void:
 	_snapshot = _view_model.build(snapshot)
-	_apply_canvas_snapshot()
+	_rebuild_snapshot_lookups()
+	_canvas_snapshot_dirty = true
+	if _active_subworkspace == "CANVAS":
+		_apply_canvas_snapshot()
 	# Runtime refreshes must not destroy an active inspector control or close an
 	# open selector. The next refresh after the interaction ends performs the
 	# normal rebuild with the latest immutable snapshot.
@@ -200,10 +222,29 @@ func _build_interface() -> void:
 	motion_toggle.toggled.connect(set_reduced_motion)
 	toolbar.add_child(motion_toggle)
 
+	# The factory is a control room, not just a build palette.  Keep the four
+	# workspaces mounted and switch visibility so selector focus and canvas state
+	# survive tab changes and runtime snapshot refreshes.
+	var tabs := HBoxContainer.new()
+	tabs.name = "FactoryWorkspaceTabs"
+	tabs.add_theme_constant_override("separation", 5)
+	root.add_child(tabs)
+	for workspace_id in ["CANVAS", "PRODUCTION", "RECIPES", "CONSTRUCTION"]:
+		var tab := _make_button(
+			I18n.t("factory.tab.%s" % workspace_id.to_lower(), workspace_id.capitalize()),
+			I18n.t("factory.tooltip.open_%s" % workspace_id.to_lower(), "Open %s workspace" % workspace_id.to_lower())
+		)
+		tab.name = "FactoryTab%s" % workspace_id.capitalize()
+		tab.toggle_mode = true
+		tab.pressed.connect(_set_active_subworkspace.bind(workspace_id))
+		tabs.add_child(tab)
+		_workspace_tabs[workspace_id] = tab
+
 	var body := HBoxContainer.new()
-	body.name = "FactoryWorkspaceBody"
+	body.name = "FactoryCanvasWorkspace"
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(body)
+	_canvas_page = body
 
 	var palette_scroll := ScrollContainer.new()
 	palette_scroll.name = "PaletteScroll"
@@ -292,6 +333,8 @@ func _build_interface() -> void:
 	_canvas.tile_hovered.connect(_on_tile_hovered)
 	_canvas.tile_selected.connect(_on_tile_selected)
 	_canvas.placement_cancelled.connect(_on_placement_cancelled)
+	_canvas.port_connection_requested.connect(_on_port_connection_requested)
+	_canvas.port_drag_preview.connect(_on_port_drag_preview)
 	body.add_child(_canvas)
 
 	var inspector_scroll := ScrollContainer.new()
@@ -305,10 +348,122 @@ func _build_interface() -> void:
 	_inspector_body.add_theme_constant_override("separation", 6)
 	inspector_scroll.add_child(_inspector_body)
 
+	_build_production_workspace(root)
+	_build_recipe_workspace(root)
+	_build_construction_workspace(root)
+
 	_feedback_label = _make_label(I18n.t("factory.feedback.waiting"), Color("9aa6a1"))
 	_feedback_label.name = "FactoryCommandFeedback"
 	_feedback_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_feedback_label)
+
+
+func _build_production_workspace(root: VBoxContainer) -> void:
+	_production_page = VBoxContainer.new()
+	_production_page.name = "FactoryProductionWorkspace"
+	_production_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_production_page.add_theme_constant_override("separation", 8)
+	root.add_child(_production_page)
+	var header := HBoxContainer.new()
+	_production_page.add_child(header)
+	var title := _make_section_label(I18n.t("factory.production.title", "Production management"))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	_production_filter_options = OptionButton.new()
+	_production_filter_options.name = "ProductionStatusFilter"
+	for filter_id in ["ALL", "RUNNING", "INPUT_SHORTAGE", "OUTPUT_FULL", "BLOCKED", "IDLE"]:
+		_production_filter_options.add_item(I18n.t("factory.production.filter.%s" % filter_id.to_lower(), filter_id.replace("_", " ").capitalize()))
+		_production_filter_options.set_item_metadata(_production_filter_options.item_count - 1, filter_id)
+	_production_filter_options.item_selected.connect(func(index: int) -> void:
+		_production_filter = str(_production_filter_options.get_item_metadata(index))
+		_refresh_production_workspace()
+	)
+	header.add_child(_production_filter_options)
+	var scroll := ScrollContainer.new()
+	scroll.name = "ProductionScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_production_page.add_child(scroll)
+	_production_rows = VBoxContainer.new()
+	_production_rows.name = "ProductionRows"
+	_production_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_production_rows.add_theme_constant_override("separation", 6)
+	scroll.add_child(_production_rows)
+
+
+func _build_recipe_workspace(root: VBoxContainer) -> void:
+	_recipe_page = VBoxContainer.new()
+	_recipe_page.name = "FactoryRecipeWorkspace"
+	_recipe_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_recipe_page.add_theme_constant_override("separation", 8)
+	root.add_child(_recipe_page)
+	var header := HBoxContainer.new()
+	_recipe_page.add_child(header)
+	var title := _make_section_label(I18n.t("factory.recipes.title", "Recipe workspace"))
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	_recipe_search = LineEdit.new()
+	_recipe_search.name = "RecipeSearch"
+	_recipe_search.placeholder_text = I18n.t("factory.recipes.search", "Search recipe, input, output")
+	_recipe_search.text_changed.connect(func(value: String) -> void:
+		_recipe_query = value
+		_refresh_recipe_workspace()
+	)
+	header.add_child(_recipe_search)
+	var scroll := ScrollContainer.new()
+	scroll.name = "RecipeScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_recipe_page.add_child(scroll)
+	_recipe_rows = VBoxContainer.new()
+	_recipe_rows.name = "RecipeRows"
+	_recipe_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_recipe_rows.add_theme_constant_override("separation", 7)
+	scroll.add_child(_recipe_rows)
+
+
+func _build_construction_workspace(root: VBoxContainer) -> void:
+	_construction_page = VBoxContainer.new()
+	_construction_page.name = "FactoryConstructionWorkspace"
+	_construction_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_construction_page.add_theme_constant_override("separation", 8)
+	root.add_child(_construction_page)
+	var title := _make_section_label(I18n.t("factory.construction.title", "Construction center"))
+	_construction_page.add_child(title)
+	var scroll := ScrollContainer.new()
+	scroll.name = "ConstructionScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_construction_page.add_child(scroll)
+	_construction_rows = VBoxContainer.new()
+	_construction_rows.name = "ConstructionRows"
+	_construction_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_construction_rows.add_theme_constant_override("separation", 7)
+	scroll.add_child(_construction_rows)
+
+
+func _set_active_subworkspace(workspace_id: String) -> void:
+	_active_subworkspace = workspace_id if workspace_id in ["CANVAS", "PRODUCTION", "RECIPES", "CONSTRUCTION"] else "CANVAS"
+	if _canvas_page != null:
+		_canvas_page.visible = _active_subworkspace == "CANVAS"
+	if _production_page != null:
+		_production_page.visible = _active_subworkspace == "PRODUCTION"
+	if _recipe_page != null:
+		_recipe_page.visible = _active_subworkspace == "RECIPES"
+	if _construction_page != null:
+		_construction_page.visible = _active_subworkspace == "CONSTRUCTION"
+	for workspace_id_value in _workspace_tabs.keys():
+		var tab: Button = _workspace_tabs.get(workspace_id_value) as Button
+		if tab != null:
+			tab.button_pressed = str(workspace_id_value) == _active_subworkspace
+	if _active_subworkspace == "CANVAS" and _canvas_snapshot_dirty:
+		_apply_canvas_snapshot()
+	elif _active_subworkspace == "PRODUCTION":
+		_refresh_production_workspace()
+	elif _active_subworkspace == "RECIPES":
+		_refresh_recipe_workspace()
+	elif _active_subworkspace == "CONSTRUCTION":
+		_refresh_construction_workspace()
 
 
 func _render() -> void:
@@ -321,6 +476,7 @@ func _render() -> void:
 	_rebuild_palette(is_valid)
 	_rebuild_connection_selectors(is_valid)
 	_refresh_inspector()
+	_set_active_subworkspace(_active_subworkspace)
 	_update_placement_preview()
 	_update_connection_preview()
 
@@ -332,6 +488,7 @@ func _apply_canvas_snapshot() -> void:
 	# payload. Passing it through avoids a second deep copy and sort in Canvas.
 	_canvas.apply_snapshot(_snapshot, true)
 	_canvas.set_reduced_motion(_reduced_motion)
+	_canvas_snapshot_dirty = false
 
 
 func _rebuild_palette(is_valid: bool) -> void:
@@ -385,7 +542,7 @@ func _rebuild_connection_selectors(is_valid: bool) -> void:
 	var source := _entity_by_id(_connection_source_id)
 	var target := _entity_by_id(_connection_target_id)
 	var item_index := 1
-	for item_value in _view_model.compatible_cargo_items(source, target):
+	for item_value in _view_model.compatible_cargo_items(source, target, _catalog_item_ids()):
 		var item_id := str(item_value)
 		_cargo_item_options.add_item(_item_name(item_id))
 		_cargo_item_options.set_item_metadata(item_index, item_id)
@@ -435,7 +592,7 @@ func _entity_is_connection_candidate(entity: Dictionary, role: String) -> bool:
 	var source := _entity_by_id(_connection_source_id)
 	if source.is_empty():
 		return bool(ports.get("accepts_power", false)) if _connection_kind == "POWER" else not (ports.get("inputs", []) as Array).is_empty()
-	return _view_model.is_power_connection_valid(source, entity) if _connection_kind == "POWER" else not _view_model.compatible_cargo_items(source, entity).is_empty()
+	return _view_model.is_power_connection_valid(source, entity) if _connection_kind == "POWER" else not _view_model.compatible_cargo_items(source, entity, _catalog_item_ids()).is_empty()
 
 
 func _refresh_world_scale() -> void:
@@ -511,6 +668,251 @@ func _refresh_connection_status(source: Dictionary, target: Dictionary) -> void:
 	_connection_status_label.add_theme_color_override("font_color", tone)
 
 
+func _clear_rows(container: VBoxContainer) -> void:
+	if container == null:
+		return
+	for child in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
+
+
+func _production_records() -> Array:
+	var records: Array = []
+	var production: Dictionary = _snapshot.get("production", {}) if _snapshot.get("production", {}) is Dictionary else {}
+	var extended_by_entity: Dictionary = {}
+	var production_rows: Array = production.get("rows", production.get("production_rows", production.get("machines", []))) if production.get("rows", production.get("production_rows", production.get("machines", []))) is Array else []
+	for row_value in production_rows:
+		if row_value is Dictionary:
+			var row: Dictionary = row_value as Dictionary
+			extended_by_entity[str(row.get("entity_id", row.get("id", "")))] = row
+	for entity_value in _snapshot.get("entities", []):
+		if not entity_value is Dictionary:
+			continue
+		var entity: Dictionary = entity_value as Dictionary
+		var node_kind := str(entity.get("node_kind", ""))
+		if node_kind not in ["MACHINE", "EXTRACTOR", "ROUTER"]:
+			continue
+		var entity_id := str(entity.get("id", ""))
+		var row: Dictionary = extended_by_entity.get(entity_id, {}) as Dictionary
+		records.append({"entity":entity, "production":row})
+	return records
+
+
+func _refresh_production_workspace() -> void:
+	if _production_rows == null:
+		return
+	_clear_rows(_production_rows)
+	var records := _production_records()
+	var counts := {"RUNNING":0, "INPUT_SHORTAGE":0, "OUTPUT_FULL":0, "BLOCKED":0, "IDLE":0}
+	for record_value in records:
+		var record: Dictionary = record_value as Dictionary
+		var entity: Dictionary = record.get("entity", {}) as Dictionary
+		var status := str(entity.get("status", "IDLE")).to_upper()
+		if status in ["FLOWING", "CONNECTED", "POWER_LIMITED", "PARTIAL_COVERAGE"]:
+			status = "RUNNING"
+		elif status == "READY":
+			status = "IDLE"
+		elif status in ["NO_POWER", "SOURCE_EMPTY", "WAITING_MATERIALS"]:
+			status = "INPUT_SHORTAGE"
+		elif status in ["TARGET_FULL"]:
+			status = "OUTPUT_FULL"
+		elif status not in counts:
+			status = "BLOCKED" if not str(entity.get("blocker_code", "")).is_empty() else "IDLE"
+		counts[status] = int(counts.get(status, 0)) + 1
+	var production_summary: Dictionary = {}
+	if _snapshot.get("production", {}) is Dictionary:
+		var production: Dictionary = _snapshot.get("production", {}) as Dictionary
+		if production.get("summary", {}) is Dictionary:
+			production_summary = production.get("summary", {}) as Dictionary
+	var summary := _make_label(I18n.t("factory.production.summary", "Running %d · input shortage %d · output full %d · blocked %d · idle %d") % [int(production_summary.get("running", counts.get("RUNNING", 0))), int(production_summary.get("input_shortage", counts.get("INPUT_SHORTAGE", 0))), int(production_summary.get("output_full", counts.get("OUTPUT_FULL", 0))), int(production_summary.get("blocked", counts.get("BLOCKED", 0))), int(production_summary.get("idle", counts.get("IDLE", 0)))], Color("d5a45c"))
+	summary.name = "ProductionStatusSummary"
+	_production_rows.add_child(summary)
+	for record_value in records:
+		var record: Dictionary = record_value as Dictionary
+		var entity: Dictionary = record.get("entity", {}) as Dictionary
+		var row: Dictionary = record.get("production", {}) as Dictionary
+		var status := str(row.get("status", entity.get("status", "IDLE"))).to_upper()
+		var normalized_status := status
+		if normalized_status in ["FLOWING", "CONNECTED", "POWER_LIMITED", "PARTIAL_COVERAGE"]:
+			normalized_status = "RUNNING"
+		elif normalized_status == "READY":
+			normalized_status = "IDLE"
+		elif normalized_status in ["NO_POWER", "SOURCE_EMPTY", "WAITING_MATERIALS"]:
+			normalized_status = "INPUT_SHORTAGE"
+		elif normalized_status == "TARGET_FULL":
+			normalized_status = "OUTPUT_FULL"
+		elif normalized_status not in counts:
+			normalized_status = "BLOCKED" if not str(entity.get("blocker_code", "")).is_empty() else "IDLE"
+		if _production_filter != "ALL" and normalized_status != _production_filter:
+			continue
+		var panel := PanelContainer.new()
+		panel.name = "ProductionRow%s" % str(entity.get("id", ""))
+		_production_rows.add_child(panel)
+		var body := VBoxContainer.new()
+		body.add_theme_constant_override("separation", 3)
+		panel.add_child(body)
+		var header := HBoxContainer.new()
+		body.add_child(header)
+		var title := _make_label("%s · %s" % [str(entity.get("name", entity.get("id", I18n.t("factory.value.unit", "Unit")))), _status_name(normalized_status)], _status_color(normalized_status))
+		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		header.add_child(title)
+		var focus := _make_button(I18n.t("factory.action.focus", "Focus"), I18n.t("factory.tooltip.focus_production", "Locate this production unit on the canvas"))
+		focus.name = "FocusProduction%s" % str(entity.get("id", ""))
+		focus.pressed.connect(_focus_entity_from_workspace.bind(entity.duplicate(true)))
+		header.add_child(focus)
+		var rate := float(row.get("rate_per_second", row.get("actual_rate", entity.get("actual_rate", 0.0))))
+		var utilization := clampf(float(row.get("utilization", entity.get("utilization", entity.get("power_factor", 0.0)))), 0.0, 1.0)
+		body.add_child(_make_label(I18n.t("factory.production.rate", "Rate %.2f/s · utilization %d%%") % [rate, roundi(utilization * 100.0)], Color("a5b2ac")))
+		var meter := ProgressBar.new()
+		meter.name = "ProductionUtilizationMeter"
+		meter.max_value = 100.0
+		meter.value = utilization * 100.0
+		meter.show_percentage = false
+		body.add_child(meter)
+		var blocker := str(row.get("blocker", row.get("blocked_reason", entity.get("blocker_code", ""))))
+		if not blocker.is_empty():
+			body.add_child(_make_label(I18n.t("factory.production.blocked", "Blocked: %s") % _status_name(blocker), Color("d86e63")))
+		var routes := HBoxContainer.new()
+		body.add_child(routes)
+		for neighbor_value in row.get("upstream", []):
+			var upstream := _entity_by_id(str((neighbor_value as Dictionary).get("entity_id", "")))
+			if not upstream.is_empty():
+				var upstream_button := _make_button("↑ %s" % str(upstream.get("name", upstream.get("id", ""))), I18n.t("factory.tooltip.focus_upstream", "Focus upstream provider"))
+				upstream_button.pressed.connect(_focus_entity_from_workspace.bind(upstream.duplicate(true)))
+				routes.add_child(upstream_button)
+		for neighbor_value in row.get("downstream", []):
+			var downstream := _entity_by_id(str((neighbor_value as Dictionary).get("entity_id", "")))
+			if not downstream.is_empty():
+				var downstream_button := _make_button("↓ %s" % str(downstream.get("name", downstream.get("id", ""))), I18n.t("factory.tooltip.focus_downstream", "Focus downstream consumer"))
+				downstream_button.pressed.connect(_focus_entity_from_workspace.bind(downstream.duplicate(true)))
+				routes.add_child(downstream_button)
+		if routes.get_child_count() == 0:
+			routes.queue_free()
+	if _production_rows.get_child_count() == 1:
+		_production_rows.add_child(_make_label(I18n.t("factory.production.empty", "No units match this status filter."), Color("9aa6a1")))
+
+
+func _refresh_recipe_workspace() -> void:
+	if _recipe_rows == null:
+		return
+	_clear_rows(_recipe_rows)
+	var term := _recipe_query.strip_edges().to_lower()
+	var recipes: Array = (_snapshot.get("palette", {}) as Dictionary).get("recipes", []) if _snapshot.get("palette", {}) is Dictionary else []
+	for recipe_value in recipes:
+		if not recipe_value is Dictionary:
+			continue
+		var recipe: Dictionary = recipe_value as Dictionary
+		var recipe_id := str(recipe.get("id", ""))
+		var haystack := "%s %s %s" % [str(recipe.get("name", recipe_id)), _item_amount_rows(recipe.get("inputs", [])), _item_amount_rows(recipe.get("outputs", []))]
+		if not term.is_empty() and not haystack.to_lower().contains(term):
+			continue
+		var panel := PanelContainer.new()
+		panel.name = "RecipeCard%s" % recipe_id
+		_recipe_rows.add_child(panel)
+		var body := VBoxContainer.new()
+		body.add_theme_constant_override("separation", 3)
+		panel.add_child(body)
+		var header := HBoxContainer.new()
+		body.add_child(header)
+		var select := _make_button(str(recipe.get("name", recipe_id)), I18n.t("factory.tooltip.select_recipe", "Select recipe for construction or inspection"))
+		select.name = "SelectRecipe%s" % recipe_id
+		select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		select.pressed.connect(_select_recipe_from_workspace.bind(recipe_id))
+		header.add_child(select)
+		header.add_child(_make_label("%.1fs" % float(recipe.get("duration_seconds", 0.0)), Color("d5a45c")))
+		body.add_child(_make_label(I18n.t("factory.recipes.input", "Input: %s") % _item_amount_rows(recipe.get("inputs", [])), Color("a5b2ac")))
+		body.add_child(_make_label(I18n.t("factory.recipes.output", "Output: %s") % _item_amount_rows(recipe.get("outputs", [])), Color("a5b2ac")))
+		var compatible: Array[String] = []
+		for building_value in (_snapshot.get("palette", {}) as Dictionary).get("buildings", []):
+			var building: Dictionary = building_value as Dictionary
+			if (building.get("recipe_ids", []) as Array).has(recipe_id):
+				compatible.append(str(building.get("name", building.get("id", ""))))
+		body.add_child(_make_label(I18n.t("factory.recipes.machines", "Machines: %s") % (", ".join(compatible) if not compatible.is_empty() else I18n.t("factory.value.none", "None")), Color("9aa6a1")))
+		var running := HBoxContainer.new()
+		body.add_child(running)
+		for entity_value in _snapshot.get("entities", []):
+			var entity: Dictionary = entity_value as Dictionary
+			if str(entity.get("recipe_id", "")) != recipe_id:
+				continue
+			var focus := _make_button(I18n.t("factory.action.focus_named", "Focus %s") % str(entity.get("name", entity.get("id", ""))), I18n.t("factory.tooltip.focus_machine", "Locate running machine"))
+			focus.pressed.connect(_focus_entity_from_workspace.bind(entity.duplicate(true)))
+			running.add_child(focus)
+		if running.get_child_count() == 0:
+			running.queue_free()
+	if _recipe_rows.get_child_count() == 0:
+		_recipe_rows.add_child(_make_label(I18n.t("factory.recipes.empty", "No recipe matches this search."), Color("9aa6a1")))
+
+
+func _refresh_construction_workspace() -> void:
+	if _construction_rows == null:
+		return
+	_clear_rows(_construction_rows)
+	var counts := {"QUEUED":0, "WAITING_MATERIALS":0, "IN_PROGRESS":0, "COMPLETED":0, "BLOCKED":0}
+	for order_value in _snapshot.get("construction_orders", []):
+		var order: Dictionary = order_value as Dictionary
+		var status := str(order.get("status", "WAITING_MATERIALS")).to_upper()
+		if status == "BUILDING":
+			status = "IN_PROGRESS"
+		elif status == "READY":
+			status = "QUEUED"
+		if status not in counts:
+			status = "BLOCKED" if not str(order.get("blocker_code", order.get("blocked_reason", ""))).is_empty() else "QUEUED"
+		counts[status] = int(counts.get(status, 0)) + 1
+	var summary := _make_label(I18n.t("factory.construction.summary", "Queued %d · missing %d · building %d · complete %d · blocked %d") % [int(counts.get("QUEUED", 0)), int(counts.get("WAITING_MATERIALS", 0)), int(counts.get("IN_PROGRESS", 0)), int(counts.get("COMPLETED", 0)), int(counts.get("BLOCKED", 0))], Color("d5a45c"))
+	summary.name = "ConstructionStatusSummary"
+	_construction_rows.add_child(summary)
+	for order_value in _snapshot.get("construction_orders", []):
+		if not order_value is Dictionary:
+			continue
+		var order: Dictionary = order_value as Dictionary
+		var order_id := str(order.get("id", ""))
+		var panel := PanelContainer.new()
+		panel.name = "ConstructionOrder%s" % order_id
+		_construction_rows.add_child(panel)
+		var body := VBoxContainer.new()
+		body.add_theme_constant_override("separation", 3)
+		panel.add_child(body)
+		body.add_child(_make_label("%s · %s" % [str(order.get("building_name", order.get("definition_id", order_id))), _status_name(str(order.get("status", "WAITING_MATERIALS")))], _status_color(str(order.get("status", "WAITING_MATERIALS")))))
+		body.add_child(_make_label(I18n.t("factory.construction.materials", "Materials: %s") % _item_amount_rows(order.get("required_items", {})), Color("a5b2ac")))
+		body.add_child(_make_label(I18n.t("factory.construction.delivered", "Delivered: %s") % _item_amount_rows(order.get("delivered_items", {})), Color("a5b2ac")))
+		var progress := ProgressBar.new()
+		progress.name = "ConstructionProgress"
+		progress.max_value = 100.0
+		progress.value = clampf(float(order.get("progress", 0.0)), 0.0, 1.0) * 100.0
+		progress.show_percentage = true
+		body.add_child(progress)
+		var blocker := str(order.get("blocked_reason", order.get("blocker_code", "")))
+		if not blocker.is_empty():
+			body.add_child(_make_label(I18n.t("factory.production.blocked", "Blocked: %s") % _status_name(blocker), Color("d86e63")))
+		var actions := HBoxContainer.new()
+		body.add_child(actions)
+		var fund := _make_button(I18n.t("factory.action.fund_location", "Fund from location"), I18n.t("factory.tooltip.fund_location", "Allocate location material through the application boundary"))
+		fund.name = "FundConstruction%s" % order_id
+		fund.pressed.connect(_request_location_fund_construction.bind(order_id))
+		actions.add_child(fund)
+		var cancel := _make_button(I18n.t("factory.action.cancel_construction", "Cancel"), I18n.t("factory.tooltip.cancel_construction", "Cancel this construction order"))
+		cancel.name = "CancelConstruction%s" % order_id
+		cancel.pressed.connect(_request_cancel_construction.bind(order_id))
+		actions.add_child(cancel)
+	if _construction_rows.get_child_count() == 1:
+		_construction_rows.add_child(_make_label(I18n.t("factory.construction.empty", "No construction orders are queued."), Color("9aa6a1")))
+
+
+func _select_recipe_from_workspace(recipe_id: String) -> void:
+	_selected_recipe_id = recipe_id
+	_set_feedback("RECIPE_SELECTED", I18n.t("factory.recipes.selected", "Recipe selected: %s") % recipe_id, Color("6fbf92"))
+	_refresh_recipe_workspace()
+
+
+func _focus_entity_from_workspace(entity: Dictionary) -> void:
+	if entity.is_empty():
+		return
+	_set_selection("ENTITY", str(entity.get("id", "")), entity)
+	if _canvas != null:
+		_canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {})))
+	_set_active_subworkspace("CANVAS")
+
+
 func _on_building_selected(index: int) -> void:
 	_selected_building_id = str(_building_options.get_item_metadata(index))
 	_selected_recipe_id = ""
@@ -518,6 +920,8 @@ func _on_building_selected(index: int) -> void:
 	if _active_tool == "BUILD":
 		_connection_source_id = ""
 		_connection_target_id = ""
+		_connection_source_port_id = ""
+		_connection_target_port_id = ""
 		_selected_cargo_item_id = ""
 	_render()
 
@@ -534,6 +938,8 @@ func _set_connection_mode(kind: String) -> void:
 	_selected_recipe_id = ""
 	_connection_source_id = ""
 	_connection_target_id = ""
+	_connection_source_port_id = ""
+	_connection_target_port_id = ""
 	_selected_cargo_item_id = ""
 	if _canvas != null:
 		_canvas.clear_placement_preview()
@@ -542,6 +948,8 @@ func _set_connection_mode(kind: String) -> void:
 
 func _on_source_selected(index: int) -> void:
 	_connection_source_id = str(_source_options.get_item_metadata(index))
+	_connection_source_port_id = ""
+	_connection_target_port_id = ""
 	if _connection_source_id == _connection_target_id:
 		_connection_target_id = ""
 	_selected_cargo_item_id = ""
@@ -551,6 +959,7 @@ func _on_source_selected(index: int) -> void:
 
 func _on_target_selected(index: int) -> void:
 	_connection_target_id = str(_target_options.get_item_metadata(index))
+	_connection_target_port_id = ""
 	if _connection_target_id == _connection_source_id:
 		_connection_source_id = ""
 	_selected_cargo_item_id = ""
@@ -588,6 +997,8 @@ func _on_placement_cancelled() -> void:
 	_selected_recipe_id = ""
 	_connection_source_id = ""
 	_connection_target_id = ""
+	_connection_source_port_id = ""
+	_connection_target_port_id = ""
 	_selected_cargo_item_id = ""
 	if _canvas != null:
 		_canvas.clear_placement_preview()
@@ -611,6 +1022,8 @@ func _on_entity_selected(entity: Dictionary) -> void:
 			_connection_source_id = entity_id if _entity_is_connection_candidate(entity, "SOURCE") else ""
 			_connection_target_id = ""
 		_selected_cargo_item_id = ""
+		_connection_source_port_id = ""
+		_connection_target_port_id = ""
 		_rebuild_connection_selectors(bool(_snapshot.get("valid", false)))
 		_update_connection_preview()
 	_set_selection("ENTITY", entity_id, entity)
@@ -666,6 +1079,10 @@ func _request_connection() -> void:
 		"capacity_per_second":1.0,
 		"priority":1
 	}
+	if not _connection_source_port_id.is_empty():
+		payload["source_port_id"] = _connection_source_port_id
+	if not _connection_target_port_id.is_empty():
+		payload["target_port_id"] = _connection_target_port_id
 	_emit_command("CONNECT_ENTITIES", payload)
 
 
@@ -680,6 +1097,33 @@ func _request_fund_construction(order_id: String, storage_id: String) -> void:
 		_set_feedback("MISSING_FUNDING_SOURCE", I18n.t("factory.feedback.missing_funding_source"), Color("d86e63"))
 		return
 	_emit_command("FUND_CONSTRUCTION", {"order_id":order_id, "storage_id":storage_id})
+
+
+func _request_location_fund_construction(order_id: String) -> void:
+	if order_id.is_empty():
+		return
+	_emit_command("FUND_CONSTRUCTION_FROM_LOCATION", {"order_id":order_id})
+
+
+func _request_cancel_construction(order_id: String) -> void:
+	if order_id.is_empty():
+		return
+	_emit_command("CANCEL_CONSTRUCTION", {"order_id":order_id})
+
+
+func _request_remove_entity(entity_id: String) -> void:
+	if entity_id.is_empty():
+		return
+	_emit_command("REMOVE_ENTITY", {"entity_id":entity_id})
+
+
+func _request_configure_link(link_id: String, priority: int) -> void:
+	if link_id.is_empty():
+		return
+	# Lane count, tier, and throughput describe physical route equipment. Until
+	# the Factory economy exposes an authoritative upgrade command and material
+	# cost, the workspace must not grant those upgrades for free.
+	_emit_command("CONFIGURE_LINK", {"link_id":link_id, "priority":clampi(priority, 0, 2)})
 
 
 func _request_set_recipe(entity_id: String, recipe_id: String) -> void:
@@ -718,12 +1162,23 @@ func _connection_is_ready(source: Dictionary, target: Dictionary) -> bool:
 func _connection_validation_reason(source: Dictionary, target: Dictionary) -> String:
 	if source.is_empty() or target.is_empty() or _connection_source_id == _connection_target_id:
 		return "INVALID_LINK"
+	var source_port := _view_model.connection_port_by_id(source, _connection_source_port_id, "OUTPUT") if not _connection_source_port_id.is_empty() else {}
+	var target_port := _view_model.connection_port_by_id(target, _connection_target_port_id, "INPUT") if not _connection_target_port_id.is_empty() else {}
+	if not _connection_source_port_id.is_empty() or not _connection_target_port_id.is_empty():
+		if source_port.is_empty() or target_port.is_empty() or not _view_model.compatible_port_pair(source, source_port, target, target_port):
+			return "CARGO_INCOMPATIBLE"
 	var item_id := _selected_cargo_item_id if _connection_kind == "CARGO" else ""
 	if _connection_kind == "POWER":
-		if not _view_model.is_power_connection_valid(source, target):
+		if not _view_model.is_power_connection_valid(source, target) or (not source_port.is_empty() and str(source_port.get("kind", "")) != "POWER"):
 			return "INVALID_LINK"
-	elif item_id.is_empty() or not _view_model.compatible_cargo_items(source, target).has(item_id):
+	elif item_id.is_empty() or (not source_port.is_empty() and not _view_model.compatible_cargo_items_for_ports(source_port, target_port, source, _catalog_item_ids()).has(item_id)) or (source_port.is_empty() and not _view_model.compatible_cargo_items(source, target, _catalog_item_ids()).has(item_id)):
 		return "CARGO_INCOMPATIBLE"
+	var source_kind := str(source.get("node_kind", source.get("kind", ""))).to_upper()
+	var target_kind := str(target.get("node_kind", target.get("kind", ""))).to_upper()
+	var source_router_mode := str(source.get("router_mode", "BIDIRECTIONAL")).to_upper()
+	var target_router_mode := str(target.get("router_mode", "BIDIRECTIONAL")).to_upper()
+	var source_allows_fan_out := source_kind == "STORAGE" or (source_kind == "ROUTER" and source_router_mode != "MERGE")
+	var target_allows_fan_in := target_kind == "ROUTER" and target_router_mode != "SPLIT"
 	for link_value in _snapshot.get("links", []):
 		var link := link_value as Dictionary
 		if str(link.get("kind", "")) == _connection_kind \
@@ -731,12 +1186,44 @@ func _connection_validation_reason(source: Dictionary, target: Dictionary) -> St
 				and str(link.get("target_id", "")) == _connection_target_id \
 				and str(link.get("item_id", "")) == item_id:
 			return "DUPLICATE_LINK"
-		if _connection_kind == "CARGO" \
-				and str(link.get("kind", "")) == "CARGO" \
-				and str(link.get("target_id", "")) == _connection_target_id \
-				and str(link.get("item_id", "")) == item_id:
+		if _connection_kind != "CARGO" or str(link.get("kind", "")) != "CARGO" or str(link.get("item_id", "")) != item_id:
+			continue
+		if str(link.get("source_id", "")) == _connection_source_id and not source_allows_fan_out:
+			return "CARGO_OUTPUT_OCCUPIED"
+		if str(link.get("target_id", "")) == _connection_target_id and not target_allows_fan_in:
 			return "CARGO_INPUT_OCCUPIED"
 	return ""
+
+
+func _on_port_connection_requested(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary) -> void:
+	var source := _entity_by_id(source_id)
+	var target := _entity_by_id(target_id)
+	if source.is_empty() or target.is_empty():
+		return
+	_connection_source_id = source_id
+	_connection_target_id = target_id
+	_connection_source_port_id = str(source_port.get("id", ""))
+	_connection_target_port_id = str(target_port.get("id", ""))
+	_connection_kind = str(source_port.get("kind", "CARGO")).to_upper()
+	_active_tool = "CONNECT"
+	var submit_immediately := _connection_kind == "POWER"
+	if _connection_kind == "CARGO":
+		var items := _view_model.compatible_cargo_items_for_ports(source_port, target_port, source, _catalog_item_ids())
+		_selected_cargo_item_id = str(items[0]) if items.size() == 1 else ""
+		submit_immediately = items.size() == 1
+	else:
+		_selected_cargo_item_id = ""
+	_rebuild_connection_selectors(bool(_snapshot.get("valid", false)))
+	_update_connection_preview()
+	if submit_immediately:
+		_request_connection()
+	elif _connection_kind == "CARGO":
+		_set_feedback("SELECT_CARGO_ITEM", I18n.t("factory.connection.choose_item", "Choose the item carried by this route, then confirm the connection."), Color("d5a45c"))
+
+
+func _on_port_drag_preview(_source_id: String, _source_port: Dictionary, target_id: String, _target_port: Dictionary, valid: bool) -> void:
+	if valid:
+		_set_feedback("PORT_READY", I18n.t("factory.connection.port_ready", "Compatible input port: %s") % target_id, Color("6fbf92"))
 
 
 func _update_placement_preview() -> void:
@@ -765,10 +1252,10 @@ func _update_connection_preview() -> void:
 			var entity_id := str(entity.get("id", ""))
 			if entity_id == _connection_source_id:
 				continue
-			var compatible := _view_model.is_power_connection_valid(source, entity) if _connection_kind == "POWER" else not _view_model.compatible_cargo_items(source, entity).is_empty()
+			var compatible := _view_model.is_power_connection_valid(source, entity) if _connection_kind == "POWER" else not _view_model.compatible_cargo_items(source, entity, _catalog_item_ids()).is_empty()
 			if compatible:
 				candidates.append(entity_id)
-	_canvas.set_connection_preview(_connection_source_id, _connection_target_id, _connection_kind, not source.is_empty() and not target.is_empty() and _connection_is_ready(source, target), candidates)
+	_canvas.set_connection_preview(_connection_source_id, _connection_target_id, _connection_kind, not source.is_empty() and not target.is_empty() and _connection_is_ready(source, target), candidates, _connection_source_port_id, _connection_target_port_id)
 
 
 func _clear_missing_selection() -> void:
@@ -916,6 +1403,10 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 		_add_entity_recipe_controls(entity)
 	if str(entity.get("node_kind", "")) == "STORAGE":
 		_add_storage_transfer_controls(entity)
+	var remove_entity := _make_button(I18n.t("factory.action.remove_entity", "Remove entity"), I18n.t("factory.tooltip.remove_entity", "Remove this Factory entity through a versioned command"))
+	remove_entity.name = "RemoveFactoryEntity"
+	remove_entity.pressed.connect(_request_remove_entity.bind(entity_id))
+	_inspector_body.add_child(remove_entity)
 
 
 func _add_entity_recipe_controls(entity: Dictionary) -> void:
@@ -989,6 +1480,9 @@ func _render_link_inspector(link: Dictionary) -> void:
 	_add_detail(I18n.t("factory.field.item"), _item_name(item_id) if not item_id.is_empty() else "-")
 	_add_detail(I18n.t("factory.field.status"), _status_name(str(link.get("status", "IDLE"))))
 	_add_detail(I18n.t("factory.field.flow"), "%.2f / %.2f" % [float(link.get("last_flow", 0.0)), float(link.get("capacity_per_second", 0.0))])
+	_add_detail(I18n.t("factory.field.congestion", "Congestion"), "%d%%" % roundi(clampf(float(link.get("congestion", link.get("utilization", 0.0))), 0.0, 1.0) * 100.0))
+	if not str(link.get("blocked_reason", "")).is_empty():
+		_add_detail(I18n.t("factory.field.blocked", "Blocked"), _status_name(str(link.get("blocked_reason", ""))))
 	for endpoint in [
 		{"id":str(link.get("source_id", "")), "action":"factory.action.center_source", "tooltip":"factory.tooltip.center_source"},
 		{"id":str(link.get("target_id", "")), "action":"factory.action.center_target", "tooltip":"factory.tooltip.center_target"}
@@ -1002,6 +1496,27 @@ func _render_link_inspector(link: Dictionary) -> void:
 	var remove_button := _make_button(I18n.t("factory.action.remove_link"), I18n.t("factory.tooltip.remove_link"))
 	remove_button.pressed.connect(func() -> void: _request_remove_link(link_id))
 	_inspector_body.add_child(remove_button)
+	_add_link_configuration_controls(link)
+
+
+func _add_link_configuration_controls(link: Dictionary) -> void:
+	if str(link.get("kind", "")).to_upper() != "CARGO":
+		return
+	_inspector_body.add_child(HSeparator.new())
+	_inspector_body.add_child(_make_section_label(I18n.t("factory.route.controls", "Route controls")))
+	var priority := SpinBox.new()
+	priority.name = "LinkPriority"
+	priority.min_value = 0.0
+	priority.max_value = 2.0
+	priority.step = 1.0
+	priority.value = clampi(int(link.get("priority", 1)), 0, 2)
+	_inspector_body.add_child(priority)
+	var apply := _make_button(I18n.t("factory.action.configure_link", "Apply route controls"), I18n.t("factory.tooltip.configure_link", "Configure route priority"))
+	apply.name = "ConfigureFactoryLink"
+	apply.pressed.connect(func() -> void:
+		_request_configure_link(str(link.get("id", "")), int(priority.value))
+	)
+	_inspector_body.add_child(apply)
 
 
 func _render_order_inspector(order: Dictionary) -> void:
@@ -1031,8 +1546,12 @@ func _render_order_inspector(order: Dictionary) -> void:
 	fund_button.pressed.connect(func() -> void: _request_fund_construction(order_id, str(storage_options.get_item_metadata(storage_options.selected))))
 	_inspector_body.add_child(fund_button)
 	var location_fund_button := _make_button(I18n.t("factory.action.fund_location"), I18n.t("factory.tooltip.fund_location"))
-	location_fund_button.pressed.connect(func() -> void: _emit_command("FUND_CONSTRUCTION_FROM_LOCATION", {"order_id":order_id}))
+	location_fund_button.pressed.connect(_request_location_fund_construction.bind(order_id))
 	_inspector_body.add_child(location_fund_button)
+	var cancel_button := _make_button(I18n.t("factory.action.cancel_construction", "Cancel construction"), I18n.t("factory.tooltip.cancel_construction", "Cancel this construction order"))
+	cancel_button.name = "CancelConstructionOrder"
+	cancel_button.pressed.connect(_request_cancel_construction.bind(order_id))
+	_inspector_body.add_child(cancel_button)
 	var location_fund_help := _make_label(I18n.t("factory.help.fund_location"), Color("9aa6a1"))
 	location_fund_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_inspector_body.add_child(location_fund_help)
@@ -1150,27 +1669,35 @@ func _add_item_dictionary(label_text: String, value: Variant) -> void:
 
 
 func _entity_by_id(entity_id: String) -> Dictionary:
-	for entity_value in _snapshot.get("entities", []):
-		var entity := entity_value as Dictionary
-		if str(entity.get("id", "")) == entity_id:
-			return entity
-	return {}
+	return _entities_by_id.get(entity_id, {})
 
 
 func _link_by_id(link_id: String) -> Dictionary:
-	for link_value in _snapshot.get("links", []):
-		var link := link_value as Dictionary
-		if str(link.get("id", "")) == link_id:
-			return link
-	return {}
+	return _links_by_id.get(link_id, {})
 
 
 func _order_by_id(order_id: String) -> Dictionary:
+	return _orders_by_id.get(order_id, {})
+
+
+func _rebuild_snapshot_lookups() -> void:
+	_entities_by_id.clear()
+	_links_by_id.clear()
+	_orders_by_id.clear()
+	for entity_value in _snapshot.get("entities", []):
+		var entity := entity_value as Dictionary
+		_entities_by_id[str(entity.get("id", ""))] = entity
+	for link_value in _snapshot.get("links", []):
+		var link := link_value as Dictionary
+		_links_by_id[str(link.get("id", ""))] = link
 	for order_value in _snapshot.get("construction_orders", []):
 		var order := order_value as Dictionary
-		if str(order.get("id", "")) == order_id:
-			return order
-	return {}
+		_orders_by_id[str(order.get("id", ""))] = order
+
+
+func _catalog_item_ids() -> Array:
+	var names: Dictionary = _snapshot.get("item_names", {}) if _snapshot.get("item_names", {}) is Dictionary else {}
+	return names.keys()
 
 
 func _set_feedback(code: String, message: String, color: Color) -> void:
@@ -1202,6 +1729,14 @@ func _make_button(text_value: String, tooltip: String) -> Button:
 
 func _status_name(status_id: String) -> String:
 	return I18n.status(status_id)
+
+
+func _status_color(status_id: String) -> Color:
+	match status_id.to_upper():
+		"RUNNING", "FLOWING", "CONNECTED", "READY", "COMPLETED": return Color("6fbf92")
+		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY", "QUEUED": return Color("e0ae5c")
+		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return Color("d86e63")
+	return Color("7f9289")
 
 
 func _item_name(item_id: String) -> String:

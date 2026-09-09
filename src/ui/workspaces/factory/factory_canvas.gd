@@ -12,6 +12,10 @@ signal construction_order_selected(order: Dictionary)
 signal tile_selected(tile: Vector2i)
 signal tile_hovered(tile: Vector2i)
 signal placement_cancelled
+## Emitted only after a drag from a concrete output port onto a compatible input
+## port.  The workspace converts this gesture into a versioned command intent.
+signal port_connection_requested(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary)
+signal port_drag_preview(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary, valid: bool)
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
@@ -56,6 +60,7 @@ var _last_pointer := Vector2.ZERO
 var _node_rects := {}
 var _link_hit_rects := {}
 var _construction_order_rects := {}
+var _port_hit_rects := {}
 var _placement_preview: Dictionary = {}
 var _connection_preview := {"source_id":"", "target_id":"", "kind":""}
 var _connection_candidate_ids: Dictionary = {}
@@ -70,6 +75,7 @@ var _visible_active_flow := false
 var _node_style_cache: Dictionary = {}
 var _hit_geometry_dirty := true
 var _detail_stage_cache := "FULL"
+var _port_drag: Dictionary = {}
 
 
 func _ready() -> void:
@@ -159,7 +165,12 @@ func clear_placement_preview() -> void:
 	queue_redraw()
 
 
-func set_connection_preview(source_id: String, target_id: String, kind: String, valid: bool = false, candidate_ids: Array[String] = []) -> void:
+func cancel_port_drag() -> void:
+	_port_drag.clear()
+	queue_redraw()
+
+
+func set_connection_preview(source_id: String, target_id: String, kind: String, valid: bool = false, candidate_ids: Array[String] = [], source_port_id: String = "", target_port_id: String = "") -> void:
 	_connection_candidate_ids.clear()
 	for candidate_id in candidate_ids:
 		_connection_candidate_ids[candidate_id] = true
@@ -168,7 +179,9 @@ func set_connection_preview(source_id: String, target_id: String, kind: String, 
 		"target_id":target_id,
 		"kind":kind.to_upper(),
 		"valid":valid,
-		"candidate_ids":candidate_ids.duplicate()
+		"candidate_ids":candidate_ids.duplicate(),
+		"source_port_id":source_port_id,
+		"target_port_id":target_port_id
 	}
 	queue_redraw()
 
@@ -201,6 +214,7 @@ func _draw() -> void:
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
+	_port_hit_rects.clear()
 	_draw_placement_preview()
 	_draw_links()
 	_draw_connection_preview()
@@ -315,9 +329,22 @@ func _draw_entities() -> void:
 		var kind_id := str(entity.get("node_kind", "UNIT"))
 		var kind: String = str(I18n.t("factory.kind.%s" % kind_id.to_lower()))
 		draw_string(font, header_rect.position + Vector2(16, 14), kind, HORIZONTAL_ALIGNMENT_LEFT, header_rect.size.x - 18, 9, Color("a5b2ac"))
-		draw_string(font, rect.position + Vector2(8, minf(39.0, rect.size.y - 8.0)), str(entity.get("name", entity.get("id", "Unit"))), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 11, Color("e6eeea"))
+		draw_string(font, rect.position + Vector2(8, minf(39.0, rect.size.y - 8.0)), str(entity.get("name", entity.get("id", I18n.t("factory.value.unit", "Unit")))), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 11, Color("e6eeea"))
 		if detail_stage == "MEDIUM":
 			continue
+		if rect.size.y >= 68.0:
+			var input_summary := _buffer_summary(entity.get("inputs", {}))
+			var output_summary := _buffer_summary(entity.get("outputs", {}))
+			var inventory_summary := _buffer_summary(entity.get("inventory", {}))
+			var io_y := rect.position.y + 54.0
+			if not input_summary.is_empty():
+				draw_string(font, Vector2(rect.position.x + 8.0, io_y), I18n.t("factory.node.input_short", "IN") + "  " + input_summary, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16.0, 8, Color("8ebbb2"))
+				io_y += 11.0
+			if not output_summary.is_empty() and io_y < rect.end.y - 17.0:
+				draw_string(font, Vector2(rect.position.x + 8.0, io_y), I18n.t("factory.node.output_short", "OUT") + "  " + output_summary, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16.0, 8, Color("d5a45c"))
+				io_y += 11.0
+			if not inventory_summary.is_empty() and io_y < rect.end.y - 17.0:
+				draw_string(font, Vector2(rect.position.x + 8.0, io_y), I18n.t("factory.node.stock_short", "STOCK") + "  " + inventory_summary, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16.0, 8, Color("9aa6a1"))
 		var progress := clampf(float(entity.get("progress", 0.0)), 0.0, 1.0)
 		var bar := Rect2(rect.position + Vector2(8, maxf(45.0, rect.size.y - 14.0)), Vector2(maxf(0.0, rect.size.x - 16.0), 4.0))
 		if bar.position.y + bar.size.y <= rect.end.y - 4.0:
@@ -325,6 +352,28 @@ func _draw_entities() -> void:
 			draw_rect(Rect2(bar.position, Vector2(bar.size.x * (float(entity.get("power_factor", 1.0)) if progress <= 0.0 else progress), bar.size.y)), tone, true)
 			var rate := "%.2f/s" % float(entity.get("actual_rate", 0.0))
 			draw_string(font, rect.position + Vector2(8, bar.position.y - rect.position.y - 4.0), rate, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 9, Color("9aa6a1"))
+
+
+func _buffer_summary(value: Variant) -> String:
+	if not value is Dictionary:
+		return ""
+	var buffer := value as Dictionary
+	var item_ids: Array = buffer.keys()
+	item_ids.sort_custom(func(left, right): return str(left) < str(right))
+	var parts: Array[String] = []
+	for item_id_value in item_ids:
+		var item_id := str(item_id_value)
+		var quantity := maxi(0, int(buffer.get(item_id_value, 0)))
+		if quantity <= 0:
+			continue
+		parts.append("%s %d" % [_item_name(item_id), quantity])
+		if parts.size() >= 2:
+			break
+	if parts.is_empty():
+		return ""
+	if buffer.keys().size() > parts.size():
+		parts.append("…")
+	return " · ".join(parts)
 
 
 func _draw_construction_orders() -> void:
@@ -368,6 +417,9 @@ func _draw_placement_preview() -> void:
 
 
 func _draw_connection_preview() -> void:
+	if not _port_drag.is_empty():
+		_draw_port_drag_preview()
+		return
 	var source_id := str(_connection_preview.get("source_id", ""))
 	var target_id := str(_connection_preview.get("target_id", ""))
 	if source_id.is_empty() or target_id.is_empty() or source_id == target_id:
@@ -376,15 +428,37 @@ func _draw_connection_preview() -> void:
 	var target := _entity_by_id(target_id)
 	if source.is_empty() or target.is_empty():
 		return
-	var endpoints := _connection_endpoints(source, target, str(_connection_preview.get("kind", "CARGO")))
+	var endpoints := _connection_endpoints(source, target, str(_connection_preview.get("kind", "CARGO")), str(_connection_preview.get("source_port_id", "")), str(_connection_preview.get("target_port_id", "")))
 	var from: Vector2 = endpoints[0]
 	var to: Vector2 = endpoints[1]
 	if not Rect2(from, Vector2.ZERO).expand(to).grow(DRAW_CULL_MARGIN_PIXELS).intersects(_visible_draw_rect()):
 		return
 	var kind := str(_connection_preview.get("kind", "CARGO"))
 	var tone := Color("6fbf92") if bool(_connection_preview.get("valid", false)) else Color("d86e63")
-	draw_dashed_line(from, to, tone, 2.0, 5.0)
-	_draw_link_arrow(from, to, tone)
+	_draw_orthogonal_route(_orthogonal_route(from, to), tone, 2.0, true)
+	_draw_link_arrow(_orthogonal_route(from, to), tone)
+
+
+func _draw_port_drag_preview() -> void:
+	var source_id := str(_port_drag.get("source_id", ""))
+	var source := _entity_by_id(source_id)
+	var source_port: Dictionary = _port_drag.get("source_port", {}) as Dictionary
+	if source.is_empty() or source_port.is_empty():
+		return
+	var source_rect := _footprint_rect(source.get("footprint", {}), 4.0)
+	var from := _port_center(source, source_port, source_rect, "OUTPUT", str(source_port.get("kind", "CARGO")))
+	var target_id := str(_port_drag.get("target_id", ""))
+	var target_port: Dictionary = _port_drag.get("target_port", {}) as Dictionary
+	var to := Vector2(_port_drag.get("pointer", from))
+	if not target_id.is_empty() and not target_port.is_empty():
+		var target := _entity_by_id(target_id)
+		if not target.is_empty():
+			to = _port_center(target, target_port, _footprint_rect(target.get("footprint", {}), 4.0), "INPUT", str(target_port.get("kind", "CARGO")))
+	var valid := bool(_port_drag.get("valid", false))
+	var tone := Color("6fbf92") if valid else Color("d86e63") if not target_id.is_empty() else Color("d5a45c")
+	var route := _orthogonal_route(from, to)
+	_draw_orthogonal_route(route, tone, 2.0, true)
+	_draw_link_arrow(route, tone)
 
 
 func _draw_links() -> void:
@@ -397,30 +471,40 @@ func _draw_links() -> void:
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
 			continue
-		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")))
+		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")), str(link.get("source_port_id", "")), str(link.get("target_port_id", "")))
 		var from: Vector2 = endpoints[0]
 		var to: Vector2 = endpoints[1]
-		var hit := Rect2(from, Vector2.ZERO).expand(to).grow(7.0)
+		var route := _link_route(link, from, to)
+		var hit := _route_bounds(route).grow(8.0)
 		if not hit.intersects(_visible_draw_rect()):
 			continue
 		var kind := str(link.get("kind", "CARGO"))
 		var color := POWER_COLOR if kind == "POWER" else CARGO_COLOR
 		var selected := _selected_link_id == str(link.get("id", ""))
 		var status := str(link.get("status", "IDLE"))
-		if status in ["SOURCE_EMPTY", "TARGET_FULL", "BLOCKED"]:
+		var congestion := clampf(float(link.get("congestion", link.get("utilization", 0.0))), 0.0, 1.0)
+		var blocked := bool(link.get("blocked", false)) or not str(link.get("blocked_reason", "")).is_empty() or status in ["SOURCE_EMPTY", "TARGET_FULL", "BLOCKED"]
+		if blocked:
 			color = Color("d86e63")
-		var width := 1.6 + clampf(float(link.get("utilization", 0.0)), 0.0, 1.0) * 2.0
+		elif congestion >= 0.80:
+			color = Color("e0ae5c")
+		var lane_count := maxi(1, int(link.get("lane_count", 1)))
+		var tier := str(link.get("tier", "MK1")).to_upper()
+		var width := 1.4 + clampf(float(link.get("utilization", 0.0)), 0.0, 1.0) * 1.8 + minf(1.8, float(lane_count - 1) * 0.35) + minf(0.8, float(_tier_number(tier) - 1) * 0.2)
 		if selected:
 			color = FOCUS_COLOR
 			width += 1.5
-		draw_line(from, to, color, width, true)
+		_draw_orthogonal_route(route, color, width, false)
 		var shows_detail := _tile_scale() >= 0.75
 		if shows_detail:
-			_draw_link_arrow(from, to, color)
+			_draw_link_arrow(route, color)
+			if _tile_scale() >= 1.25 and not blocked:
+				var label: String = str(I18n.t("factory.route.label", "L%d · %s · %d%%")) % [lane_count, tier, roundi(congestion * 100.0)]
+				draw_string(get_theme_default_font(), _route_midpoint(route) + Vector2(4, -5), label, HORIZONTAL_ALIGNMENT_LEFT, 120, 9, color)
 		_link_hit_rects[str(link.get("id", ""))] = hit
-		if flow_animation_allowed and float(link.get("last_flow", 0.0)) > 0.00001 and not _reduced_motion and status not in ["BLOCKED", "SOURCE_EMPTY", "TARGET_FULL"]:
+		if flow_animation_allowed and float(link.get("last_flow", 0.0)) > 0.00001 and not _reduced_motion and not blocked:
 			_visible_active_flow = true
-			var packet_position := from.lerp(to, fposmod(_visual_phase * 0.62 + float(str(link.get("id", "")).hash() % 13) / 13.0, 1.0))
+			var packet_position := _point_on_route(route, fposmod(_visual_phase * 0.62 + float(str(link.get("id", "")).hash() % 13) / 13.0, 1.0))
 			draw_circle(packet_position, 2.4, Color("f4e7c5") if kind == "CARGO" else Color("d5fffa"))
 
 
@@ -437,19 +521,74 @@ func _draw_connection_ports(entity: Dictionary, rect: Rect2, detail_stage: Strin
 		draw_rect(rect.grow(2.0), Color(FOCUS_COLOR, 0.72), false, 1.5)
 	if detail_stage == "COMPACT":
 		return
-	var ports: Dictionary = entity.get("ports", {}) if entity.get("ports", {}) is Dictionary else {}
 	var radius := 4.0 if detail_stage == "FULL" else 3.0
-	if not (ports.get("inputs", []) as Array).is_empty():
-		draw_circle(Vector2(rect.position.x, rect.get_center().y), radius, CARGO_COLOR)
-	if not (ports.get("outputs", []) as Array).is_empty():
-		draw_circle(Vector2(rect.end.x, rect.get_center().y), radius, CARGO_COLOR)
-	if bool(ports.get("accepts_power", false)):
-		draw_circle(Vector2(rect.get_center().x, rect.position.y), radius, POWER_COLOR)
-	if bool(ports.get("provides_power", false)):
-		draw_circle(Vector2(rect.get_center().x, rect.end.y), radius, POWER_COLOR)
+	_draw_entity_ports(entity, rect, "INPUT", radius)
+	_draw_entity_ports(entity, rect, "OUTPUT", radius)
 
 
-func _draw_link_arrow(from: Vector2, to: Vector2, color: Color) -> void:
+func _draw_entity_ports(entity: Dictionary, rect: Rect2, direction: String, radius: float) -> void:
+	var ports := _view_model.connection_ports(entity, direction)
+	var cargo_ports: Array = []
+	var power_ports: Array = []
+	for port_value in ports:
+		var port: Dictionary = port_value as Dictionary
+		if str(port.get("kind", "CARGO")) == "POWER":
+			power_ports.append(port)
+		else:
+			cargo_ports.append(port)
+	for index in cargo_ports.size():
+		var port: Dictionary = cargo_ports[index] as Dictionary
+		var fraction := float(index + 1) / float(cargo_ports.size() + 1)
+		var center := Vector2(rect.position.x if direction == "INPUT" else rect.end.x, lerpf(rect.position.y, rect.end.y, fraction))
+		_draw_port_marker(entity, port, center, radius, CARGO_COLOR)
+	for index in power_ports.size():
+		var port: Dictionary = power_ports[index] as Dictionary
+		var fraction := float(index + 1) / float(power_ports.size() + 1)
+		var center := Vector2(lerpf(rect.position.x, rect.end.x, fraction), rect.position.y if direction == "INPUT" else rect.end.y)
+		_draw_port_marker(entity, port, center, radius, POWER_COLOR)
+
+
+func _draw_port_marker(entity: Dictionary, port: Dictionary, center: Vector2, radius: float, color: Color) -> void:
+	var key := "%s:%s" % [str(entity.get("id", "")), str(port.get("id", ""))]
+	var is_drag_source := key == str(_port_drag.get("source_key", ""))
+	var is_drag_target := key == str(_port_drag.get("target_key", ""))
+	var tone := FOCUS_COLOR if is_drag_target else Color("d5a45c") if is_drag_source else color
+	draw_circle(center, radius + (1.5 if is_drag_source or is_drag_target else 0.0), tone)
+	_register_port_hit(entity, port, center, radius)
+
+
+func _register_port_hit(entity: Dictionary, port: Dictionary, center: Vector2, radius: float) -> void:
+	var key := "%s:%s" % [str(entity.get("id", "")), str(port.get("id", ""))]
+	_port_hit_rects[key] = {"rect":Rect2(center - Vector2.ONE * maxf(7.0, radius + 3.0), Vector2.ONE * maxf(14.0, (radius + 3.0) * 2.0)), "entity_id":str(entity.get("id", "")), "port":port.duplicate(false), "center":center}
+
+
+func _register_entity_port_hits(entity: Dictionary, rect: Rect2, radius: float) -> void:
+	for direction in ["INPUT", "OUTPUT"]:
+		var cargo_ports: Array = []
+		var power_ports: Array = []
+		for port_value in _view_model.connection_ports(entity, direction):
+			var port := port_value as Dictionary
+			if str(port.get("kind", "CARGO")) == "POWER":
+				power_ports.append(port)
+			else:
+				cargo_ports.append(port)
+		for index in cargo_ports.size():
+			var cargo_port := cargo_ports[index] as Dictionary
+			var cargo_fraction := float(index + 1) / float(cargo_ports.size() + 1)
+			var cargo_center := Vector2(rect.position.x if direction == "INPUT" else rect.end.x, lerpf(rect.position.y, rect.end.y, cargo_fraction))
+			_register_port_hit(entity, cargo_port, cargo_center, radius)
+		for index in power_ports.size():
+			var power_port := power_ports[index] as Dictionary
+			var power_fraction := float(index + 1) / float(power_ports.size() + 1)
+			var power_center := Vector2(lerpf(rect.position.x, rect.end.x, power_fraction), rect.position.y if direction == "INPUT" else rect.end.y)
+			_register_port_hit(entity, power_port, power_center, radius)
+
+
+func _draw_link_arrow(route: PackedVector2Array, color: Color) -> void:
+	if route.size() < 2:
+		return
+	var from := route[route.size() - 2]
+	var to := route[route.size() - 1]
 	var direction := (to - from).normalized()
 	if direction.is_zero_approx():
 		return
@@ -459,12 +598,171 @@ func _draw_link_arrow(from: Vector2, to: Vector2, color: Color) -> void:
 	draw_colored_polygon(triangle, color)
 
 
-func _connection_endpoints(source: Dictionary, target: Dictionary, kind: String) -> Array[Vector2]:
+func _connection_endpoints(source: Dictionary, target: Dictionary, kind: String, source_port_id: String = "", target_port_id: String = "") -> Array[Vector2]:
 	var source_rect := _footprint_rect(source.get("footprint", {}), 4.0)
 	var target_rect := _footprint_rect(target.get("footprint", {}), 4.0)
+	var source_port := _view_model.connection_port_by_id(source, source_port_id, "OUTPUT") if not source_port_id.is_empty() else {}
+	var target_port := _view_model.connection_port_by_id(target, target_port_id, "INPUT") if not target_port_id.is_empty() else {}
+	if not source_port.is_empty() or not target_port.is_empty():
+		return [_port_center(source, source_port, source_rect, "OUTPUT", kind), _port_center(target, target_port, target_rect, "INPUT", kind)]
 	if kind == "POWER":
 		return [Vector2(source_rect.get_center().x, source_rect.end.y), Vector2(target_rect.get_center().x, target_rect.position.y)]
 	return [Vector2(source_rect.end.x, source_rect.get_center().y), Vector2(target_rect.position.x, target_rect.get_center().y)]
+
+
+func _port_center(entity: Dictionary, port: Dictionary, rect: Rect2, direction: String, kind: String) -> Vector2:
+	if port.is_empty():
+		return Vector2(rect.get_center().x, rect.end.y if direction == "OUTPUT" else rect.position.y) if kind == "POWER" else Vector2(rect.end.x if direction == "OUTPUT" else rect.position.x, rect.get_center().y)
+	var ports := _view_model.connection_ports(entity, direction)
+	var same_kind: Array = []
+	for candidate_value in ports:
+		var candidate: Dictionary = candidate_value as Dictionary
+		if str(candidate.get("kind", "CARGO")) == str(port.get("kind", "CARGO")):
+			same_kind.append(candidate)
+	var index := 0
+	for candidate_index in same_kind.size():
+		if str((same_kind[candidate_index] as Dictionary).get("id", "")) == str(port.get("id", "")):
+			index = candidate_index
+			break
+	var fraction := float(index + 1) / float(same_kind.size() + 1)
+	if str(port.get("kind", "CARGO")) == "POWER":
+		return Vector2(lerpf(rect.position.x, rect.end.x, fraction), rect.end.y if direction == "OUTPUT" else rect.position.y)
+	return Vector2(rect.end.x if direction == "OUTPUT" else rect.position.x, lerpf(rect.position.y, rect.end.y, fraction))
+
+
+## DSPONLINE-style routes leave the port horizontally/vertically, travel on a
+## shared orthogonal spine, then enter the target.  Corners are rounded in the
+## renderer; explicit path_tiles are honored when a future topology snapshot
+## supplies authored routing geometry.
+func _link_route(link: Dictionary, from: Vector2, to: Vector2) -> PackedVector2Array:
+	var authored := PackedVector2Array()
+	var path_tiles: Variant = link.get("path_tiles", [])
+	if path_tiles is Array:
+		for point_value in path_tiles as Array:
+			var point: Dictionary = point_value as Dictionary if point_value is Dictionary else {}
+			if point.is_empty():
+				continue
+			# Domain paths address logical tiles; render through their centers so the
+			# topology remains independent from current zoom and theme geometry.
+			authored.append(_world_to_screen(Vector2(float(point.get("x", 0.0)) + 0.5, float(point.get("y", 0.0)) + 0.5)))
+	if authored.size() >= 2:
+		var first_was_horizontal := is_equal_approx(authored[0].y, authored[1].y)
+		var last_was_horizontal := is_equal_approx(authored[-2].y, authored[-1].y)
+		if authored.size() == 2:
+			return _deduplicate_route_points(PackedVector2Array([
+				from,
+				Vector2(to.x, from.y) if first_was_horizontal else Vector2(from.x, to.y),
+				to
+			]))
+		var connected := PackedVector2Array([from])
+		var first_control := authored[1]
+		connected.append(Vector2(first_control.x, from.y) if first_was_horizontal else Vector2(from.x, first_control.y))
+		for index in range(1, authored.size() - 1):
+			connected.append(authored[index])
+		var last_control := authored[-2]
+		connected.append(Vector2(to.x, last_control.y) if last_was_horizontal else Vector2(last_control.x, to.y))
+		connected.append(to)
+		return _deduplicate_route_points(connected)
+	var lane_offset := (float(maxi(1, int(link.get("lane_count", 1))) - 1) * 2.0) + float(_tier_number(str(link.get("tier", "MK1"))) - 1)
+	return _orthogonal_route(from, to, lane_offset)
+
+
+func _tier_number(tier: String) -> int:
+	match tier.to_upper():
+		"MK3", "3": return 3
+		"MK2", "2": return 2
+	return 1
+
+
+func _orthogonal_route(from: Vector2, to: Vector2, lane_offset: float = 0.0) -> PackedVector2Array:
+	var horizontal := absf(to.x - from.x) >= absf(to.y - from.y)
+	var route := PackedVector2Array([from])
+	if horizontal:
+		var horizontal_direction := 1.0 if to.x >= from.x else -1.0
+		var lead := minf(34.0, maxf(12.0, absf(to.x - from.x) * 0.25))
+		var spine_y := (from.y + to.y) * 0.5 + lane_offset
+		route.append(Vector2(from.x + lead * horizontal_direction, from.y))
+		route.append(Vector2(from.x + lead * horizontal_direction, spine_y))
+		route.append(Vector2(to.x - lead * horizontal_direction, spine_y))
+		route.append(Vector2(to.x - lead * horizontal_direction, to.y))
+	else:
+		var vertical_direction := 1.0 if to.y >= from.y else -1.0
+		var lead := minf(34.0, maxf(12.0, absf(to.y - from.y) * 0.25))
+		var spine_x := (from.x + to.x) * 0.5 + lane_offset
+		route.append(Vector2(from.x, from.y + lead * vertical_direction))
+		route.append(Vector2(spine_x, from.y + lead * vertical_direction))
+		route.append(Vector2(spine_x, to.y - lead * vertical_direction))
+		route.append(Vector2(to.x, to.y - lead * vertical_direction))
+	route.append(to)
+	return _deduplicate_route_points(route)
+
+
+func _deduplicate_route_points(route: PackedVector2Array) -> PackedVector2Array:
+	var result := PackedVector2Array()
+	for point in route:
+		if result.is_empty() or result[result.size() - 1].distance_to(point) > 0.01:
+			result.append(point)
+	return result
+
+
+func _draw_orthogonal_route(route: PackedVector2Array, color: Color, width: float, dashed: bool) -> void:
+	if route.size() < 2:
+		return
+	var visible_rect := _visible_draw_rect().grow(width + 2.0)
+	for index in range(route.size() - 1):
+		var from := route[index]
+		var to := route[index + 1]
+		if not Rect2(from, Vector2.ZERO).expand(to).grow(width).intersects(visible_rect):
+			continue
+		if dashed:
+			draw_dashed_line(from, to, color, width, 5.0)
+		else:
+			draw_line(from, to, color, width, true)
+	# A small round cap at each turn retains the readable rounded-corner DSP
+	# aesthetic without generating a per-link Curve2D allocation every frame.
+	if not dashed:
+		for index in range(1, route.size() - 1):
+			var previous := route[index - 1]
+			var point := route[index]
+			var following := route[index + 1]
+			var is_turn := not (is_equal_approx(previous.x, point.x) and is_equal_approx(point.x, following.x)) \
+				and not (is_equal_approx(previous.y, point.y) and is_equal_approx(point.y, following.y))
+			if is_turn and visible_rect.has_point(point):
+				draw_circle(point, width * 0.5, color)
+
+
+func _route_bounds(route: PackedVector2Array) -> Rect2:
+	if route.is_empty():
+		return Rect2()
+	var bounds := Rect2(route[0], Vector2.ZERO)
+	for point in route:
+		bounds = bounds.expand(point)
+	return bounds
+
+
+func _route_midpoint(route: PackedVector2Array) -> Vector2:
+	return _point_on_route(route, 0.5)
+
+
+func _point_on_route(route: PackedVector2Array, ratio: float) -> Vector2:
+	if route.is_empty():
+		return Vector2.ZERO
+	if route.size() == 1:
+		return route[0]
+	var total := 0.0
+	for index in range(route.size() - 1):
+		total += route[index].distance_to(route[index + 1])
+	if total <= 0.001:
+		return route[0]
+	var remaining := clampf(ratio, 0.0, 1.0) * total
+	for index in range(route.size() - 1):
+		var from := route[index]
+		var to := route[index + 1]
+		var length := from.distance_to(to)
+		if remaining <= length or index == route.size() - 2:
+			return from.lerp(to, remaining / maxf(0.001, length))
+		remaining -= length
+	return route[route.size() - 1]
 
 
 func _footprint_rect(footprint_value: Variant, minimum_tiles: float) -> Rect2:
@@ -631,7 +929,8 @@ func _on_canvas_resized() -> void:
 
 func _on_gui_input(event: InputEvent) -> void:
 	var connection_active := not str(_connection_preview.get("kind", "")).is_empty()
-	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active):
+	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty()):
+		cancel_port_drag()
 		placement_cancelled.emit()
 		accept_event()
 		return
@@ -648,8 +947,14 @@ func _on_gui_input(event: InputEvent) -> void:
 			_set_zoom_around(mouse_event.position, _screen_to_world(mouse_event.position), _zoom * (1.14 if mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP else 0.88))
 			accept_event()
 			return
-		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
-			_select_at(mouse_event.position)
+		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			if mouse_event.pressed:
+				if _begin_port_drag(mouse_event.position):
+					accept_event()
+					return
+				_select_at(mouse_event.position)
+			elif not _port_drag.is_empty():
+				_finish_port_drag(mouse_event.position)
 			accept_event()
 	elif event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
@@ -659,6 +964,10 @@ func _on_gui_input(event: InputEvent) -> void:
 			_clamp_camera_to_bounds()
 			_invalidate_hit_geometry()
 			queue_redraw()
+			accept_event()
+			return
+		if not _port_drag.is_empty():
+			_update_port_drag(motion.position)
 			accept_event()
 			return
 		var hovered_tile := _screen_to_tile(motion.position)
@@ -692,6 +1001,92 @@ func _on_gui_input(event: InputEvent) -> void:
 				handled = false
 		if handled:
 			accept_event()
+
+
+func _begin_port_drag(point: Vector2) -> bool:
+	_ensure_hit_geometry()
+	var row := _port_at(point, "OUTPUT")
+	if row.is_empty():
+		return false
+	var port: Dictionary = row.get("port", {}) as Dictionary
+	if str(port.get("direction", "")) != "OUTPUT":
+		return false
+	_port_drag = {
+		"source_id":str(row.get("entity_id", "")),
+		"source_port":port.duplicate(false),
+		"source_key":"%s:%s" % [str(row.get("entity_id", "")), str(port.get("id", ""))],
+		"target_id":"",
+		"target_port":{},
+		"target_key":"",
+		"pointer":point,
+		"valid":false
+	}
+	queue_redraw()
+	return true
+
+
+func _update_port_drag(point: Vector2) -> void:
+	if _port_drag.is_empty():
+		return
+	var row := _port_at(point, "INPUT")
+	var source := _entity_by_id(str(_port_drag.get("source_id", "")))
+	var source_port: Dictionary = _port_drag.get("source_port", {}) as Dictionary
+	var target_id := ""
+	var target_port: Dictionary = {}
+	if not row.is_empty():
+		var candidate: Dictionary = row.get("port", {}) as Dictionary
+		var candidate_id := str(row.get("entity_id", ""))
+		var target := _entity_by_id(candidate_id)
+		if candidate_id != str(_port_drag.get("source_id", "")) and _view_model.compatible_port_pair(source, source_port, target, candidate):
+			target_id = candidate_id
+			target_port = candidate.duplicate(false)
+	var valid := not target_id.is_empty()
+	_port_drag["pointer"] = point
+	_port_drag["target_id"] = target_id
+	_port_drag["target_port"] = target_port
+	_port_drag["target_key"] = "%s:%s" % [target_id, str(target_port.get("id", ""))] if valid else ""
+	_port_drag["valid"] = valid
+	port_drag_preview.emit(str(_port_drag.get("source_id", "")), source_port.duplicate(false), target_id, target_port.duplicate(false), valid)
+	queue_redraw()
+
+
+func _finish_port_drag(point: Vector2) -> void:
+	_update_port_drag(point)
+	var source_id := str(_port_drag.get("source_id", ""))
+	var source_port: Dictionary = _port_drag.get("source_port", {}) as Dictionary
+	var target_id := str(_port_drag.get("target_id", ""))
+	var target_port: Dictionary = _port_drag.get("target_port", {}) as Dictionary
+	var valid := bool(_port_drag.get("valid", false))
+	_port_drag.clear()
+	queue_redraw()
+	if valid:
+		port_connection_requested.emit(source_id, source_port.duplicate(false), target_id, target_port.duplicate(false))
+
+
+func _port_at(point: Vector2, preferred_direction: String = "") -> Dictionary:
+	var best: Dictionary = {}
+	var best_direction_rank := 2
+	var best_distance_squared := INF
+	var best_key := ""
+	for key_value in _port_hit_rects.keys():
+		var row: Dictionary = _port_hit_rects.get(key_value, {}) as Dictionary
+		var rect: Rect2 = row.get("rect", Rect2())
+		if not rect.has_point(point):
+			continue
+		var port: Dictionary = row.get("port", {}) as Dictionary
+		var direction_rank := 0 if preferred_direction.is_empty() or str(port.get("direction", "")) == preferred_direction else 1
+		var center: Vector2 = row.get("center", rect.get_center())
+		var distance_squared := center.distance_squared_to(point)
+		var key := str(key_value)
+		if best.is_empty() \
+				or direction_rank < best_direction_rank \
+				or (direction_rank == best_direction_rank and distance_squared < best_distance_squared - 0.001) \
+				or (direction_rank == best_direction_rank and is_equal_approx(distance_squared, best_distance_squared) and key < best_key):
+			best = row
+			best_direction_rank = direction_rank
+			best_distance_squared = distance_squared
+			best_key = key
+	return best
 
 
 func _is_placement_cancel_event(event: InputEvent) -> bool:
@@ -729,6 +1124,7 @@ func _invalidate_hit_geometry() -> void:
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
+	_port_hit_rects.clear()
 	_hit_geometry_dirty = true
 
 
@@ -738,8 +1134,11 @@ func _ensure_hit_geometry() -> void:
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
+	_port_hit_rects.clear()
 	var visible_rect := _visible_draw_rect()
 	var visible_records := _chunk_index.query(_visible_world_query_rect())
+	_visible_records = visible_records
+	var hit_detail_stage := _detail_stage()
 	for resource_id_value in visible_records.get("resource_ids", []):
 		var resource: Dictionary = _resources_by_id.get(str(resource_id_value), {})
 		var resource_rect := _footprint_rect(resource.get("footprint", {}), 1.0)
@@ -750,6 +1149,8 @@ func _ensure_hit_geometry() -> void:
 		var entity_rect := _footprint_rect(entity.get("footprint", {}), 4.0)
 		if entity_rect.intersects(visible_rect):
 			_node_rects[str(entity.get("id", ""))] = {"rect":entity_rect, "data":entity, "is_entity":true}
+			if hit_detail_stage != "COMPACT":
+				_register_entity_port_hits(entity, entity_rect, 4.0 if hit_detail_stage == "FULL" else 3.0)
 	for order_id_value in visible_records.get("order_ids", []):
 		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
 		var order_rect := _footprint_rect(order.get("footprint", {}), 4.0)
@@ -761,10 +1162,10 @@ func _ensure_hit_geometry() -> void:
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
 			continue
-		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")))
+		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")), str(link.get("source_port_id", "")), str(link.get("target_port_id", "")))
 		var from: Vector2 = endpoints[0]
 		var to: Vector2 = endpoints[1]
-		var hit := Rect2(from, Vector2.ZERO).expand(to).grow(7.0)
+		var hit := _route_bounds(_link_route(link, from, to)).grow(8.0)
 		if hit.intersects(visible_rect):
 			_link_hit_rects[str(link.get("id", ""))] = hit
 	_hit_geometry_dirty = false
@@ -841,10 +1242,12 @@ func _distance_to_link(point: Vector2, link_id: String) -> float:
 	var target := _entity_by_id(str(link.get("target_id", "")))
 	if source.is_empty() or target.is_empty():
 		return INF
-	var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")))
-	var from: Vector2 = endpoints[0]
-	var to: Vector2 = endpoints[1]
-	return Geometry2D.get_closest_point_to_segment(point, from, to).distance_to(point)
+	var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")), str(link.get("source_port_id", "")), str(link.get("target_port_id", "")))
+	var route := _link_route(link, endpoints[0], endpoints[1])
+	var distance := INF
+	for index in range(route.size() - 1):
+		distance = minf(distance, Geometry2D.get_closest_point_to_segment(point, route[index], route[index + 1]).distance_to(point))
+	return distance
 
 
 func _node_style(tone: Color, selected: bool) -> StyleBoxFlat:

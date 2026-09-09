@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_legacy_game_mutators_refresh_immediately()
 	_test_multi_world_event_order_is_deterministic()
 	_test_factory_construction_intents()
+	_test_factory_route_demolition_and_cancellation_intents()
 	_test_fresh_factory_bootstrap_closure()
 	_test_surveyed_world_initialization()
 	_test_factory_progression_adapters()
@@ -567,10 +568,12 @@ func _test_legacy_game_mutators_refresh_immediately() -> void:
 	_check(bool(factory.place_entity_immediate(world, "grid_solar_array", Vector2i(0, 0), "", "power").get("ok", false)), "legacy refresh fixture places physical generation")
 	_check(bool(factory.add_resource_field(world, "iron-field", "iron_ore", Vector2i(32, 32), Vector2i(24, 24), 1.0, 0.25, "solid").get("ok", false)), "legacy refresh fixture temporarily provides a legal extractor placement field")
 	_check(bool(factory.place_entity_immediate(world, "grid_surface_mine", Vector2i(34, 34), "", "mine").get("ok", false)), "legacy refresh fixture places an extractor before registering its field")
+	_check(bool(factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(80, 80), "", "cargo-source").get("ok", false)) and bool(factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(112, 80), "", "cargo-target").get("ok", false)), "legacy refresh fixture places Cargo endpoints")
 	world.get("resource_fields", {}).erase("iron-field")
 	game.state.factory_worlds["legacy-refresh-grid"] = world
 	var elapsed_before := float(world.get("elapsed_ms", -1.0))
 	var runtime_revision_before := int(world.get("runtime_revision", -1))
+	_check(not game.connect_factory_entities("legacy-refresh-grid", "CARGO", "cargo-source", "cargo-target", "iron_ingot", 1000000.0, 2) and game.state.factory_worlds["legacy-refresh-grid"].get("links", {}).is_empty(), "legacy public Game API also rejects client-authored free Cargo throughput")
 	_check(game.connect_factory_entities("legacy-refresh-grid", "POWER", "power", "mine"), "legacy public Game API accepts a physical power edge")
 	var powered_snapshot: Dictionary = game.factory_workspace_snapshot("legacy-refresh-grid")
 	var powered_mine := _workspace_entity(powered_snapshot, "mine")
@@ -852,7 +855,9 @@ func _test_fresh_factory_bootstrap_closure() -> void:
 		{"definition_id":"grid_engineering_works", "recipe_id":"grid_refine_iron", "origin":{"x":0, "y":100}, "label":"iron_refinery"},
 		{"definition_id":"grid_engineering_works", "recipe_id":"grid_refine_copper", "origin":{"x":20, "y":100}, "label":"copper_refinery"},
 		{"definition_id":"grid_engineering_works", "recipe_id":"grid_fabricate_electronics", "origin":{"x":40, "y":100}, "label":"electronics"},
-		{"definition_id":"grid_engineering_works", "recipe_id":"grid_assemble_frame", "origin":{"x":60, "y":100}, "label":"frames"}
+		{"definition_id":"grid_engineering_works", "recipe_id":"grid_assemble_frame", "origin":{"x":60, "y":100}, "label":"frames"},
+		{"definition_id":"grid_cargo_splitter", "recipe_id":"", "origin":{"x":150, "y":40}, "label":"iron_splitter"},
+		{"definition_id":"grid_cargo_splitter", "recipe_id":"", "origin":{"x":170, "y":40}, "label":"copper_splitter"}
 	]
 	var entity_ids := {}
 	for plan_value in plans:
@@ -882,23 +887,25 @@ func _test_fresh_factory_bootstrap_closure() -> void:
 		_check(bool(funded.get("accepted", false)), "fresh bootstrap funds %s from the physical starter depot" % str(plan.get("label", "")))
 	var funded_world: Dictionary = game.state.factory_worlds[world_id]
 	var starter_inventory: Dictionary = funded_world.get("entities", {}).get("starter-depot", {}).get("inventory", {})
-	_check(int(starter_inventory.get("scrap_metal", -1)) == 18 and int(starter_inventory.get("electronics", -1)) == 6, "44 scrap preserves the full Lunar and Asteroid remote-bootstrap reserve after funding the renewable starter chain")
+	_check(int(starter_inventory.get("scrap_metal", -1)) == 14 and int(starter_inventory.get("electronics", -1)) == 4, "starter inventory pays for the two physical Cargo Splitters in addition to the renewable production chain")
 	var construction_report: Dictionary = game.advance_game_time(240000.0)
 	var completed_world: Dictionary = game.state.factory_worlds[world_id]
-	_check(completed_world.get("construction_orders", {}).is_empty() and completed_world.get("entities", {}).size() == 8, "normal deterministic construction completes all seven funded starter entities")
+	_check(completed_world.get("construction_orders", {}).is_empty() and completed_world.get("entities", {}).size() == 10, "normal deterministic construction completes the funded starter entities and physical Cargo Splitters")
 	_check((construction_report.get("events", []) as Array).any(func(event): return str((event as Dictionary).get("type", "")) == "FactoryConstructionCompleted"), "fresh construction advance returns the observable FactoryConstructionCompleted event")
 	var power_id := str(entity_ids.get("power", ""))
-	for consumer_label in ["iron_mine", "copper_mine", "iron_refinery", "copper_refinery", "electronics", "frames"]:
+	for consumer_label in ["iron_mine", "copper_mine", "iron_refinery", "copper_refinery", "electronics", "frames", "iron_splitter", "copper_splitter"]:
 		_connect_bootstrap(game, world_id, "POWER", power_id, str(entity_ids.get(consumer_label, "")), "", "bootstrap-power-%s" % consumer_label)
 	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("iron_mine", "")), str(entity_ids.get("iron_refinery", "")), "iron_ore", "bootstrap-iron-ore")
 	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("copper_mine", "")), str(entity_ids.get("copper_refinery", "")), "copper_ore", "bootstrap-copper-ore")
+	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("iron_refinery", "")), str(entity_ids.get("iron_splitter", "")), "iron_ingot", "bootstrap-iron-splitter-input")
+	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("copper_refinery", "")), str(entity_ids.get("copper_splitter", "")), "copper_ingot", "bootstrap-copper-splitter-input")
 	for target_label in ["electronics", "frames"]:
-		_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("iron_refinery", "")), str(entity_ids.get(target_label, "")), "iron_ingot", "bootstrap-iron-%s" % target_label)
-		_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("copper_refinery", "")), str(entity_ids.get(target_label, "")), "copper_ingot", "bootstrap-copper-%s" % target_label)
+		_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("iron_splitter", "")), str(entity_ids.get(target_label, "")), "iron_ingot", "bootstrap-iron-%s" % target_label)
+		_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("copper_splitter", "")), str(entity_ids.get(target_label, "")), "copper_ingot", "bootstrap-copper-%s" % target_label)
 	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("electronics", "")), "starter-depot", "electronics", "bootstrap-electronics-out")
 	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("frames", "")), "starter-depot", "structural_frame", "bootstrap-frames-out")
-	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("iron_refinery", "")), "starter-depot", "iron_ingot", "bootstrap-iron-out")
-	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("copper_refinery", "")), "starter-depot", "copper_ingot", "bootstrap-copper-out")
+	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("iron_splitter", "")), "starter-depot", "iron_ingot", "bootstrap-iron-out")
+	_connect_bootstrap(game, world_id, "CARGO", str(entity_ids.get("copper_splitter", "")), "starter-depot", "copper_ingot", "bootstrap-copper-out")
 	var production_report: Dictionary = game.advance_game_time(300000.0)
 	var running_world: Dictionary = game.state.factory_worlds[world_id]
 	var renewable_inventory: Dictionary = running_world.get("entities", {}).get("starter-depot", {}).get("inventory", {})
@@ -944,7 +951,6 @@ func _connect_bootstrap(game: Variant, world_id: String, kind: String, source_id
 	var payload := {"link_kind":kind, "source_id":source_id, "target_id":target_id}
 	if not item_id.is_empty():
 		payload["item_id"] = item_id
-		payload["capacity_per_second"] = 4.0
 	var result: Dictionary = game.execute_factory_command({
 		"protocol_version":1,
 		"command_id":command_id,
@@ -1707,6 +1713,141 @@ func _test_megastructure_same_tick_maintenance_boundary() -> void:
 		completion_event_types.append(str((event_value as Dictionary).get("type", "")))
 	project = game.state.megastructure_projects["stellar_energy"]
 	_check(bool(game.state.game_complete) and str(project.get("status", "")) == "COMPLETE" and completion_event_types.count("MegastructureStageChanged") == 1 and completion_event_types.count("GameCompleted") == 1 and (project.get("phase_history", []) as Array).size() == phase_history_before + 1, "one post-replenishment time window commits the phase and completion events exactly once")
+
+
+func _test_factory_route_demolition_and_cancellation_intents() -> void:
+	var game: Variant = get_root().get_node("Game")
+	game.persistence_enabled = false
+	game.content = database
+	game.simulation = SimulationEngine.new(database)
+	game.state = SpaceGameState.create_new(database.domains.keys(), database.regions)
+	var world := factory.create_world("factory-v2-intents", "earth_orbit", Vector2i(256, 160), 208)
+	_check(bool(factory.place_entity_immediate(world, "grid_bulk_depot", Vector2i(8, 8), "", "depot").get("ok", false)), "Factory v2 application fixture places a source depot")
+	_check(bool(factory.place_entity_immediate(world, "grid_cargo_splitter", Vector2i(52, 12), "", "router").get("ok", false)), "Factory v2 application fixture places a physical router")
+	world["entities"]["depot"]["inventory"]["iron_ingot"] = 1
+	game.state.factory_worlds["factory-v2-intents"] = world
+	var before: Dictionary = game.factory_workspace_snapshot("factory-v2-intents")
+	var free_high_tier: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-free-high-tier-connect",
+		"kind":"CONNECT_ENTITIES",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(before.get("topology_revision", -1)),
+		"base_runtime_revision":int(before.get("runtime_revision", -1)),
+		"payload":{"link_kind":"CARGO", "source_id":"depot", "target_id":"router", "item_id":"iron_ingot", "capacity_per_second":1000000.0, "lane_count":12, "tier":"MK3"}
+	})
+	_check(not bool(free_high_tier.get("accepted", true)) and str(free_high_tier.get("reason_code", "")) == "INVALID_PAYLOAD" and world.get("links", {}).is_empty(), "application facade rejects client-authored high-tier Cargo equipment during route creation")
+	var connected: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-connect",
+		"kind":"CONNECT_ENTITIES",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(before.get("topology_revision", -1)),
+		"base_runtime_revision":int(before.get("runtime_revision", -1)),
+		"payload":{
+			"link_kind":"CARGO",
+			"source_id":"depot",
+			"target_id":"router",
+			"item_id":"iron_ingot",
+			"source_port_id":"depot:OUTPUT:ITEM:*",
+			"target_port_id":"router:INPUT:ITEM:*",
+			"capacity_per_second":1.0,
+			"priority":1,
+			"lane_count":1,
+			"tier":"MK1"
+		}
+	})
+	_check(bool(connected.get("accepted", false)) and str(connected.get("events", [])[0].get("type", "")) == "FactoryEntitiesConnected", "versioned Factory command creates a validated port-to-port Cargo route")
+	var link_id := str(connected.get("result", {}).get("link_id", ""))
+	var configured: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-configure",
+		"kind":"CONFIGURE_LINK",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(connected.get("topology_revision", -1)),
+		"payload":{"link_id":link_id, "priority":2}
+	})
+	var configured_link: Dictionary = game.state.factory_worlds["factory-v2-intents"].get("links", {}).get(link_id, {})
+	_check(
+		bool(configured.get("accepted", false))
+		and str(configured.get("events", [])[0].get("type", "")) == "FactoryLinkConfigured"
+		and str(configured.get("events", [])[0].get("configuration", {}).get("tier", "")) == "MK1"
+		and is_equal_approx(float(configured_link.get("capacity_per_second", 0.0)), 1.0)
+		and int(configured_link.get("priority", -1)) == 2
+		and int(configured_link.get("lane_count", 0)) == 1
+		and str(configured_link.get("tier", "")) == "MK1",
+		"route priority configuration is committed atomically without changing physical equipment"
+	)
+	var physical_upgrade: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-free-upgrade",
+		"kind":"CONFIGURE_LINK",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(configured.get("topology_revision", -1)),
+		"payload":{"link_id":link_id, "capacity_per_second":6.0, "lane_count":3, "tier":"MK3"}
+	})
+	_check(not bool(physical_upgrade.get("accepted", true)) and str(physical_upgrade.get("reason_code", "")) == "LINK_UPGRADE_REQUIRES_CONSTRUCTION" and is_equal_approx(float(game.state.factory_worlds["factory-v2-intents"]["links"][link_id].get("capacity_per_second", 0.0)), 1.0), "application facade rejects free physical route upgrades without mutating the route")
+	var removed: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-remove-router",
+		"kind":"REMOVE_ENTITY",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(configured.get("topology_revision", -1)),
+		"payload":{"entity_id":"router"}
+	})
+	_check(
+		bool(removed.get("accepted", false))
+		and str(removed.get("events", [])[0].get("type", "")) == "FactoryEntityRemoved"
+		and not game.state.factory_worlds["factory-v2-intents"].get("entities", {}).has("router")
+		and game.state.factory_worlds["factory-v2-intents"].get("links", {}).is_empty(),
+		"entity demolition removes an empty entity and its incident routes in one application transaction"
+	)
+	var buffered_remove: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-remove-buffered",
+		"kind":"REMOVE_ENTITY",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(removed.get("topology_revision", -1)),
+		"payload":{"entity_id":"depot"}
+	})
+	_check(not bool(buffered_remove.get("accepted", true)) and str(buffered_remove.get("reason_code", "")) == "ENTITY_BUFFER_NOT_EMPTY" and game.state.factory_worlds["factory-v2-intents"].get("entities", {}).has("depot"), "application demolition fails closed instead of deleting buffered physical cargo")
+
+	game.state.add_item("iron_ingot", 10, "earth_orbit")
+	var queued: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-queue-cancel",
+		"kind":"QUEUE_CONSTRUCTION",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(removed.get("topology_revision", -1)),
+		"payload":{"definition_id":"grid_bulk_depot", "recipe_id":"", "origin":{"x":120, "y":80}, "priority":50}
+	})
+	var order_id := str(queued.get("result", {}).get("order_id", ""))
+	var funded: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-fund-cancel",
+		"kind":"FUND_CONSTRUCTION_FROM_LOCATION",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(queued.get("topology_revision", -1)),
+		"payload":{"order_id":order_id}
+	})
+	var iron_after_funding: int = int(game.state.item_quantity("iron_ingot", "earth_orbit"))
+	var cancelled: Dictionary = game.execute_factory_command({
+		"protocol_version":1,
+		"command_id":"factory-v2-cancel",
+		"kind":"CANCEL_CONSTRUCTION",
+		"world_id":"factory-v2-intents",
+		"base_topology_revision":int(funded.get("topology_revision", -1)),
+		"payload":{"order_id":order_id}
+	})
+	_check(
+		bool(queued.get("accepted", false))
+		and bool(funded.get("accepted", false))
+		and bool(cancelled.get("accepted", false))
+		and str(cancelled.get("events", [])[0].get("type", "")) == "FactoryConstructionCancelled"
+		and not game.state.factory_worlds["factory-v2-intents"].get("construction_orders", {}).has(order_id)
+		and game.state.item_quantity("iron_ingot", "earth_orbit") == iron_after_funding + 10,
+		"construction cancellation returns every delivered material to same-location custody atomically"
+	)
 
 
 func _workspace_entity(snapshot: Dictionary, entity_id: String) -> Dictionary:

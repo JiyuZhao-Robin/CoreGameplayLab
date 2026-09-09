@@ -20,8 +20,11 @@ const FACTORY_COMMAND_KIND_FAILURE_REASONS := {
 	"FUND_CONSTRUCTION":["INVALID_CONSTRUCTION_ORDER", "INVALID_STORAGE", "INPUT_SHORTAGE"],
 	"FUND_CONSTRUCTION_FROM_LOCATION":["INVALID_TRANSFER_TARGET", "INVALID_CONSTRUCTION_ORDER", "INPUT_SHORTAGE"],
 	"SET_RECIPE":["RECIPE_LOCKED", "UNKNOWN_ENTITY", "INVALID_MACHINE", "INCOMPATIBLE_RECIPE"],
-	"CONNECT_ENTITIES":["INVALID_LINK", "MISSING_ENDPOINT", "DUPLICATE_LINK", "INVALID_CARGO_LINK", "CARGO_INCOMPATIBLE", "CARGO_INPUT_OCCUPIED"],
+	"CONNECT_ENTITIES":["INVALID_LINK", "MISSING_ENDPOINT", "DUPLICATE_LINK", "INVALID_CARGO_LINK", "CARGO_INCOMPATIBLE", "CARGO_INPUT_OCCUPIED", "CARGO_OUTPUT_OCCUPIED", "INVALID_SOURCE_PORT", "INVALID_TARGET_PORT", "INVALID_LANE_COUNT", "INVALID_LINK_TIER", "INVALID_LINK_PATH", "PATH_OUT_OF_BOUNDS"],
+	"CONFIGURE_LINK":["UNKNOWN_LINK", "INVALID_LINK_PRIORITY", "LINK_UPGRADE_REQUIRES_CONSTRUCTION", "LINK_CONFIGURATION_UNSUPPORTED", "MISSING_ENDPOINT"],
 	"REMOVE_LINK":["UNKNOWN_LINK"],
+	"CANCEL_CONSTRUCTION":["INVALID_CONSTRUCTION_ORDER", "INVALID_TRANSFER_TARGET", "STORAGE_FULL"],
+	"REMOVE_ENTITY":["UNKNOWN_ENTITY", "ENTITY_BUFFER_NOT_EMPTY"],
 	"IMPORT_FROM_LOCATION":["INVALID_TRANSFER_TARGET", "LOCATION_INVENTORY_EMPTY", "INVALID_STORAGE", "STORAGE_FULL"],
 	"EXPORT_TO_LOCATION":["INVALID_TRANSFER_TARGET", "INVALID_TRANSFER", "INVALID_STORAGE", "STORAGE_EMPTY", "STORAGE_FULL"]
 }
@@ -31,7 +34,10 @@ const FACTORY_COMMAND_SUCCESS_KEYS := {
 	"FUND_CONSTRUCTION_FROM_LOCATION":"factory.success.fund_construction_from_location",
 	"SET_RECIPE":"factory.success.set_recipe",
 	"CONNECT_ENTITIES":"factory.success.connect_entities",
+	"CONFIGURE_LINK":"factory.success.configure_link",
 	"REMOVE_LINK":"factory.success.remove_link",
+	"CANCEL_CONSTRUCTION":"factory.success.cancel_construction",
+	"REMOVE_ENTITY":"factory.success.remove_entity",
 	"IMPORT_FROM_LOCATION":"factory.success.import_from_location",
 	"EXPORT_TO_LOCATION":"factory.success.export_to_location"
 }
@@ -254,8 +260,10 @@ func fund_factory_construction(world_id: String, order_id: String, storage_id: S
 func connect_factory_entities(world_id: String, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1) -> bool:
 	if not state.factory_worlds.has(world_id):
 		return _reject(I18n.t("notice.factory_world_unknown", "Unknown factory world"))
+	if kind.to_upper() == "CARGO" and not is_equal_approx(capacity_per_second, 1.0):
+		return _reject(I18n.t("factory.reason.link_upgrade_requires_construction", "Physical route upgrades require a construction project and materials."))
 	var transaction := _new_transaction()
-	var result: Dictionary = simulation.factory_grid.connect_entities(transaction.working_state.factory_worlds[world_id], kind, source_id, target_id, item_id, capacity_per_second, priority)
+	var result: Dictionary = simulation.factory_grid.connect_entities(transaction.working_state.factory_worlds[world_id], kind, source_id, target_id, item_id, 1.0 if kind.to_upper() == "CARGO" else capacity_per_second, priority)
 	if not bool(result.get("ok", false)):
 		return _reject(str(result.get("reason", I18n.t("notice.factory_connection_rejected", "Factory connection rejected"))))
 	simulation.refresh_factory_dependent_runtime_state(transaction.working_state)
@@ -531,15 +539,45 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 				target_id,
 				item_id,
 				float(payload.get("capacity_per_second", 1.0)),
-				int(payload.get("priority", 1))
+				int(payload.get("priority", 1)),
+				str(payload.get("source_port_id", "")),
+				str(payload.get("target_port_id", "")),
+				int(payload.get("lane_count", 1)),
+				str(payload.get("tier", "MK1")),
+				payload.get("path_tiles", [])
 			)
+			var connected_link: Dictionary = world.get("links", {}).get(str(operation_result.get("link_id", "")), {})
 			event.merge({
 				"type":"FactoryEntitiesConnected",
 				"link_id":str(operation_result.get("link_id", "")),
 				"kind":link_kind,
 				"source_id":source_id,
 				"target_id":target_id,
-				"item_id":item_id
+				"item_id":item_id,
+				"source_port_id":str(connected_link.get("source_port_id", payload.get("source_port_id", ""))),
+				"target_port_id":str(connected_link.get("target_port_id", payload.get("target_port_id", ""))),
+				"lane_count":int(connected_link.get("lane_count", 0)),
+				"tier":str(connected_link.get("tier", "")),
+				"path_tiles":connected_link.get("path_tiles", []).duplicate(true)
+			})
+		"CONFIGURE_LINK":
+			var configured_link_id := str(payload.get("link_id", ""))
+			var link_configuration := payload.duplicate(true)
+			link_configuration.erase("link_id")
+			operation_result = simulation.factory_grid.configure_link(world, configured_link_id, link_configuration)
+			var configured_link: Dictionary = world.get("links", {}).get(configured_link_id, {})
+			var effective_configuration := {
+				"priority":int(configured_link.get("priority", 1)),
+				"capacity_per_second":float(configured_link.get("capacity_per_second", 0.0)),
+				"lane_count":int(configured_link.get("lane_count", 0)),
+				"tier":str(configured_link.get("tier", "")),
+				"path_tiles":configured_link.get("path_tiles", []).duplicate(true)
+			}
+			event.merge({
+				"type":"FactoryLinkConfigured",
+				"link_id":configured_link_id,
+				"changed":bool(operation_result.get("changed", false)),
+				"configuration":effective_configuration
 			})
 		"REMOVE_LINK":
 			var link_id := str(payload.get("link_id", ""))
@@ -548,6 +586,37 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 			if not removed:
 				operation_result.merge({"reason_code":"UNKNOWN_LINK", "reason":I18n.t("factory.reason.unknown_link", "The selected Factory link no longer exists.")})
 			event.merge({"type":"FactoryLinkRemoved", "link_id":link_id})
+		"CANCEL_CONSTRUCTION":
+			var cancelled_order_id := str(payload.get("order_id", ""))
+			operation_result = simulation.factory_grid.cancel_construction(world, cancelled_order_id)
+			var cancellation_location_id := str(world.get("location_id", ""))
+			if bool(operation_result.get("ok", false)):
+				if not transaction.working_state.has_location(cancellation_location_id):
+					operation_result = {"ok":false, "reason_code":"INVALID_TRANSFER_TARGET", "reason":I18n.t("factory.reason.invalid_transfer_target", "Factory transfers must use known same-location inventory.")}
+				else:
+					var returned_items: Dictionary = operation_result.get("returned_items", {})
+					if not simulation.storage_can_apply_transaction(transaction.working_state, cancellation_location_id, returned_items):
+						operation_result = {"ok":false, "reason_code":"STORAGE_FULL", "reason":I18n.t("factory.reason.storage_full", "The destination storage has insufficient capacity for this transfer.")}
+					if bool(operation_result.get("ok", false)):
+						var cancellation_inventory: Dictionary = transaction.working_state.location_inventory(cancellation_location_id)
+						for returned_item_id_value in returned_items.keys():
+							var returned_item_id := str(returned_item_id_value)
+							cancellation_inventory[returned_item_id] = int(cancellation_inventory.get(returned_item_id, 0)) + int(returned_items.get(returned_item_id_value, 0))
+			event.merge({
+				"type":"FactoryConstructionCancelled",
+				"order_id":cancelled_order_id,
+				"entity_id":str(operation_result.get("entity_id", "")),
+				"location_id":cancellation_location_id,
+				"returned_items":operation_result.get("returned_items", {}).duplicate(true)
+			})
+		"REMOVE_ENTITY":
+			var removed_entity_id := str(payload.get("entity_id", ""))
+			operation_result = simulation.factory_grid.remove_entity(world, removed_entity_id)
+			event.merge({
+				"type":"FactoryEntityRemoved",
+				"entity_id":removed_entity_id,
+				"removed_link_ids":operation_result.get("removed_link_ids", []).duplicate(true)
+			})
 		"IMPORT_FROM_LOCATION":
 			var import_storage_id := str(payload.get("storage_id", ""))
 			var import_item_id := str(payload.get("item_id", ""))
@@ -656,8 +725,14 @@ func _factory_command_success_message(command_kind: String) -> String:
 			return I18n.t("factory.success.set_recipe")
 		"CONNECT_ENTITIES":
 			return I18n.t("factory.success.connect_entities")
+		"CONFIGURE_LINK":
+			return I18n.t("factory.success.configure_link")
 		"REMOVE_LINK":
 			return I18n.t("factory.success.remove_link")
+		"CANCEL_CONSTRUCTION":
+			return I18n.t("factory.success.cancel_construction")
+		"REMOVE_ENTITY":
+			return I18n.t("factory.success.remove_entity")
 		"IMPORT_FROM_LOCATION":
 			return I18n.t("factory.success.import_from_location")
 		"EXPORT_TO_LOCATION":
@@ -702,21 +777,68 @@ func _normalize_factory_command_payload(command_kind: String, raw_payload: Dicti
 			for key in ["link_kind", "source_id", "target_id", "item_id"]:
 				if typeof(raw_payload.get(key, "")) not in text_types:
 					return {"ok":false}
-			if typeof(raw_payload.get("capacity_per_second", 1.0)) not in number_types or typeof(raw_payload.get("priority", 1)) not in number_types:
+			for key in ["source_port_id", "target_port_id", "tier"]:
+				if raw_payload.has(key) and typeof(raw_payload.get(key)) not in text_types:
+					return {"ok":false}
+			if typeof(raw_payload.get("capacity_per_second", 1.0)) not in number_types \
+					or typeof(raw_payload.get("priority", 1)) not in number_types \
+					or typeof(raw_payload.get("lane_count", 1)) not in number_types:
+				return {"ok":false}
+			var path_result := _normalize_factory_link_path(raw_payload.get("path_tiles", []))
+			if not bool(path_result.get("ok", false)):
 				return {"ok":false}
 			var link_kind := str(raw_payload.get("link_kind", "")).to_upper()
+			var requested_capacity := float(raw_payload.get("capacity_per_second", 1.0))
+			var requested_lane_count := int(raw_payload.get("lane_count", 1))
+			var requested_tier := str(raw_payload.get("tier", "MK1")).to_upper()
+			# Player commands create the baseline physical route only. Higher
+			# throughput equipment requires a future construction transaction.
+			if link_kind == "CARGO" and (not is_equal_approx(requested_capacity, 1.0) or requested_lane_count != 1 or requested_tier != "MK1"):
+				return {"ok":false}
 			return {"ok":true, "payload":{
 				"link_kind":link_kind,
 				"source_id":str(raw_payload.get("source_id", "")),
 				"target_id":str(raw_payload.get("target_id", "")),
 				"item_id":"" if link_kind == "POWER" else str(raw_payload.get("item_id", "")),
-				"capacity_per_second":float(raw_payload.get("capacity_per_second", 1.0)),
-				"priority":clampi(int(raw_payload.get("priority", 1)), 0, 2)
+				"capacity_per_second":1.0 if link_kind == "CARGO" else requested_capacity,
+				"priority":clampi(int(raw_payload.get("priority", 1)), 0, 2),
+				"source_port_id":str(raw_payload.get("source_port_id", "")),
+				"target_port_id":str(raw_payload.get("target_port_id", "")),
+				"lane_count":1 if link_kind == "CARGO" else maxi(1, requested_lane_count),
+				"tier":"MK1" if link_kind == "CARGO" else requested_tier,
+				"path_tiles":path_result.get("path_tiles", [])
 			}}
+		"CONFIGURE_LINK":
+			if typeof(raw_payload.get("link_id", "")) not in text_types:
+				return {"ok":false}
+			var configuration := {"link_id":str(raw_payload.get("link_id", ""))}
+			for numeric_key in ["priority", "capacity_per_second", "lane_count"]:
+				if raw_payload.has(numeric_key):
+					if typeof(raw_payload.get(numeric_key)) not in number_types:
+						return {"ok":false}
+					configuration[numeric_key] = raw_payload.get(numeric_key)
+			if raw_payload.has("tier"):
+				if typeof(raw_payload.get("tier")) not in text_types:
+					return {"ok":false}
+				configuration["tier"] = str(raw_payload.get("tier", ""))
+			if raw_payload.has("path_tiles"):
+				var configured_path_result := _normalize_factory_link_path(raw_payload.get("path_tiles"))
+				if not bool(configured_path_result.get("ok", false)):
+					return {"ok":false}
+				configuration["path_tiles"] = configured_path_result.get("path_tiles", [])
+			return {"ok":true, "payload":configuration}
 		"REMOVE_LINK":
 			if typeof(raw_payload.get("link_id", "")) not in text_types:
 				return {"ok":false}
 			return {"ok":true, "payload":{"link_id":str(raw_payload.get("link_id", ""))}}
+		"CANCEL_CONSTRUCTION":
+			if typeof(raw_payload.get("order_id", "")) not in text_types:
+				return {"ok":false}
+			return {"ok":true, "payload":{"order_id":str(raw_payload.get("order_id", ""))}}
+		"REMOVE_ENTITY":
+			if typeof(raw_payload.get("entity_id", "")) not in text_types:
+				return {"ok":false}
+			return {"ok":true, "payload":{"entity_id":str(raw_payload.get("entity_id", ""))}}
 		"IMPORT_FROM_LOCATION", "EXPORT_TO_LOCATION":
 			if typeof(raw_payload.get("storage_id", "")) not in text_types \
 					or typeof(raw_payload.get("item_id", "")) not in text_types \
@@ -728,6 +850,20 @@ func _normalize_factory_command_payload(command_kind: String, raw_payload: Dicti
 				"quantity":int(raw_payload.get("quantity", 0))
 			}}
 	return {"ok":true, "payload":{}}
+
+
+func _normalize_factory_link_path(value: Variant) -> Dictionary:
+	if not value is Array:
+		return {"ok":false}
+	var path_tiles: Array = []
+	for tile_value in value as Array:
+		if not tile_value is Dictionary:
+			return {"ok":false}
+		var tile := tile_value as Dictionary
+		if typeof(tile.get("x", 0)) not in [TYPE_INT, TYPE_FLOAT] or typeof(tile.get("y", 0)) not in [TYPE_INT, TYPE_FLOAT]:
+			return {"ok":false}
+		path_tiles.append({"x":int(tile.get("x", 0)), "y":int(tile.get("y", 0))})
+	return {"ok":true, "path_tiles":path_tiles}
 
 
 func _factory_requests_match(previous: Dictionary, current: Dictionary) -> bool:

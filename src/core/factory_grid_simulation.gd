@@ -12,7 +12,9 @@ const WORKSPACE_PROTOCOL_VERSION := 1
 const DEFAULT_CHUNK_SIZE := 64
 const DEFAULT_STEP_SECONDS := 1.0
 const EPSILON := 0.000001
-const ENTITY_KINDS := ["EXTRACTOR", "MACHINE", "STORAGE", "POWER", "CONSTRUCTION"]
+const DEFAULT_CARGO_LINK_TIER := "MK1"
+const MAX_CARGO_LINK_LANES := 12
+const ENTITY_KINDS := ["EXTRACTOR", "MACHINE", "STORAGE", "ROUTER", "POWER", "CONSTRUCTION"]
 const LINK_KINDS := ["CARGO", "POWER"]
 
 var building_definitions: Dictionary = {}
@@ -134,13 +136,51 @@ func _normalize_runtime_records(world: Dictionary) -> void:
 		resource_field["grade"] = maxf(EPSILON, float(resource_field.get("grade", 1.0)))
 		resource_field["potential_density"] = maxf(EPSILON, float(resource_field.get("potential_density", 1.0)))
 	var valid_links := {}
-	for link_value in world.get("links", {}).values():
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link_value = world.get("links", {}).get(link_id_value, {})
 		var link := link_value as Dictionary
-		if str(link.get("kind", "")) not in LINK_KINDS or not structures.has(str(link.get("source_id", ""))) or not structures.has(str(link.get("target_id", ""))):
+		var kind := str(link.get("kind", "")).to_upper()
+		var source_id := str(link.get("source_id", ""))
+		var target_id := str(link.get("target_id", ""))
+		if kind not in LINK_KINDS or not structures.has(source_id) or not structures.has(target_id):
 			continue
+		link["id"] = str(link.get("id", link_id_value))
+		link["kind"] = kind
+		link["source_id"] = source_id
+		link["target_id"] = target_id
 		link["capacity_progress"] = maxf(0.0, float(link.get("capacity_progress", 0.0)))
 		link["last_flow"] = maxf(0.0, float(link.get("last_flow", 0.0)))
 		link["total_transferred"] = maxi(0, int(link.get("total_transferred", 0)))
+		link["priority"] = clampi(int(link.get("priority", 1)), 0, 2)
+		if kind == "CARGO":
+			var item_id := str(link.get("item_id", ""))
+			var source: Dictionary = structures.get(source_id, {})
+			var target: Dictionary = structures.get(target_id, {})
+			# SpaceGameState performs schema-only save normalization with an empty
+			# definition registry. Preserve structurally valid persisted links in
+			# that pass; semantic endpoint validation resumes when the configured
+			# simulation engine owns the world.
+			if item_id.is_empty() or (not building_definitions.is_empty() and (not _entity_can_output(world, source, item_id) or not _entity_can_input(target, item_id))):
+				continue
+			link["item_id"] = item_id
+			link["capacity_per_second"] = maxf(EPSILON, float(link.get("capacity_per_second", 1.0)))
+			link["source_port_id"] = _cargo_port_id_for_entity(source, source_id, "OUTPUT", item_id)
+			link["target_port_id"] = _cargo_port_id_for_entity(target, target_id, "INPUT", item_id)
+			link["lane_count"] = clampi(maxi(1, int(link.get("lane_count", 1))), 1, MAX_CARGO_LINK_LANES)
+			link["tier"] = _normalize_cargo_link_tier(str(link.get("tier", DEFAULT_CARGO_LINK_TIER)))
+			link["congestion"] = clampf(float(link.get("congestion", 0.0)), 0.0, 1.0)
+			link["blocked_reason"] = str(link.get("blocked_reason", ""))
+			var path_tiles := _normalized_link_path_tiles(world, link.get("path_tiles", []), source, target, "CARGO")
+			link["path_tiles"] = path_tiles
+			if not _path_tiles_are_in_world(world, path_tiles):
+				continue
+		else:
+			link["item_id"] = ""
+			link["source_port_id"] = _power_port_id(source_id, "OUTPUT")
+			link["target_port_id"] = _power_port_id(target_id, "INPUT")
+			link["congestion"] = 0.0
+			link["blocked_reason"] = ""
+			link["path_tiles"] = _normalized_link_path_tiles(world, link.get("path_tiles", []), structures.get(source_id, {}), structures.get(target_id, {}), "POWER")
 		valid_links[str(link.get("id", ""))] = link
 	world["links"] = valid_links
 	for order_value in world.get("construction_orders", {}).values():
@@ -555,7 +595,7 @@ func set_entity_recipe(world: Dictionary, entity_id: String, recipe_id: String) 
 	}
 
 
-func connect_entities(world: Dictionary, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1) -> Dictionary:
+func connect_entities(world: Dictionary, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1, source_port_id: String = "", target_port_id: String = "", lane_count: int = 1, tier: String = DEFAULT_CARGO_LINK_TIER, path_tiles: Array = []) -> Dictionary:
 	kind = kind.to_upper()
 	if kind not in LINK_KINDS or source_id == target_id:
 		return _failure("INVALID_LINK", "Link kind and endpoints must be valid")
@@ -577,17 +617,39 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 				return _failure("INVALID_CARGO_LINK", "Cargo links require an item and positive capacity")
 			if not _entity_can_output(world, source, item_id) or not _entity_can_input(target, item_id):
 				return _failure("CARGO_INCOMPATIBLE", "Cargo item is incompatible with an endpoint")
+			var expected_source_port_id := _cargo_port_id_for_entity(source, source_id, "OUTPUT", item_id)
+			var expected_target_port_id := _cargo_port_id_for_entity(target, target_id, "INPUT", item_id)
+			if not source_port_id.is_empty() and source_port_id != expected_source_port_id:
+				return _failure("INVALID_SOURCE_PORT", "Cargo source port does not match the selected entity and item")
+			if not target_port_id.is_empty() and target_port_id != expected_target_port_id:
+				return _failure("INVALID_TARGET_PORT", "Cargo target port does not match the selected entity and item")
+			if lane_count < 1 or lane_count > MAX_CARGO_LINK_LANES:
+				return _failure("INVALID_LANE_COUNT", "Cargo link lane count is outside the supported range")
+			if tier.strip_edges().is_empty():
+				return _failure("INVALID_LINK_TIER", "Cargo link tier must be a stable non-empty identifier")
+			var source_kind := str(source.get("kind", ""))
+			var target_kind := str(target.get("kind", ""))
+			var source_allows_fan_out := source_kind == "STORAGE" or (source_kind == "ROUTER" and _router_mode(source) != "MERGE")
+			var target_allows_fan_in := target_kind == "ROUTER" and _router_mode(target) != "SPLIT"
 			for link_value in world.get("links", {}).values():
 				var occupied := link_value as Dictionary
-				if str(occupied.get("kind", "")) == "CARGO" and str(occupied.get("target_id", "")) == target_id and str(occupied.get("item_id", "")) == item_id:
+				if str(occupied.get("kind", "")) != "CARGO" or str(occupied.get("item_id", "")) != item_id:
+					continue
+				if str(occupied.get("source_id", "")) == source_id and not source_allows_fan_out:
+					return _failure("CARGO_OUTPUT_OCCUPIED", "A producer output needs a Cargo Splitter before it can fan out")
+				if str(occupied.get("target_id", "")) == target_id and not target_allows_fan_in:
 					return _failure("CARGO_INPUT_OCCUPIED", "A target item port accepts one incoming cargo link")
 		"POWER":
 			var source_definition: Dictionary = building_definitions.get(str(source.get("definition_id", "")), {})
 			var target_definition: Dictionary = building_definitions.get(str(target.get("definition_id", "")), {})
 			if float(source_definition.get("power_generation_kw", 0.0)) <= EPSILON or float(target_definition.get("power_demand_kw", 0.0)) <= EPSILON:
 				return _failure("INVALID_LINK", "Power links require a generating source and a consuming target")
+			if not source_port_id.is_empty() and source_port_id != _power_port_id(source_id, "OUTPUT"):
+				return _failure("INVALID_SOURCE_PORT", "Power source port does not match the selected generator")
+			if not target_port_id.is_empty() and target_port_id != _power_port_id(target_id, "INPUT"):
+				return _failure("INVALID_TARGET_PORT", "Power target port does not match the selected consumer")
 	var link_id := _next_id(world, "next_link_serial", "LINK-")
-	world["links"][link_id] = {
+	var link := {
 		"id":link_id,
 		"kind":kind,
 		"source_id":source_id,
@@ -599,6 +661,23 @@ func connect_entities(world: Dictionary, kind: String, source_id: String, target
 		"last_flow":0.0,
 		"total_transferred":0
 	}
+	if kind == "CARGO":
+		link["source_port_id"] = _cargo_port_id_for_entity(source, source_id, "OUTPUT", item_id) if source_port_id.is_empty() else source_port_id
+		link["target_port_id"] = _cargo_port_id_for_entity(target, target_id, "INPUT", item_id) if target_port_id.is_empty() else target_port_id
+		link["lane_count"] = lane_count
+		link["tier"] = _normalize_cargo_link_tier(tier)
+		link["path_tiles"] = _orthogonal_link_path_tiles(world, source, target, "CARGO") if path_tiles.is_empty() else _path_tiles_from_value(path_tiles)
+		link["congestion"] = 0.0
+		link["blocked_reason"] = ""
+		if not _path_tiles_are_valid_for_link(world, link.get("path_tiles", []), source, target, "CARGO"):
+			return _failure("INVALID_LINK_PATH", "Cargo path must be orthogonal, endpoint-aligned and inside the Factory world")
+	else:
+		link["source_port_id"] = _power_port_id(source_id, "OUTPUT")
+		link["target_port_id"] = _power_port_id(target_id, "INPUT")
+		link["path_tiles"] = _orthogonal_link_path_tiles(world, source, target, "POWER")
+		link["congestion"] = 0.0
+		link["blocked_reason"] = ""
+	world["links"][link_id] = link
 	_bump_topology_revision(world)
 	return {"ok":true, "link_id":link_id}
 
@@ -608,6 +687,92 @@ func remove_link(world: Dictionary, link_id: String) -> bool:
 	if removed:
 		_bump_topology_revision(world)
 	return removed
+
+
+## Reconfigures routing policy without granting free physical equipment. Cargo
+## throughput, lanes, tier, and geometry require a future construction/economy
+## transaction; callers cannot mutate those fields through this command.
+func configure_link(world: Dictionary, link_id: String, configuration: Dictionary = {}) -> Dictionary:
+	var link: Dictionary = world.get("links", {}).get(link_id, {})
+	if link.is_empty():
+		return _failure("UNKNOWN_LINK", "The selected Factory link does not exist")
+	for physical_key in ["capacity_per_second", "lane_count", "tier", "path_tiles"]:
+		if configuration.has(physical_key):
+			return _failure("LINK_UPGRADE_REQUIRES_CONSTRUCTION", "Physical route changes require an authoritative construction transaction")
+	var candidate := link.duplicate(true)
+	var changed := false
+	var kind := str(candidate.get("kind", "")).to_upper()
+	if kind != "CARGO":
+		return _failure("LINK_CONFIGURATION_UNSUPPORTED", "This link type has no configurable routing policy")
+	if configuration.has("priority"):
+		var requested_priority := int(configuration.get("priority", candidate.get("priority", 1)))
+		if requested_priority < 0 or requested_priority > 2:
+			return _failure("INVALID_LINK_PRIORITY", "Factory link priority must be between zero and two")
+		if requested_priority != int(candidate.get("priority", 1)):
+			candidate["priority"] = requested_priority
+			changed = true
+	if kind == "CARGO":
+		var source: Dictionary = world.get("entities", {}).get(str(candidate.get("source_id", "")), {})
+		var target: Dictionary = world.get("entities", {}).get(str(candidate.get("target_id", "")), {})
+		if source.is_empty() or target.is_empty():
+			return _failure("MISSING_ENDPOINT", "Cargo link endpoints must exist")
+		var generated_path := _orthogonal_link_path_tiles(world, source, target, "CARGO")
+		if not _path_tiles_are_valid_for_link(world, candidate.get("path_tiles", []), source, target, "CARGO"):
+			candidate["path_tiles"] = generated_path
+			changed = true
+	if not changed:
+		return {"ok":true, "link_id":link_id, "changed":false}
+	world["links"][link_id] = candidate
+	_bump_topology_revision(world)
+	return {"ok":true, "link_id":link_id, "changed":true}
+
+
+## Cancels an incomplete Factory order atomically. Delivered goods remain a
+## staging manifest rather than being silently deleted; the application facade
+## decides the valid physical destination inside its outer transaction.
+func cancel_construction(world: Dictionary, order_id: String) -> Dictionary:
+	var order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+	if order.is_empty() or str(order.get("status", "")) in ["COMPLETE", "CANCELLED", "FAILED"]:
+		return _failure("INVALID_CONSTRUCTION_ORDER", "The selected Factory construction order cannot be cancelled")
+	var staging_manifest := _positive_item_manifest(order.get("delivered_items", {}))
+	world["construction_orders"].erase(order_id)
+	_bump_topology_revision(world)
+	return {
+		"ok":true,
+		"order_id":order_id,
+		"entity_id":str(order.get("entity_id", "")),
+		"staging_manifest":staging_manifest,
+		"returned_items":staging_manifest.duplicate(true)
+	}
+
+
+## Removes an empty completed entity and all of its incident links in one
+## topology mutation. Buffered physical cargo is fail-closed so the application
+## cannot accidentally destroy assets while using a visual demolition action.
+func remove_entity(world: Dictionary, entity_id: String) -> Dictionary:
+	var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
+	if entity.is_empty():
+		return _failure("UNKNOWN_ENTITY", "The selected Factory entity does not exist")
+	var buffered_items := _entity_buffer_manifest(entity)
+	if not buffered_items.is_empty():
+		return {
+			"ok":false,
+			"reason_code":"ENTITY_BUFFER_NOT_EMPTY",
+			"reason":"Factory entities with buffered physical cargo cannot be removed",
+			"entity_id":entity_id,
+			"buffered_items":buffered_items
+		}
+	var removed_link_ids: Array[String] = []
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link_id := str(link_id_value)
+		var link: Dictionary = world.get("links", {}).get(link_id, {})
+		if str(link.get("source_id", "")) == entity_id or str(link.get("target_id", "")) == entity_id:
+			removed_link_ids.append(link_id)
+	for link_id in removed_link_ids:
+		world["links"].erase(link_id)
+	world["entities"].erase(entity_id)
+	_bump_topology_revision(world)
+	return {"ok":true, "entity_id":entity_id, "removed_link_ids":removed_link_ids}
 
 
 func advance_world(world: Dictionary, elapsed_ms: float) -> Dictionary:
@@ -667,13 +832,15 @@ func synchronization_boundary_ms(world: Dictionary) -> float:
 
 
 func _step(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void:
+	var power_factors := _calculate_power_factors(world)
 	for link_value in world.get("links", {}).values():
 		var link := link_value as Dictionary
 		link["last_flow"] = 0.0
 		if str(link.get("kind", "")) == "CARGO":
-			link["capacity_progress"] = float(link.get("capacity_progress", 0.0)) + maxf(0.0, float(link.get("capacity_per_second", 0.0))) * seconds
+			link["blocked_reason"] = ""
+			link["capacity_progress"] = float(link.get("capacity_progress", 0.0)) \
+				+ maxf(0.0, float(link.get("capacity_per_second", 0.0))) * _cargo_link_power_factor(world, link) * seconds
 	_transfer_cargo(world, seconds)
-	var power_factors := _calculate_power_factors(world)
 	_run_extractors(world, seconds, power_factors, events)
 	_run_machines(world, seconds, power_factors, events)
 	_transfer_cargo(world, seconds)
@@ -686,6 +853,8 @@ func _step(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void
 			var progress := maxf(0.0, float(link.get("capacity_progress", 0.0)))
 			link["capacity_progress"] = progress - floorf(progress)
 	_advance_construction(world, seconds, events)
+	_update_cargo_link_diagnostics(world)
+	_refresh_router_operational_status(world)
 
 
 func _calculate_power_factors(world: Dictionary) -> Dictionary:
@@ -730,6 +899,56 @@ func _refresh_operational_status(world: Dictionary, power_factors: Dictionary) -
 				_apply_operational_projection(entity, _extractor_operational_projection(world, entity_id, entity, power_factors))
 			"MACHINE":
 				_apply_operational_projection(entity, _machine_operational_projection(entity_id, entity, power_factors))
+	_refresh_router_operational_status(world)
+
+
+func _refresh_router_operational_status(world: Dictionary) -> void:
+	var outbound_rate := {}
+	var outbound_links := {}
+	for link_value in world.get("links", {}).values():
+		var link := link_value as Dictionary
+		if str(link.get("kind", "")) == "CARGO":
+			var source_id := str(link.get("source_id", ""))
+			outbound_rate[source_id] = float(outbound_rate.get(source_id, 0.0)) + maxf(0.0, float(link.get("last_flow", 0.0)))
+			var links: Array = outbound_links.get(source_id, [])
+			links.append(link)
+			outbound_links[source_id] = links
+	for entity_id_value in _sorted_keys(world.get("entities", {})):
+		var entity_id := str(entity_id_value)
+		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
+		if str(entity.get("kind", "")) != "ROUTER":
+			continue
+		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+		var requires_power := float(definition.get("power_demand_kw", 0.0)) > EPSILON
+		var factor := clampf(float(entity.get("power_factor", 1.0)), 0.0, 1.0)
+		var actual_rate := maxf(0.0, float(outbound_rate.get(entity_id, 0.0)))
+		entity["actual_rate"] = actual_rate
+		if requires_power and factor <= EPSILON:
+			entity["status"] = "NO_POWER"
+		elif requires_power and factor < 1.0 - EPSILON:
+			entity["status"] = "POWER_LIMITED"
+		elif actual_rate > EPSILON:
+			entity["status"] = "FLOWING"
+		elif _dictionary_total(entity.get("inventory", {})) > 0 and not _router_has_available_output(world, entity, outbound_links.get(entity_id, [])):
+			entity["status"] = "OUTPUT_FULL"
+		else:
+			entity["status"] = "READY"
+
+
+func _router_has_available_output(world: Dictionary, entity: Dictionary, links: Array) -> bool:
+	var inventory: Dictionary = entity.get("inventory", {})
+	for item_id_value in _sorted_keys(inventory):
+		var item_id := str(item_id_value)
+		if int(inventory.get(item_id_value, 0)) <= 0:
+			continue
+		for link_value in links:
+			var link := link_value as Dictionary
+			if str(link.get("item_id", "")) != item_id or float(link.get("capacity_per_second", 0.0)) <= EPSILON:
+				continue
+			var target: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
+			if not target.is_empty() and _target_free_capacity(target, item_id) > 0 and _cargo_link_power_factor(world, link) > EPSILON:
+				return true
+	return false
 
 
 func _apply_operational_projection(entity: Dictionary, projection: Dictionary) -> void:
@@ -775,7 +994,12 @@ func _machine_operational_projection(entity_id: String, entity: Dictionary, powe
 	if available_cycles <= 0:
 		projection["status"] = "INPUT_SHORTAGE"
 		return projection
-	var output_cycles := _available_recipe_output_cycles(entity, definition, recipe)
+	# Reserve output buffer room before advancing cycle progress. This is the
+	# physical backpressure boundary: a machine cannot complete into cargo space
+	# it does not own, including recipes with several output stacks.
+	var output_reservation := _machine_output_capacity_reservation(entity, definition, recipe)
+	var output_cycles := maxi(0, int(output_reservation.get("cycles", 0)))
+	projection["output_reservation"] = output_reservation
 	projection["output_cycles"] = output_cycles
 	if output_cycles <= 0:
 		projection["status"] = "OUTPUT_FULL"
@@ -828,9 +1052,11 @@ func _run_machines(world: Dictionary, seconds: float, power_factors: Dictionary,
 		var recipe := projection.get("recipe", {}) as Dictionary
 		var available_cycles := maxi(0, int(projection.get("available_cycles", 0)))
 		var output_cycles := maxi(0, int(projection.get("output_cycles", 0)))
+		var output_reservation: Dictionary = projection.get("output_reservation", {})
 		var cycle_rate := maxf(0.0, float(projection.get("actual_rate", 0.0)))
 		entity["progress"] = float(entity.get("progress", 0.0)) + cycle_rate * seconds
 		var completed_cycles := mini(mini(available_cycles, output_cycles), maxi(0, floori(float(entity.get("progress", 0.0)) + EPSILON)))
+		completed_cycles = mini(completed_cycles, maxi(0, int(output_reservation.get("cycles", output_cycles))))
 		if completed_cycles > 0:
 			var produced_items := {}
 			for input_value in recipe.get("inputs", []):
@@ -859,7 +1085,7 @@ func _run_machines(world: Dictionary, seconds: float, power_factors: Dictionary,
 
 
 func _transfer_cargo(world: Dictionary, seconds: float) -> void:
-	var groups := {}
+	var source_groups := {}
 	for link_id_value in _sorted_keys(world.get("links", {})):
 		var link_id := str(link_id_value)
 		var link: Dictionary = world.get("links", {}).get(link_id, {})
@@ -875,25 +1101,67 @@ func _transfer_cargo(world: Dictionary, seconds: float) -> void:
 		if demand <= 0:
 			continue
 		var group_key := "%s|%s" % [link.get("source_id", ""), item_id]
-		if not groups.has(group_key):
-			groups[group_key] = []
-		groups[group_key].append({"link_id":link_id, "demand":demand, "priority":int(link.get("priority", 1))})
-	for group_key_value in _sorted_keys(groups):
-		var candidates: Array = groups[group_key_value]
+		if not source_groups.has(group_key):
+			source_groups[group_key] = []
+		source_groups[group_key].append({
+			"link_id":link_id,
+			"source_id":str(link.get("source_id", "")),
+			"target_id":str(link.get("target_id", "")),
+			"item_id":item_id,
+			"demand":demand,
+			"priority":int(link.get("priority", 1))
+		})
+	# First reserve each source's finite inventory fairly across its outgoing
+	# routes. The second pass reserves each target's finite input space across
+	# independent sources, preventing a merger's lexical-first source from
+	# starving every other incoming route.
+	var source_grants := {}
+	var candidates_by_link := {}
+	for group_key_value in _sorted_keys(source_groups):
+		var candidates: Array = source_groups[group_key_value]
 		if candidates.is_empty():
 			continue
 		var link: Dictionary = world["links"][str(candidates[0].get("link_id", ""))]
 		var source: Dictionary = world["entities"][str(link.get("source_id", ""))]
 		var item_id := str(link.get("item_id", ""))
-		var allocations := _fair_allocations(source, item_id, candidates, _source_quantity(source, item_id))
+		var allocations := _fair_allocations(source, item_id, candidates, _source_quantity(source, item_id), "OUT")
 		for candidate_value in candidates:
 			var candidate := candidate_value as Dictionary
+			var candidate_link_id := str(candidate.get("link_id", ""))
+			var granted := maxi(0, int(allocations.get(candidate_link_id, 0)))
+			if granted > 0:
+				source_grants[candidate_link_id] = granted
+				candidates_by_link[candidate_link_id] = candidate
+
+	var target_groups := {}
+	for link_id_value in _sorted_keys(source_grants):
+		var link_id := str(link_id_value)
+		var candidate: Dictionary = candidates_by_link.get(link_id, {})
+		# Input/inventory capacity is shared across item types, so all incoming
+		# routes for one target participate in the same deterministic arbitration.
+		var target_key := str(candidate.get("target_id", ""))
+		var target_candidates: Array = target_groups.get(target_key, [])
+		var target_candidate := candidate.duplicate(false)
+		target_candidate["demand"] = int(source_grants.get(link_id, 0))
+		target_candidates.append(target_candidate)
+		target_groups[target_key] = target_candidates
+
+	for target_key_value in _sorted_keys(target_groups):
+		var target_candidates: Array = target_groups.get(target_key_value, [])
+		if target_candidates.is_empty():
+			continue
+		var first_candidate := target_candidates[0] as Dictionary
+		var target_id := str(first_candidate.get("target_id", ""))
+		var item_id := str(first_candidate.get("item_id", ""))
+		var target: Dictionary = world.get("entities", {}).get(target_id, {})
+		var target_allocations := _fair_allocations(target, "SHARED", target_candidates, _target_free_capacity(target, item_id), "IN")
+		for candidate_value in target_candidates:
+			var candidate := candidate_value as Dictionary
 			var link_id := str(candidate.get("link_id", ""))
-			var quantity := int(allocations.get(link_id, 0))
-			if quantity <= 0:
-				continue
-			var cargo_link: Dictionary = world["links"][link_id]
-			var target: Dictionary = world["entities"][str(cargo_link.get("target_id", ""))]
+			item_id = str(candidate.get("item_id", ""))
+			var quantity := maxi(0, int(target_allocations.get(link_id, 0)))
+			var cargo_link: Dictionary = world.get("links", {}).get(link_id, {})
+			var source: Dictionary = world.get("entities", {}).get(str(cargo_link.get("source_id", "")), {})
 			quantity = mini(mini(quantity, _source_quantity(source, item_id)), _target_free_capacity(target, item_id))
 			if quantity <= 0:
 				continue
@@ -905,14 +1173,59 @@ func _transfer_cargo(world: Dictionary, seconds: float) -> void:
 			_add_statistic(world, "transferred", item_id, quantity)
 
 
-func _fair_allocations(source: Dictionary, item_id: String, candidates: Array, available: int) -> Dictionary:
+func _cargo_link_power_factor(world: Dictionary, link: Dictionary) -> float:
+	var result := 1.0
+	for entity_id_value in [str(link.get("source_id", "")), str(link.get("target_id", ""))]:
+		var entity: Dictionary = world.get("entities", {}).get(str(entity_id_value), {})
+		if str(entity.get("kind", "")) == "ROUTER":
+			result = minf(result, clampf(float(entity.get("power_factor", 0.0)), 0.0, 1.0))
+	return result
+
+
+## Cargo diagnostics are calculated after both deterministic transfer phases.
+## This keeps a newly-produced item eligible in the second phase while still
+## exposing downstream full-buffer backpressure on the final world state.
+func _update_cargo_link_diagnostics(world: Dictionary) -> void:
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link: Dictionary = world.get("links", {}).get(link_id_value, {})
+		if str(link.get("kind", "")) != "CARGO":
+			continue
+		var source: Dictionary = world.get("entities", {}).get(str(link.get("source_id", "")), {})
+		var target: Dictionary = world.get("entities", {}).get(str(link.get("target_id", "")), {})
+		var item_id := str(link.get("item_id", ""))
+		var capacity := maxf(0.0, float(link.get("capacity_per_second", 0.0)))
+		var flow := maxf(0.0, float(link.get("last_flow", 0.0)))
+		if source.is_empty() or target.is_empty() or item_id.is_empty() or not _entity_can_output(world, source, item_id) or not _entity_can_input(target, item_id):
+			link["blocked_reason"] = "INCOMPATIBLE_ENDPOINT"
+			link["congestion"] = 1.0
+			continue
+		var source_waiting := _source_quantity(source, item_id) > 0
+		var target_full := _target_free_capacity(target, item_id) <= 0
+		var transport_power := _cargo_link_power_factor(world, link)
+		link["congestion"] = 1.0 if source_waiting and target_full else 0.0
+		if transport_power <= EPSILON:
+			link["blocked_reason"] = "NO_POWER"
+			link["congestion"] = 1.0
+		elif source_waiting and target_full:
+			link["blocked_reason"] = "TARGET_FULL"
+		elif flow > EPSILON:
+			link["blocked_reason"] = ""
+		elif capacity <= EPSILON:
+			link["blocked_reason"] = "NO_CAPACITY"
+		elif not source_waiting:
+			link["blocked_reason"] = "SOURCE_EMPTY"
+		else:
+			link["blocked_reason"] = ""
+
+
+func _fair_allocations(source: Dictionary, item_id: String, candidates: Array, available: int, cursor_namespace: String = "OUT") -> Dictionary:
 	var allocations := {}
 	var remaining := maxi(0, available)
 	for priority in [2, 1, 0]:
 		var priority_candidates: Array = candidates.filter(func(candidate): return int((candidate as Dictionary).get("priority", 1)) == priority)
 		if priority_candidates.is_empty() or remaining <= 0:
 			continue
-		var priority_allocations := _fair_priority_allocations(source, item_id, priority, priority_candidates, remaining)
+		var priority_allocations := _fair_priority_allocations(source, item_id, priority, priority_candidates, remaining, cursor_namespace)
 		for link_id_value in priority_allocations.keys():
 			var link_id := str(link_id_value)
 			var quantity := int(priority_allocations.get(link_id, 0))
@@ -921,11 +1234,11 @@ func _fair_allocations(source: Dictionary, item_id: String, candidates: Array, a
 	return allocations
 
 
-func _fair_priority_allocations(source: Dictionary, item_id: String, priority: int, candidates: Array, available: int) -> Dictionary:
+func _fair_priority_allocations(source: Dictionary, item_id: String, priority: int, candidates: Array, available: int, cursor_namespace: String) -> Dictionary:
 	var allocations := {}
 	var active := candidates.duplicate(true)
 	active.sort_custom(func(a, b): return str(a.get("link_id", "")) < str(b.get("link_id", "")))
-	var cursor_key := "%s:%d" % [item_id, priority]
+	var cursor_key := "%s:%s:%d" % [cursor_namespace, item_id, priority]
 	var cursor := posmod(int(source.get("routing_cursor", {}).get(cursor_key, 0)), maxi(1, active.size()))
 	if cursor > 0:
 		active = active.slice(cursor) + active.slice(0, cursor)
@@ -1053,10 +1366,11 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"grade":float(resource_field.get("grade", 1.0)),
 			"potential_density":float(resource_field.get("potential_density", 1.0)),
 			"mapped_potential_per_second":maxf(0.0, float(field_size.x * field_size.y) * float(resource_field.get("potential_density", 1.0))),
-			"ports":{"inputs":[], "outputs":[], "accepts_power":false}
+			"ports":{"inputs":[], "outputs":[], "accepts_power":false, "provides_power":false, "entries":[], "input_ports":[], "output_ports":[]}
 		})
 
 	var entities: Array = []
+	var port_connections := _port_connection_index(world)
 	for entity_id_value in _sorted_keys(world.get("entities", {})):
 		var entity_id := str(entity_id_value)
 		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
@@ -1067,6 +1381,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"node_kind":str(entity.get("kind", "UNKNOWN")),
 			"is_entity":true,
 			"definition_id":str(entity.get("definition_id", "")),
+			"router_mode":str(definition.get("router_mode", "BIDIRECTIONAL")) if str(entity.get("kind", "")) == "ROUTER" else "",
 			"name":str(definition.get("name", entity.get("definition_id", entity_id))),
 			"recipe_id":str(entity.get("recipe_id", "")),
 			"footprint":entity.get("footprint", {}).duplicate(true),
@@ -1091,7 +1406,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"covered_resource_tiles":maxi(0, int(entity.get("covered_resource_tiles", 0))),
 			"footprint_tiles":maxi(0, int(entity.get("footprint_tiles", 0))),
 			"missing_resource_tiles":maxi(0, int(entity.get("missing_resource_tiles", 0))),
-			"ports":_entity_port_snapshot(entity)
+			"ports":_entity_port_snapshot(entity_id, entity, port_connections)
 		})
 
 	var links: Array = []
@@ -1101,15 +1416,24 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		var capacity := maxf(0.0, float(link.get("capacity_per_second", 0.0)))
 		var last_flow := maxf(0.0, float(link.get("last_flow", 0.0)))
 		var link_status := _link_status(world, link)
+		var path_tiles: Array = link.get("path_tiles", []) if link.get("path_tiles", []) is Array else []
 		links.append({
 			"id":link_id,
 			"kind":str(link.get("kind", "")),
 			"source_id":str(link.get("source_id", "")),
 			"target_id":str(link.get("target_id", "")),
 			"item_id":str(link.get("item_id", "")),
+			"source_port_id":str(link.get("source_port_id", "")),
+			"target_port_id":str(link.get("target_port_id", "")),
 			"capacity_per_second":capacity,
 			"last_flow":last_flow,
 			"utilization":0.0 if capacity <= EPSILON else clampf(last_flow / capacity, 0.0, 1.0),
+			"lane_count":clampi(maxi(1, int(link.get("lane_count", 1))), 1, MAX_CARGO_LINK_LANES) if str(link.get("kind", "")) == "CARGO" else 0,
+			"tier":str(link.get("tier", "")),
+			"path_tiles":path_tiles.duplicate(true),
+			"path_in_bounds":_path_tiles_are_in_world(world, path_tiles),
+			"congestion":clampf(float(link.get("congestion", 0.0)), 0.0, 1.0),
+			"blocked_reason":str(link.get("blocked_reason", "")),
 			"priority":clampi(int(link.get("priority", 1)), 0, 2),
 			"total_transferred":maxi(0, int(link.get("total_transferred", 0))),
 			"status":link_status,
@@ -1139,6 +1463,8 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"blocker_code":str(order.get("blocked_reason", ""))
 		})
 
+	var production_rows := _production_rows(world, _production_route_index(world))
+	var production_summary := _production_summary(production_rows)
 	return {
 		"protocol_version":WORKSPACE_PROTOCOL_VERSION,
 		"world_schema_version":int(world.get("schema_version", WORLD_SCHEMA_VERSION)),
@@ -1156,6 +1482,9 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		"construction_orders":construction_orders,
 		"palette":_workspace_palette_snapshot(),
 		"power":_workspace_power_snapshot(world),
+		"production":{"summary":production_summary, "rows":production_rows},
+		"production_summary":production_summary.duplicate(true),
+		"production_rows":production_rows.duplicate(true),
 		"statistics":world.get("statistics", {}).duplicate(true),
 		"summary":world_summary(world)
 	}
@@ -1211,7 +1540,7 @@ func _workspace_power_snapshot(world: Dictionary) -> Dictionary:
 	}
 
 
-func _entity_port_snapshot(entity: Dictionary) -> Dictionary:
+func _entity_port_snapshot(entity_id: String, entity: Dictionary, port_connections: Dictionary) -> Dictionary:
 	var kind := str(entity.get("kind", ""))
 	var input_ids: Array = []
 	var output_ids: Array = []
@@ -1224,15 +1553,215 @@ func _entity_port_snapshot(entity: Dictionary) -> Dictionary:
 			var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
 			input_ids = _item_entry_ids(recipe.get("inputs", []))
 			output_ids = _item_entry_ids(recipe.get("outputs", []))
-		"STORAGE":
+		"STORAGE", "ROUTER":
 			input_ids = ["*"]
 			output_ids = ["*"]
+	var accepts_power := maxf(0.0, float(building_definitions.get(str(entity.get("definition_id", "")), {}).get("power_demand_kw", 0.0))) > 0.0
+	var provides_power := maxf(0.0, float(building_definitions.get(str(entity.get("definition_id", "")), {}).get("power_generation_kw", 0.0))) > 0.0
+	var input_ports: Array = []
+	var output_ports: Array = []
+	for item_id_value in input_ids:
+		var item_id := str(item_id_value)
+		input_ports.append(_port_snapshot(port_connections, entity_id, "INPUT", "ITEM", item_id))
+	for item_id_value in output_ids:
+		var item_id := str(item_id_value)
+		output_ports.append(_port_snapshot(port_connections, entity_id, "OUTPUT", "ITEM", item_id))
+	if accepts_power:
+		input_ports.append(_port_snapshot(port_connections, entity_id, "INPUT", "POWER", ""))
+	if provides_power:
+		output_ports.append(_port_snapshot(port_connections, entity_id, "OUTPUT", "POWER", ""))
+	var entries := input_ports.duplicate(true)
+	entries.append_array(output_ports.duplicate(true))
 	return {
 		"inputs":input_ids,
 		"outputs":output_ids,
-		"accepts_power":maxf(0.0, float(building_definitions.get(str(entity.get("definition_id", "")), {}).get("power_demand_kw", 0.0))) > 0.0,
-		"provides_power":maxf(0.0, float(building_definitions.get(str(entity.get("definition_id", "")), {}).get("power_generation_kw", 0.0))) > 0.0
+		"accepts_power":accepts_power,
+		"provides_power":provides_power,
+		"entries":entries,
+		"input_ports":input_ports,
+		"output_ports":output_ports
 	}
+
+
+func _port_snapshot(port_connections: Dictionary, entity_id: String, direction: String, channel: String, item_id: String) -> Dictionary:
+	var port_id := _power_port_id(entity_id, direction) if channel == "POWER" else _cargo_port_id(entity_id, direction, item_id)
+	var connection: Dictionary = port_connections.get(port_id, {})
+	var connected_link_ids: Array = connection.get("link_ids", []).duplicate()
+	var connected_entity_ids: Array = connection.get("entity_ids", []).duplicate()
+	return {
+		"id":port_id,
+		"direction":direction,
+		"channel":channel,
+		"item_id":item_id,
+		"occupied":not connected_link_ids.is_empty(),
+		"connected_link_ids":connected_link_ids,
+		"connected_entity_ids":connected_entity_ids
+	}
+
+
+func _port_connection_index(world: Dictionary) -> Dictionary:
+	var index := {}
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link_id := str(link_id_value)
+		var link: Dictionary = world.get("links", {}).get(link_id, {})
+		for endpoint in [
+			{"port_id":str(link.get("source_port_id", "")), "peer_id":str(link.get("target_id", ""))},
+			{"port_id":str(link.get("target_port_id", "")), "peer_id":str(link.get("source_id", ""))}
+		]:
+			var port_id := str(endpoint.get("port_id", ""))
+			if port_id.is_empty():
+				continue
+			var row: Dictionary = index.get(port_id, {"link_ids":[], "entity_ids":[]})
+			row["link_ids"].append(link_id)
+			var peer_id := str(endpoint.get("peer_id", ""))
+			if not peer_id.is_empty() and not row["entity_ids"].has(peer_id):
+				row["entity_ids"].append(peer_id)
+			index[port_id] = row
+	return index
+
+
+func _cargo_port_id(entity_id: String, direction: String, item_id: String) -> String:
+	return "%s:%s:ITEM:%s" % [entity_id, direction.to_upper(), item_id]
+
+
+func _cargo_port_id_for_entity(entity: Dictionary, entity_id: String, direction: String, item_id: String) -> String:
+	return _cargo_port_id(entity_id, direction, "*" if str(entity.get("kind", "")) in ["STORAGE", "ROUTER"] else item_id)
+
+
+func _router_mode(entity: Dictionary) -> String:
+	if str(entity.get("kind", "")) != "ROUTER":
+		return ""
+	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+	var mode := str(definition.get("router_mode", "BIDIRECTIONAL")).to_upper()
+	return mode if mode in ["SPLIT", "MERGE", "BIDIRECTIONAL"] else "BIDIRECTIONAL"
+
+
+func _power_port_id(entity_id: String, direction: String) -> String:
+	return "%s:%s:POWER" % [entity_id, direction.to_upper()]
+
+
+func _production_rows(world: Dictionary, route_index: Dictionary = {}) -> Array:
+	var rows: Array = []
+	for entity_id_value in _sorted_keys(world.get("entities", {})):
+		var entity_id := str(entity_id_value)
+		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
+		var kind := str(entity.get("kind", ""))
+		if kind not in ["EXTRACTOR", "MACHINE", "ROUTER"]:
+			continue
+		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+		var theoretical_rate := _theoretical_entity_rate(world, entity_id, entity, definition)
+		var actual_rate := maxf(0.0, float(entity.get("actual_rate", 0.0)))
+		var status := str(entity.get("status", "IDLE"))
+		rows.append({
+			"entity_id":entity_id,
+			"definition_id":str(entity.get("definition_id", "")),
+			"recipe_id":str(entity.get("recipe_id", "")),
+			"kind":kind,
+			"status":status,
+			"theoretical_rate":theoretical_rate,
+			"actual_rate":actual_rate,
+			"utilization":0.0 if theoretical_rate <= EPSILON else clampf(actual_rate / theoretical_rate, 0.0, 1.0),
+			"blocker":_entity_blocker_code(status),
+			"is_transport_router":kind == "ROUTER",
+			"upstream":_production_neighbors(route_index, entity_id, false),
+			"downstream":_production_neighbors(route_index, entity_id, true)
+		})
+	return rows
+
+
+func _production_summary(rows: Array) -> Dictionary:
+	var theoretical_rate := 0.0
+	var actual_rate := 0.0
+	var blockers := {}
+	var productive_row_count := 0
+	var status_counts := {"running":0, "input_shortage":0, "output_full":0, "blocked":0, "idle":0}
+	for row_value in rows:
+		var row := row_value as Dictionary
+		var kind := str(row.get("kind", ""))
+		if kind in ["EXTRACTOR", "MACHINE"]:
+			theoretical_rate += maxf(0.0, float(row.get("theoretical_rate", 0.0)))
+			actual_rate += maxf(0.0, float(row.get("actual_rate", 0.0)))
+			productive_row_count += 1
+		elif kind != "ROUTER":
+			continue
+		var blocker := str(row.get("blocker", ""))
+		var status := str(row.get("status", "IDLE")).to_upper()
+		if status in ["RUNNING", "FLOWING", "POWER_LIMITED", "PARTIAL_COVERAGE"]:
+			status_counts["running"] = int(status_counts.get("running", 0)) + 1
+		elif status in ["NO_POWER", "INPUT_SHORTAGE"]:
+			status_counts["input_shortage"] = int(status_counts.get("input_shortage", 0)) + 1
+		elif status == "OUTPUT_FULL":
+			status_counts["output_full"] = int(status_counts.get("output_full", 0)) + 1
+		elif status in ["IDLE", "READY"]:
+			status_counts["idle"] = int(status_counts.get("idle", 0)) + 1
+		else:
+			status_counts["blocked"] = int(status_counts.get("blocked", 0)) + 1
+		if not blocker.is_empty():
+			blockers[blocker] = int(blockers.get(blocker, 0)) + 1
+	return {
+		"theoretical_rate":theoretical_rate,
+		"actual_rate":actual_rate,
+		"utilization":0.0 if theoretical_rate <= EPSILON else clampf(actual_rate / theoretical_rate, 0.0, 1.0),
+		"row_count":rows.size(),
+		"productive_row_count":productive_row_count,
+		"running_count":int(status_counts.get("running", 0)),
+		"blocked_count":int(status_counts.get("input_shortage", 0)) + int(status_counts.get("output_full", 0)) + int(status_counts.get("blocked", 0)),
+		"blockers":blockers,
+		"running":int(status_counts.get("running", 0)),
+		"input_shortage":int(status_counts.get("input_shortage", 0)),
+		"output_full":int(status_counts.get("output_full", 0)),
+		"blocked":int(status_counts.get("blocked", 0)),
+		"idle":int(status_counts.get("idle", 0))
+	}
+
+
+func _theoretical_entity_rate(world: Dictionary, entity_id: String, entity: Dictionary, definition: Dictionary) -> float:
+	if str(entity.get("kind", "")) == "EXTRACTOR":
+		var profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+		return minf(
+			maxf(0.0, float(definition.get("mining_rate_per_second", 0.0))) * maxf(EPSILON, float(profile.get("average_grade", 1.0))) * clampf(float(profile.get("coverage_efficiency", 0.0)), 0.0, 1.0),
+			maxf(0.0, float(profile.get("sustainable_rate_per_second", 0.0)))
+		)
+	if str(entity.get("kind", "")) == "MACHINE":
+		var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
+		return 0.0 if recipe.is_empty() else maxf(0.0, float(definition.get("speed", 1.0))) / maxf(EPSILON, float(recipe.get("duration_seconds", 1.0)))
+	return 0.0
+
+
+func _production_route_index(world: Dictionary) -> Dictionary:
+	var upstream := {}
+	var downstream := {}
+	for link_id_value in _sorted_keys(world.get("links", {})):
+		var link_id := str(link_id_value)
+		var link: Dictionary = world.get("links", {}).get(link_id, {})
+		if str(link.get("kind", "")) != "CARGO":
+			continue
+		var source_id := str(link.get("source_id", ""))
+		var target_id := str(link.get("target_id", ""))
+		var common := {
+			"link_id":link_id,
+			"item_id":str(link.get("item_id", "")),
+			"status":_link_status(world, link),
+			"blocked_reason":str(link.get("blocked_reason", ""))
+		}
+		var downstream_row := common.duplicate(true)
+		downstream_row["entity_id"] = target_id
+		downstream_row["port_id"] = str(link.get("source_port_id", ""))
+		var downstream_rows: Array = downstream.get(source_id, [])
+		downstream_rows.append(downstream_row)
+		downstream[source_id] = downstream_rows
+		var upstream_row := common.duplicate(true)
+		upstream_row["entity_id"] = source_id
+		upstream_row["port_id"] = str(link.get("target_port_id", ""))
+		var upstream_rows: Array = upstream.get(target_id, [])
+		upstream_rows.append(upstream_row)
+		upstream[target_id] = upstream_rows
+	return {"upstream":upstream, "downstream":downstream}
+
+
+func _production_neighbors(route_index: Dictionary, entity_id: String, downstream: bool) -> Array:
+	var direction_index: Dictionary = route_index.get("downstream" if downstream else "upstream", {})
+	return direction_index.get(entity_id, []).duplicate(true)
 
 
 func _item_entry_ids(entries: Array) -> Array:
@@ -1255,6 +1784,9 @@ func _entity_blocker_code(status: String) -> String:
 func _link_status(world: Dictionary, link: Dictionary) -> String:
 	if str(link.get("kind", "")) == "POWER":
 		return "CONNECTED"
+	var blocked_reason := str(link.get("blocked_reason", ""))
+	if not blocked_reason.is_empty():
+		return blocked_reason
 	if float(link.get("last_flow", 0.0)) > EPSILON:
 		return "FLOWING"
 	var source: Dictionary = world.get("entities", {}).get(str(link.get("source_id", "")), {})
@@ -1270,7 +1802,7 @@ func _link_status(world: Dictionary, link: Dictionary) -> String:
 func _status_tone(status: String) -> String:
 	if status in ["RUNNING", "FLOWING", "CONNECTED", "COMPLETE"]:
 		return "positive"
-	if status in ["NO_RESOURCE", "NO_POWER", "OUTPUT_FULL", "FAILED"]:
+	if status in ["NO_RESOURCE", "NO_POWER", "OUTPUT_FULL", "FAILED", "INCOMPATIBLE_ENDPOINT", "NO_CAPACITY"]:
 		return "danger"
 	if status in ["POWER_LIMITED", "PARTIAL_COVERAGE", "INPUT_SHORTAGE", "NO_RECIPE", "WAITING_MATERIALS", "SOURCE_EMPTY", "TARGET_FULL"]:
 		return "warning"
@@ -1307,7 +1839,7 @@ func _apply_extractor_resource_profile(entity: Dictionary, profile: Dictionary) 
 
 func _entity_can_output(world: Dictionary, entity: Dictionary, item_id: String) -> bool:
 	match str(entity.get("kind", "")):
-		"STORAGE": return true
+		"STORAGE", "ROUTER": return true
 		"EXTRACTOR":
 			return str(entity.get("resource_id", "")) == item_id
 		"MACHINE":
@@ -1318,7 +1850,7 @@ func _entity_can_output(world: Dictionary, entity: Dictionary, item_id: String) 
 
 func _entity_can_input(entity: Dictionary, item_id: String) -> bool:
 	match str(entity.get("kind", "")):
-		"STORAGE": return true
+		"STORAGE", "ROUTER": return true
 		"MACHINE":
 			var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
 			return _item_entries_to_dictionary(recipe.get("inputs", [])).has(item_id)
@@ -1326,17 +1858,17 @@ func _entity_can_input(entity: Dictionary, item_id: String) -> bool:
 
 
 func _source_quantity(entity: Dictionary, item_id: String) -> int:
-	var buffer: Dictionary = entity.get("inventory", {}) if str(entity.get("kind", "")) == "STORAGE" else entity.get("outputs", {})
+	var buffer: Dictionary = entity.get("inventory", {}) if str(entity.get("kind", "")) in ["STORAGE", "ROUTER"] else entity.get("outputs", {})
 	return maxi(0, int(buffer.get(item_id, 0)))
 
 
 func _remove_source_quantity(entity: Dictionary, item_id: String, quantity: int) -> void:
-	var field := "inventory" if str(entity.get("kind", "")) == "STORAGE" else "outputs"
+	var field := "inventory" if str(entity.get("kind", "")) in ["STORAGE", "ROUTER"] else "outputs"
 	entity[field][item_id] = maxi(0, int(entity.get(field, {}).get(item_id, 0)) - quantity)
 
 
 func _add_target_quantity(entity: Dictionary, item_id: String, quantity: int) -> void:
-	var field := "inventory" if str(entity.get("kind", "")) == "STORAGE" else "inputs"
+	var field := "inventory" if str(entity.get("kind", "")) in ["STORAGE", "ROUTER"] else "inputs"
 	entity[field][item_id] = int(entity.get(field, {}).get(item_id, 0)) + quantity
 
 
@@ -1344,9 +1876,124 @@ func _target_free_capacity(entity: Dictionary, item_id: String) -> int:
 	if not _entity_can_input(entity, item_id):
 		return 0
 	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
-	if str(entity.get("kind", "")) == "STORAGE":
+	if str(entity.get("kind", "")) in ["STORAGE", "ROUTER"]:
 		return maxi(0, int(definition.get("inventory_capacity", 0)) - _dictionary_total(entity.get("inventory", {})))
 	return maxi(0, int(definition.get("input_capacity", 0)) - _dictionary_total(entity.get("inputs", {})))
+
+
+func _orthogonal_link_path_tiles(world: Dictionary, source: Dictionary, target: Dictionary, kind: String) -> Array:
+	var channel := "POWER" if kind == "POWER" else "ITEM"
+	var start := _entity_port_tile(source, "OUTPUT", channel)
+	var finish := _entity_port_tile(target, "INPUT", channel)
+	# Persist route vertices, not every traversed tile. Very large planets can
+	# therefore keep long belts without O(distance) save, culling, or draw work.
+	var path_tiles: Array = [_point_dict(start)]
+	if start.x != finish.x and start.y != finish.y:
+		path_tiles.append(_point_dict(Vector2i(finish.x, start.y)))
+	if finish != start:
+		path_tiles.append(_point_dict(finish))
+	# Both endpoints are valid entity-footprint tiles. The explicit check keeps
+	# finite-world enforcement close to the generator for future port layouts.
+	return path_tiles if _path_tiles_are_in_world(world, path_tiles) else []
+
+
+func _entity_port_tile(entity: Dictionary, direction: String, channel: String) -> Vector2i:
+	var footprint: Dictionary = entity.get("footprint", {})
+	var origin := _point(footprint.get("origin", {}))
+	var size := _point(footprint.get("size", {}))
+	var width := maxi(1, size.x)
+	var height := maxi(1, size.y)
+	if channel == "POWER":
+		return Vector2i(origin.x + floori(float(width) / 2.0), origin.y + height - 1) if direction == "OUTPUT" else Vector2i(origin.x + floori(float(width) / 2.0), origin.y)
+	return Vector2i(origin.x + width - 1, origin.y + floori(float(height) / 2.0)) if direction == "OUTPUT" else Vector2i(origin.x, origin.y + floori(float(height) / 2.0))
+
+
+func _normalized_link_path_tiles(world: Dictionary, value, source: Dictionary, target: Dictionary, kind: String) -> Array:
+	var requested_path := _path_tiles_from_value(value)
+	if _path_tiles_are_valid_for_link(world, requested_path, source, target, kind):
+		return requested_path
+	return _orthogonal_link_path_tiles(world, source, target, kind)
+
+
+func _path_tiles_from_value(value) -> Array:
+	var result: Array = []
+	if value is not Array:
+		return result
+	for tile_value in value:
+		if tile_value is not Dictionary:
+			return []
+		result.append(_point_dict(_point(tile_value as Dictionary)))
+	return _compact_orthogonal_path_tiles(result)
+
+
+func _compact_orthogonal_path_tiles(path_tiles: Array) -> Array:
+	var result: Array = []
+	for tile_value in path_tiles:
+		var point := _point(tile_value as Dictionary)
+		if not result.is_empty() and _point(result[-1] as Dictionary) == point:
+			continue
+		while result.size() >= 2:
+			var before := _point(result[-2] as Dictionary)
+			var previous := _point(result[-1] as Dictionary)
+			var same_axis := (before.x == previous.x and previous.x == point.x) \
+				or (before.y == previous.y and previous.y == point.y)
+			if not same_axis:
+				break
+			result.pop_back()
+		result.append(_point_dict(point))
+	return result
+
+
+func _path_tiles_are_in_world(world: Dictionary, path_tiles) -> bool:
+	if path_tiles is not Array or path_tiles.is_empty():
+		return false
+	for tile_value in path_tiles:
+		if tile_value is not Dictionary or not _tile_in_world(world, _point(tile_value as Dictionary)):
+			return false
+	return true
+
+
+func _path_tiles_are_valid_for_link(world: Dictionary, path_tiles, source: Dictionary, target: Dictionary, kind: String) -> bool:
+	if not _path_tiles_are_in_world(world, path_tiles):
+		return false
+	var channel := "POWER" if kind == "POWER" else "ITEM"
+	var expected_start := _entity_port_tile(source, "OUTPUT", channel)
+	var expected_finish := _entity_port_tile(target, "INPUT", channel)
+	if _point(path_tiles[0] as Dictionary) != expected_start or _point(path_tiles[-1] as Dictionary) != expected_finish:
+		return false
+	for index in range(1, path_tiles.size()):
+		var previous := _point(path_tiles[index - 1] as Dictionary)
+		var current := _point(path_tiles[index] as Dictionary)
+		if previous == current or (previous.x != current.x and previous.y != current.y):
+			return false
+	return true
+
+
+func _normalize_cargo_link_tier(value: String) -> String:
+	var normalized := value.strip_edges().to_upper()
+	return DEFAULT_CARGO_LINK_TIER if normalized.is_empty() else normalized.left(32)
+
+
+func _positive_item_manifest(source: Dictionary) -> Dictionary:
+	var manifest := {}
+	for item_id_value in _sorted_keys(source):
+		var item_id := str(item_id_value)
+		var quantity := maxi(0, int(source.get(item_id, 0)))
+		if quantity > 0:
+			manifest[item_id] = quantity
+	return manifest
+
+
+func _entity_buffer_manifest(entity: Dictionary) -> Dictionary:
+	var manifest := {}
+	for buffer_name in ["inputs", "outputs", "inventory"]:
+		var buffer: Dictionary = entity.get(buffer_name, {}) if entity.get(buffer_name, {}) is Dictionary else {}
+		for item_id_value in _sorted_keys(buffer):
+			var item_id := str(item_id_value)
+			var quantity := maxi(0, int(buffer.get(item_id, 0)))
+			if quantity > 0:
+				manifest[item_id] = int(manifest.get(item_id, 0)) + quantity
+	return manifest
 
 
 func _available_recipe_input_cycles(entity: Dictionary, recipe: Dictionary) -> int:
@@ -1358,13 +2005,25 @@ func _available_recipe_input_cycles(entity: Dictionary, recipe: Dictionary) -> i
 	return 0 if cycles == 2147483647 else cycles
 
 
-func _available_recipe_output_cycles(entity: Dictionary, definition: Dictionary, recipe: Dictionary) -> int:
+func _machine_output_capacity_reservation(entity: Dictionary, definition: Dictionary, recipe: Dictionary) -> Dictionary:
 	var free := maxi(0, int(definition.get("output_capacity", 0)) - _dictionary_total(entity.get("outputs", {})))
 	var output_per_cycle := 0
 	for output_value in recipe.get("outputs", []):
 		var output := output_value as Dictionary
 		output_per_cycle += maxi(1, int(output.get("quantity", 1)))
-	return free / maxi(1, output_per_cycle)
+	var cycles := free / maxi(1, output_per_cycle)
+	var reserved_outputs := {}
+	for output_value in recipe.get("outputs", []):
+		var output := output_value as Dictionary
+		var item_id := str(output.get("item", ""))
+		if not item_id.is_empty():
+			reserved_outputs[item_id] = maxi(1, int(output.get("quantity", 1))) * cycles
+	return {
+		"cycles":cycles,
+		"free_capacity":free,
+		"output_per_cycle":output_per_cycle,
+		"reserved_outputs":reserved_outputs
+	}
 
 
 func _construction_funded(order: Dictionary) -> bool:

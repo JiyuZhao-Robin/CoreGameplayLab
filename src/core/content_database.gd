@@ -835,7 +835,7 @@ func _validate_factory_grid_content() -> void:
 		for item_id_value in entity.get("inventory", {}).keys():
 			if not items.has(str(item_id_value)) or int(entity.get("inventory", {}).get(item_id_value, 0)) < 0:
 				errors.append("factory starter entity has invalid inventory item '%s'" % item_id_value)
-	var allowed_kinds := ["EXTRACTOR", "MACHINE", "STORAGE", "POWER", "CONSTRUCTION"]
+	var allowed_kinds := ["EXTRACTOR", "MACHINE", "ROUTER", "STORAGE", "POWER", "CONSTRUCTION"]
 	var factory_storage_classes := {}
 	for definition_value in factory_buildings.values():
 		var definition := definition_value as Dictionary
@@ -876,6 +876,11 @@ func _validate_factory_grid_content() -> void:
 				for recipe_id_value in definition.get("recipe_ids", []):
 					if not factory_recipes.has(str(recipe_id_value)):
 						errors.append("factory machine '%s' references missing recipe '%s'" % [definition_id, recipe_id_value])
+			"ROUTER":
+				if int(definition.get("inventory_capacity", 0)) <= 0 or int(definition.get("input_capacity", 0)) <= 0 or int(definition.get("output_capacity", 0)) <= 0:
+					errors.append("factory router '%s' must define positive inventory, input, and output capacity" % definition_id)
+				if str(definition.get("router_mode", "BIDIRECTIONAL")) not in ["SPLIT", "MERGE", "BIDIRECTIONAL"]:
+					errors.append("factory router '%s' has invalid router_mode" % definition_id)
 			"STORAGE":
 				if int(definition.get("inventory_capacity", 0)) <= 0:
 					errors.append("factory storage '%s' must define positive capacity" % definition_id)

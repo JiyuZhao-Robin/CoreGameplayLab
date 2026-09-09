@@ -32,6 +32,14 @@ func build(snapshot: Dictionary) -> Dictionary:
 		rows.sort_custom(func(a, b): return str((a as Dictionary).get("id", "")) < str((b as Dictionary).get("id", "")))
 		palette[array_key] = rows
 	result["palette"] = palette
+	# Production is an optional v1 extension.  Keep it detached, predictable and
+	# non-authoritative so older snapshots remain a fully functional workspace.
+	var production: Dictionary = (result.get("production", {}) as Dictionary).duplicate(false) if result.get("production", {}) is Dictionary else {}
+	for array_key in ["rows", "production_rows", "groups", "diagnostics"]:
+		var rows: Array = (production.get(array_key, []) as Array).duplicate() if production.get(array_key, []) is Array else []
+		rows.sort_custom(func(a, b): return str((a as Dictionary).get("id", (a as Dictionary).get("entity_id", ""))) < str((b as Dictionary).get("id", (b as Dictionary).get("entity_id", ""))))
+		production[array_key] = rows
+	result["production"] = production
 	_rebuild_palette_indexes(result)
 	return result
 
@@ -136,31 +144,20 @@ func _ensure_placement_index(snapshot: Dictionary) -> void:
 	_placement_chunk_index.rebuild(snapshot)
 
 
-func compatible_cargo_items(source: Dictionary, target: Dictionary) -> Array:
-	var source_ports: Dictionary = source.get("ports", {}) if source.get("ports", {}) is Dictionary else {}
-	var target_ports: Dictionary = target.get("ports", {}) if target.get("ports", {}) is Dictionary else {}
-	var outputs: Array = source_ports.get("outputs", []) if source_ports.get("outputs", []) is Array else []
-	var inputs: Array = target_ports.get("inputs", []) if target_ports.get("inputs", []) is Array else []
+func compatible_cargo_items(source: Dictionary, target: Dictionary, catalog_item_ids: Array = []) -> Array:
 	var result: Array = []
-	var source_provides_any := outputs.has("*")
-	var target_accepts_any := inputs.has("*")
-	if source_provides_any and not target_accepts_any:
-		for item_value in inputs:
-			var target_item_id := str(item_value)
-			if not target_item_id.is_empty() and target_item_id != "*" and not result.has(target_item_id):
-				result.append(target_item_id)
-	else:
-		for item_value in outputs:
-			var item_id := str(item_value)
-			if not item_id.is_empty() and item_id != "*" and (target_accepts_any or inputs.has(item_id)) and not result.has(item_id):
-				result.append(item_id)
-		if source_provides_any and target_accepts_any:
-			for item_collection_key in ["outputs", "inventory"]:
-				var quantities: Dictionary = source.get(item_collection_key, {}) if source.get(item_collection_key, {}) is Dictionary else {}
-				for item_id_value in quantities.keys():
-					var stored_item_id := str(item_id_value)
-					if not stored_item_id.is_empty() and not result.has(stored_item_id):
-						result.append(stored_item_id)
+	for source_port_value in connection_ports(source, "OUTPUT"):
+		var source_port: Dictionary = source_port_value as Dictionary
+		if str(source_port.get("kind", "")) != "CARGO":
+			continue
+		for target_port_value in connection_ports(target, "INPUT"):
+			var target_port: Dictionary = target_port_value as Dictionary
+			if not compatible_port_pair(source, source_port, target, target_port):
+				continue
+			for item_value in compatible_cargo_items_for_ports(source_port, target_port, source, catalog_item_ids):
+				var item_id := str(item_value)
+				if not item_id.is_empty() and not result.has(item_id):
+					result.append(item_id)
 	result.sort()
 	return result
 
@@ -168,7 +165,120 @@ func compatible_cargo_items(source: Dictionary, target: Dictionary) -> Array:
 func is_power_connection_valid(source: Dictionary, target: Dictionary) -> bool:
 	var source_ports: Dictionary = source.get("ports", {}) if source.get("ports", {}) is Dictionary else {}
 	var target_ports: Dictionary = target.get("ports", {}) if target.get("ports", {}) is Dictionary else {}
-	return bool(source_ports.get("provides_power", false)) and bool(target_ports.get("accepts_power", false))
+	if bool(source_ports.get("provides_power", false)) and bool(target_ports.get("accepts_power", false)):
+		return true
+	for source_port_value in connection_ports(source, "OUTPUT"):
+		var source_port: Dictionary = source_port_value as Dictionary
+		if str(source_port.get("kind", "")) != "POWER":
+			continue
+		for target_port_value in connection_ports(target, "INPUT"):
+			if str((target_port_value as Dictionary).get("kind", "")) == "POWER":
+				return true
+	return false
+
+
+## Ports are presentation records, never a second topology model.  Newer
+## snapshots can describe individual port ids; old string-array ports are
+## expanded into stable synthetic ids so the same canvas gesture works in both.
+func connection_ports(entity: Dictionary, direction: String) -> Array:
+	var result: Array = []
+	var ports_value: Variant = entity.get("ports", {})
+	var ports: Dictionary = ports_value as Dictionary if ports_value is Dictionary else {}
+	var normalized_direction := direction.to_upper()
+	var key := "outputs" if normalized_direction == "OUTPUT" else "inputs"
+	var structured_key := "output_ports" if normalized_direction == "OUTPUT" else "input_ports"
+	# The factory contract sends input_ports/output_ports when individual port
+	# topology is known.  Legacy item arrays are only a compatibility fallback.
+	var raw: Array = ports.get(structured_key, []) if ports.get(structured_key, []) is Array else []
+	if raw.is_empty():
+		raw = ports.get(key, []) if ports.get(key, []) is Array else []
+	for index in raw.size():
+		var entry_value: Variant = raw[index]
+		var entry: Dictionary = {}
+		var item_id := ""
+		if entry_value is Dictionary:
+			entry = (entry_value as Dictionary).duplicate(false)
+			item_id = str(entry.get("item_id", entry.get("item", "")))
+		else:
+			item_id = str(entry_value)
+		var port_id := str(entry.get("id", entry.get("port_id", "")))
+		if port_id.is_empty():
+			port_id = ("out:" if normalized_direction == "OUTPUT" else "in:") + (item_id if not item_id.is_empty() else str(index))
+		var channel := str(entry.get("channel", entry.get("kind", "ITEM"))).to_upper()
+		result.append({
+			"id":port_id,
+			"direction":normalized_direction,
+			"kind":"POWER" if channel == "POWER" else "CARGO",
+			"item_id":item_id,
+			"accepts_any":item_id == "*" or bool(entry.get("accepts_any", false)),
+			"label":str(entry.get("label", item_id)),
+			"index":index
+		})
+	var has_power_port := false
+	for port_value in result:
+		if str((port_value as Dictionary).get("kind", "")) == "POWER":
+			has_power_port = true
+			break
+	if normalized_direction == "OUTPUT" and bool(ports.get("provides_power", false)) and not has_power_port:
+		result.append({"id":str(ports.get("power_output_id", "power-out")), "direction":"OUTPUT", "kind":"POWER", "item_id":"", "accepts_any":false, "label":"Power", "index":result.size()})
+	elif normalized_direction == "INPUT" and bool(ports.get("accepts_power", false)) and not has_power_port:
+		result.append({"id":str(ports.get("power_input_id", "power-in")), "direction":"INPUT", "kind":"POWER", "item_id":"", "accepts_any":false, "label":"Power", "index":result.size()})
+	return result
+
+
+func connection_port_by_id(entity: Dictionary, port_id: String, direction: String = "") -> Dictionary:
+	for port_value in connection_ports(entity, direction if not direction.is_empty() else "OUTPUT"):
+		var port: Dictionary = port_value as Dictionary
+		if str(port.get("id", "")) == port_id:
+			return port
+	if direction.is_empty():
+		for port_value in connection_ports(entity, "INPUT"):
+			var port: Dictionary = port_value as Dictionary
+			if str(port.get("id", "")) == port_id:
+				return port
+	return {}
+
+
+func compatible_port_pair(source: Dictionary, source_port: Dictionary, target: Dictionary, target_port: Dictionary) -> bool:
+	if source.is_empty() or target.is_empty() or source_port.is_empty() or target_port.is_empty():
+		return false
+	if str(source_port.get("direction", "")) != "OUTPUT" or str(target_port.get("direction", "")) != "INPUT":
+		return false
+	var source_kind := str(source_port.get("kind", "CARGO")).to_upper()
+	var target_kind := str(target_port.get("kind", "CARGO")).to_upper()
+	if source_kind != target_kind:
+		return false
+	if source_kind == "POWER":
+		return is_power_connection_valid(source, target)
+	var source_item := str(source_port.get("item_id", ""))
+	var target_item := str(target_port.get("item_id", ""))
+	return not source_item.is_empty() and (source_item == target_item or source_item == "*" or target_item == "*")
+
+
+func compatible_cargo_items_for_ports(source_port: Dictionary, target_port: Dictionary, source: Dictionary = {}, catalog_item_ids: Array = []) -> Array:
+	if source_port.is_empty() or target_port.is_empty():
+		return []
+	var source_item := str(source_port.get("item_id", ""))
+	var target_item := str(target_port.get("item_id", ""))
+	var result: Array = []
+	if source_item != "*" and not source_item.is_empty() and (target_item == "*" or target_item == source_item):
+		result.append(source_item)
+	elif source_item == "*" and target_item != "*" and not target_item.is_empty():
+		result.append(target_item)
+	elif source_item == "*" and target_item == "*":
+		for collection_key in ["outputs", "inventory"]:
+			var values: Dictionary = source.get(collection_key, {}) if source.get(collection_key, {}) is Dictionary else {}
+			for item_id_value in values.keys():
+				var item_id := str(item_id_value)
+				if not item_id.is_empty() and not result.has(item_id):
+					result.append(item_id)
+		if result.is_empty():
+			for item_id_value in catalog_item_ids:
+				var item_id := str(item_id_value)
+				if not item_id.is_empty() and not result.has(item_id):
+					result.append(item_id)
+	result.sort()
+	return result
 
 
 func footprints_overlap(a_value: Variant, b_value: Variant) -> bool:

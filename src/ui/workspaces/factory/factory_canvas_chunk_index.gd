@@ -51,13 +51,24 @@ func rebuild(snapshot: Dictionary) -> void:
 		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
 		if source.is_empty() or target.is_empty():
 			continue
-		# Canvas draws from edge ports, not entity centers. Index the conservative
-		# union of both endpoint footprints so every chunk touched by any possible
-		# port-to-port segment can discover and precisely cull the link.
+		# Explicit routes are indexed segment-by-segment. A long L-shaped belt must
+		# not be registered in every chunk inside its large bounding rectangle.
 		var source_bounds := _footprint_rect(source.get("footprint", {}))
 		var target_bounds := _footprint_rect(target.get("footprint", {}))
-		var link_bounds := source_bounds.merge(target_bounds).grow(0.001)
-		_add_record(_link_ids_by_chunk, str(link.get("id", "")), link_bounds)
+		var path_tiles_value: Variant = link.get("path_tiles", [])
+		var link_id := str(link.get("id", ""))
+		if path_tiles_value is Array and (path_tiles_value as Array).size() >= 2:
+			_add_record(_link_ids_by_chunk, link_id, source_bounds)
+			_add_record(_link_ids_by_chunk, link_id, target_bounds)
+			var path_tiles := path_tiles_value as Array
+			for index in range(1, path_tiles.size()):
+				var previous := Vector2(_point(path_tiles[index - 1])) + Vector2.ONE * 0.5
+				var current := Vector2(_point(path_tiles[index])) + Vector2.ONE * 0.5
+				_add_record(_link_ids_by_chunk, link_id, Rect2(previous, Vector2.ZERO).expand(current).grow(0.501))
+		else:
+			# Legacy snapshots have no authored route. Retain the previous conservative
+			# endpoint union until the authoritative domain normalizes them.
+			_add_record(_link_ids_by_chunk, link_id, source_bounds.merge(target_bounds).grow(0.001))
 
 
 func query(world_rect: Rect2) -> Dictionary:

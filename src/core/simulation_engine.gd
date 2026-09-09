@@ -408,6 +408,15 @@ func _crop_factory_world(world: Dictionary, target_size: Vector2i) -> void:
 			links.erase(link_id_value)
 			topology_changed = true
 			runtime_changed = true
+	# Surviving endpoints can still carry a legacy authored detour outside the
+	# newly cropped planet. Re-normalize link geometry against the new bounds so
+	# every live route is force-clipped/rebuilt before simulation resumes.
+	var normalized_links: Dictionary = factory_grid.normalize_world(world).get("links", {})
+	if normalized_links != links:
+		world["links"] = normalized_links
+		links = normalized_links
+		topology_changed = true
+		runtime_changed = true
 
 	var tile_deltas: Dictionary = world.get("tile_deltas", {})
 	for tile_key_value in tile_deltas.keys():
