@@ -13,7 +13,18 @@ signal selection_changed(selection: Dictionary)
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const CanvasScript = preload("res://src/ui/workspaces/factory/factory_canvas.gd")
 const BuildPaletteScript = preload("res://src/ui/workspaces/factory/factory_build_palette.gd")
+const OperationsOverviewScript = preload("res://src/ui/workspaces/factory/factory_operations_overview.gd")
+const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
+const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const PROTOCOL_VERSION := 1
+const UI_NAVY := Color("0c141c")
+const UI_RAISED := Color("15222d")
+const UI_BORDER := Color("304652")
+const UI_CYAN := Color("65d9d1")
+const UI_AMBER := Color("e5b467")
+const UI_OFFWHITE := Color("e4ecef")
+const UI_MUTED := Color("96aab7")
+const UI_CRITICAL := Color("ef867d")
 
 ## Resolve the localization autoload at runtime so this standalone component
 ## also compiles when loaded by a --script SceneTree test.
@@ -36,7 +47,7 @@ var _connection_target_id := ""
 var _connection_source_port_id := ""
 var _connection_target_port_id := ""
 var _selected_cargo_item_id := ""
-var _active_subworkspace := "CANVAS"
+var _active_subworkspace := "OVERVIEW"
 var _production_filter := "ALL"
 var _selection := {"kind":"", "id":"", "data":{}}
 var _preview_tile := Vector2i.ZERO
@@ -45,11 +56,17 @@ var _pending_link_selection_id := ""
 var _pending_order_selection_id := ""
 var _canvas_snapshot_dirty := true
 var _building_card_signature := ""
+var _canvas_startup_world_id := ""
+var _canvas_focus_pending := false
 
 var _world_label: Label
 var _world_scale_label: Label
 var _revision_label: Label
 var _feedback_label: Label
+var _last_telemetry_feedback := ""
+var _reset_camera_button: Button
+var _refresh_button: Button
+var _toolbar_frame: Control
 var _building_options: OptionButton
 var _source_options: OptionButton
 var _target_options: OptionButton
@@ -63,6 +80,8 @@ var _connection_status_label: Label
 var _inspector_body: VBoxContainer
 var _canvas
 var _canvas_page: HBoxContainer
+var _overview_page: Control
+var _operations_overview
 var _production_page: VBoxContainer
 var _production_rows: VBoxContainer
 var _production_filter_options: OptionButton
@@ -109,15 +128,20 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 	_canvas_snapshot_dirty = true
 	if _active_subworkspace == "CANVAS":
 		_apply_canvas_snapshot()
+	elif _canvas != null and (_canvas.get("_snapshot") as Dictionary).is_empty():
+		# A hidden canvas still receives its first immutable payload so focused UI
+		# tests and later canvas gestures begin from a valid physical world. Further
+		# hidden refreshes remain deferred to preserve the spatial-index contract.
+		_apply_canvas_snapshot()
 	# Runtime refreshes must not destroy an active inspector control or close an
 	# open selector. The next refresh after the interaction ends performs the
 	# normal rebuild with the latest immutable snapshot.
 	if _inspector_interaction_active():
 		_pending_inspector_refresh = true
 		set_process(true)
-		_world_label.text = I18n.t("factory.workspace.world") % str(_snapshot.get("world_id", I18n.t("factory.workspace.unavailable")))
+		_world_label.text = I18n.t("factory.operations.world_telemetry", "LOCAL GRID · %s") % _location_telemetry_name()
 		_refresh_world_scale()
-		_revision_label.text = I18n.t("factory.workspace.revisions") % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+		_revision_label.text = "T%d · R%d" % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
 		return
 	_pending_inspector_refresh = false
 	set_process(false)
@@ -147,7 +171,7 @@ func apply_command_result(result: Dictionary) -> void:
 					accepted_message = I18n.t("factory.feedback.construction_auto_started", "Materials staged automatically; construction has started.")
 				else:
 					accepted_message = I18n.t("factory.feedback.construction_auto_partial", "Available materials staged; still missing: %s") % _item_amount_rows(funding.get("remaining", {}))
-		_set_feedback("ACCEPTED", accepted_message, Color("6fbf92"))
+		_set_feedback("ACCEPTED", accepted_message, UI_CYAN)
 		if str(result.get("command_kind", "")) == "CONNECT_ENTITIES":
 			_pending_link_selection_id = str(operation_result.get("link_id", ""))
 			_active_tool = ""
@@ -162,7 +186,7 @@ func apply_command_result(result: Dictionary) -> void:
 		var localized_message: String = str(I18n.t(rejection_key))
 		if localized_message == rejection_key:
 			localized_message = message if not message.is_empty() else I18n.t("factory.feedback.rejected")
-		_set_feedback(rejection_code, localized_message, Color("d86e63"))
+		_set_feedback(rejection_code, localized_message, UI_CRITICAL)
 	var response_world_id := str(result.get("world_id", _snapshot.get("world_id", "")))
 	if not response_world_id.is_empty():
 		refresh_requested.emit(response_world_id)
@@ -177,7 +201,7 @@ func set_reduced_motion(enabled: bool) -> void:
 func request_refresh() -> void:
 	var world_id := str(_snapshot.get("world_id", ""))
 	if world_id.is_empty():
-		_set_feedback("NO_FACTORY_WORLD", I18n.t("factory.feedback.no_world"), Color("d86e63"))
+		_set_feedback("NO_FACTORY_WORLD", I18n.t("factory.feedback.no_world"), UI_CRITICAL)
 		return
 	refresh_requested.emit(world_id)
 
@@ -236,24 +260,28 @@ func _build_interface() -> void:
 	root.add_theme_constant_override("separation", 8)
 	add_child(root)
 
+	_toolbar_frame = PanelContainer.new()
+	_toolbar_frame.name = "FactoryToolbarChrome"
+	_toolbar_frame.add_theme_stylebox_override("panel", UiTokens.control_style(UI_RAISED, UI_BORDER, 3))
+	root.add_child(_toolbar_frame)
 	var toolbar := HBoxContainer.new()
 	toolbar.name = "FactoryToolbar"
 	toolbar.custom_minimum_size = Vector2(0, 32)
-	root.add_child(toolbar)
-	_world_label = _make_label(I18n.t("factory.workspace.label"), Color("d5ddd8"))
+	_toolbar_frame.add_child(toolbar)
+	_world_label = _make_label(I18n.t("factory.workspace.label"), UI_OFFWHITE)
 	_world_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(_world_label)
-	_world_scale_label = _make_label("", Color("d5a45c"))
+	_world_scale_label = _make_label("", UI_AMBER)
 	_world_scale_label.name = "FactoryWorldScale"
 	toolbar.add_child(_world_scale_label)
-	_revision_label = _make_label(I18n.t("factory.workspace.topology_empty"), Color("9aa6a1"))
+	_revision_label = _make_label(I18n.t("factory.workspace.topology_empty"), UI_MUTED)
 	toolbar.add_child(_revision_label)
-	var reset_camera_button := _make_button(I18n.t("factory.action.reset_view"), I18n.t("factory.tooltip.reset_view"))
-	reset_camera_button.pressed.connect(func() -> void: _canvas.reset_camera())
-	toolbar.add_child(reset_camera_button)
-	var refresh_button := _make_button(I18n.t("factory.action.refresh"), I18n.t("factory.tooltip.refresh"))
-	refresh_button.pressed.connect(request_refresh)
-	toolbar.add_child(refresh_button)
+	_reset_camera_button = _make_button(I18n.t("factory.action.reset_view"), I18n.t("factory.tooltip.reset_view"))
+	_reset_camera_button.pressed.connect(func() -> void: _canvas.reset_camera())
+	toolbar.add_child(_reset_camera_button)
+	_refresh_button = _make_button(I18n.t("factory.action.refresh"), I18n.t("factory.tooltip.refresh"))
+	_refresh_button.pressed.connect(request_refresh)
+	toolbar.add_child(_refresh_button)
 	var motion_toggle := CheckButton.new()
 	motion_toggle.text = I18n.t("factory.action.reduced_motion")
 	motion_toggle.tooltip_text = I18n.t("factory.tooltip.reduced_motion")
@@ -261,23 +289,30 @@ func _build_interface() -> void:
 	motion_toggle.toggled.connect(set_reduced_motion)
 	toolbar.add_child(motion_toggle)
 
-	# The factory is a control room, not just a build palette. Keep the three
+	# The factory is a control room, not just a build palette. Keep the four
 	# workspaces mounted and switch visibility so selector focus and canvas state
 	# survive tab changes and runtime snapshot refreshes.
+	var tabs_frame := PanelContainer.new()
+	tabs_frame.name = "FactoryWorkspaceTabsChrome"
+	tabs_frame.add_theme_stylebox_override("panel", UiTokens.control_style(UI_NAVY, UI_BORDER, 3))
+	root.add_child(tabs_frame)
 	var tabs := HBoxContainer.new()
 	tabs.name = "FactoryWorkspaceTabs"
 	tabs.add_theme_constant_override("separation", 5)
-	root.add_child(tabs)
-	for workspace_id in ["CANVAS", "PRODUCTION", "CONSTRUCTION"]:
+	tabs_frame.add_child(tabs)
+	for workspace_id in ["OVERVIEW", "CANVAS", "PRODUCTION", "CONSTRUCTION"]:
 		var tab := _make_button(
 			I18n.t("factory.tab.%s" % workspace_id.to_lower(), workspace_id.capitalize()),
 			I18n.t("factory.tooltip.open_%s" % workspace_id.to_lower(), "Open %s workspace" % workspace_id.to_lower())
 		)
 		tab.name = "FactoryTab%s" % workspace_id.capitalize()
+		tab.custom_minimum_size = UiTokens.layout_vector(Vector2(120, 36))
 		tab.toggle_mode = true
 		tab.pressed.connect(_set_active_subworkspace.bind(workspace_id))
 		tabs.add_child(tab)
 		_workspace_tabs[workspace_id] = tab
+
+	_build_overview_workspace(root)
 
 	var body := HBoxContainer.new()
 	body.name = "FactoryCanvasWorkspace"
@@ -296,6 +331,7 @@ func _build_interface() -> void:
 	# compact keyboard/accessibility fallback without sacrificing canvas width.
 	var connection_panel := PanelContainer.new()
 	connection_panel.name = "FactoryConnectionAssist"
+	connection_panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_RAISED, UI_BORDER, 3))
 	center_column.add_child(connection_panel)
 	var connection_modes := HBoxContainer.new()
 	connection_modes.name = "FactoryConnectionTools"
@@ -337,7 +373,7 @@ func _build_interface() -> void:
 	_connect_button.name = "CreateConnection"
 	_connect_button.pressed.connect(_request_connection)
 	connection_modes.add_child(_connect_button)
-	_connection_status_label = _make_label("", Color("9aa6a1"))
+	_connection_status_label = _make_label("", UI_MUTED)
 	_connection_status_label.name = "ConnectionStatus"
 	_connection_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_connection_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -373,10 +409,13 @@ func _build_interface() -> void:
 	var inspector_scroll := ScrollContainer.new()
 	inspector_scroll.name = "InspectorScroll"
 	inspector_scroll.custom_minimum_size = Vector2(270, 0)
+	inspector_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_scroll.size_flags_stretch_ratio = 0.28
 	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	body.add_child(inspector_scroll)
 	_inspector_body = VBoxContainer.new()
 	_inspector_body.name = "FactoryInspector"
+	_inspector_body.custom_minimum_size.x = 270
 	_inspector_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inspector_body.add_theme_constant_override("separation", 6)
 	inspector_scroll.add_child(_inspector_body)
@@ -384,10 +423,20 @@ func _build_interface() -> void:
 	_build_production_workspace(root)
 	_build_construction_workspace(root)
 
-	_feedback_label = _make_label(I18n.t("factory.feedback.waiting"), Color("9aa6a1"))
+	_feedback_label = _make_label(I18n.t("factory.feedback.waiting"), UI_MUTED)
 	_feedback_label.name = "FactoryCommandFeedback"
 	_feedback_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_feedback_label)
+
+
+func _build_overview_workspace(root: VBoxContainer) -> void:
+	_overview_page = VBoxContainer.new()
+	_overview_page.name = "FactoryOverviewWorkspace"
+	_overview_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(_overview_page)
+	_operations_overview = OperationsOverviewScript.new()
+	_operations_overview.action_requested.connect(_on_operations_action_requested)
+	_overview_page.add_child(_operations_overview)
 
 
 func _build_production_workspace(root: VBoxContainer) -> void:
@@ -396,13 +445,25 @@ func _build_production_workspace(root: VBoxContainer) -> void:
 	_production_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_production_page.add_theme_constant_override("separation", 8)
 	root.add_child(_production_page)
+	var header_panel := PanelContainer.new()
+	header_panel.name = "ProductionBoardHeader"
+	header_panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_RAISED, UI_BORDER, 4))
+	_production_page.add_child(header_panel)
 	var header := HBoxContainer.new()
-	_production_page.add_child(header)
+	header.add_theme_constant_override("separation", UiTokens.layout_px(12))
+	header_panel.add_child(header)
+	var headings := VBoxContainer.new()
+	headings.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	headings.add_theme_constant_override("separation", 1)
+	header.add_child(headings)
 	var title := _make_section_label(I18n.t("factory.production.title", "Production management"))
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
+	headings.add_child(title)
+	headings.add_child(_make_label(I18n.t("factory.operations.production_board_hint", "Live rate, utilization and connected routes"), UI_MUTED))
 	_production_filter_options = OptionButton.new()
 	_production_filter_options.name = "ProductionStatusFilter"
+	_production_filter_options.tooltip_text = I18n.t("factory.operations.production_board_hint", "Live rate, utilization and connected routes")
+	_production_filter_options.add_theme_stylebox_override("normal", UiTokens.control_style(UI_NAVY, UI_BORDER, 3))
+	_production_filter_options.add_theme_stylebox_override("focus", UiTokens.control_style(UI_NAVY, UI_CYAN, 3))
 	for filter_id in ["ALL", "RUNNING", "INPUT_SHORTAGE", "OUTPUT_FULL", "BLOCKED", "IDLE"]:
 		_production_filter_options.add_item(I18n.t("factory.production.filter.%s" % filter_id.to_lower(), filter_id.replace("_", " ").capitalize()))
 		_production_filter_options.set_item_metadata(_production_filter_options.item_count - 1, filter_id)
@@ -429,8 +490,15 @@ func _build_construction_workspace(root: VBoxContainer) -> void:
 	_construction_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_construction_page.add_theme_constant_override("separation", 8)
 	root.add_child(_construction_page)
-	var title := _make_section_label(I18n.t("factory.construction.title", "Construction center"))
-	_construction_page.add_child(title)
+	var header_panel := PanelContainer.new()
+	header_panel.name = "ConstructionBoardHeader"
+	header_panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_RAISED, UI_BORDER, 4))
+	_construction_page.add_child(header_panel)
+	var headings := VBoxContainer.new()
+	headings.add_theme_constant_override("separation", 1)
+	header_panel.add_child(headings)
+	headings.add_child(_make_section_label(I18n.t("factory.construction.title", "Construction center")))
+	headings.add_child(_make_label(I18n.t("factory.operations.construction_board_hint", "Orders, staged stock and automatic replenishment"), UI_MUTED))
 	var scroll := ScrollContainer.new()
 	scroll.name = "ConstructionScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -444,7 +512,11 @@ func _build_construction_workspace(root: VBoxContainer) -> void:
 
 
 func _set_active_subworkspace(workspace_id: String) -> void:
-	_active_subworkspace = workspace_id if workspace_id in ["CANVAS", "PRODUCTION", "CONSTRUCTION"] else "CANVAS"
+	_active_subworkspace = workspace_id if workspace_id in ["OVERVIEW", "CANVAS", "PRODUCTION", "CONSTRUCTION"] else "CANVAS"
+	if _overview_page != null:
+		_overview_page.visible = _active_subworkspace == "OVERVIEW"
+	if _toolbar_frame != null:
+		_toolbar_frame.visible = _active_subworkspace != "OVERVIEW"
 	if _canvas_page != null:
 		_canvas_page.visible = _active_subworkspace == "CANVAS"
 	if _production_page != null:
@@ -455,8 +527,16 @@ func _set_active_subworkspace(workspace_id: String) -> void:
 		var tab: Button = _workspace_tabs.get(workspace_id_value) as Button
 		if tab != null:
 			tab.button_pressed = str(workspace_id_value) == _active_subworkspace
-	if _active_subworkspace == "CANVAS" and _canvas_snapshot_dirty:
+	if _reset_camera_button != null:
+		_reset_camera_button.visible = _active_subworkspace == "CANVAS"
+	if _refresh_button != null:
+		_refresh_button.visible = _active_subworkspace == "CANVAS"
+	if _active_subworkspace == "OVERVIEW" and _operations_overview != null:
+		_operations_overview.configure(_snapshot)
+	elif _active_subworkspace == "CANVAS" and _canvas_snapshot_dirty:
 		_apply_canvas_snapshot()
+	if _active_subworkspace == "CANVAS":
+		_schedule_pending_canvas_focus()
 	elif _active_subworkspace == "PRODUCTION":
 		_refresh_production_workspace()
 	elif _active_subworkspace == "CONSTRUCTION":
@@ -467,9 +547,12 @@ func _render() -> void:
 	if not is_instance_valid(_building_options):
 		return
 	var is_valid := bool(_snapshot.get("valid", false)) and int(_snapshot.get("protocol_version", 0)) == PROTOCOL_VERSION
-	_world_label.text = I18n.t("factory.workspace.world") % str(_snapshot.get("world_id", I18n.t("factory.workspace.unavailable")))
-	_revision_label.text = I18n.t("factory.workspace.revisions") % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+	_world_label.text = I18n.t("factory.operations.world_telemetry", "LOCAL GRID · %s") % _location_telemetry_name()
+	_revision_label.text = "T%d · R%d" % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+	_revision_label.tooltip_text = I18n.t("factory.workspace.revisions") % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
 	_refresh_world_scale()
+	if _operations_overview != null:
+		_operations_overview.configure(_snapshot)
 	_rebuild_palette(is_valid)
 	_rebuild_connection_selectors(is_valid)
 	_refresh_inspector()
@@ -478,6 +561,10 @@ func _render() -> void:
 	_canvas.set_port_connections_enabled(_active_tool != "BUILD")
 	_update_placement_preview()
 	_update_connection_preview()
+	if _feedback_label != null and (_feedback_label.text == I18n.t("factory.feedback.waiting") or _feedback_label.text == _last_telemetry_feedback):
+		_feedback_label.text = I18n.t("factory.operations.live_world", "Live factory telemetry · %s") % _location_telemetry_name()
+		_last_telemetry_feedback = _feedback_label.text
+		_feedback_label.add_theme_color_override("font_color", UI_MUTED)
 
 
 func _apply_canvas_snapshot() -> void:
@@ -486,8 +573,32 @@ func _apply_canvas_snapshot() -> void:
 	# The workspace already normalized and detached this immutable presentation
 	# payload. Passing it through avoids a second deep copy and sort in Canvas.
 	_canvas.apply_snapshot(_snapshot, true)
+	var world_id := str(_snapshot.get("world_id", ""))
+	if world_id != _canvas_startup_world_id:
+		_canvas_startup_world_id = world_id
+		_canvas_focus_pending = true
 	_canvas.set_reduced_motion(_reduced_motion)
 	_canvas_snapshot_dirty = false
+	_schedule_pending_canvas_focus()
+
+
+func _schedule_pending_canvas_focus() -> void:
+	if not _canvas_focus_pending or _canvas == null or _active_subworkspace != "CANVAS":
+		return
+	call_deferred("_apply_pending_canvas_focus")
+
+
+func _apply_pending_canvas_focus() -> void:
+	if not _canvas_focus_pending or _canvas == null or _active_subworkspace != "CANVAS":
+		return
+	# Canvas pages may be hidden during their first snapshot. Deferring until the
+	# mounted page has a real authored rectangle prevents a 0px-size overview zoom
+	# from being retained as the first operational camera.
+	if _canvas.size.x < 64.0 or _canvas.size.y < 64.0:
+		call_deferred("_apply_pending_canvas_focus")
+		return
+	_canvas.focus_operational_region()
+	_canvas_focus_pending = false
 
 
 func _rebuild_palette(is_valid: bool) -> void:
@@ -563,18 +674,28 @@ func _entity_is_connection_candidate(entity: Dictionary, role: String) -> bool:
 func _refresh_world_scale() -> void:
 	if not is_instance_valid(_world_scale_label):
 		return
+	_world_scale_label.text = I18n.t("factory.operations.network_metrics", "%d nodes · %d routes · %d orders") % [
+		(_snapshot.get("entities", []) as Array).size(),
+		(_snapshot.get("links", []) as Array).size(),
+		(_snapshot.get("construction_orders", []) as Array).size()
+	]
 	var bounds: Dictionary = _snapshot.get("bounds", {}) if _snapshot.get("bounds", {}) is Dictionary else {}
 	var extent := _view_model.footprint_size(bounds)
 	var chunk_size := maxi(1, int(_snapshot.get("chunk_size_tiles", 64)))
 	var profile: Dictionary = _snapshot.get("world_profile", {}) if _snapshot.get("world_profile", {}) is Dictionary else {}
 	var scale_class := str(profile.get("scale_class", ""))
-	_world_scale_label.text = I18n.t("factory.workspace.scale", "%d × %d tiles · %d × %d chunks · %s") % [
+	_world_scale_label.tooltip_text = I18n.t("factory.workspace.scale") % [
 		extent.x,
 		extent.y,
 		ceili(float(extent.x) / float(chunk_size)),
 		ceili(float(extent.y) / float(chunk_size)),
 		scale_class if not scale_class.is_empty() else I18n.t("factory.workspace.custom_scale", "CUSTOM")
 	]
+
+
+func _location_telemetry_name() -> String:
+	var location_name := str(_snapshot.get("location_name", ""))
+	return location_name if not location_name.is_empty() else str(_snapshot.get("world_id", I18n.t("factory.workspace.unavailable")))
 
 
 func _refresh_building_card() -> void:
@@ -708,9 +829,14 @@ func _refresh_production_workspace() -> void:
 		var production: Dictionary = _snapshot.get("production", {}) as Dictionary
 		if production.get("summary", {}) is Dictionary:
 			production_summary = production.get("summary", {}) as Dictionary
-	var summary := _make_label(I18n.t("factory.production.summary", "Running %d · input shortage %d · output full %d · blocked %d · idle %d") % [int(production_summary.get("running", counts.get("RUNNING", 0))), int(production_summary.get("input_shortage", counts.get("INPUT_SHORTAGE", 0))), int(production_summary.get("output_full", counts.get("OUTPUT_FULL", 0))), int(production_summary.get("blocked", counts.get("BLOCKED", 0))), int(production_summary.get("idle", counts.get("IDLE", 0)))], Color("d5a45c"))
+	var summary_panel := PanelContainer.new()
+	summary_panel.name = "ProductionStatusSummaryPanel"
+	summary_panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_NAVY, Color(UI_CYAN, 0.52), 3))
+	_production_rows.add_child(summary_panel)
+	var summary := _make_label(I18n.t("factory.production.summary", "Running %d · input shortage %d · output full %d · blocked %d · idle %d") % [int(production_summary.get("running", counts.get("RUNNING", 0))), int(production_summary.get("input_shortage", counts.get("INPUT_SHORTAGE", 0))), int(production_summary.get("output_full", counts.get("OUTPUT_FULL", 0))), int(production_summary.get("blocked", counts.get("BLOCKED", 0))), int(production_summary.get("idle", counts.get("IDLE", 0)))], UI_AMBER)
 	summary.name = "ProductionStatusSummary"
-	_production_rows.add_child(summary)
+	summary_panel.add_child(summary)
+	_production_rows.add_child(_production_material_ledger())
 	for record_value in records:
 		var record: Dictionary = record_value as Dictionary
 		var entity: Dictionary = record.get("entity", {}) as Dictionary
@@ -731,10 +857,17 @@ func _refresh_production_workspace() -> void:
 			continue
 		var panel := PanelContainer.new()
 		panel.name = "ProductionRow%s" % str(entity.get("id", ""))
+		panel.custom_minimum_size.y = UiTokens.layout_px(126)
+		panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_RAISED, Color(_status_color(normalized_status), 0.68), 3))
 		_production_rows.add_child(panel)
+		var layout := HBoxContainer.new()
+		layout.add_theme_constant_override("separation", UiTokens.layout_px(10))
+		panel.add_child(layout)
+		layout.add_child(_building_thumbnail(str(entity.get("definition_id", "")), str(entity.get("node_kind", "")), _status_color(normalized_status), Vector2(104, 96)))
 		var body := VBoxContainer.new()
-		body.add_theme_constant_override("separation", 3)
-		panel.add_child(body)
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.add_theme_constant_override("separation", UiTokens.layout_px(4))
+		layout.add_child(body)
 		var header := HBoxContainer.new()
 		body.add_child(header)
 		var title := _make_label("%s · %s" % [str(entity.get("name", entity.get("id", I18n.t("factory.value.unit", "Unit")))), _status_name(normalized_status)], _status_color(normalized_status))
@@ -746,17 +879,26 @@ func _refresh_production_workspace() -> void:
 		header.add_child(focus)
 		var rate := float(row.get("rate_per_second", row.get("actual_rate", entity.get("actual_rate", 0.0))))
 		var utilization := clampf(float(row.get("utilization", entity.get("utilization", entity.get("power_factor", 0.0)))), 0.0, 1.0)
-		body.add_child(_make_label(I18n.t("factory.production.rate", "Rate %.2f/s · utilization %d%%") % [rate, roundi(utilization * 100.0)], Color("a5b2ac")))
+		var recipe_name := _production_recipe_name(entity)
+		body.add_child(_make_label((recipe_name + " · " if not recipe_name.is_empty() else "") + I18n.t("factory.production.rate", "Rate %.2f/s · utilization %d%%") % [rate, roundi(utilization * 100.0)], UI_OFFWHITE))
+		var io := _production_io_line(entity)
+		if not io.is_empty():
+			body.add_child(_make_label(io, UI_MUTED))
 		var meter := ProgressBar.new()
 		meter.name = "ProductionUtilizationMeter"
 		meter.max_value = 100.0
 		meter.value = utilization * 100.0
 		meter.show_percentage = false
+		meter.add_theme_stylebox_override("background", UiTokens.panel_style(UI_NAVY, UI_BORDER, 2))
+		meter.add_theme_stylebox_override("fill", UiTokens.panel_style(_status_color(normalized_status), _status_color(normalized_status), 2))
 		body.add_child(meter)
 		var blocker := str(row.get("blocker", row.get("blocked_reason", entity.get("blocker_code", ""))))
 		if not blocker.is_empty():
-			body.add_child(_make_label(I18n.t("factory.production.blocked", "Blocked: %s") % _status_name(blocker), Color("d86e63")))
-		var routes := HBoxContainer.new()
+			body.add_child(_make_label(I18n.t("factory.operations.constraint", "Constraint: %s") % _status_name(blocker), UI_CRITICAL))
+		var deficit := _production_deficit_line(entity)
+		if not deficit.is_empty():
+			body.add_child(_make_label(deficit, UI_AMBER))
+		var routes := HFlowContainer.new()
 		body.add_child(routes)
 		for neighbor_value in row.get("upstream", []):
 			var upstream := _entity_by_id(str((neighbor_value as Dictionary).get("entity_id", "")))
@@ -772,8 +914,130 @@ func _refresh_production_workspace() -> void:
 				routes.add_child(downstream_button)
 		if routes.get_child_count() == 0:
 			routes.queue_free()
-	if _production_rows.get_child_count() == 1:
-		_production_rows.add_child(_make_label(I18n.t("factory.production.empty", "No units match this status filter."), Color("9aa6a1")))
+	if _production_rows.get_child_count() == 2:
+		_production_rows.add_child(_make_label(I18n.t("factory.production.empty", "No units match this status filter."), UI_MUTED))
+		_production_rows.add_child(_empty_state_open_build_button("PRODUCTION", "FactoryProductionEmptyOpenBuild"))
+
+
+func _production_material_ledger() -> Control:
+	var panel := PanelContainer.new()
+	panel.name = "ProductionMaterialLedger"
+	panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_NAVY, Color(UI_CYAN, 0.48), 3))
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", UiTokens.layout_px(3))
+	panel.add_child(body)
+	var heading := _make_label(I18n.t("factory.operations.flow_ledger", "Material flow ledger"), UI_CYAN)
+	heading.name = "ProductionMaterialLedgerTitle"
+	body.add_child(heading)
+	var header := HBoxContainer.new()
+	header.add_child(_flow_column_label(I18n.t("factory.operations.material", "Material"), 0.42, UI_MUTED))
+	header.add_child(_flow_column_label(I18n.t("factory.operations.flow_output", "Output /s"), 0.19, UI_MUTED))
+	header.add_child(_flow_column_label(I18n.t("factory.operations.flow_input", "Input /s"), 0.19, UI_MUTED))
+	header.add_child(_flow_column_label(I18n.t("factory.operations.flow_storage", "Storage"), 0.20, UI_MUTED))
+	body.add_child(header)
+	var flow_rows := 0
+	for material_value in _operations_materials():
+		if not material_value is Dictionary:
+			continue
+		var material := material_value as Dictionary
+		var output_rate := maxf(0.0, float(material.get("production_per_second", 0.0)))
+		var input_rate := maxf(0.0, float(material.get("consumption_per_second", 0.0)))
+		if is_zero_approx(output_rate) and is_zero_approx(input_rate):
+			continue
+		var row := HBoxContainer.new()
+		row.name = "ProductionFlow%s" % str(material.get("item_id", "")).to_pascal_case()
+		row.add_child(_flow_column_label(_item_name(str(material.get("item_id", ""))), 0.42, UI_OFFWHITE))
+		row.add_child(_flow_column_label("%.2f" % output_rate, 0.19, UI_CYAN))
+		row.add_child(_flow_column_label("%.2f" % input_rate, 0.19, UI_AMBER))
+		row.add_child(_flow_column_label(str(int(material.get("stored", 0))), 0.20, UI_OFFWHITE))
+		body.add_child(row)
+		flow_rows += 1
+	if flow_rows == 0:
+		body.add_child(_make_label(I18n.t("factory.operations.no_live_flows", "No active material throughput is reported."), UI_MUTED))
+	return panel
+
+
+func _operations_materials() -> Array:
+	var operations: Dictionary = _snapshot.get("operations", {}) as Dictionary if _snapshot.get("operations", {}) is Dictionary else {}
+	return operations.get("materials", []) as Array if operations.get("materials", []) is Array else []
+
+
+func _flow_column_label(value: String, stretch: float, color: Color) -> Label:
+	var label := _make_label(value, color)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_stretch_ratio = stretch
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	return label
+
+
+func _building_thumbnail(definition_id: String, kind: String, tone: Color, minimum_size: Vector2) -> Control:
+	var frame := PanelContainer.new()
+	frame.name = "FactoryBuildingThumbnail%s" % definition_id.to_pascal_case()
+	frame.custom_minimum_size = UiTokens.layout_vector(minimum_size)
+	frame.add_theme_stylebox_override("panel", UiTokens.panel_style(UI_NAVY, Color(tone, 0.68), 3))
+	var artwork := TextureRect.new()
+	artwork.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), definition_id, kind)
+	artwork.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	artwork.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	artwork.modulate = Color(0.82, 0.94, 1.0, 0.96)
+	frame.add_child(artwork)
+	return frame
+
+
+func _production_recipe_name(entity: Dictionary) -> String:
+	var recipe_id := str(entity.get("recipe_id", ""))
+	if recipe_id.is_empty():
+		return ""
+	var recipe := _view_model.recipe_by_id(_snapshot, recipe_id)
+	return str(recipe.get("name", recipe_id))
+
+
+func _production_recipe_manifest(entity: Dictionary, field: String) -> Dictionary:
+	var recipe_id := str(entity.get("recipe_id", ""))
+	var recipe := _view_model.recipe_by_id(_snapshot, recipe_id) if not recipe_id.is_empty() else {}
+	return _quantity_manifest(recipe.get(field, []))
+
+
+func _production_io_line(entity: Dictionary) -> String:
+	if str(entity.get("node_kind", "")) == "EXTRACTOR":
+		return I18n.t("factory.operations.output_buffer", "Output buffer · %s") % _item_amount_rows(entity.get("outputs", {}))
+	var inputs := _production_recipe_manifest(entity, "inputs")
+	var outputs := _production_recipe_manifest(entity, "outputs")
+	if inputs.is_empty() and outputs.is_empty():
+		return ""
+	return I18n.t("factory.operations.recipe_io", "Per cycle · IN %s → OUT %s") % [_item_amount_rows(inputs), _item_amount_rows(outputs)]
+
+
+func _production_deficit_line(entity: Dictionary) -> String:
+	# Construction demand is not a machine input shortage. This diagnosis uses
+	# the selected recipe and this machine's own authoritative input buffer.
+	if str(entity.get("status", "")) != "INPUT_SHORTAGE":
+		return ""
+	var inputs := _production_recipe_manifest(entity, "inputs")
+	if inputs.is_empty():
+		return ""
+	var missing: Array[String] = []
+	for item_id in inputs.keys():
+		var deficit := maxi(0, int(inputs[item_id]) - int(entity.get("inputs", {}).get(item_id, 0)))
+		if deficit > 0:
+			missing.append("%s %d" % [_item_name(item_id), deficit])
+	return I18n.t("factory.operations.deficit_line", "DEFICIT · %s") % ", ".join(missing) if not missing.is_empty() else ""
+
+
+func _quantity_manifest(value: Variant) -> Dictionary:
+	var result: Dictionary = {}
+	if value is Dictionary:
+		for item_id_value in (value as Dictionary).keys():
+			result[str(item_id_value)] = maxi(0, int((value as Dictionary).get(item_id_value, 0)))
+	elif value is Array:
+		for entry_value in value as Array:
+			if not entry_value is Dictionary:
+				continue
+			var entry := entry_value as Dictionary
+			var item_id := str(entry.get("item_id", entry.get("item", "")))
+			if not item_id.is_empty():
+				result[item_id] = maxi(0, int(entry.get("quantity", entry.get("amount", 0))))
+	return result
 
 
 func _refresh_construction_workspace() -> void:
@@ -791,9 +1055,13 @@ func _refresh_construction_workspace() -> void:
 		if status not in counts:
 			status = "BLOCKED" if not str(order.get("blocker_code", order.get("blocked_reason", ""))).is_empty() else "QUEUED"
 		counts[status] = int(counts.get(status, 0)) + 1
-	var summary := _make_label(I18n.t("factory.construction.summary", "Queued %d · missing %d · building %d · complete %d · blocked %d") % [int(counts.get("QUEUED", 0)), int(counts.get("WAITING_MATERIALS", 0)), int(counts.get("IN_PROGRESS", 0)), int(counts.get("COMPLETED", 0)), int(counts.get("BLOCKED", 0))], Color("d5a45c"))
+	var summary_panel := PanelContainer.new()
+	summary_panel.name = "ConstructionStatusSummaryPanel"
+	summary_panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_NAVY, Color(UI_AMBER, 0.58), 3))
+	_construction_rows.add_child(summary_panel)
+	var summary := _make_label(I18n.t("factory.construction.summary", "Queued %d · missing %d · building %d · complete %d · blocked %d") % [int(counts.get("QUEUED", 0)), int(counts.get("WAITING_MATERIALS", 0)), int(counts.get("IN_PROGRESS", 0)), int(counts.get("COMPLETED", 0)), int(counts.get("BLOCKED", 0))], UI_AMBER)
 	summary.name = "ConstructionStatusSummary"
-	_construction_rows.add_child(summary)
+	summary_panel.add_child(summary)
 	for order_value in _snapshot.get("construction_orders", []):
 		if not order_value is Dictionary:
 			continue
@@ -801,22 +1069,43 @@ func _refresh_construction_workspace() -> void:
 		var order_id := str(order.get("id", ""))
 		var panel := PanelContainer.new()
 		panel.name = "ConstructionOrder%s" % order_id
+		panel.custom_minimum_size.y = UiTokens.layout_px(172)
+		panel.add_theme_stylebox_override("panel", UiTokens.control_style(UI_RAISED, Color(_status_color(str(order.get("status", "WAITING_MATERIALS"))), 0.66), 3))
 		_construction_rows.add_child(panel)
+		var layout := HBoxContainer.new()
+		layout.add_theme_constant_override("separation", UiTokens.layout_px(10))
+		panel.add_child(layout)
+		layout.add_child(_building_thumbnail(str(order.get("definition_id", "")), "CONSTRUCTION", _status_color(str(order.get("status", "WAITING_MATERIALS"))), Vector2(128, 132)))
 		var body := VBoxContainer.new()
-		body.add_theme_constant_override("separation", 3)
-		panel.add_child(body)
-		body.add_child(_make_label("%s · %s" % [str(order.get("building_name", order.get("definition_id", order_id))), _status_name(str(order.get("status", "WAITING_MATERIALS")))], _status_color(str(order.get("status", "WAITING_MATERIALS")))))
-		body.add_child(_make_label(I18n.t("factory.construction.materials", "Materials: %s") % _item_amount_rows(order.get("required_items", {})), Color("a5b2ac")))
-		body.add_child(_make_label(I18n.t("factory.construction.delivered", "Delivered: %s") % _item_amount_rows(order.get("delivered_items", {})), Color("a5b2ac")))
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.add_theme_constant_override("separation", UiTokens.layout_px(4))
+		layout.add_child(body)
+		var header := HBoxContainer.new()
+		body.add_child(header)
+		var title := _make_label("%s · %s" % [str(order.get("building_name", order.get("definition_id", order_id))), _status_name(str(order.get("status", "WAITING_MATERIALS")))], _status_color(str(order.get("status", "WAITING_MATERIALS"))))
+		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		header.add_child(title)
+		body.add_child(_construction_bom(order.get("required_items", {}), order.get("delivered_items", {})))
+		var funding_policy := str(order.get("funding_policy", ""))
+		var funding: Dictionary = order.get("funding", {}) as Dictionary if order.get("funding", {}) is Dictionary else {}
+		funding_policy = str(funding.get("policy", funding_policy))
+		if funding_policy == "AUTO_SAME_LOCATION":
+			var staging := _make_label(I18n.t("factory.construction.auto_funding", "Auto-staging · local storage"), UI_CYAN)
+			staging.name = "ConstructionAutoFunding%s" % order_id
+			staging.tooltip_text = I18n.t("factory.construction.auto_funding_tooltip", "Initial staging includes eligible local inventory; replenishment continues from Factory storage on this world.")
+			staging.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			body.add_child(staging)
 		var progress := ProgressBar.new()
 		progress.name = "ConstructionProgress"
 		progress.max_value = 100.0
 		progress.value = clampf(float(order.get("progress", 0.0)), 0.0, 1.0) * 100.0
 		progress.show_percentage = true
+		progress.add_theme_stylebox_override("background", UiTokens.panel_style(UI_NAVY, UI_BORDER, 2))
+		progress.add_theme_stylebox_override("fill", UiTokens.panel_style(UI_AMBER, UI_AMBER, 2))
 		body.add_child(progress)
 		var blocker := str(order.get("blocked_reason", order.get("blocker_code", "")))
 		if not blocker.is_empty():
-			body.add_child(_make_label(I18n.t("factory.production.blocked", "Blocked: %s") % _status_name(blocker), Color("d86e63")))
+			body.add_child(_make_label(I18n.t("factory.operations.constraint", "Constraint: %s") % _status_name(blocker), UI_CRITICAL))
 		var actions := HBoxContainer.new()
 		body.add_child(actions)
 		var fund := _make_button(I18n.t("factory.action.fund_location", "Fund from location"), I18n.t("factory.tooltip.fund_location", "Allocate location material through the application boundary"))
@@ -828,7 +1117,37 @@ func _refresh_construction_workspace() -> void:
 		cancel.pressed.connect(_request_cancel_construction.bind(order_id))
 		actions.add_child(cancel)
 	if _construction_rows.get_child_count() == 1:
-		_construction_rows.add_child(_make_label(I18n.t("factory.construction.empty", "No construction orders are queued."), Color("9aa6a1")))
+		_construction_rows.add_child(_make_label(I18n.t("factory.construction.empty", "No construction orders are queued."), UI_MUTED))
+		_construction_rows.add_child(_empty_state_open_build_button("CONSTRUCTION", "FactoryConstructionEmptyOpenBuild"))
+
+
+func _construction_bom(required_value: Variant, delivered_value: Variant) -> Control:
+	var table := VBoxContainer.new()
+	table.name = "ConstructionBom"
+	table.add_theme_constant_override("separation", 1)
+	var header := HBoxContainer.new()
+	header.add_child(_flow_column_label(I18n.t("factory.operations.material", "Material"), 0.46, UI_MUTED))
+	header.add_child(_flow_column_label(I18n.t("factory.operations.delivered", "Staged"), 0.18, UI_MUTED))
+	header.add_child(_flow_column_label(I18n.t("factory.operations.required", "Required"), 0.18, UI_MUTED))
+	header.add_child(_flow_column_label(I18n.t("factory.operations.missing", "Deficit"), 0.18, UI_MUTED))
+	table.add_child(header)
+	var required := _quantity_manifest(required_value)
+	var delivered := _quantity_manifest(delivered_value)
+	var item_ids: Array = required.keys()
+	item_ids.sort_custom(func(left, right): return str(left) < str(right))
+	for item_id_value in item_ids:
+		var item_id := str(item_id_value)
+		var needed := int(required.get(item_id, 0))
+		var staged := int(delivered.get(item_id, 0))
+		var deficit := maxi(0, needed - staged)
+		var row := HBoxContainer.new()
+		row.name = "ConstructionBom%s" % item_id.to_pascal_case()
+		row.add_child(_flow_column_label(_item_name(item_id), 0.46, UI_OFFWHITE))
+		row.add_child(_flow_column_label(str(staged), 0.18, UI_CYAN))
+		row.add_child(_flow_column_label(str(needed), 0.18, UI_OFFWHITE))
+		row.add_child(_flow_column_label(str(deficit), 0.18, UI_AMBER if deficit > 0 else UI_CYAN))
+		table.add_child(row)
+	return table
 
 
 func _focus_entity_from_workspace(entity: Dictionary) -> void:
@@ -836,8 +1155,104 @@ func _focus_entity_from_workspace(entity: Dictionary) -> void:
 		return
 	_set_selection("ENTITY", str(entity.get("id", "")), entity)
 	if _canvas != null:
+		_canvas_focus_pending = false
 		_canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {})))
 	_set_active_subworkspace("CANVAS")
+
+
+func _on_operations_action_requested(action: Dictionary) -> void:
+	var kind := str(action.get("kind", "")).to_upper()
+	match kind:
+		"OPEN_TAB":
+			_set_active_subworkspace(str(action.get("tab", "OVERVIEW")).to_upper())
+		"FOCUS_ENTITY":
+			_focus_entity_from_workspace(_entity_by_id(str(action.get("target_id", ""))))
+		"FOCUS_ORDER":
+			var order := _order_by_id(str(action.get("target_id", action.get("order_id", ""))))
+			if not order.is_empty():
+				_set_selection("CONSTRUCTION_ORDER", str(order.get("id", "")), order)
+				if _canvas != null:
+					_canvas_focus_pending = false
+					_canvas.focus_tile(_view_model.footprint_origin(order.get("footprint", {})))
+				_set_active_subworkspace("CANVAS")
+		"SELECT_BUILDING":
+			_select_building_id(str(action.get("target_id", "")))
+
+
+## Empty operational boards still need to lead back into the same physical
+## placement path as the Operations overview.  This resolves only from the
+## detached snapshot; it does not infer costs or issue a simulation command.
+func _empty_state_open_build_button(stage_id: String, node_name: String) -> Button:
+	var target_id := _empty_state_building_id(stage_id)
+	var button := _make_button(
+		I18n.t("factory.operations.open_build", "Open build"),
+		I18n.t("factory.operations.open_build_tooltip", "Open this target in the physical Factory construction palette.")
+	)
+	button.name = node_name
+	button.disabled = target_id.is_empty()
+	button.add_theme_stylebox_override("normal", UiTokens.control_style(Color("173740"), UI_CYAN, 3))
+	button.add_theme_stylebox_override("hover", UiTokens.control_style(Color("20515b"), UI_CYAN, 3))
+	button.pressed.connect(_open_empty_state_build.bind(stage_id))
+	return button
+
+
+func _open_empty_state_build(stage_id: String) -> void:
+	var target_id := _empty_state_building_id(stage_id)
+	if target_id.is_empty():
+		return
+	# Keep the empty-board CTA on the same SELECT_BUILDING presentation intent
+	# used by Operations overview plans.  Only a subsequent tile placement emits
+	# the established QUEUE_CONSTRUCTION application command.
+	_on_operations_action_requested({"kind":"SELECT_BUILDING", "target_id":target_id})
+
+
+func _empty_state_building_id(stage_id: String) -> String:
+	var palette: Dictionary = _snapshot.get("palette", {}) as Dictionary if _snapshot.get("palette", {}) is Dictionary else {}
+	var unlocked_ids := {}
+	var building_ids: Array[String] = []
+	for building_value in palette.get("buildings", []):
+		if not building_value is Dictionary:
+			continue
+		var building_id := str((building_value as Dictionary).get("id", ""))
+		if building_id.is_empty():
+			continue
+		unlocked_ids[building_id] = true
+		building_ids.append(building_id)
+	building_ids.sort()
+	if unlocked_ids.is_empty():
+		return ""
+	var operations: Dictionary = _snapshot.get("operations", {}) as Dictionary if _snapshot.get("operations", {}) is Dictionary else {}
+	for stage_value in operations.get("stages", []):
+		if not stage_value is Dictionary:
+			continue
+		var stage := stage_value as Dictionary
+		if str(stage.get("id", "")).to_upper() != stage_id.to_upper():
+			continue
+		var action: Dictionary = stage.get("action", {}) as Dictionary if stage.get("action", {}) is Dictionary else {}
+		var action_target := str(action.get("target_id", ""))
+		if str(action.get("kind", "")).to_upper() == "SELECT_BUILDING" and unlocked_ids.has(action_target):
+			return action_target
+	for plan_value in operations.get("build_plans", []):
+		if not plan_value is Dictionary:
+			continue
+		var plan := plan_value as Dictionary
+		var plan_id := str(plan.get("definition_id", ""))
+		if bool(plan.get("affordable", false)) and unlocked_ids.has(plan_id):
+			return plan_id
+	# A present but currently unaffordable plan is still a legal palette target.
+	# It gives the player its real BOM rather than inventing a different action.
+	for plan_value in operations.get("build_plans", []):
+		if not plan_value is Dictionary:
+			continue
+		var fallback_plan_id := str((plan_value as Dictionary).get("definition_id", ""))
+		if unlocked_ids.has(fallback_plan_id):
+			return fallback_plan_id
+	if stage_id.to_upper() == "PRODUCTION":
+		for building_id in building_ids:
+			var building := _view_model.building_by_id(_snapshot, building_id)
+			if str(building.get("kind", "")).to_upper() == "MACHINE":
+				return building_id
+	return building_ids[0]
 
 
 func _on_building_selected(index: int) -> void:
@@ -855,6 +1270,8 @@ func _select_building_id(building_id: String, render_now: bool = true) -> void:
 		_selected_cargo_item_id = ""
 	if _build_palette != null:
 		_build_palette.set_selected_building(_selected_building_id)
+	if _active_tool == "BUILD":
+		_set_active_subworkspace("CANVAS")
 	if render_now:
 		_render()
 
@@ -870,6 +1287,7 @@ func _set_connection_mode(kind: String) -> void:
 	_selected_cargo_item_id = ""
 	if _canvas != null:
 		_canvas.clear_placement_preview()
+	_set_active_subworkspace("CANVAS")
 	_render()
 
 
@@ -1844,8 +2262,8 @@ func _set_feedback(code: String, message: String, color: Color) -> void:
 
 
 func _make_section_label(text_value: String) -> Label:
-	var label := _make_label(text_value, Color("d5a45c"))
-	label.add_theme_font_size_override("font_size", 14)
+	var label := _make_label(text_value, UI_CYAN)
+	label.add_theme_font_size_override("font_size", UiTokens.font_size(15))
 	return label
 
 
@@ -1860,19 +2278,30 @@ func _make_button(text_value: String, tooltip: String) -> Button:
 	var button := Button.new()
 	button.text = text_value
 	button.tooltip_text = tooltip
+	button.add_theme_font_size_override("font_size", UiTokens.font_size(12))
+	button.add_theme_color_override("font_color", UI_OFFWHITE)
+	button.add_theme_color_override("font_hover_color", UI_OFFWHITE)
+	button.add_theme_color_override("font_pressed_color", UI_CYAN)
+	button.add_theme_stylebox_override("normal", UiTokens.control_style(UI_RAISED, UI_BORDER, 3))
+	button.add_theme_stylebox_override("hover", UiTokens.control_style(Color("1b2d39"), UI_CYAN, 3))
+	button.add_theme_stylebox_override("pressed", UiTokens.control_style(Color("102c35"), UI_CYAN, 3))
+	button.add_theme_stylebox_override("focus", UiTokens.control_style(UI_RAISED, UI_CYAN, 3))
+	button.add_theme_stylebox_override("disabled", UiTokens.control_style(Color("111a22"), UI_BORDER, 3))
 	return button
 
 
 func _status_name(status_id: String) -> String:
+	match status_id.to_upper():
+		"MISSING_MATERIALS", "MATERIAL_SHORTAGE": return I18n.t("factory.operations.status.material_shortage", "Material shortage")
 	return I18n.status(status_id)
 
 
 func _status_color(status_id: String) -> Color:
 	match status_id.to_upper():
-		"RUNNING", "FLOWING", "CONNECTED", "READY", "COMPLETED": return Color("6fbf92")
-		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY", "QUEUED": return Color("e0ae5c")
-		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return Color("d86e63")
-	return Color("7f9289")
+		"RUNNING", "FLOWING", "CONNECTED", "READY", "COMPLETED": return UI_CYAN
+		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY", "QUEUED": return UI_AMBER
+		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return UI_CRITICAL
+	return UI_MUTED
 
 
 func _item_name(item_id: String) -> String:

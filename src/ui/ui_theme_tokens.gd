@@ -3,20 +3,20 @@ extends RefCounted
 
 # Semantic UI tokens. The base dark palette below directly maps the local
 # D:\Projects\DSPONLINE\src\styles.css :root values into Godot names.
-const COLOR_CANVAS := Color("090d0c")
-const COLOR_PANEL := Color("111614")
-const COLOR_RAISED := Color("171d1b")
-const COLOR_SOFT := Color("1d2421")
-const COLOR_INSET := Color("0d1311")
-const COLOR_CONTROL := Color("151c19")
-const COLOR_CONTROL_HOVER := Color("1b2723")
-const COLOR_CONTROL_ACTIVE := Color("20332d")
-const COLOR_BORDER := Color("2b3531")
-const COLOR_BORDER_STRONG := Color("41504a")
-const COLOR_TEXT := Color("e9eeeb")
-const COLOR_TEXT_SECONDARY := Color("c1cac5")
-const COLOR_TEXT_MUTED := Color("83918a")
-const COLOR_FOCUS := Color("62b5ae")
+const COLOR_CANVAS := Color("0c141c")
+const COLOR_PANEL := Color("101c26")
+const COLOR_RAISED := Color("15222d")
+const COLOR_SOFT := Color("1c2c38")
+const COLOR_INSET := Color("0b151e")
+const COLOR_CONTROL := Color("142630")
+const COLOR_CONTROL_HOVER := Color("203b48")
+const COLOR_CONTROL_ACTIVE := Color("21434e")
+const COLOR_BORDER := Color("304652")
+const COLOR_BORDER_STRONG := Color("506975")
+const COLOR_TEXT := Color("e4ecef")
+const COLOR_TEXT_SECONDARY := Color("c5d5df")
+const COLOR_TEXT_MUTED := Color("96aab7")
+const COLOR_FOCUS := Color("65d9d1")
 const COLOR_RUNNING := Color("70bb85")
 const COLOR_INFO := Color("64a8ca")
 const COLOR_WARNING := Color("e1b452")
@@ -28,31 +28,31 @@ const COLOR_MATERIAL := Color("65d6c1")
 const COLOR_INFORMATION := Color("65a9d8")
 const COLOR_ENERGY := Color("e3b35b")
 const COLOR_RESEARCH := Color("9181d8")
-const COLOR_INACTIVE := Color("60716a")
-const COLOR_GHOST := Color("70827b")
-const COLOR_GRID_MINOR := Color("17211f")
-const COLOR_GRID_MAJOR := Color("22302c")
-const COLOR_FACTORY_CANVAS := Color("0b100e")
-const COLOR_FACTORY_GRID_DOT := Color("3c4743")
-const COLOR_NODE_SURFACE := Color("131917")
-const COLOR_NODE_HEADER := Color("171e1b")
-const COLOR_SHIP_CANVAS := Color("08100e")
-const COLOR_SHIP_GRID_MINOR := Color("18231f")
-const COLOR_SHIP_GRID_MAJOR := Color("35443e")
-const COLOR_SHIP_FRAME_INNER := Color("26342f")
+const COLOR_INACTIVE := Color("738694")
+const COLOR_GHOST := Color("708594")
+const COLOR_GRID_MINOR := Color("182731")
+const COLOR_GRID_MAJOR := Color("29424f")
+const COLOR_FACTORY_CANVAS := Color("0b151e")
+const COLOR_FACTORY_GRID_DOT := Color("3c505b")
+const COLOR_NODE_SURFACE := Color("101e28")
+const COLOR_NODE_HEADER := Color("172c38")
+const COLOR_SHIP_CANVAS := Color("08131c")
+const COLOR_SHIP_GRID_MINOR := Color("182b38")
+const COLOR_SHIP_GRID_MAJOR := Color("354e60")
+const COLOR_SHIP_FRAME_INNER := Color("263e4e")
 const COLOR_SHIP_LINK_SHADOW := Color(0.0, 0.0, 0.0, 0.56)
 
 # Ship Registry surfaces are deliberately darker and slightly greener than the
 # general application cards. Keeping the relationship centralized prevents the
 # Browser, Inspector and transient controls from drifting into one-off grays.
-const COLOR_REGISTRY_CANVAS := Color("07100f")
-const COLOR_REGISTRY_SURFACE := Color("0b1513")
-const COLOR_REGISTRY_INSET := Color("07110f")
-const COLOR_REGISTRY_CONTROL := Color("0d1916")
-const COLOR_REGISTRY_CONTROL_HOVER := Color("13251f")
-const COLOR_REGISTRY_CONTROL_ACTIVE := Color("17352e")
-const COLOR_REGISTRY_BORDER := Color("233a34")
-const COLOR_REGISTRY_SEPARATOR := Color("1a302a")
+const COLOR_REGISTRY_CANVAS := Color("0c141c")
+const COLOR_REGISTRY_SURFACE := Color("101e28")
+const COLOR_REGISTRY_INSET := Color("0b1720")
+const COLOR_REGISTRY_CONTROL := Color("142630")
+const COLOR_REGISTRY_CONTROL_HOVER := Color("203b48")
+const COLOR_REGISTRY_CONTROL_ACTIVE := Color("21434e")
+const COLOR_REGISTRY_BORDER := Color("304652")
+const COLOR_REGISTRY_SEPARATOR := Color("243b48")
 
 const SPACING_XS := 4
 const SPACING_SM := 8
@@ -69,7 +69,7 @@ const COLLAPSED_RAIL_WIDTH := 28
 const COLLAPSE_BUTTON_HEIGHT := 28
 const WORKSPACE_NAV_HEIGHT := 53
 const TOP_BAR_HEIGHT := 52
-const BOTTOM_BAR_HEIGHT := 108
+const BOTTOM_BAR_HEIGHT := 38
 const NETWORK_NODE_WIDTH := 252
 const NETWORK_NODE_GAP_X := 96
 const NETWORK_NODE_GAP_Y := 28
@@ -79,7 +79,7 @@ const NETWORK_GRID_MAJOR_EVERY := 5
 # Explicit player UI scale is separate from the fixed project viewport and from
 # every interactive graph/canvas zoom. Physical Window resizing never changes
 # this value. Fonts follow the selected scale directly; shell geometry uses a
-# moderated scale inside the one 1440x900 authored layout.
+# moderated scale inside the one 1920x1080 authored layout.
 const SUPPORTED_UI_SCALES := [0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
 const DEFAULT_UI_SCALE := 1.25
 const UI_SCALE_SESSION_META := "core_gameplay_lab_ui_scale"

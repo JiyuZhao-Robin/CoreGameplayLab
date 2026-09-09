@@ -1,0 +1,25 @@
+{
+  "protocol_version": 1,
+  "valid": true,
+  "world_id": "operations-fixture",
+  "location_id": "earth_orbit",
+  "entities": [],
+  "links": [],
+  "construction_orders": [],
+  "resource_fields": [],
+  "palette": {"buildings": [], "recipes": []},
+  "location_available_inventory": {},
+  "operations": {
+    "schema_version": 1,
+    "metrics": {"extractors": 0, "running_machines": 0, "blocked_entities": 0, "stored_items": 0, "power_supply_kw": 0, "power_demand_kw": 0, "active_orders": 0, "waiting_orders": 0},
+    "stages": [
+      {"id": "COLLECTION", "state": "MISSING", "count": 0, "action": {"kind": "OPEN_TAB", "tab": "CANVAS"}},
+      {"id": "PRODUCTION", "state": "MISSING", "count": 0, "action": {"kind": "OPEN_TAB", "tab": "PRODUCTION"}},
+      {"id": "CONSTRUCTION", "state": "MISSING", "count": 0, "action": {"kind": "OPEN_TAB", "tab": "CONSTRUCTION"}},
+      {"id": "EXPANSION", "state": "MISSING", "count": 0, "action": {"kind": "OPEN_TAB", "tab": "CANVAS"}}
+    ],
+    "alerts": [],
+    "materials": [],
+    "build_plans": []
+  }
+}

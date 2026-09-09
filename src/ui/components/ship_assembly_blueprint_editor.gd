@@ -16,6 +16,16 @@ const FONT_SCALE_OPTIONS: Array[int] = [75, 100, 125, 150, 175, 200]
 const DEFAULT_FONT_SCALE := 1.0
 const FONT_SCALE_SESSION_META := "ship_assembly_demo_font_scale"
 
+# The shipyard host gives the editor a bounded 1920 x 1080 design region. The
+# editor itself must also remain useful in the shorter in-page shipyard region
+# (about 1880 x 650 logical pixels) rather than forcing the Fleet page into a
+# second vertical scroll. Physical 4K is supplied by the project-wide uniform
+# canvas scale, never by this workspace.
+const LIBRARY_COLUMN_END := 0.23
+const CANVAS_COLUMN_END := 0.75
+const WORKSPACE_GUTTER := 4.0
+const SESSION_STATE_VERSION := 1
+
 signal blueprint_saved(design_id: String)
 
 var _catalog: Dictionary = {}
@@ -43,6 +53,8 @@ var _embedded_in_main := false
 var _allow_locked_plan := true
 var _ship_entries: Array[Dictionary] = DEMO_SHIPS.duplicate(true)
 var _part_ids: Array[String] = DEMO_PART_IDS.duplicate()
+var _pending_session_state: Dictionary = {}
+var _session_restore_revision := 0
 
 
 func configure_for_main_game() -> void:
@@ -66,6 +78,10 @@ func _ready() -> void:
 	_build_demo()
 	_refresh_saved_designs()
 	_refresh_engineering()
+	if not _pending_session_state.is_empty():
+		var pending_state := _pending_session_state.duplicate(true)
+		_pending_session_state.clear()
+		_apply_session_state(pending_state, _session_restore_revision)
 
 
 func _exit_tree() -> void:
@@ -173,6 +189,139 @@ func current_design_id() -> String:
 	return _design_id
 
 
+func capture_session_state() -> Dictionary:
+	# Drafts remain UI-local until the player presses Save.  The shell may carry
+	# this snapshot across a page, locale, or explicit scale rebuild, but neither
+	# capturing nor restoring it writes Game state or persistence.
+	var draft := _assembly_view.draft_snapshot() if is_instance_valid(_assembly_view) else _draft.duplicate(true)
+	var library_tab: int = _library.current_tab() if is_instance_valid(_library) else 0
+	var canvas_zoom := 0.82
+	var canvas_center := Vector2.ZERO
+	if is_instance_valid(_assembly_view):
+		canvas_zoom = _assembly_view.zoom
+		canvas_center = (_assembly_view.scroll_offset + _assembly_view.size * 0.5) / maxf(canvas_zoom, 0.01)
+	return {
+		"version":SESSION_STATE_VERSION,
+		"draft":draft.duplicate(true),
+		"blueprint_name":_blueprint_name,
+		"design_id":_design_id,
+		"draft_dirty":_draft_dirty,
+		"selection_kind":_selection_kind,
+		"selection_id":_selection_id,
+		"selection_node_id":_selected_canvas_node_id(),
+		"library_tab":library_tab,
+		"canvas_world_center":canvas_center,
+		"canvas_zoom":canvas_zoom
+	}
+
+
+func restore_session_state(state: Dictionary) -> bool:
+	# Accept restoration before _ready as well as after a mounted editor has laid
+	# out.  The revision makes a newer caller win over any stale deferred camera
+	# restoration still waiting on GraphEdit's layout pass.
+	if state.is_empty():
+		return false
+	var draft_value: Variant = state.get("draft", {})
+	if not (draft_value is Dictionary):
+		return false
+	_session_restore_revision += 1
+	_pending_session_state = state.duplicate(true)
+	if not is_node_ready():
+		return true
+	var pending_state := _pending_session_state.duplicate(true)
+	_pending_session_state.clear()
+	_apply_session_state(pending_state, _session_restore_revision)
+	return true
+
+
+func _apply_session_state(state: Dictionary, revision: int) -> void:
+	if revision != _session_restore_revision:
+		return
+	var restored_draft: Dictionary = (state.get("draft", {}) as Dictionary).duplicate(true)
+	_draft = restored_draft
+	_blueprint_name = str(state.get("blueprint_name", _blueprint_name))
+	_design_id = str(state.get("design_id", ""))
+	_draft_dirty = bool(state.get("draft_dirty", false))
+	_selection_kind = str(state.get("selection_kind", ""))
+	_selection_id = str(state.get("selection_id", ""))
+	if is_instance_valid(_assembly_view):
+		_assembly_view.configure(_catalog, _draft)
+	if is_instance_valid(_library):
+		_library.select_tab(clampi(int(state.get("library_tab", 0)), 0, 1))
+	_refresh_saved_designs(_design_id)
+	_refresh_draft_chrome()
+	_refresh_engineering()
+	call_deferred("_restore_session_canvas_after_layout", state.duplicate(true), revision)
+
+
+func _restore_session_canvas_after_layout(state: Dictionary, revision: int) -> void:
+	# GraphEdit schedules its own Fit All while restoring the saved nodes.  Let
+	# that layout settle first, then restore the player camera in shared world
+	# coordinates so nodes, links, hit testing and the grid stay aligned.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if revision != _session_restore_revision or not is_instance_valid(_assembly_view):
+		return
+	var zoom_value := _finite_session_float(state.get("canvas_zoom", 0.82), 0.82)
+	var world_center := _session_vector2(state.get("canvas_world_center", Vector2.ZERO), Vector2.ZERO)
+	_assembly_view.restore_view_center(world_center, zoom_value)
+	_restore_session_selection(state)
+
+
+func _restore_session_selection(state: Dictionary) -> void:
+	if not is_instance_valid(_assembly_view):
+		return
+	var node_id := str(state.get("selection_node_id", ""))
+	var selection_kind := str(state.get("selection_kind", ""))
+	var selection_id := str(state.get("selection_id", ""))
+	if selection_kind.is_empty() or selection_id.is_empty():
+		return
+	var selected_node := _assembly_view.get_node_or_null(NodePath(node_id)) as GraphNode
+	if selected_node == null or String(selected_node.get_meta("entity_kind", "")) != selection_kind or String(selected_node.get_meta("entity_id", "")) != selection_id:
+		selected_node = null
+		for child in _assembly_view.get_children():
+			var candidate := child as GraphNode
+			if candidate != null and String(candidate.get_meta("entity_kind", "")) == selection_kind and String(candidate.get_meta("entity_id", "")) == selection_id:
+				selected_node = candidate
+				break
+	if selected_node == null:
+		return
+	selected_node.selected = true
+	# Keep the GraphEdit's own visual presentation synchronized with the restored
+	# selection. This only re-emits the component-local selection signal.
+	_assembly_view.call("_on_node_selected", selected_node)
+
+
+func _selected_canvas_node_id() -> String:
+	if not is_instance_valid(_assembly_view):
+		return ""
+	for child in _assembly_view.get_children():
+		var graph_node := child as GraphNode
+		if graph_node != null and graph_node.selected and String(graph_node.get_meta("entity_kind", "")) == _selection_kind and String(graph_node.get_meta("entity_id", "")) == _selection_id:
+			return String(graph_node.name)
+	return ""
+
+
+func _session_vector2(value: Variant, fallback: Vector2) -> Vector2:
+	if value is Vector2:
+		return value
+	if value is Dictionary:
+		return Vector2(
+			_finite_session_float((value as Dictionary).get("x", fallback.x), fallback.x),
+			_finite_session_float((value as Dictionary).get("y", fallback.y), fallback.y)
+		)
+	return fallback
+
+
+func _finite_session_float(value: Variant, fallback: float) -> float:
+	if not (value is int or value is float or value is String):
+		return fallback
+	if value is String and not String(value).strip_edges().is_valid_float():
+		return fallback
+	var numeric := float(value)
+	return fallback if is_nan(numeric) or is_inf(numeric) else numeric
+
+
 func load_blueprint(design_id: String) -> bool:
 	return _load_blueprint_by_id(design_id)
 
@@ -187,58 +336,72 @@ func _build_demo() -> void:
 	page.name = "BlueprintEditorFrame"
 	add_child(page)
 	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	page.offset_left = 12.0
-	page.offset_top = 12.0
-	page.offset_right = -12.0
-	page.offset_bottom = -12.0
-	page.add_theme_constant_override("separation", 10)
+	page.offset_left = 8.0
+	page.offset_top = 8.0
+	page.offset_right = -8.0
+	page.offset_bottom = -8.0
+	page.add_theme_constant_override("separation", 8)
 	page.add_child(_build_header())
-	var workspace := HBoxContainer.new()
+	# The production host uses anchored thirds so its bounded shipyard stage
+	# never grows into a page scroll. Keep the standalone demonstration's legacy
+	# HBox surface intact: it is a separate lab with its own explicit font picker
+	# and remains useful to focused interaction tests.
+	var workspace: Control = Control.new() if _embedded_in_main else HBoxContainer.new()
 	workspace.name = "BlueprintWorkspace"
 	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	workspace.add_theme_constant_override("separation", 10)
+	if not _embedded_in_main:
+		(workspace as HBoxContainer).add_theme_constant_override("separation", 10)
 	page.add_child(workspace)
 	_library = ShipAssemblyLibraryScript.new()
 	_library.entity_selected.connect(_on_entity_selected)
 	workspace.add_child(_library)
 	_library.configure(_catalog, _ship_entries, _part_ids)
-	_library.custom_minimum_size.x = 320.0 * _accessibility_layout_scale()
-	workspace.add_child(_build_canvas())
+	var canvas_region := _build_canvas()
+	workspace.add_child(canvas_region)
 	_data_panel = ShipAssemblyDataPanelScript.new()
 	_data_panel.save_requested.connect(_save_blueprint)
 	_data_panel.blueprint_name_changed.connect(_on_blueprint_name_changed)
 	workspace.add_child(_data_panel)
-	_data_panel.custom_minimum_size.x = 288.0 * _accessibility_layout_scale()
+	if _embedded_in_main:
+		_place_workspace_column(_library, 0.0, LIBRARY_COLUMN_END, 0.0, -WORKSPACE_GUTTER)
+		_place_workspace_column(canvas_region, LIBRARY_COLUMN_END, CANVAS_COLUMN_END, WORKSPACE_GUTTER, -WORKSPACE_GUTTER)
+		_place_workspace_column(_data_panel, CANVAS_COLUMN_END, 1.0, WORKSPACE_GUTTER, 0.0)
+	else:
+		_library.custom_minimum_size.x = 320.0 * _accessibility_layout_scale()
+		_data_panel.custom_minimum_size.x = 288.0 * _accessibility_layout_scale()
+
+
+func _place_workspace_column(control: Control, left_anchor: float, right_anchor: float, left_inset: float, right_inset: float) -> void:
+	# Asset library 23%, design canvas 52%, engineering data 25%. Each panel
+	# keeps its own explicitly named inner scroller where its content can grow.
+	control.set_anchors_preset(Control.PRESET_FULL_RECT)
+	control.anchor_left = left_anchor
+	control.anchor_right = right_anchor
+	control.offset_left = left_inset
+	control.offset_right = right_inset
+	control.offset_top = 0.0
+	control.offset_bottom = 0.0
 
 
 func _build_header() -> Control:
 	var panel := PanelContainer.new()
 	panel.name = "BlueprintCommandBar"
-	panel.custom_minimum_size.y = 64.0
+	panel.custom_minimum_size.y = 52.0
 	panel.add_theme_stylebox_override("panel", UiTokens.panel_style(Color("0a1918"), UiTokens.COLOR_BORDER_STRONG, 3))
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 14)
-	margin.add_theme_constant_override("margin_top", 8)
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 6)
 	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_bottom", 8)
+	margin.add_theme_constant_override("margin_bottom", 6)
 	panel.add_child(margin)
-	var high_text_scale := _applied_font_scale >= 1.5
 	var primary_row := HBoxContainer.new()
-	primary_row.add_theme_constant_override("separation", 10)
+	primary_row.add_theme_constant_override("separation", 8)
+	margin.add_child(primary_row)
+	# At 150% the prior two-row command bar stole canvas height. The target
+	# command width has room for this compact, stable single row.
 	var actions_row := primary_row
-	if high_text_scale:
-		var stack := VBoxContainer.new()
-		stack.add_theme_constant_override("separation", 8)
-		margin.add_child(stack)
-		stack.add_child(primary_row)
-		actions_row = HBoxContainer.new()
-		actions_row.alignment = BoxContainer.ALIGNMENT_END
-		actions_row.add_theme_constant_override("separation", 10)
-		stack.add_child(actions_row)
-	else:
-		margin.add_child(primary_row)
 	var brand := VBoxContainer.new()
-	brand.custom_minimum_size.x = 290.0
+	brand.custom_minimum_size.x = 218.0
 	brand.add_theme_constant_override("separation", 1)
 	var brand_name := _label("HELIOS CORE", 10, UiTokens.COLOR_FOCUS)
 	brand_name.name = "BlueprintBrand"
@@ -268,20 +431,20 @@ func _build_header() -> Control:
 		actions_row.add_child(_font_scale_picker)
 	_load_picker = OptionButton.new()
 	_load_picker.name = "SavedBlueprintPicker"
-	_load_picker.custom_minimum_size.x = 208.0
+	_load_picker.custom_minimum_size.x = 168.0
 	_load_picker.tooltip_text = I18n.core("ships.assembly.select_saved_tooltip", "Select a saved ship blueprint")
 	_load_picker.item_selected.connect(_on_load_picker_selected)
 	actions_row.add_child(_load_picker)
 	_load_button = Button.new()
 	_load_button.name = "LoadBlueprintButton"
 	_load_button.text = I18n.core("ships.assembly.load", "LOAD")
-	_load_button.custom_minimum_size = Vector2(104.0, 40.0)
+	_load_button.custom_minimum_size = Vector2(88.0, 36.0)
 	_load_button.pressed.connect(_load_selected_blueprint)
 	actions_row.add_child(_load_button)
 	var new_button := Button.new()
 	new_button.name = "NewBlueprintButton"
 	new_button.text = I18n.core("ships.assembly.new", "NEW")
-	new_button.custom_minimum_size = Vector2(126.0, 40.0)
+	new_button.custom_minimum_size = Vector2(94.0, 36.0)
 	new_button.pressed.connect(_new_blueprint)
 	actions_row.add_child(new_button)
 	return panel
@@ -297,10 +460,11 @@ func _build_canvas() -> Control:
 	column.add_theme_constant_override("separation", 5)
 	panel.add_child(column)
 	var caption := HBoxContainer.new()
-	caption.custom_minimum_size.y = 28.0
+	caption.custom_minimum_size.y = 24.0
 	caption.add_theme_constant_override("separation", 8)
 	var canvas_title := _label(I18n.core("ships.assembly.canvas_title", "ASSEMBLY CANVAS"), 9, UiTokens.COLOR_TEXT_MUTED)
 	canvas_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	canvas_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	caption.add_child(canvas_title)
 	_measurement_label = _label("W —  ·  L —", 8, UiTokens.COLOR_TEXT_MUTED)
 	_measurement_label.name = "BlueprintHullMeasurements"
@@ -316,11 +480,12 @@ func _build_canvas() -> Control:
 	_assembly_view.configure(_catalog, {})
 	var status_bar := PanelContainer.new()
 	status_bar.name = "BlueprintStatusBar"
-	status_bar.custom_minimum_size.y = 30.0
+	status_bar.custom_minimum_size.y = 24.0
 	status_bar.add_theme_stylebox_override("panel", UiTokens.panel_style(Color("071210"), UiTokens.COLOR_BORDER, 0))
 	_status_label = _label(I18n.core("ships.assembly.choose_hull", "Choose a hull from the left to begin."), 8, UiTokens.COLOR_TEXT_SECONDARY)
 	_status_label.name = "BlueprintStatusLabel"
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	status_bar.add_child(_status_label)
 	column.add_child(status_bar)
 	return panel

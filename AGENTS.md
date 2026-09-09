@@ -149,7 +149,9 @@ concurrent writers.
 
 ### Fixed UI layout contract
 
-- The production UI is authored in one `1440 × 900` logical design viewport.
+- The production UI is authored in one `1920 × 1080` logical design viewport,
+  with `3840 × 2160` (16:9, exact uniform 2×) as the primary visual acceptance
+  target. This supersedes the old 1440 × 900 baseline per the 2026-09-10 request.
 - Physical Window resizing may only apply one uniform CanvasItem scale and
   centered letterbox/pillarbox offset. It must not change panel ratios, Theme
   scale, font preset, layout profile, visibility, or sidebar collapse state.
@@ -163,9 +165,11 @@ concurrent writers.
 - UI scale changes are explicit player accessibility actions. Window size, DPI,
   page changes, locale changes, and sidebar changes must not automatically
   change the effective UI scale or reload the Main scene.
-- Overflow is handled inside the authored layout with scrolling, clipping,
-  wrapping, ellipsis, or an explicit player-controlled collapse. Do not add
-  physical-window breakpoints or automatic compact/expanded rearrangements.
+- Whole workspaces, their navigation, canvases and primary actions must fit
+  without page-level scrolling. Only named, bounded lists/details/queues may
+  scroll internally; wrapping and ellipsis must not conceal primary actions.
+  Do not fix overflow by hiding scrollbars or clipping an oversized page.
+  Do not add physical-window breakpoints or automatic layout rearrangements.
 - Popup and input fixes must convert coordinates at one boundary when required;
   never multiply or divide Factory/world input coordinates in individual
   workspaces to compensate for the global stretch.

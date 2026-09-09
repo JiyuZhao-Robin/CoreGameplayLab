@@ -22,15 +22,16 @@ signal port_drag_preview(source_id: String, source_port: Dictionary, target_id: 
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
-const CANVAS_COLOR := Color("0b100e")
-const WORLD_COLOR := Color("101814")
-const WORLD_BOUNDARY_COLOR := Color("62b5ae")
-const GRID_COLOR := Color("3c4743")
-const NODE_COLOR := Color("131917")
-const HEADER_COLOR := Color("171e1b")
-const FOCUS_COLOR := Color("62b5ae")
-const CARGO_COLOR := Color("d5a45c")
-const POWER_COLOR := Color("62b5ae")
+const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
+const CANVAS_COLOR := Color("0c141c")
+const WORLD_COLOR := Color("101c25")
+const WORLD_BOUNDARY_COLOR := Color("65d9d1")
+const GRID_COLOR := Color("304652")
+const NODE_COLOR := Color("15222d")
+const HEADER_COLOR := Color("1a2a36")
+const FOCUS_COLOR := Color("65d9d1")
+const CARGO_COLOR := Color("e5b467")
+const POWER_COLOR := Color("65d9d1")
 const BASE_TILE_PIXELS := 4.0
 const MAX_DETAIL_TILE_PIXELS := 10.0
 const OVERVIEW_PADDING_PIXELS := 24.0
@@ -44,6 +45,15 @@ const COMPACT_DETAIL_EXIT_RECORDS := 400
 const POINTER_DRAG_THRESHOLD_PIXELS := 8.0
 const PORT_START_HIT_RADIUS_PIXELS := 10.0
 const PORT_SNAP_HIT_RADIUS_PIXELS := 24.0
+const REGOLITH_TILE_PATH := "res://assets/ui/factory/operations_art/regolith_tile.png"
+## A ground texture cell is a world-space material tile, not a backdrop scaled
+## to the current planet. Keeping this value in tiles makes its phase stable
+## through pan, zoom, non-zero world origins, and the 1920 -> 3840 render scale.
+const REGOLITH_WORLD_TILE_TILES := 64
+## At this logical spacing (16 physical pixels at 4K), individual build tiles
+## are readable. Below it the grid deliberately switches to macro-grid LOD.
+const ACTUAL_TILE_GRID_MIN_PIXELS := 8.0
+const MACRO_GRID_MIN_PIXELS := 24.0
 
 ## Keep the canvas independently loadable by SceneTree-based component tests.
 @onready var I18n = get_node("/root/I18n")
@@ -86,6 +96,8 @@ var _port_drag: Dictionary = {}
 var _left_pointer: Dictionary = {}
 var _configuration_gestures_enabled := true
 var _port_connections_enabled := true
+var _building_atlas: Texture2D
+var _regolith_tile: Texture2D
 
 
 func _ready() -> void:
@@ -97,6 +109,9 @@ func _ready() -> void:
 	gui_input.connect(_on_gui_input)
 	resized.connect(_on_canvas_resized)
 	_last_canvas_size = size
+	_building_atlas = BuildingArt.atlas_texture()
+	if ResourceLoader.exists(REGOLITH_TILE_PATH):
+		_regolith_tile = load(REGOLITH_TILE_PATH) as Texture2D
 
 
 func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> void:
@@ -171,6 +186,70 @@ func reset_camera() -> void:
 	_camera = Vector2.ZERO
 	_zoom = _overview_zoom()
 	_keyboard_tile = _bounds_origin()
+	_clamp_camera_to_bounds()
+	_invalidate_hit_geometry()
+	queue_redraw()
+
+
+## On a world handoff, start at the earliest developed or resource-bearing
+## region instead of presenting an uninformative planet-wide postage stamp.
+## The workspace calls this once per world; player pan/zoom always wins after.
+func focus_operational_region() -> void:
+	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
+		return
+	var candidates: Array = []
+	for entity_value in _snapshot.get("entities", []):
+		if not entity_value is Dictionary:
+			continue
+		var entity := entity_value as Dictionary
+		var status := str(entity.get("status", "")).to_upper()
+		var rank := 0 if status in ["RUNNING", "FLOWING", "CONNECTED", "READY"] else 1
+		candidates.append({"rank":rank, "id":str(entity.get("id", "")), "footprint":entity.get("footprint", {})})
+	# The starter loop has to be legible as a loop: include nearby deposits and
+	# queued work with the first developed cluster instead of centering one depot
+	# so tightly that the resource opportunity disappears off-screen.
+	for field_value in _snapshot.get("resource_fields", []):
+		if field_value is Dictionary:
+			var field := field_value as Dictionary
+			candidates.append({"rank":2, "id":str(field.get("id", "")), "footprint":field.get("footprint", {})})
+	for order_value in _snapshot.get("construction_orders", []):
+		if order_value is Dictionary:
+			var order := order_value as Dictionary
+			candidates.append({"rank":1, "id":str(order.get("id", "")), "footprint":order.get("footprint", {})})
+	if candidates.is_empty():
+		return
+	candidates.sort_custom(func(a, b):
+		var a_row := a as Dictionary
+		var b_row := b as Dictionary
+		var a_rank := int(a_row.get("rank", 0))
+		var b_rank := int(b_row.get("rank", 0))
+		if a_rank != b_rank:
+			return a_rank < b_rank
+		return str(a_row.get("id", "")) < str(b_row.get("id", ""))
+	)
+	# Use the full local operational envelope. It is bounded by the current
+	# snapshot (not speculative terrain) and gives deposits, machines, storage,
+	# and planned construction a shared, readable starting frame.
+	var envelope := Rect2i()
+	for candidate_value in candidates:
+		var candidate := candidate_value as Dictionary
+		var footprint: Dictionary = candidate.get("footprint", {}) as Dictionary
+		var origin := _view_model.footprint_origin(footprint)
+		var extent := _view_model.footprint_size(footprint)
+		var rect := Rect2i(origin, Vector2i(maxi(1, extent.x), maxi(1, extent.y)))
+		envelope = rect if envelope.size == Vector2i.ZERO else envelope.merge(rect)
+	var focus_tile := envelope.get_center()
+	var padding_tiles := 8
+	var framed_extent := Vector2(maxi(1, envelope.size.x + padding_tiles * 2), maxi(1, envelope.size.y + padding_tiles * 2))
+	var available := (size - Vector2.ONE * OVERVIEW_PADDING_PIXELS * 2.0).max(Vector2.ONE)
+	var fitted_zoom := minf(
+		available.x / (framed_extent.x * BASE_TILE_PIXELS),
+		available.y / (framed_extent.y * BASE_TILE_PIXELS)
+	)
+	_zoom = clampf(fitted_zoom, _overview_zoom(), minf(_maximum_zoom(), 1.75))
+	_overview_mode = false
+	_keyboard_tile = _clamp_tile_to_bounds(focus_tile)
+	_camera = size * 0.5 - Vector2(_keyboard_tile) * _tile_scale()
 	_clamp_camera_to_bounds()
 	_invalidate_hit_geometry()
 	queue_redraw()
@@ -256,6 +335,8 @@ func _draw() -> void:
 	var world_rect := _world_screen_rect()
 	_visible_records = _chunk_index.query(_visible_world_query_rect())
 	draw_rect(world_rect, WORLD_COLOR, true)
+	if _regolith_tile != null and world_rect.has_area():
+		_draw_regolith_ground()
 	_draw_grid()
 	_draw_chunk_boundaries()
 	_node_rects.clear()
@@ -278,25 +359,81 @@ func _draw_empty() -> void:
 
 
 func _draw_grid() -> void:
-	var tile_scale := _tile_scale()
-	var step_tiles := 1
-	while float(step_tiles) * tile_scale < 24.0:
-		step_tiles *= 2
-	var spacing := float(step_tiles) * tile_scale
-	var visible_world := _world_screen_rect().intersection(Rect2(Vector2.ZERO, size))
+	var visible_world := _visible_world_query_rect().intersection(Rect2(Vector2(_bounds_origin()), Vector2(_bounds_size())))
 	if not visible_world.has_area():
 		return
-	var world_start := _world_to_screen(Vector2(_bounds_origin()))
-	var start_x := visible_world.position.x + fposmod(world_start.x - visible_world.position.x, spacing)
-	var start_y := visible_world.position.y + fposmod(world_start.y - visible_world.position.y, spacing)
-	var x := start_x
-	while x <= visible_world.end.x:
-		draw_line(Vector2(x, visible_world.position.y), Vector2(x, visible_world.end.y), Color(GRID_COLOR, 0.32), 1.0)
-		x += spacing
-	var y := start_y
-	while y <= visible_world.end.y:
-		draw_line(Vector2(visible_world.position.x, y), Vector2(visible_world.end.x, y), Color(GRID_COLOR, 0.32), 1.0)
-		y += spacing
+	var screen_world := _world_screen_rect().intersection(Rect2(Vector2.ZERO, size))
+	if not screen_world.has_area():
+		return
+	var step_tiles := _grid_step_tiles()
+	var is_exact_tile_grid := step_tiles == 1
+	# Macro-grid lines use lower contrast and a slightly heavier stroke so they
+	# read as a navigation LOD, never as a misleading 1:1 placement lattice.
+	var line_color := Color(GRID_COLOR, 0.34 if is_exact_tile_grid else 0.20)
+	var line_width := 1.0 if is_exact_tile_grid else 1.35
+	var origin := _bounds_origin()
+	var first_x := _first_grid_coordinate(visible_world.position.x, origin.x, step_tiles)
+	var first_y := _first_grid_coordinate(visible_world.position.y, origin.y, step_tiles)
+	var last_x := floori(visible_world.end.x - 0.0001)
+	var last_y := floori(visible_world.end.y - 0.0001)
+	for world_x in range(first_x, last_x + 1, step_tiles):
+		var x := _world_to_screen(Vector2(world_x, 0.0)).x
+		draw_line(Vector2(x, screen_world.position.y), Vector2(x, screen_world.end.y), line_color, line_width)
+	for world_y in range(first_y, last_y + 1, step_tiles):
+		var y := _world_to_screen(Vector2(0.0, world_y)).y
+		draw_line(Vector2(screen_world.position.x, y), Vector2(screen_world.end.x, y), line_color, line_width)
+
+
+## Returns the world-tile interval rendered by the current grid LOD. Grid
+## phase, footprint bounds, placement previews, and screen-to-tile selection
+## all use the same world origin; only visual density changes with zoom.
+func _grid_step_tiles() -> int:
+	var tile_scale := _tile_scale()
+	if tile_scale >= ACTUAL_TILE_GRID_MIN_PIXELS:
+		return 1
+	var step_tiles := 1
+	while float(step_tiles) * tile_scale < MACRO_GRID_MIN_PIXELS:
+		step_tiles *= 2
+	return step_tiles
+
+
+func _first_grid_coordinate(visible_world_coordinate: float, origin_coordinate: int, step_tiles: int) -> int:
+	var safe_step := maxi(1, step_tiles)
+	return origin_coordinate + ceili((visible_world_coordinate - float(origin_coordinate)) / float(safe_step)) * safe_step
+
+
+func _draw_regolith_ground() -> void:
+	var world_bounds := Rect2(Vector2(_bounds_origin()), Vector2(_bounds_size()))
+	var visible_world := _visible_world_query_rect().intersection(world_bounds)
+	if not visible_world.has_area():
+		return
+	var world_origin := _bounds_origin()
+	var texture_size := _regolith_tile.get_size()
+	if texture_size.x <= 0.0 or texture_size.y <= 0.0:
+		return
+	var cell_size := float(REGOLITH_WORLD_TILE_TILES)
+	var first_cell_x := _ground_cell_coordinate(visible_world.position.x, world_origin.x)
+	var first_cell_y := _ground_cell_coordinate(visible_world.position.y, world_origin.y)
+	var last_cell_x := _ground_cell_coordinate(visible_world.end.x - 0.0001, world_origin.x)
+	var last_cell_y := _ground_cell_coordinate(visible_world.end.y - 0.0001, world_origin.y)
+	for world_y in range(first_cell_y, last_cell_y + 1, REGOLITH_WORLD_TILE_TILES):
+		for world_x in range(first_cell_x, last_cell_x + 1, REGOLITH_WORLD_TILE_TILES):
+			var cell_world_rect := Rect2(Vector2(world_x, world_y), Vector2.ONE * cell_size)
+			var clipped_world_rect := cell_world_rect.intersection(world_bounds)
+			if not clipped_world_rect.has_area():
+				continue
+			var source_offset := (clipped_world_rect.position - cell_world_rect.position) / cell_size * texture_size
+			var source_size := clipped_world_rect.size / cell_size * texture_size
+			draw_texture_rect_region(
+				_regolith_tile,
+				_world_rect_to_screen(clipped_world_rect),
+				Rect2(source_offset, source_size),
+				Color(0.38, 0.52, 0.62, 0.16)
+			)
+
+
+func _ground_cell_coordinate(world_coordinate: float, world_origin_coordinate: int) -> int:
+	return world_origin_coordinate + floori((world_coordinate - float(world_origin_coordinate)) / float(REGOLITH_WORLD_TILE_TILES)) * REGOLITH_WORLD_TILE_TILES
 
 
 func _draw_chunk_boundaries() -> void:
@@ -335,7 +472,7 @@ func _draw_resource_fields() -> void:
 		var field: Dictionary = _resources_by_id.get(str(field_id_value), {})
 		if field.is_empty():
 			continue
-		var rect := _footprint_rect(field.get("footprint", {}), 1.0)
+		var rect := _footprint_rect(field.get("footprint", {}))
 		if not rect.intersects(visible_rect):
 			continue
 		_node_rects[str(field.get("id", ""))] = {"rect":rect, "data":field, "is_entity":false}
@@ -357,7 +494,7 @@ func _draw_entities() -> void:
 		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
 		if entity.is_empty():
 			continue
-		var rect := _footprint_rect(entity.get("footprint", {}), 4.0)
+		var rect := _footprint_rect(entity.get("footprint", {}))
 		if not rect.intersects(visible_rect):
 			continue
 		_node_rects[str(entity.get("id", ""))] = {"rect":rect, "data":entity, "is_entity":true}
@@ -365,9 +502,12 @@ func _draw_entities() -> void:
 		var tone := _status_color(status)
 		var selected := _selected_node_id == str(entity.get("id", ""))
 		draw_style_box(_node_style(tone, selected), rect)
+		_draw_entity_silhouette(entity, rect, detail_stage)
 		_draw_connection_ports(entity, rect, detail_stage)
-		if detail_stage == "COMPACT" or rect.size.x < 48.0 or rect.size.y < 34.0:
-			draw_circle(rect.get_center(), minf(3.0, minf(rect.size.x, rect.size.y) * 0.25), tone)
+		if detail_stage == "COMPACT" or rect.size.x < 96.0 or rect.size.y < 72.0:
+			# At operational overview distance the silhouette and ports carry
+			# identity. Tiny stacked text would cover the artwork entirely.
+			draw_circle(rect.position + Vector2(4, 4), 2.5, tone)
 			continue
 		var header_rect := Rect2(rect.position, Vector2(rect.size.x, minf(22.0, rect.size.y)))
 		draw_rect(header_rect, HEADER_COLOR, true)
@@ -409,6 +549,41 @@ func _draw_entities() -> void:
 			draw_string(font, rect.position + Vector2(8, bar.position.y - rect.position.y - 4.0), rate, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 9, Color("9aa6a1"))
 
 
+func _draw_entity_silhouette(entity: Dictionary, rect: Rect2, detail_stage: String) -> void:
+	if _building_atlas == null:
+		return
+	var definition_id := str(entity.get("definition_id", ""))
+	var kind := str(entity.get("node_kind", ""))
+	var source_region := BuildingArt.atlas_region(_building_atlas, definition_id, kind)
+	if source_region.size.x <= 0.0 or source_region.size.y <= 0.0:
+		return
+	# The icon can be larger than a tiny world footprint, but it is intentionally
+	# separate from the node/placement hit rectangle. A click outside the exact
+	# grid footprint selects its tile instead of expanding a building's authority.
+	var art_rect := _entity_visible_icon_rect(rect, detail_stage)
+	if art_rect.size.x <= 0.0 or art_rect.size.y <= 0.0:
+		return
+	if detail_stage == "COMPACT" or rect.size.x < 96.0 or rect.size.y < 72.0:
+		draw_style_box(_node_style(Color("65d9d1"), false), art_rect)
+		draw_texture_rect_region(_building_atlas, art_rect.grow(-3.0), source_region, Color(0.82, 0.95, 1.0, 0.92))
+		return
+	draw_texture_rect_region(_building_atlas, art_rect, source_region, Color(0.82, 0.95, 1.0, 0.88))
+
+
+## Presentation-only icon geometry. It is never inserted into _node_rects,
+## construction hit maps, port maps, or placement validation. This explicit
+## separation preserves exact tiles at compact 4K-readable visual LOD.
+func _entity_visible_icon_rect(footprint_rect: Rect2, detail_stage: String) -> Rect2:
+	if detail_stage == "COMPACT" or footprint_rect.size.x < 96.0 or footprint_rect.size.y < 72.0:
+		var badge_size := clampf(maxf(footprint_rect.size.x, footprint_rect.size.y), 38.0, 62.0)
+		return Rect2(footprint_rect.get_center() - Vector2.ONE * badge_size * 0.5, Vector2.ONE * badge_size)
+	var inset := minf(12.0, minf(footprint_rect.size.x, footprint_rect.size.y) * 0.18)
+	return Rect2(
+		footprint_rect.position + Vector2(inset, inset + 5.0),
+		footprint_rect.size - Vector2(inset * 2.0, inset * 2.0 + 5.0)
+	)
+
+
 func _buffer_summary(value: Variant) -> String:
 	if not value is Dictionary:
 		return ""
@@ -437,7 +612,7 @@ func _draw_construction_orders() -> void:
 		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
 		if order.is_empty():
 			continue
-		var rect := _footprint_rect(order.get("footprint", {}), 4.0)
+		var rect := _footprint_rect(order.get("footprint", {}))
 		if not rect.intersects(visible_rect):
 			continue
 		_construction_order_rects[str(order.get("id", ""))] = {"rect":rect, "data":order}
@@ -459,7 +634,7 @@ func _draw_placement_preview() -> void:
 	var footprint_value: Variant = _placement_preview.get("footprint", {})
 	if not footprint_value is Dictionary:
 		return
-	var rect := _footprint_rect(footprint_value, 2.0)
+	var rect := _footprint_rect(footprint_value)
 	var is_valid := bool(_placement_preview.get("valid", false))
 	var tone := Color("6fbf92") if is_valid else Color("d86e63")
 	draw_rect(rect, Color(tone, 0.20), true)
@@ -504,17 +679,17 @@ func _draw_port_drag_preview() -> void:
 	if origin.is_empty() or origin_port.is_empty():
 		return
 	var origin_direction := str(origin_port.get("direction", "OUTPUT"))
-	var origin_center := _port_center(origin, origin_port, _footprint_rect(origin.get("footprint", {}), 4.0), origin_direction, str(origin_port.get("kind", "CARGO")))
+	var origin_center := _port_center(origin, origin_port, _footprint_rect(origin.get("footprint", {})), origin_direction, str(origin_port.get("kind", "CARGO")))
 	var from := origin_center
 	var target_id := str(_port_drag.get("target_id", ""))
 	var target_port: Dictionary = _port_drag.get("target_port", {}) as Dictionary
 	var to := Vector2(_port_drag.get("pointer", from))
 	if not source.is_empty() and not source_port.is_empty():
-		from = _port_center(source, source_port, _footprint_rect(source.get("footprint", {}), 4.0), "OUTPUT", str(source_port.get("kind", "CARGO")))
+		from = _port_center(source, source_port, _footprint_rect(source.get("footprint", {})), "OUTPUT", str(source_port.get("kind", "CARGO")))
 	if not target_id.is_empty() and not target_port.is_empty():
 		var target := _entity_by_id(target_id)
 		if not target.is_empty():
-			to = _port_center(target, target_port, _footprint_rect(target.get("footprint", {}), 4.0), "INPUT", str(target_port.get("kind", "CARGO")))
+			to = _port_center(target, target_port, _footprint_rect(target.get("footprint", {})), "INPUT", str(target_port.get("kind", "CARGO")))
 	elif origin_direction == "INPUT":
 		to = origin_center
 		from = Vector2(_port_drag.get("pointer", origin_center))
@@ -566,7 +741,7 @@ func _draw_links() -> void:
 		var shows_detail := _tile_scale() >= 0.75
 		if shows_detail:
 			_draw_link_arrow(route, color)
-			if _tile_scale() >= 1.25 and not blocked:
+			if (selected or _tile_scale() >= 8.0) and _route_bounds(route).size.length() >= 140.0 and not blocked:
 				var label: String = str(I18n.t("factory.route.label", "L%d · %s · %d%%")) % [lane_count, tier, roundi(congestion * 100.0)]
 				draw_string(get_theme_default_font(), _route_midpoint(route) + Vector2(4, -5), label, HORIZONTAL_ALIGNMENT_LEFT, 120, 9, color)
 		_link_hit_rects[str(link.get("id", ""))] = hit
@@ -680,8 +855,8 @@ func _draw_link_arrow(route: PackedVector2Array, color: Color) -> void:
 
 
 func _connection_endpoints(source: Dictionary, target: Dictionary, kind: String, source_port_id: String = "", target_port_id: String = "") -> Array[Vector2]:
-	var source_rect := _footprint_rect(source.get("footprint", {}), 4.0)
-	var target_rect := _footprint_rect(target.get("footprint", {}), 4.0)
+	var source_rect := _footprint_rect(source.get("footprint", {}))
+	var target_rect := _footprint_rect(target.get("footprint", {}))
 	var source_port := _view_model.connection_port_by_id(source, source_port_id, "OUTPUT") if not source_port_id.is_empty() else {}
 	var target_port := _view_model.connection_port_by_id(target, target_port_id, "INPUT") if not target_port_id.is_empty() else {}
 	if not source_port.is_empty() or not target_port.is_empty():
@@ -846,19 +1021,23 @@ func _point_on_route(route: PackedVector2Array, ratio: float) -> Vector2:
 	return route[route.size() - 1]
 
 
-func _footprint_rect(footprint_value: Variant, minimum_tiles: float) -> Rect2:
+## Converts the authoritative tile footprint directly into logical canvas
+## pixels. `minimum_tiles` remains an ignored compatibility parameter for the
+## existing focused callers; visual readability is handled by the separate icon
+## helper, never by enlarging construction, selection, or port geometry.
+func _footprint_rect(footprint_value: Variant, _minimum_tiles: float = 0.0) -> Rect2:
 	var footprint: Dictionary = footprint_value as Dictionary if footprint_value is Dictionary else {}
 	var origin := _view_model.footprint_origin(footprint)
 	var extent := _view_model.footprint_size(footprint)
-	var tile_scale := _tile_scale()
-	var rect := Rect2(_world_to_screen(Vector2(origin)), Vector2(extent) * tile_scale)
-	var min_size := Vector2(minimum_tiles * tile_scale, minimum_tiles * tile_scale)
-	rect.size = rect.size.max(min_size)
-	return rect
+	return Rect2(_world_to_screen(Vector2(origin)), Vector2(extent) * _tile_scale())
 
 
 func _world_to_screen(world: Vector2) -> Vector2:
 	return _camera + world * _tile_scale()
+
+
+func _world_rect_to_screen(world_rect: Rect2) -> Rect2:
+	return Rect2(_world_to_screen(world_rect.position), world_rect.size * _tile_scale())
 
 
 func _screen_to_tile(screen: Vector2) -> Vector2i:
@@ -1421,19 +1600,19 @@ func _ensure_hit_geometry() -> void:
 	var hit_detail_stage := _detail_stage()
 	for resource_id_value in visible_records.get("resource_ids", []):
 		var resource: Dictionary = _resources_by_id.get(str(resource_id_value), {})
-		var resource_rect := _footprint_rect(resource.get("footprint", {}), 1.0)
+		var resource_rect := _footprint_rect(resource.get("footprint", {}))
 		if resource_rect.intersects(visible_rect):
 			_node_rects[str(resource.get("id", ""))] = {"rect":resource_rect, "data":resource, "is_entity":false}
 	for entity_id_value in visible_records.get("entity_ids", []):
 		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
-		var entity_rect := _footprint_rect(entity.get("footprint", {}), 4.0)
+		var entity_rect := _footprint_rect(entity.get("footprint", {}))
 		if entity_rect.intersects(visible_rect):
 			_node_rects[str(entity.get("id", ""))] = {"rect":entity_rect, "data":entity, "is_entity":true}
 			if hit_detail_stage != "COMPACT":
 				_register_entity_port_hits(entity, entity_rect, 4.0 if hit_detail_stage == "FULL" else 3.0)
 	for order_id_value in visible_records.get("order_ids", []):
 		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
-		var order_rect := _footprint_rect(order.get("footprint", {}), 4.0)
+		var order_rect := _footprint_rect(order.get("footprint", {}))
 		if order_rect.intersects(visible_rect):
 			_construction_order_rects[str(order.get("id", ""))] = {"rect":order_rect, "data":order}
 	for link_id_value in visible_records.get("link_ids", []):
@@ -1490,6 +1669,17 @@ func _select_at(point: Vector2) -> void:
 				resource_field_selected.emit((row.get("data", {}) as Dictionary).duplicate(true))
 			queue_redraw()
 			return
+	# Compact building art may deliberately extend beyond a one- or two-tile
+	# footprint so the player can recognise it at operational zoom. Exact domain
+	# rectangles above always win; this is a secondary, deterministic selection
+	# affordance only and never changes construction, placement, or port geometry.
+	var icon_entity := _visible_entity_icon_at(point)
+	if not icon_entity.is_empty():
+		_selected_node_id = str(icon_entity.get("id", ""))
+		_selected_link_id = ""
+		entity_selected.emit(icon_entity.duplicate(true))
+		queue_redraw()
+		return
 	var link_id := _nearest_link_at(point)
 	if not link_id.is_empty():
 		_selected_link_id = link_id
@@ -1516,7 +1706,39 @@ func _point_has_interactive_hit(point: Vector2) -> bool:
 		var node_rect: Rect2 = node_row.get("rect", Rect2())
 		if node_rect.has_point(point):
 			return true
+	if not _visible_entity_icon_at(point).is_empty():
+		return true
 	return not _nearest_link_at(point).is_empty()
+
+
+## Icon selection is intentionally a second pass after the exact footprint
+## maps. This lets compact artwork be click-friendly without giving it domain
+## authority. If icons overlap, choose nearest centre, then lexicographic ID so
+## the same view always resolves to the same building.
+func _visible_entity_icon_at(point: Vector2) -> Dictionary:
+	var detail_stage := _detail_stage()
+	var visible_records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
+	var entity_ids: Array = visible_records.get("entity_ids", [])
+	var best: Dictionary = {}
+	var best_distance_squared := INF
+	var best_id := ""
+	for entity_id_value in entity_ids:
+		var entity_id := str(entity_id_value)
+		var entity: Dictionary = _entities_by_id.get(entity_id, {}) as Dictionary
+		if entity.is_empty():
+			continue
+		var footprint_rect := _footprint_rect(entity.get("footprint", {}))
+		var icon_rect := _entity_visible_icon_rect(footprint_rect, detail_stage)
+		if not icon_rect.has_point(point):
+			continue
+		var distance_squared := footprint_rect.get_center().distance_squared_to(point)
+		if best.is_empty() \
+				or distance_squared < best_distance_squared - 0.001 \
+				or (is_equal_approx(distance_squared, best_distance_squared) and entity_id < best_id):
+			best = entity
+			best_distance_squared = distance_squared
+			best_id = entity_id
+	return best
 
 
 func _nearest_link_at(point: Vector2) -> String:
@@ -1536,14 +1758,14 @@ func _nearest_link_at(point: Vector2) -> String:
 
 func _placement_preview_hit(point: Vector2) -> bool:
 	var footprint_value: Variant = _placement_preview.get("footprint", {})
-	return footprint_value is Dictionary and _footprint_rect(footprint_value, 2.0).has_point(point)
+	return footprint_value is Dictionary and _footprint_rect(footprint_value).has_point(point)
 
 
 func _placement_preview_contains(point: Vector2) -> bool:
 	if not bool(_placement_preview.get("valid", false)):
 		return false
 	var footprint_value: Variant = _placement_preview.get("footprint", {})
-	return footprint_value is Dictionary and _footprint_rect(footprint_value, 2.0).has_point(point)
+	return footprint_value is Dictionary and _footprint_rect(footprint_value).has_point(point)
 
 
 func _select_tile(point: Vector2) -> void:
@@ -1587,10 +1809,10 @@ func _node_style(tone: Color, selected: bool) -> StyleBoxFlat:
 
 func _status_color(status: String) -> Color:
 	match status:
-		"RUNNING", "FLOWING", "CONNECTED", "READY": return Color("6fbf92")
-		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY", "NO_RECIPE": return Color("e0ae5c")
-		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return Color("d86e63")
-	return Color("7f9289")
+		"RUNNING", "FLOWING", "CONNECTED", "READY": return Color("65d9d1")
+		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "SOURCE_EMPTY", "NO_RECIPE": return Color("e5b467")
+		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return Color("ef867d")
+	return Color("96aab7")
 
 
 func _parse_color(value: String, fallback: Color) -> Color:

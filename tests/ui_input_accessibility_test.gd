@@ -92,6 +92,13 @@ func _test_factory_workspace_input(main: Control) -> void:
 	_check(workspace != null and workspace.is_visible_in_tree(), "Industry opens the Factory mining and production workspace", "EXECUTED", {})
 	if workspace == null:
 		return
+	var canvas_tab := workspace.find_child("FactoryTabCanvas", true, false) as Button
+	if canvas_tab != null:
+		canvas_tab.grab_focus()
+		await _send_action("ui_accept")
+		await _settle_ui()
+	var keyboard_canvas := workspace.find_child("FactoryCanvas", true, false) as Control
+	_check(keyboard_canvas != null and keyboard_canvas.is_visible_in_tree(), "the overview exposes a keyboard-operable transition to the construction canvas", "EXECUTED", {})
 	_check(workspace.find_child("PaletteScroll", true, false) != null and workspace.find_child("FactoryCanvas", true, false) != null and workspace.find_child("InspectorScroll", true, false) != null, "the workspace exposes construction palette, grid canvas, and inspector panes", "EXECUTED", {})
 	var palette := workspace.find_child("BuildingPalette", true, false) as OptionButton
 	var palette_available := palette != null and palette.item_count > 1 and not palette.disabled

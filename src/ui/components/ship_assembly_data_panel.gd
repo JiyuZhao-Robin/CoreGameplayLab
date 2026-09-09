@@ -17,7 +17,9 @@ var _save_status_label: Label
 
 func _ready() -> void:
 	name = "ShipAssemblyDataPanel"
-	custom_minimum_size.x = 270.0
+	# The editor assigns the deterministic engineering column. This is only a
+	# standalone safety floor, so a hosted Fleet page never expands for details.
+	custom_minimum_size.x = 250.0
 	add_theme_stylebox_override("panel", UiTokens.panel_style(Color("0b1716"), UiTokens.COLOR_BORDER, 4))
 	_build_frame()
 
@@ -40,15 +42,15 @@ func save_enabled() -> bool:
 
 func _build_frame() -> void:
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 8)
+	root.add_theme_constant_override("separation", 6)
 	add_child(root)
 	var header_margin := MarginContainer.new()
-	header_margin.add_theme_constant_override("margin_left", 12)
-	header_margin.add_theme_constant_override("margin_top", 12)
-	header_margin.add_theme_constant_override("margin_right", 12)
+	header_margin.add_theme_constant_override("margin_left", 10)
+	header_margin.add_theme_constant_override("margin_top", 10)
+	header_margin.add_theme_constant_override("margin_right", 10)
 	root.add_child(header_margin)
 	var header := VBoxContainer.new()
-	header.add_theme_constant_override("separation", 3)
+	header.add_theme_constant_override("separation", 2)
 	var header_title := _label(I18n.core("ships.assembly.engineering_data", "ENGINEERING DATA"), 9, UiTokens.COLOR_FOCUS)
 	header_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	header.add_child(header_title)
@@ -63,13 +65,13 @@ func _build_frame() -> void:
 	root.add_child(scroll)
 	var content_margin := MarginContainer.new()
 	content_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content_margin.add_theme_constant_override("margin_left", 12)
-	content_margin.add_theme_constant_override("margin_right", 12)
+	content_margin.add_theme_constant_override("margin_left", 10)
+	content_margin.add_theme_constant_override("margin_right", 10)
 	scroll.add_child(content_margin)
 	_content = VBoxContainer.new()
 	_content.name = "AssemblyDataContent"
 	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_content.add_theme_constant_override("separation", 10)
+	_content.add_theme_constant_override("separation", 8)
 	content_margin.add_child(_content)
 	root.add_child(HSeparator.new())
 	root.add_child(_build_footer())
@@ -79,28 +81,33 @@ func _build_frame() -> void:
 func _build_footer() -> Control:
 	var margin := MarginContainer.new()
 	margin.name = "AssemblySaveRegion"
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_bottom", 12)
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 8)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", 4)
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 6)
 	var name_label := _label(I18n.core("ships.assembly.current_blueprint", "CURRENT BLUEPRINT"), 8, UiTokens.COLOR_TEXT_MUTED)
-	column.add_child(name_label)
+	name_label.custom_minimum_size.x = 88.0
+	name_row.add_child(name_label)
 	_name_edit = LineEdit.new()
 	_name_edit.name = "BlueprintNameEdit"
 	_name_edit.placeholder_text = I18n.core("ships.assembly.default_blueprint_name", "Escort Configuration A")
 	_name_edit.max_length = 48
+	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_name_edit.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(9))
 	_name_edit.text_changed.connect(func(value: String): blueprint_name_changed.emit(value))
-	column.add_child(_name_edit)
+	name_row.add_child(_name_edit)
+	column.add_child(name_row)
 	_save_status_label = _label(I18n.core("ships.assembly.awaiting_complete", "◇ Awaiting complete blueprint"), 7, UiTokens.COLOR_WARNING)
 	_save_status_label.name = "BlueprintSaveStatus"
-	_save_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_save_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	column.add_child(_save_status_label)
 	_save_button = Button.new()
 	_save_button.name = "SaveBlueprintButton"
 	_save_button.text = I18n.core("ships.assembly.save_blueprint", "SAVE BLUEPRINT")
-	_save_button.custom_minimum_size.y = 72.0
+	_save_button.custom_minimum_size.y = 48.0
 	_save_button.add_theme_font_size_override("font_size", UiTokens.ship_assembly_font_size(10))
 	var normal := UiTokens.control_style(Color("17302d"), UiTokens.COLOR_FOCUS.darkened(0.16), 3)
 	var hover := UiTokens.control_style(Color("1d4540"), UiTokens.COLOR_FOCUS, 3)
@@ -136,6 +143,7 @@ func _rebuild() -> void:
 		_save_button.disabled = not allowed
 		_save_button.tooltip_text = str(validation.get("reason", ""))
 		_save_status_label.text = I18n.core("ships.assembly.ready_to_save", "● Blueprint ready to save") if allowed else I18n.core("ships.assembly.validation_status", "◇ %s") % _validation_reason_text(str(validation.get("reason_code", "")), str(validation.get("reason", I18n.core("ships.assembly.incomplete", "Blueprint is incomplete"))))
+		_save_status_label.tooltip_text = _save_status_label.text
 		_save_status_label.add_theme_color_override("font_color", UiTokens.COLOR_RUNNING if allowed else UiTokens.COLOR_WARNING)
 
 

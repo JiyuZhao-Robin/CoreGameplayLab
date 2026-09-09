@@ -11,6 +11,7 @@ const MAX_TIME_ORCHESTRATION_STEPS := 500000
 const MAX_ONLINE_FRAME_SIMULATION_MS := 15000.0
 const MIN_TIME_ORCHESTRATION_STEP_MS := 0.01
 const FACTORY_WORKSPACE_PROTOCOL_VERSION := 1
+const FactoryOperations = preload("res://src/core/factory_operations_projection.gd")
 const FACTORY_COMMAND_COMMON_FAILURE_REASONS := [
 	"UNSUPPORTED_PROTOCOL", "MISSING_COMMAND_ID", "INVALID_PAYLOAD",
 	"UNKNOWN_FACTORY_WORLD", "COMMAND_ID_CONFLICT", "STALE_TOPOLOGY"
@@ -317,12 +318,14 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 			"size_tiles":profile.get("size_tiles", {}).duplicate(true)
 		}
 	var location_id := str(snapshot.get("location_id", ""))
+	snapshot["location_name"] = I18n.content(content.regions.get(location_id, {"id":location_id, "name":location_id}))
 	var unlocked_recipe_ids := {}
 	var unlocked_recipes: Array = []
 	for recipe_value in snapshot.get("palette", {}).get("recipes", []):
 		var recipe := (recipe_value as Dictionary).duplicate(true)
 		var recipe_id := str(recipe.get("id", ""))
 		if content.factory_recipes.has(recipe_id) and _factory_definition_available(content.factory_recipes[recipe_id]):
+			recipe["name"] = I18n.t("factory.recipe.%s" % recipe_id, str(recipe.get("name", recipe_id)))
 			var activity_id := str(content.factory_recipes[recipe_id].get("activity_id", ""))
 			if content.activities.has(activity_id):
 				recipe["name"] = I18n.content(content.activities[activity_id])
@@ -374,6 +377,7 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 		"import_command":"IMPORT_FROM_LOCATION",
 		"export_command":"EXPORT_TO_LOCATION"
 	}
+	snapshot["operations"] = FactoryOperations.build(snapshot)
 	return snapshot
 
 
@@ -480,7 +484,8 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 					definition_id,
 					Vector2i(int(origin_data.get("x", 0)), int(origin_data.get("y", 0))),
 					recipe_id,
-					int(payload.get("priority", 50))
+					int(payload.get("priority", 50)),
+					funding_policy
 				)
 				if bool(operation_result.get("ok", false)) and funding_policy == "AUTO_SAME_LOCATION":
 					operation_result["funding"] = _auto_fund_factory_construction(

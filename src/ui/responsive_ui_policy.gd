@@ -18,7 +18,7 @@ const SESSION_STATE_META := "core_gameplay_lab_responsive_ui_state"
 # All production UI is authored in this one logical coordinate system. The
 # Window may scale and letterbox this surface, but it must never use its physical
 # size to select another Theme scale or layout profile.
-const DESIGN_VIEWPORT_SIZE := Vector2(1440.0, 900.0)
+const DESIGN_VIEWPORT_SIZE := Vector2(1920.0, 1080.0)
 
 
 static func normalize_mode(value: Variant) -> String:

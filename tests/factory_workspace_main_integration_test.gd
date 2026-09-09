@@ -13,6 +13,10 @@ func _run() -> void:
 	game.persistence_enabled = false
 	localization.call("set_locale", "zh_CN")
 	game.reset_game()
+	# Keep setup independent of UI render time. The progress assertion below
+	# advances exactly one explicit tick and must not inherit fractional mining
+	# progress accumulated while controls/fonts/art were being created.
+	game.set_process(false)
 	var earth_world: Dictionary = game.state.factory_worlds.get("earth-surface-grid", {})
 	game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_solar_array", Vector2i(200, 0), "", "integration-power")
 	game.simulation.factory_grid.place_entity_immediate(earth_world, "grid_surface_mine", Vector2i(32, 32), "", "integration-mine")
@@ -44,6 +48,11 @@ func _run() -> void:
 	await _settle()
 	_check(_selected_world(main) == "earth-surface-grid", "Factory selector and workspace initially agree on the Earth world")
 	var live_workspace := main.find_child("FactoryWorkspace", true, false)
+	_check(live_workspace != null and str(live_workspace.get("_active_subworkspace")) == "OVERVIEW", "Industry opens its operations overview")
+	var canvas_tab := main.find_child("FactoryTabCanvas", true, false) as Button
+	if canvas_tab != null:
+		canvas_tab.pressed.emit()
+	await _settle()
 	var power_mode := main.find_child("PowerConnectionMode", true, false) as Button
 	var connection_source := main.find_child("ConnectionSource", true, false) as OptionButton
 	var connection_target := main.find_child("ConnectionTarget", true, false) as OptionButton
@@ -160,7 +169,9 @@ func _run() -> void:
 	root.size = Vector2i(1366, 768)
 	await _settle()
 	var industry_scroll := main.find_child("industry", true, false) as ScrollContainer
-	_check(industry_scroll != null and industry_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO and industry_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO, "fixed Factory layout keeps bounded overflow reachable without a compact reflow")
+	_check(industry_scroll != null and industry_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED and industry_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "fixed Factory workspace never adds whole-page scrolling")
+	var industry_content := industry_scroll.get_child(0) as Control if industry_scroll != null else null
+	_check(industry_content != null and industry_scroll.get_global_rect().grow(1).encloses(industry_content.get_global_rect()), "Factory content actually fits its host; disabling outer scrolling does not hide overflow")
 	_check(main.find_child("BuildingPalette", true, false) != null and main.find_child("FactoryCanvas", true, false) != null and main.find_child("FactoryInspector", true, false) != null, "1366x768 physical output retains the authored palette, canvas, and inspector controls")
 	var bottom_palette := main.find_child("FactoryBuildPalette", true, false) as Control
 	canvas = main.find_child("FactoryCanvas", true, false) as Control

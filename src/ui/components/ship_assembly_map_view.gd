@@ -69,7 +69,10 @@ var _pan_tool_button: Button
 
 func _ready() -> void:
 	name = "ShipAssemblyMap"
-	custom_minimum_size.y = 420.0
+	# The shipyard owns a bounded editor stage. Four hundred logical pixels leave
+	# a generous 4K design surface while keeping complete editor chrome visible
+	# in the 650px host.
+	custom_minimum_size.y = 400.0
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	show_grid = true
@@ -200,6 +203,17 @@ func canvas_tool() -> String:
 	return _canvas_tool
 
 
+func world_to_canvas_screen(world_position: Vector2) -> Vector2:
+	# Node layout, link drawing and pointer hit testing share this one local
+	# GraphEdit transform. It deliberately knows nothing about physical-window or
+	# UI accessibility scale; those belong above this independent canvas camera.
+	return world_position * zoom - scroll_offset
+
+
+func canvas_screen_to_world(screen_position: Vector2) -> Vector2:
+	return (screen_position + scroll_offset) / maxf(zoom, 0.01)
+
+
 func _sync_canvas_tool_buttons() -> void:
 	if is_instance_valid(_select_tool_button):
 		_select_tool_button.modulate = Color.WHITE if _canvas_tool == "SELECT" else Color(1.0, 1.0, 1.0, 0.52)
@@ -263,14 +277,14 @@ func _get_entity_connection_line(source: GraphNode, target_position: Vector2, ta
 
 func _connection_preview_target() -> Dictionary:
 	var target_screen := get_local_mouse_position()
-	var target_world := (target_screen + scroll_offset) / maxf(zoom, 0.01)
+	var target_world := canvas_screen_to_world(target_screen)
 	var target_node: GraphNode = null
 	if not _hovered_socket_id.is_empty():
 		var socket_node_name := _socket_node_name(_hovered_socket_id)
 		target_node = get_node_or_null(NodePath(socket_node_name)) as GraphNode
 		if target_node != null:
 			target_world = _graph_node_center(target_node)
-			target_screen = target_world * zoom - scroll_offset
+			target_screen = world_to_canvas_screen(target_world)
 	return {"screen":target_screen, "world":target_world, "node":target_node}
 
 
@@ -485,7 +499,7 @@ func _drop_data(at_position: Vector2, data: Variant) -> void:
 		return
 	if not _can_drop_data(at_position, data):
 		return
-	var graph_position := (at_position + scroll_offset) / zoom
+	var graph_position := canvas_screen_to_world(at_position)
 	if kind == "hull":
 		_add_hull(String(data.get("plan_id", "")), graph_position)
 		var hull_node := get_node_or_null(NodePath(HULL_NODE_NAME)) as GraphNode
@@ -1071,7 +1085,7 @@ func _socket_at_screen_position(screen_position: Vector2, compatible_only := fal
 		var socket_node := get_node_or_null(NodePath(_socket_node_name(socket_id))) as GraphNode
 		if socket_node == null or not socket_node.visible:
 			continue
-		var screen_rect := Rect2(socket_node.position_offset * zoom - scroll_offset, _graph_node_size(socket_node) * zoom)
+		var screen_rect := Rect2(world_to_canvas_screen(socket_node.position_offset), _graph_node_size(socket_node) * zoom)
 		if not screen_rect.grow(SOCKET_DROP_PADDING_PX).has_point(screen_position):
 			continue
 		var distance := screen_position.distance_squared_to(screen_rect.get_center())
@@ -1489,8 +1503,8 @@ func _select_connection_at(screen_position: Vector2) -> bool:
 	for link in _links:
 		var path := _world_path_for_link(link)
 		for index in path.size() - 1:
-			var start := path[index] * zoom - scroll_offset
-			var finish := path[index + 1] * zoom - scroll_offset
+			var start := world_to_canvas_screen(path[index])
+			var finish := world_to_canvas_screen(path[index + 1])
 			var distance := _distance_to_segment(screen_position, start, finish)
 			if distance <= closest_distance:
 				closest_distance = distance

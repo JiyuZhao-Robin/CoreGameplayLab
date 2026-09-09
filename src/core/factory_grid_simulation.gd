@@ -402,7 +402,7 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 	return result
 
 
-func queue_construction(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", priority: int = 50) -> Dictionary:
+func queue_construction(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", priority: int = 50, funding_policy: String = "MANUAL") -> Dictionary:
 	var placement := can_place_entity(world, definition_id, origin, recipe_id)
 	if not bool(placement.get("ok", false)):
 		return placement
@@ -422,6 +422,7 @@ func queue_construction(world: Dictionary, definition_id: String, origin: Vector
 		"work_required":maxf(EPSILON, float(definition.get("construction_work", 1.0))),
 		"work_done":0.0,
 		"priority":clampi(priority, 0, 100),
+		"funding_policy":"AUTO_SAME_LOCATION" if funding_policy == "AUTO_SAME_LOCATION" else "MANUAL",
 		"status":"WAITING_MATERIALS" if not costs.is_empty() else "READY",
 		"blocked_reason":"MISSING_MATERIALS" if not costs.is_empty() else "",
 		"queued_at_ms":float(world.get("elapsed_ms", 0.0))
@@ -855,6 +856,7 @@ func _step(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void
 		if str(link.get("kind", "")) == "CARGO":
 			var progress := maxf(0.0, float(link.get("capacity_progress", 0.0)))
 			link["capacity_progress"] = progress - floorf(progress)
+	_stage_automatic_construction_materials(world, events)
 	_advance_construction(world, seconds, events)
 	_update_cargo_link_diagnostics(world)
 	_refresh_router_operational_status(world)
@@ -1270,6 +1272,40 @@ func _fair_priority_allocations(source: Dictionary, item_id: String, priority: i
 	return allocations
 
 
+## A queued automatic project remains a standing request for physical materials.
+## This step follows cargo delivery, so new production can fund expansion without
+## another UI click. Only STORAGE custody in this world is eligible: machine
+## buffers and external Location inventories never become implicit supply.
+func _stage_automatic_construction_materials(world: Dictionary, events: Array[Dictionary]) -> void:
+	var orders: Array = world.get("construction_orders", {}).values().filter(func(order):
+		return str((order as Dictionary).get("funding_policy", "MANUAL")) == "AUTO_SAME_LOCATION" and not _construction_funded(order)
+	)
+	if orders.is_empty():
+		return
+	orders.sort_custom(func(a, b):
+		var a_priority := int((a as Dictionary).get("priority", 50))
+		var b_priority := int((b as Dictionary).get("priority", 50))
+		return str((a as Dictionary).get("id", "")) < str((b as Dictionary).get("id", "")) if a_priority == b_priority else a_priority > b_priority
+	)
+	var storage_ids: Array = []
+	for storage_id in _sorted_keys(world.get("entities", {})):
+		var storage: Dictionary = world.get("entities", {}).get(storage_id, {})
+		if str(storage.get("kind", "")) == "STORAGE" and str(storage.get("status", "")) != "UNDER_CONSTRUCTION":
+			storage_ids.append(storage_id)
+	for order_value in orders:
+		var order := order_value as Dictionary
+		for storage_id in storage_ids:
+			if _construction_funded(order):
+				break
+			var funded := fund_construction_from_storage(world, str(order.get("id", "")), str(storage_id))
+			if bool(funded.get("ok", false)):
+				events.append({
+					"type":"FactoryConstructionFunded", "world_id":str(world.get("world_id", "")),
+					"order_id":str(order.get("id", "")), "storage_id":str(storage_id),
+					"automatic":true, "moved":funded.get("moved", {}).duplicate(true)
+				})
+
+
 func _advance_construction(world: Dictionary, seconds: float, events: Array[Dictionary]) -> void:
 	var capacity := _construction_capacity_per_second(world)
 	var available_work := capacity * seconds
@@ -1461,6 +1497,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"work_done":maxf(0.0, float(order.get("work_done", 0.0))),
 			"progress":clampf(float(order.get("work_done", 0.0)) / work_required, 0.0, 1.0),
 			"priority":clampi(int(order.get("priority", 50)), 0, 100),
+			"funding_policy":str(order.get("funding_policy", "MANUAL")),
 			"status":order_status,
 			"status_tone":_status_tone(order_status),
 			"blocker_code":str(order.get("blocked_reason", ""))

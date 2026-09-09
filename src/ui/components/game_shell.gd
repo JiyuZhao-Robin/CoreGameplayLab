@@ -126,14 +126,23 @@ func set_right_collapsed(collapsed: bool, emit_change := false) -> void:
 
 
 func set_blueprint_workspace(enabled: bool) -> void:
-	# Ship Assembly already owns its library, engineering inspector and status
-	# feedback. Hide the shell duplicates while this full-width workspace is open.
+	# Factory and Ship workspaces own their library, inspector and status feedback.
+	# Hide shell duplicates without changing the player's sidebar preferences.
 	if is_instance_valid(_left_panel):
 		_left_panel.visible = not enabled
 	if is_instance_valid(_right_panel):
 		_right_panel.visible = not enabled
 	if is_instance_valid(_bottom_panel):
 		_bottom_panel.visible = not enabled
+
+
+func set_command_workspace() -> void:
+	# The 4K command shell owns no permanent duplicate sidebars. Page-specific
+	# inspection is mounted beside that page's canvas; player collapse preferences
+	# remain available for auxiliary surfaces without controlling this layout.
+	_left_panel.hide()
+	_right_panel.hide()
+	_bottom_panel.show()
 
 
 func refresh_locale() -> void:

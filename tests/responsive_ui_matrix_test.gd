@@ -4,9 +4,11 @@ const MainScene := preload("res://src/ui/main.tscn")
 const Policy := preload("res://src/ui/responsive_ui_policy.gd")
 const UiTokens := preload("res://src/ui/ui_theme_tokens.gd")
 const WINDOW_MATRIX := [
-	Vector2i(1440, 900),
 	Vector2i(1920, 1080),
 	Vector2i(2560, 1440),
+	Vector2i(3840, 2160),
+	Vector2i(3440, 1440),
+	Vector2i(1440, 900),
 	Vector2i(1366, 768)
 ]
 
@@ -25,7 +27,7 @@ func _run() -> void:
 	_check_project_contract()
 
 	var original_window_size := get_window().size
-	get_window().size = Vector2i(1440, 900)
+	get_window().size = Vector2i(1920, 1080)
 	await get_tree().process_frame
 	var main: Control = MainScene.instantiate()
 	get_tree().root.add_child(main)
@@ -40,11 +42,10 @@ func _run() -> void:
 	var active_workspace := main.find_child("SystemMap2D", true, false) as Control
 	var active_workspace_id := active_workspace.get_instance_id() if active_workspace != null else 0
 	var system_map_signature := _system_map_signature(active_workspace)
-	var ui_state = main.get("_ui_state")
-	_check(not baseline.is_empty(), "fixed-layout matrix captured the five-region shell baseline")
+	_check(not baseline.is_empty(), "fixed-layout matrix captured the compact command shell baseline")
 	_check(main.find_child("ResponsiveUiDebounce", true, false) == null, "Main no longer owns a resize debounce that can reload the UI")
 	_check(get_tree().root.find_child("AuditCaptureViewport", false, false) == null, "ordinary startup creates no capture-only SubViewport")
-	_check(not bool(ui_state.left_rail_collapsed) and not bool(ui_state.right_inspector_collapsed), "fixed-layout baseline starts with both authored side regions expanded")
+	_check(_global_rails_are_hidden(main), "the compact command shell retains but hides redundant global sidebars")
 
 	for physical_size in WINDOW_MATRIX:
 		get_window().size = physical_size
@@ -54,23 +55,25 @@ func _run() -> void:
 		var content_rect: Rect2 = snapshot.get("canvas_content_rect", Rect2())
 		var logical_visible_size := get_viewport().get_visible_rect().size
 		_check(get_window().size == physical_size, "%s becomes the actual physical Window client size" % physical_size)
-		_check(get_window().content_scale_size == Vector2i(1440, 900), "%s keeps the runtime content-scale design size" % physical_size)
+		_check(get_window().content_scale_size == Vector2i(1920, 1080), "%s keeps the runtime content-scale design size" % physical_size)
 		_check(get_window().content_scale_mode == Window.CONTENT_SCALE_MODE_CANVAS_ITEMS, "%s keeps CanvasItem runtime scaling" % physical_size)
 		_check(get_window().content_scale_aspect == Window.CONTENT_SCALE_ASPECT_KEEP, "%s keeps the runtime aspect policy" % physical_size)
-		_check(logical_visible_size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s keeps the actual logical viewport at 1440x900" % physical_size)
+		_check(logical_visible_size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s keeps the actual logical viewport at 1920x1080" % physical_size)
 		_check(is_instance_valid(main) and main.get_instance_id() == main_instance_id, "%s resize keeps the existing Main scene instance" % physical_size)
 		_check(selector != null and is_instance_valid(selector) and selector.get_instance_id() == selector_instance_id, "%s resize does not rebuild header controls" % physical_size)
 		_check(active_workspace != null and is_instance_valid(active_workspace) and active_workspace.get_instance_id() == active_workspace_id, "%s resize keeps the active workspace instance" % physical_size)
-		_check(main.size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s keeps the logical root at 1440x900" % physical_size)
+		_check(main.size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s keeps the logical root at 1920x1080" % physical_size)
 		_check(_geometry_matches(_shell_geometry(main), baseline), "%s preserves all shell rectangles in design coordinates" % physical_size)
 		_check(_system_map_signature(active_workspace) == system_map_signature, "%s preserves System Map world and button coordinates" % physical_size)
-		_check(not bool(ui_state.left_rail_collapsed) and not bool(ui_state.right_inspector_collapsed), "%s cannot auto-collapse either authored side region" % physical_size)
+		_check(_global_rails_are_hidden(main), "%s keeps redundant global sidebars hidden instead of resizing the command workspace" % physical_size)
 		_check(String(snapshot.get("preferred_mode", "")) == Policy.MODE_MANUAL, "%s keeps the fixed MANUAL scale mode" % physical_size)
 		_check(is_equal_approx(float(snapshot.get("effective_scale", 0.0)), UiTokens.DEFAULT_UI_SCALE), "%s cannot change the effective Theme scale" % physical_size)
 		_check(String(snapshot.get("layout_profile", "")) == Policy.PROFILE_STANDARD, "%s cannot switch the authored layout profile" % physical_size)
 		_check(Vector2(snapshot.get("design_viewport_size", Vector2.ZERO)).is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "%s reports the fixed design viewport" % physical_size)
 		_check(is_equal_approx(content_rect.size.aspect(), Policy.DESIGN_VIEWPORT_SIZE.aspect()), "%s uses uniform keep-aspect scaling" % physical_size)
 		_check(content_rect.position.x >= -0.01 and content_rect.position.y >= -0.01, "%s centers letterbox/pillarbox space outside the UI" % physical_size)
+		if physical_size == Vector2i(3840, 2160):
+			_check(content_rect.position.is_equal_approx(Vector2.ZERO) and content_rect.size.is_equal_approx(Vector2(3840, 2160)), "3840x2160 is an exact 2x canvas transform with no offset")
 
 	await _check_factory_canvas_invariance(main)
 	await _check_ship_assembly_invariance(main)
@@ -94,15 +97,20 @@ func _run() -> void:
 
 
 func _check_project_contract() -> void:
-	_check(int(ProjectSettings.get_setting("display/window/size/viewport_width", 0)) == 1440, "project design viewport width is 1440")
-	_check(int(ProjectSettings.get_setting("display/window/size/viewport_height", 0)) == 900, "project design viewport height is 900")
+	_check(int(ProjectSettings.get_setting("display/window/size/viewport_width", 0)) == 1920, "project design viewport width is 1920")
+	_check(int(ProjectSettings.get_setting("display/window/size/viewport_height", 0)) == 1080, "project design viewport height is 1080")
 	_check(String(ProjectSettings.get_setting("display/window/stretch/mode", "")) == "canvas_items", "project uses CanvasItem content scaling")
-	_check(String(ProjectSettings.get_setting("display/window/stretch/aspect", "")) == "keep", "project preserves the 16:10 design aspect")
+	_check(String(ProjectSettings.get_setting("display/window/stretch/aspect", "")) == "keep", "project preserves the 16:9 design aspect")
 
 
 func _check_factory_canvas_invariance(main: Control) -> void:
-	get_window().size = Vector2i(1440, 900)
+	get_window().size = Vector2i(1920, 1080)
 	main.call("_switch_page", "industry")
+	await _settle()
+	var canvas_tab := main.find_child("FactoryTabCanvas", true, false) as Button
+	_check(canvas_tab != null, "Factory exposes its authored canvas tab from the overview")
+	if canvas_tab != null:
+		canvas_tab.pressed.emit()
 	await _settle()
 	var canvas := main.find_child("FactoryCanvas", true, false) as Control
 	_check(canvas != null, "Factory workspace exposes its independent canvas")
@@ -122,7 +130,7 @@ func _check_factory_canvas_invariance(main: Control) -> void:
 
 
 func _check_ship_assembly_invariance(main: Control) -> void:
-	get_window().size = Vector2i(1440, 900)
+	get_window().size = Vector2i(1920, 1080)
 	main.call("_switch_page", "fleet")
 	main.call("_select_fleet_section", "shipyard")
 	await _settle()
@@ -166,12 +174,13 @@ func _draft_has_distinct_positions(nodes: Array) -> bool:
 
 func _check_capture_surface_contract(main: Control) -> SubViewport:
 	var shell_before := _shell_geometry(main)
-	await main.call("_set_capture_viewport_size", Vector2i(1920, 1080))
+	await main.call("_set_capture_viewport_size", Vector2i(3840, 2160))
 	var audit_viewport := main.get_viewport() as SubViewport
-	_check(audit_viewport != null and audit_viewport.name == "AuditCaptureViewport" and audit_viewport.size == Vector2i(1920, 1080), "capture path owns an exact physical output viewport")
+	_check(audit_viewport != null and audit_viewport.name == "AuditCaptureViewport" and audit_viewport.size == Vector2i(3840, 2160), "capture path owns an exact 4K physical output viewport")
 	_check(main.size.is_equal_approx(Policy.DESIGN_VIEWPORT_SIZE), "capture output does not become a new logical UI layout size")
-	_check(main.scale.is_equal_approx(Vector2(1.2, 1.2)) and main.position.is_equal_approx(Vector2(96, 0)), "1920x1080 capture applies one centered 16:10 keep-aspect transform")
+	_check(main.scale.is_equal_approx(Vector2(2.0, 2.0)) and main.position.is_equal_approx(Vector2.ZERO), "3840x2160 capture applies one exact 2x 16:9 transform with no offset")
 	_check(_geometry_matches(_shell_geometry(main), shell_before), "capture transform preserves internal shell geometry")
+	_check(_global_rails_are_hidden(main), "capture transform preserves the compact command-shell sidebar policy")
 	return audit_viewport
 
 
@@ -195,9 +204,8 @@ func _settle() -> void:
 func _shell_geometry(main: Control) -> Dictionary:
 	var names := [
 		"TopStatusBar",
-		"ResourceRailSurface",
+		"WorkspaceNavigationBar",
 		"CentralWorkspace",
-		"ContextInspectorSurface",
 		"CommandDockSurface"
 	]
 	var result := {}
@@ -207,6 +215,12 @@ func _shell_geometry(main: Control) -> Dictionary:
 			return {}
 		result[node_name] = control.get_rect()
 	return result
+
+
+func _global_rails_are_hidden(main: Control) -> bool:
+	var left := main.find_child("ResourceRailSurface", true, false) as Control
+	var right := main.find_child("ContextInspectorSurface", true, false) as Control
+	return left != null and right != null and not left.visible and not right.visible
 
 
 func _geometry_matches(current: Dictionary, expected: Dictionary) -> bool:

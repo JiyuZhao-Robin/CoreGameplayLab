@@ -21,7 +21,9 @@ var _empty_modules: Label
 
 func _ready() -> void:
 	name = "ShipAssemblyLibrary"
-	custom_minimum_size.x = 300.0
+	# The editor assigns the 23 / 52 / 25 workspace columns. This is only a
+	# standalone safety floor; tab lists scroll inside their bounded region.
+	custom_minimum_size.x = 270.0
 	add_theme_stylebox_override("panel", UiTokens.panel_style(Color("0b1716"), UiTokens.COLOR_BORDER, 4))
 	_build_frame()
 
@@ -46,18 +48,18 @@ func current_tab() -> int:
 
 func _build_frame() -> void:
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_top", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_bottom", 12)
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
 	add_child(margin)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 10)
+	column.add_theme_constant_override("separation", 8)
 	margin.add_child(column)
 	var eyebrow := _label(I18n.core("ships.assembly.design_assets", "DESIGN ASSETS"), 9, UiTokens.COLOR_FOCUS)
 	eyebrow.name = "AssemblyLibraryEyebrow"
 	column.add_child(eyebrow)
-	var hint := _label(I18n.core("ships.assembly.design_assets_hint", "Drag hulls and modules into the blueprint. Select an asset to inspect its engineering data."), 9, UiTokens.COLOR_TEXT_MUTED)
+	var hint := _label(I18n.core("ships.assembly.design_assets_hint", "Drag hulls and modules into the blueprint. Select an asset to inspect its engineering data."), 8, UiTokens.COLOR_TEXT_MUTED)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(hint)
 	_tabs = TabContainer.new()
@@ -112,6 +114,7 @@ func _build_modules_tab() -> Control:
 	tools.add_child(_category)
 	column.add_child(tools)
 	var scroll := ScrollContainer.new()
+	scroll.name = "AssemblyModulesScroll"
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_module_cards = VBoxContainer.new()
@@ -151,7 +154,7 @@ func _rebuild_ship_cards() -> void:
 			I18n.core("ships.assembly.drag_hull", "Drag hull to the assembly canvas"),
 			_hull_thumbnail_path(ui_visual)
 		)
-		card.custom_minimum_size = Vector2(266.0, card.recommended_height(140.0))
+		card.custom_minimum_size = Vector2(266.0, card.recommended_height(118.0))
 		card.pressed.connect(_on_card_pressed.bind("hull", ship_id))
 		cards.add_child(card)
 
@@ -188,7 +191,7 @@ func _rebuild_module_cards() -> void:
 			I18n.core("ships.assembly.drag_module", "Drag into the canvas and connect to a matching hull socket"),
 			ShipAssemblyMapViewScript.module_thumbnail_path(module)
 		)
-		card.custom_minimum_size = Vector2(266.0, card.recommended_height(132.0))
+		card.custom_minimum_size = Vector2(266.0, card.recommended_height(108.0))
 		card.pressed.connect(_on_card_pressed.bind("module", module_id))
 		_module_cards.add_child(card)
 		visible_count += 1

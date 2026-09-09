@@ -147,7 +147,7 @@ func _draw_connection_packet(route: Dictionary, link: Dictionary, tone: Color, s
 	var progress := elapsed / maxf(travel_seconds, 0.001)
 	var envelope := smoothstep(0.0, 0.12, progress) * (1.0 - smoothstep(0.82, 1.0, progress))
 	var world_position := _sample_cached_route(route, progress)
-	var position := world_position * _graph.zoom - _graph.scroll_offset
+	var position := _graph.call("world_to_canvas_screen", world_position) as Vector2
 	draw_circle(position, 5.0 if selected else 4.0, Color(tone, 0.075 * envelope))
 	draw_circle(position, 2.2 if selected else 1.7, Color(tone.lightened(0.22), 0.72 * envelope))
 
@@ -215,7 +215,7 @@ func _draw_connection_arrow(path: PackedVector2Array, tone: Color, width: float,
 
 func _draw_install_packet(route: Dictionary, tone: Color, progress: float) -> void:
 	var world_position := _sample_cached_route(route, progress)
-	var position := world_position * _graph.zoom - _graph.scroll_offset
+	var position := _graph.call("world_to_canvas_screen", world_position) as Vector2
 	var envelope := sin(clampf(progress, 0.0, 1.0) * PI)
 	draw_circle(position, 7.0, Color(tone, 0.10 * envelope))
 	draw_circle(position, 2.4, Color(tone.lightened(0.22), 0.82 * envelope))
@@ -345,5 +345,5 @@ func _world_to_screen(world_path: PackedVector2Array) -> PackedVector2Array:
 	var result := PackedVector2Array()
 	result.resize(world_path.size())
 	for index in world_path.size():
-		result[index] = world_path[index] * _graph.zoom - _graph.scroll_offset
+		result[index] = _graph.call("world_to_canvas_screen", world_path[index]) as Vector2
 	return result

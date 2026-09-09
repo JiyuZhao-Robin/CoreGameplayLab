@@ -23,6 +23,9 @@ func _run() -> void:
 	var fixture := _fixture_snapshot()
 	var original_fixture_signature := JSON.stringify(fixture)
 	workspace.apply_snapshot(fixture)
+	# Default landing is covered by factory_operations_ui_test. This suite
+	# explicitly enters the authored canvas before testing pointer geometry.
+	workspace.call("_set_active_subworkspace", "CANVAS")
 	await _settle()
 
 	var intents: Array = []
@@ -80,7 +83,7 @@ func _test_initial_render(workspace) -> void:
 	var scale_label := workspace.find_child("FactoryWorldScale", true, false) as Label
 	var building_card: Node = workspace.find_child("BuildingSelectionCard", true, false)
 	var connection_status := workspace.find_child("ConnectionStatus", true, false) as Label
-	_check(scale_label != null and scale_label.text.contains("256 × 160") and scale_label.text.contains("4 × 3") and building_card != null and connection_status != null and not connection_status.text.is_empty(), "Factory workspace exposes planet scale, construction card, and guided connection status")
+	_check(scale_label != null and scale_label.tooltip_text.contains("256 × 160") and scale_label.tooltip_text.contains("4 × 3") and building_card != null and connection_status != null and not connection_status.text.is_empty(), "Factory workspace exposes detailed planet scale in its telemetry tooltip, construction card, and connection status")
 	_check(canvas != null and canvas.selected_node_id().is_empty() and canvas.selected_link_id().is_empty(), "Factory canvas starts with an empty presentation-only selection")
 	var bottom_palette := workspace.find_child("FactoryBuildPalette", true, false) as Control
 	var center_column := workspace.find_child("FactoryCenterColumn", true, false) as VBoxContainer

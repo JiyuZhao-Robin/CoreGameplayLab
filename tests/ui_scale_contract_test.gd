@@ -71,7 +71,7 @@ func _test_fixed_shell_contract(main: Control) -> void:
 	if selector != null:
 		for index in selector.item_count:
 			selector_ids.append(selector.get_item_id(index))
-	_check(main.size.is_equal_approx(FixedPolicy.DESIGN_VIEWPORT_SIZE), "Main is authored on the 1440x900 logical canvas")
+	_check(main.size.is_equal_approx(FixedPolicy.DESIGN_VIEWPORT_SIZE), "Main is authored on the 1920x1080 logical canvas")
 	_check(selector != null and selector.item_count == UiTokens.SUPPORTED_UI_SCALES.size(), "the header exposes only explicit UI scale choices")
 	_check(not selector_ids.has(FixedPolicy.AUTO_SELECTOR_ID), "window-driven AUTO is absent from the player selector")
 	_check(selector != null and selector.get_item_id(selector.selected) == 125, "the fixed layout starts at the explicit 125% preference")
@@ -84,7 +84,10 @@ func _test_fixed_shell_contract(main: Control) -> void:
 	_check(main.scale.is_equal_approx(Vector2.ONE), "Main does not add a second Control transform on top of Window content scaling")
 	var left := main.find_child("ResourceRailSurface", true, false) as Control
 	var right := main.find_child("ContextInspectorSurface", true, false) as Control
-	_check(left != null and right != null and left.visible and right.visible, "the fixed baseline keeps both side regions available")
+	var navigation := main.find_child("WorkspaceNavigationBar", true, false) as Control
+	var workspace := main.find_child("CentralWorkspace", true, false) as Control
+	_check(left != null and right != null and not left.visible and not right.visible, "the compact baseline retains but hides both redundant global side regions")
+	_check(navigation != null and navigation.visible and workspace != null and workspace.visible, "the compact baseline keeps global navigation and the command workspace available")
 
 
 func _test_resize_is_presentation_only(main: Control) -> void:
@@ -100,8 +103,9 @@ func _test_resize_is_presentation_only(main: Control) -> void:
 	_check(_shell_geometry(main) == before_geometry, "resize leaves shell geometry unchanged in design coordinates")
 	_check(is_equal_approx(float(before_snapshot.get("effective_scale", 0.0)), float(after_snapshot.get("effective_scale", -1.0))), "resize leaves effective Theme scale unchanged")
 	_check(String(after_snapshot.get("layout_profile", "")) == FixedPolicy.PROFILE_STANDARD, "resize leaves the layout profile unchanged")
+	var left := main.find_child("ResourceRailSurface", true, false) as Control
 	var right := main.find_child("ContextInspectorSurface", true, false) as Control
-	_check(right != null and right.visible, "resize does not turn the right inspector into an automatic drawer")
+	_check(left != null and right != null and not left.visible and not right.visible, "resize keeps redundant global side regions hidden rather than turning them into drawers")
 
 
 func _test_explicit_accessibility_scale(main: Control) -> void:
@@ -129,7 +133,7 @@ func _test_explicit_accessibility_scale(main: Control) -> void:
 
 func _shell_geometry(main: Control) -> Dictionary:
 	var result := {}
-	for node_name in ["TopStatusBar", "ResourceRailSurface", "CentralWorkspace", "ContextInspectorSurface", "CommandDockSurface"]:
+	for node_name in ["TopStatusBar", "WorkspaceNavigationBar", "CentralWorkspace", "CommandDockSurface"]:
 		var control := main.find_child(node_name, true, false) as Control
 		if control != null:
 			result[node_name] = control.get_rect()

@@ -9,9 +9,13 @@ signal building_selected(building_id: String)
 signal filter_changed(filter_id: String)
 
 const ThemeTokens = preload("res://src/ui/ui_theme_tokens.gd")
-const ICON_ATLAS_PATH := "res://assets/ui/factory/generated/factory_building_icon_atlas_v1.png"
-const ICON_ATLAS_COLUMNS := 4
-const ICON_ATLAS_ROWS := 3
+const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
+const NAVY := Color("0c141c")
+const RAISED := Color("15222d")
+const BORDER := Color("304652")
+const CYAN := Color("65d9d1")
+const OFFWHITE := Color("e4ecef")
+const MUTED := Color("96aab7")
 const PALETTE_HEIGHT := 118.0
 const CARD_WIDTH := 128.0
 const CARD_HEIGHT := 72.0
@@ -31,37 +35,6 @@ const LOGISTICS_STORAGE_IDS := [
 	"grid_special_vault"
 ]
 
-## The atlas maps eleven current content silhouettes plus one reserved power-hub
-## cell at index 9. Unknown and late-game buildings fall back to their semantic
-## kind cell instead of losing the card or inventing a second content authority.
-const ICON_INDEX_BY_BUILDING := {
-	"grid_surface_mine":0,
-	"grid_cryogenic_extractor":0,
-	"grid_exotic_extractor":0,
-	"grid_cargo_splitter":1,
-	"grid_cargo_merger":1,
-	"grid_engineering_works":2,
-	"grid_arc_smelter":3,
-	"grid_electronics_works":4,
-	"grid_assembly_array":5,
-	"grid_bulk_depot":6,
-	"grid_component_depot":6,
-	"grid_fluid_tank":7,
-	"grid_solar_array":8,
-	"grid_research_complex":10,
-	"grid_research_complex_ii":10,
-	"grid_repair_dock":11,
-	"grid_construction_yard":11
-}
-const ICON_INDEX_BY_KIND := {
-	"POWER":8,
-	"EXTRACTOR":0,
-	"MACHINE":2,
-	"ROUTER":1,
-	"STORAGE":6,
-	"CONSTRUCTION":11
-}
-
 var _buildings: Array = []
 var _building_signature := ""
 var _selected_building_id := ""
@@ -80,10 +53,12 @@ var _card_focus_style: StyleBoxFlat
 
 var _title_label: Label
 var _count_label: Label
+var _more_cards_indicator: Label
 var _quick_filter: OptionButton
 var _cards: HBoxContainer
 var _empty_label: Label
 var _detail_body: VBoxContainer
+var _palette_scroll: ScrollContainer
 
 
 func _ready() -> void:
@@ -97,13 +72,12 @@ func ensure_built() -> void:
 	name = "FactoryBuildPalette"
 	custom_minimum_size = Vector2(0, ThemeTokens.layout_px(PALETTE_HEIGHT))
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_stylebox_override("panel", ThemeTokens.panel_style(ThemeTokens.COLOR_INSET, ThemeTokens.COLOR_BORDER_STRONG, 4))
-	_card_normal_style = ThemeTokens.control_style(ThemeTokens.COLOR_CONTROL, ThemeTokens.COLOR_BORDER, 3)
-	_card_selected_style = ThemeTokens.control_style(ThemeTokens.COLOR_CONTROL_ACTIVE, ThemeTokens.COLOR_FOCUS, 3)
-	_card_hover_style = ThemeTokens.control_style(ThemeTokens.COLOR_CONTROL_HOVER, ThemeTokens.COLOR_BORDER_STRONG, 3)
-	_card_focus_style = ThemeTokens.control_style(ThemeTokens.COLOR_CONTROL_ACTIVE, ThemeTokens.COLOR_FOCUS, 3)
-	if ResourceLoader.exists(ICON_ATLAS_PATH):
-		_atlas_texture = load(ICON_ATLAS_PATH) as Texture2D
+	add_theme_stylebox_override("panel", ThemeTokens.panel_style(NAVY, BORDER, 4))
+	_card_normal_style = ThemeTokens.control_style(RAISED, BORDER, 3)
+	_card_selected_style = ThemeTokens.control_style(Color("19323d"), CYAN, 3)
+	_card_hover_style = ThemeTokens.control_style(Color("1b2d39"), Color(CYAN, 0.72), 3)
+	_card_focus_style = ThemeTokens.control_style(Color("19323d"), CYAN, 3)
+	_atlas_texture = BuildingArt.atlas_texture()
 
 	var layout := VBoxContainer.new()
 	layout.name = "FactoryBuildPaletteLayout"
@@ -116,7 +90,7 @@ func ensure_built() -> void:
 	header.add_theme_constant_override("separation", ThemeTokens.layout_px(5))
 	layout.add_child(header)
 
-	_title_label = _label(_t("factory.palette.construction", "Construction palette"), ThemeTokens.COLOR_FOCUS, 13)
+	_title_label = _label(_t("factory.palette.construction", "Construction palette"), CYAN, 13)
 	_title_label.name = "BuildPaletteTitle"
 	_title_label.custom_minimum_size.x = ThemeTokens.layout_px(116)
 	_title_label.clip_text = true
@@ -149,13 +123,23 @@ func ensure_built() -> void:
 		button.pressed.connect(_set_filter.bind(filter_id))
 		filter_row.add_child(button)
 		_filter_buttons[filter_id] = button
-	_count_label = _label("", ThemeTokens.COLOR_TEXT_MUTED, 11)
+	_count_label = _label("", MUTED, 11)
 	_count_label.name = "BuildPaletteCount"
-	_count_label.custom_minimum_size.x = ThemeTokens.layout_px(76)
-	_count_label.clip_text = true
-	_count_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	# Keep this independent from the filter scroller.  At the 4K command view
+	# the old 76px slot cut "visible / total" at the slash, hiding both the real
+	# inventory and that more cards existed off-screen.
+	_count_label.custom_minimum_size.x = ThemeTokens.layout_px(112)
+	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_count_label.clip_text = false
 	_count_label.tooltip_text = _t("factory.palette.visible_count_tooltip", "Visible and total buildable buildings")
 	header.add_child(_count_label)
+	_more_cards_indicator = _label("↔", CYAN, 13)
+	_more_cards_indicator.name = "PaletteMoreCardsIndicator"
+	_more_cards_indicator.custom_minimum_size.x = ThemeTokens.layout_px(22)
+	_more_cards_indicator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_more_cards_indicator.tooltip_text = _t("factory.tooltip.building_palette", "Choose a building, then click a free tile to queue construction.")
+	_more_cards_indicator.visible = false
+	header.add_child(_more_cards_indicator)
 	_quick_filter = OptionButton.new()
 	_quick_filter.name = "BuildingPalette"
 	_quick_filter.fit_to_longest_item = false
@@ -170,18 +154,18 @@ func ensure_built() -> void:
 	content.add_theme_constant_override("separation", ThemeTokens.layout_px(8))
 	layout.add_child(content)
 
-	var palette_scroll := ScrollContainer.new()
-	palette_scroll.name = "PaletteScroll"
-	palette_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	palette_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	palette_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	palette_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	content.add_child(palette_scroll)
+	_palette_scroll = ScrollContainer.new()
+	_palette_scroll.name = "PaletteScroll"
+	_palette_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_palette_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_palette_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_palette_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	content.add_child(_palette_scroll)
 	_cards = HBoxContainer.new()
 	_cards.name = "FactoryPalette"
 	_cards.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_cards.add_theme_constant_override("separation", ThemeTokens.layout_px(6))
-	palette_scroll.add_child(_cards)
+	_palette_scroll.add_child(_cards)
 	_empty_label = _label(_t("factory.palette.empty", "No unlocked buildings match this filter."), ThemeTokens.COLOR_TEXT_MUTED, 12)
 	_empty_label.name = "BuildPaletteEmpty"
 	_empty_label.visible = false
@@ -190,12 +174,13 @@ func ensure_built() -> void:
 	var detail_panel := PanelContainer.new()
 	detail_panel.name = "BuildingSelectionCard"
 	detail_panel.custom_minimum_size.x = ThemeTokens.layout_px(286)
-	detail_panel.add_theme_stylebox_override("panel", ThemeTokens.panel_style(ThemeTokens.COLOR_PANEL, ThemeTokens.COLOR_BORDER, 3))
+	detail_panel.add_theme_stylebox_override("panel", ThemeTokens.panel_style(RAISED, BORDER, 3))
 	content.add_child(detail_panel)
 	_detail_body = VBoxContainer.new()
 	_detail_body.name = "BuildingSelectionDetails"
 	_detail_body.add_theme_constant_override("separation", ThemeTokens.layout_px(3))
 	detail_panel.add_child(_detail_body)
+	resized.connect(_schedule_more_cards_affordance)
 	_refresh_all()
 
 
@@ -417,6 +402,19 @@ func _refresh_header() -> void:
 		var button: Button = _filter_buttons.get(filter_id_value) as Button
 		if button != null:
 			button.set_pressed_no_signal(str(filter_id_value) == _active_filter_id)
+	_schedule_more_cards_affordance()
+
+
+func _schedule_more_cards_affordance() -> void:
+	if is_instance_valid(_palette_scroll) and is_instance_valid(_more_cards_indicator):
+		call_deferred("_refresh_more_cards_affordance")
+
+
+func _refresh_more_cards_affordance() -> void:
+	if not is_instance_valid(_palette_scroll) or not is_instance_valid(_more_cards_indicator):
+		return
+	var scrollbar := _palette_scroll.get_h_scroll_bar()
+	_more_cards_indicator.visible = scrollbar != null and scrollbar.max_value > 0.5
 
 
 func _refresh_all() -> void:
@@ -477,22 +475,7 @@ func _building_tooltip(building: Dictionary) -> String:
 
 
 func _building_icon(building: Dictionary) -> Texture2D:
-	if _atlas_texture == null:
-		return null
-	var building_id := str(building.get("id", ""))
-	var kind := str(building.get("kind", "")).to_upper()
-	var index := int(ICON_INDEX_BY_BUILDING.get(building_id, ICON_INDEX_BY_KIND.get(kind, 0)))
-	var cell_width := float(_atlas_texture.get_width()) / float(ICON_ATLAS_COLUMNS)
-	var cell_height := float(_atlas_texture.get_height()) / float(ICON_ATLAS_ROWS)
-	if cell_width <= 0.0 or cell_height <= 0.0:
-		return null
-	var atlas := AtlasTexture.new()
-	atlas.atlas = _atlas_texture
-	atlas.region = Rect2(
-		Vector2(float(index % ICON_ATLAS_COLUMNS) * cell_width, float(floori(float(index) / float(ICON_ATLAS_COLUMNS))) * cell_height),
-		Vector2(cell_width, cell_height)
-	)
-	return atlas
+	return BuildingArt.icon_texture(_atlas_texture, str(building.get("id", "")), str(building.get("kind", "")))
 
 
 func _apply_card_style(button: Button, selected: bool) -> void:

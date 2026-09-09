@@ -22,6 +22,7 @@ func _run() -> void:
 	var intents: Array = []
 	workspace.command_requested.connect(func(intent: Dictionary) -> void: intents.append(intent.duplicate(true)))
 	workspace.apply_snapshot(_fixture())
+	workspace.call("_set_active_subworkspace", "CANVAS")
 	await process_frame
 	await process_frame
 

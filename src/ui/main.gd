@@ -93,6 +93,7 @@ const FLEET_ROSTER_BULK_DISMANTLE := 207
 const FLEET_ROSTER_GOLDEN_SCALE := 1.5
 
 var _tabs: TabContainer
+var _section_navigation: HBoxContainer
 var _shell
 var _ui_state = UiNavigationStateScript.new()
 var _pages: Dictionary = {}
@@ -151,6 +152,7 @@ var _selected_factory_world_id := ""
 var _rendered_factory_world_id := ""
 var _selected_research_project_id := ""
 var _ship_blueprint_editor: ShipAssemblyBlueprintEditor
+var _shipyard_session: Dictionary = {}
 var _shipyard_handoff_content: VBoxContainer
 var _reduced_motion := false
 # `_ui_scale` remains the effective Theme scale so existing builders retain one
@@ -181,10 +183,13 @@ const MIN_PRODUCTION_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 
 func _ready() -> void:
-	# Production UI always lays out in the fixed 1440x900 design viewport declared
+	# Production UI always lays out in the fixed 1920x1080 design viewport declared
 	# in project.godot. The physical Window only applies one uniform canvas scale.
 	get_window().min_size = MIN_PRODUCTION_VIEWPORT_SIZE
 	_load_ui_preferences()
+	if get_tree().root.has_meta("shipyard_ui_session"):
+		_shipyard_session = get_tree().root.get_meta("shipyard_ui_session").duplicate(true)
+		get_tree().root.remove_meta("shipyard_ui_session")
 	for argument in OS.get_cmdline_user_args():
 		if String(argument).begins_with("--fleet-section="):
 			_fleet_section = String(argument).trim_prefix("--fleet-section=")
@@ -318,6 +323,10 @@ func _build_shell() -> void:
 	_pages["resource_rail"] = resource_box
 
 	_shell.center_slot.add_child(_build_navigation_rail())
+	_section_navigation = HBoxContainer.new()
+	_section_navigation.name = "WorkspaceSectionNavigation"
+	_section_navigation.add_theme_constant_override("separation", UiTokens.layout_px(6))
+	_shell.center_slot.add_child(_section_navigation)
 
 	_tabs = TabContainer.new()
 	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -352,55 +361,90 @@ func _build_shell() -> void:
 	sidebar_scroll.add_child(sidebar_box)
 	_pages["sidebar"] = sidebar_box
 	_shell.bottom_slot.add_child(_build_command_dock())
+	_shell.set_command_workspace()
 
 
 func _build_navigation_rail() -> Control:
 	var panel := _panel(UiTokens.COLOR_RAISED)
 	panel.name = "WorkspaceNavigationBar"
 	panel.custom_minimum_size.y = UiTokens.workspace_navigation_height()
-	var margin := _margin(8, 6, 8, 6)
+	var margin := _margin(12, 5, 12, 5)
 	margin.name = "WorkspaceNavigationMargin"
 	panel.add_child(margin)
-	var rail := HFlowContainer.new()
+	var rail := HBoxContainer.new()
 	rail.name = "WorkspaceNavigationFlow"
-	rail.add_theme_constant_override("h_separation", UiTokens.layout_px(4))
-	rail.add_theme_constant_override("v_separation", UiTokens.layout_px(4))
+	rail.add_theme_constant_override("separation", UiTokens.layout_px(8))
 	margin.add_child(rail)
-	var operations_title := _label(I18n.core("shell.workspaces", "WORKSPACES"), 10, COLOR_MUTED)
-	operations_title.name = "OperationsTitle"
-	operations_title.custom_minimum_size.x = UiTokens.layout_px(78)
-	operations_title.visible = _ui_scale <= 1.0
-	operations_title.autowrap_mode = TextServer.AUTOWRAP_OFF
-	operations_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	operations_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	rail.add_child(operations_title)
-	var entries := [
-		["system_map", "nav.system_map"],
-		["location", "nav.location"],
-		["industry", "nav.industry"],
-		["inventory", "nav.inventory"],
-		["logistics", "nav.logistics"],
-		["construction", "nav.construction"],
-		["research", "nav.research"],
-		["fleet", "nav.ships"],
-		["frontier", "nav.survey"],
-		["megastructure", "nav.megastructure"],
-		["diagnostics", "nav.diagnostics"]
-	]
-	for entry in entries:
-		var key := String(entry[0])
-		var button := _button(I18n.core("nav.short.%s" % key, I18n.core(String(entry[1]))), _switch_page.bind(key))
-		var public_key := "ships" if key == "fleet" else ("survey" if key == "frontier" else key)
-		button.name = "Navigation_%s" % public_key
-		button.tooltip_text = I18n.core(String(entry[1]))
-		button.custom_minimum_size = UiTokens.layout_vector(Vector2(58, 34))
-		button.add_theme_font_size_override("font_size", UiTokens.font_size(12))
+	for key in ["system_map", "industry", "inventory", "research", "fleet", "megastructure", "diagnostics"]:
+		if key == "diagnostics":
+			var utility_gap := Control.new()
+			utility_gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rail.add_child(utility_gap)
+		var button := _button("", _switch_page.bind(key))
+		button.name = "Navigation_%s" % ("ships" if key == "fleet" else key)
+		button.custom_minimum_size = UiTokens.layout_vector(Vector2(132, 34))
+		button.add_theme_font_size_override("font_size", UiTokens.font_size(16))
+		var keyboard_focus := UiTokens.panel_style(Color.TRANSPARENT, UiTokens.COLOR_TEXT_SECONDARY.darkened(0.35), 2)
+		keyboard_focus.set_border_width_all(1)
+		button.add_theme_stylebox_override("focus", keyboard_focus)
 		_nav_buttons[key] = button
 		rail.add_child(button)
 	return panel
 
+func _page_group(key: String) -> String:
+	if key in ["system_map", "location", "frontier"]: return "system_map"
+	if key in ["industry", "construction"]: return "industry"
+	if key in ["inventory", "logistics"]: return "inventory"
+	if key in ["fleet", "expedition"]: return "fleet"
+	return key
+
+func _refresh_group_navigation() -> void:
+	if not is_instance_valid(_section_navigation):
+		return
+	var group := _page_group(_active_page_key)
+	var routes: Array = {"system_map":["system_map", "location", "frontier"], "inventory":["inventory", "logistics"]}.get(group, [])
+	_section_navigation.visible = not routes.is_empty()
+	var signature := "%s/%s/%s" % [group, I18n.current_locale, _selected_location_id]
+	if str(_section_navigation.get_meta("signature", "")) == signature:
+		for child in _section_navigation.get_children():
+			if child is Button and child.has_meta("route"):
+				child.disabled = str(child.get_meta("route")) == _active_page_key
+		return
+	_clear(_section_navigation)
+	_section_navigation.set_meta("signature", signature)
+	for key_value in routes:
+		var key := str(key_value)
+		var button := _button(I18n.core(str(NAV_TRANSLATION_KEYS.get(key, "nav." + key))), _switch_page.bind(key), key == _active_page_key)
+		button.name = "SectionRoute_%s" % key
+		button.set_meta("route", key)
+		_style_section_button(button, key == _active_page_key)
+		_section_navigation.add_child(button)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_section_navigation.add_child(spacer)
+	var selector := OptionButton.new()
+	selector.name = "WorkspaceLocationSelector"
+	selector.custom_minimum_size.x = UiTokens.layout_px(240)
+	selector.fit_to_longest_item = false
+	var ids: Array[String] = []
+	for id_value in Game.state.locations.keys():
+		var id := str(id_value)
+		if str(Game.state.location_state(id).get("discovery_state", "")) == LocationState.DISCOVERED:
+			ids.append(id)
+	ids.sort()
+	for id in ids:
+		selector.add_item(_location_name(id))
+		if id == _selected_location_id:
+			selector.select(selector.item_count - 1)
+	selector.item_selected.connect(_on_context_location_selected.bind(ids))
+	_section_navigation.add_child(selector)
+
 
 func _switch_page(key: String, record_history: bool = true) -> void:
+	if key == "construction":
+		_switch_page("industry", record_history)
+		call_deferred("_activate_factory_construction")
+		return
 	var page: Control = _page_controls.get(key)
 	if not is_instance_valid(page):
 		return
@@ -415,27 +459,27 @@ func _switch_page(key: String, record_history: bool = true) -> void:
 	_record_telemetry("ScreenOpen", {"screen":key})
 
 
+func _activate_factory_construction() -> void:
+	_rebuild_active_page()
+	if is_instance_valid(_factory_workspace):
+		_factory_workspace.call("_set_active_subworkspace", "CONSTRUCTION")
+
+
 func _update_navigation_state() -> void:
 	if not is_instance_valid(_tabs):
 		return
+	var group := _page_group(_active_page_key)
 	for key_value in _nav_buttons.keys():
-		var key := String(key_value)
+		var key := str(key_value)
 		var button := _nav_buttons[key] as Button
-		var page: Control = _page_controls.get(key)
-		var active := is_instance_valid(page) and page.get_index() == _tabs.current_tab
+		var active := key == group
+		var caption := I18n.core("ui4k.group." + key, key.capitalize())
 		var availability: Dictionary = Game.ui_navigation_availability(key)
-		var caption := I18n.core("nav.short.%s" % key, I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize()))
-		if not bool(availability.get("unlocked", true)):
-			caption += " *"
-		button.text = caption
-		button.tooltip_text = I18n.core(String(NAV_TRANSLATION_KEYS.get(key, "nav.%s" % key)), key.capitalize()) if bool(availability.get("unlocked", true)) else I18n.core(String(availability.get("condition_key", "")), "Progression requirement not met")
-		var compact_roster := _active_page_key == "fleet" and _fleet_section == "roster"
-		button.add_theme_color_override("font_color", COLOR_ACCENT if active else (COLOR_TEXT_SECONDARY if compact_roster else COLOR_TEXT))
-		button.add_theme_stylebox_override("normal", _fleet_roster_navigation_style(active, false) if compact_roster else _button_style(UiTokens.COLOR_CONTROL_ACTIVE if active else UiTokens.COLOR_CONTROL, COLOR_ACCENT if active else COLOR_BORDER))
-		if compact_roster:
-			button.add_theme_stylebox_override("hover", _fleet_roster_navigation_style(active, true))
-			button.add_theme_stylebox_override("pressed", _fleet_roster_navigation_style(true, true))
-			button.add_theme_stylebox_override("focus", _fleet_roster_navigation_style(true, true))
+		button.text = ("◇ " if not bool(availability.get("unlocked", true)) else "") + caption
+		button.tooltip_text = caption if bool(availability.get("unlocked", true)) else I18n.core(str(availability.get("condition_key", "")), "Progression requirement not met")
+		button.add_theme_color_override("font_color", COLOR_ACCENT if active else COLOR_TEXT_SECONDARY)
+		button.add_theme_stylebox_override("normal", _button_style(UiTokens.COLOR_CONTROL_ACTIVE if active else UiTokens.COLOR_CONTROL, COLOR_ACCENT if active else COLOR_BORDER))
+	_refresh_group_navigation()
 
 
 func _build_header() -> Control:
@@ -505,38 +549,25 @@ func _build_header() -> Control:
 func _build_command_dock() -> Control:
 	var row := HBoxContainer.new()
 	row.name = "CommandDock"
-	row.add_theme_constant_override("separation", UiTokens.layout_px(UiTokens.SPACING_MD))
-	var identity := VBoxContainer.new()
-	identity.custom_minimum_size.x = UiTokens.layout_px(148)
-	var dock_title := _label(I18n.core("shell.command_dock", "COMMAND DOCK"), 10, COLOR_MUTED)
-	dock_title.name = "CommandDockTitle"
-	identity.add_child(dock_title)
-	_dock_workspace_label = _label("", 15, COLOR_TEXT)
+	row.add_theme_constant_override("separation", UiTokens.layout_px(10))
+	var back := _button(I18n.core("shell.back", "Back"), _navigate_back)
+	back.name = "ShellBack"
+	row.add_child(back)
+	_dock_workspace_label = _label("", 12, COLOR_ACCENT)
 	_dock_workspace_label.name = "DockWorkspaceLabel"
-	identity.add_child(_dock_workspace_label)
-	row.add_child(identity)
-	var separator := VSeparator.new()
-	row.add_child(separator)
-	_notice_label = Label.new()
+	_dock_workspace_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_dock_workspace_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_dock_workspace_label)
+	_notice_label = _label("", 12, COLOR_MUTED)
 	_notice_label.name = "AlertsTimelineTasks"
 	_notice_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_notice_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_notice_label.add_theme_font_size_override("font_size", UiTokens.font_size(12))
-	_notice_label.add_theme_color_override("font_color", COLOR_MUTED)
-	_notice_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_notice_label.max_lines_visible = 3
+	_notice_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_notice_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_notice_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(_notice_label)
-	var actions := VBoxContainer.new()
-	actions.custom_minimum_size.x = UiTokens.layout_px(142)
-	actions.add_theme_constant_override("separation", UiTokens.layout_px(UiTokens.SPACING_XS))
-	var back_button := _button(I18n.core("shell.back", "Back"), _navigate_back)
-	back_button.name = "ShellBack"
-	actions.add_child(back_button)
-	_dock_next_button = _button(I18n.core("shell.next_action", "Next action"), _open_next_flow_target, false, COLOR_GOOD)
+	_dock_next_button = _button(I18n.core("ui4k.task_orders", "Task orders"), _open_next_flow_target)
 	_dock_next_button.name = "DockNextStep"
-	actions.add_child(_dock_next_button)
-	row.add_child(actions)
+	row.add_child(_dock_next_button)
 	return row
 
 
@@ -594,6 +625,8 @@ func _rebuild_all() -> void:
 	_rebuild_expedition()
 	_rebuild_megastructure()
 	_rebuild_diagnostics()
+	for page_key in _pages:
+		_compose_workspace(String(page_key))
 	_update_header()
 	_update_bottom_bar()
 	_update_navigation_state()
@@ -638,7 +671,7 @@ func _rebuild_active_page() -> void:
 		"construction": _rebuild_construction()
 		"research": _rebuild_research()
 		"fleet":
-			if _fleet_section == "shipyard" and is_instance_valid(_ship_blueprint_editor) and is_instance_valid(_shipyard_handoff_content):
+			if _fleet_section == "shipyard" and is_instance_valid(_ship_blueprint_editor) and is_instance_valid(_shipyard_handoff_content) and str(_ship_blueprint_editor.get_meta("ui_locale", "")) == I18n.current_locale:
 				_ship_blueprint_editor.refresh_domain_state()
 				_rebuild_shipyard_handoff()
 			else:
@@ -646,6 +679,7 @@ func _rebuild_active_page() -> void:
 		"expedition": _rebuild_expedition()
 		"megastructure": _rebuild_megastructure()
 		"diagnostics": _rebuild_diagnostics()
+	_compose_workspace(key)
 	_update_header()
 	_update_bottom_bar()
 	_update_navigation_state()
@@ -819,17 +853,27 @@ func _build_research_project_inspector(box: VBoxContainer, project_id: String) -
 	else:
 		box.add_child(_requirements_label(project.get("requirements", [])))
 	box.add_child(_separator())
-	box.add_child(_label(I18n.core("research.roadmap.title"), 10, COLOR_MUTED))
+
 	box.add_child(_label(_research_roadmap_text(project, int(Game.state.research.get("stage_index", 0)) if current else -1), 11, COLOR_TEXT_SECONDARY))
-	var close := _button(I18n.core("research.inspector.close", "Close project inspector"), _clear_research_project_selection, false, COLOR_MUTED)
-	close.name = "ResearchInspectorClose"
-	box.add_child(close)
+	# Selection remains local to the permanent project inspector.
 
 
-func _clear_research_project_selection() -> void:
-	_selected_research_project_id = ""
-	_ui_state.select_context("location", _selected_location_id)
-	_rebuild_sidebar()
+func _refresh_research_workspace_inspector() -> void:
+	var inspector := (_pages["research"] as Node).find_child("ResearchWorkspaceInspector", true, false) as VBoxContainer
+	if not is_instance_valid(inspector):
+		return
+	_clear(inspector)
+	_build_research_project_inspector(inspector, _selected_research_project_id)
+	var model := _research_graph_model()
+	var selected: Array = (model.get("nodes", []) as Array).filter(func(data): return String(data.get("id", "")) == _selected_research_project_id)
+	if not selected.is_empty():
+		model["nodes"] = selected
+		inspector.add_child(_build_research_project_index(model))
+	var blocker := _research_blocker_guidance(Game.state.research.get("blocker", {}))
+	if String(Game.state.research.get("project_id", "")) == _selected_research_project_id and not blocker.is_empty():
+		inspector.add_child(_card_text(blocker, COLOR_WARN))
+
+
 
 
 func _build_sidebar_footer(box: VBoxContainer) -> void:
@@ -945,13 +989,16 @@ func _open_location_section(location_id: String, section: String) -> void:
 	if not Game.state.has_location(location_id):
 		return
 	_selected_location_id = location_id
-	_location_section = section
+	_location_section = "industry" if section == "projects" else section
 	_save_ui_preferences()
-	_switch_page("location")
+	_switch_page("logistics" if section == "logistics" else "location")
 
 
 func _select_location_section(section: String) -> void:
-	_location_section = section
+	if section == "logistics":
+		_switch_page("logistics")
+		return
+	_location_section = "industry" if section == "projects" else section
 	_save_ui_preferences()
 	_request_active_page_refresh(true)
 
@@ -966,9 +1013,10 @@ func _rebuild_location() -> void:
 	box.add_child(_page_title(_location_name(_selected_location_id), I18n.core("location.subtitle") % [_status_text(String(location.get("type", "UNKNOWN"))), _system_name(String(location.get("system_id", "UNKNOWN")))]))
 	var nav := HBoxContainer.new()
 	nav.add_theme_constant_override("separation", 6)
-	for section in ["overview", "resources", "industry", "logistics", "projects"]:
+	for section in ["overview", "resources", "industry"]:
 		var captions := {"overview":I18n.core("location.tab.overview"), "resources":I18n.core("location.tab.resources"), "industry":I18n.core("location.tab.industry"), "logistics":I18n.core("location.tab.logistics"), "projects":I18n.core("location.tab.projects")}
 		var tab_button := _button(String(captions[section]), _select_location_section.bind(section), section == _location_section, COLOR_ACCENT)
+		_style_section_button(tab_button, section == _location_section)
 		tab_button.name = "LocationTab_%s" % section
 		nav.add_child(tab_button)
 	box.add_child(nav)
@@ -977,6 +1025,7 @@ func _rebuild_location() -> void:
 			_build_location_resources(box, location)
 		"industry":
 			_build_location_industry(box, location)
+			_build_location_projects(box, location)
 		"logistics":
 			_build_location_logistics(box, location)
 		"projects":
@@ -1049,6 +1098,9 @@ func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
 
 func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> void:
 	box.add_child(_section_title(I18n.core("location.resources.known_sites", "Mapped tile resource fields")))
+	var open_grid := _button(I18n.t("factory.location.open", "Open Factory workspace"), _open_location_section.bind(_selected_location_id, "industry"), false, COLOR_ACCENT)
+	open_grid.name = "ResourcesOpenFactory"
+	box.add_child(open_grid)
 	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
 	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
 	var resources: Array = intelligence.get("resources", [])
@@ -1595,7 +1647,7 @@ func _capture_requested_view() -> void:
 func _set_capture_viewport_size(target: Vector2i) -> void:
 	# Capture output size and UI design size are separate contracts. Use one
 	# exact-size audit viewport, then reproduce the production keep-aspect transform
-	# around the unchanged 1440x900 Main root. This avoids OS window decoration
+	# around the unchanged 1920x1080 Main root. This avoids OS window decoration
 	# quantization without turning the capture target into a new layout size.
 	var audit_viewport := SubViewport.new()
 	audit_viewport.name = "AuditCaptureViewport"
@@ -2003,46 +2055,118 @@ func _rebuild_frontier() -> void:
 			var title := I18n.category(String(profile.get("resource_category", "UNKNOWN"))) if resource_id.is_empty() else _content_name(Game.content.items.get(resource_id, {}), resource_id)
 			var card := _card()
 			card.add_child(_label(title, 17, COLOR_TEXT))
-			card.add_child(_label(I18n.core("survey.grid_deposit", "%s · %s · world %s · resource field %s") % [_location_name(location_id), _status_text(survey_state), String(profile.get("world_id", "")), String(profile.get("resource_field_id", ""))], 14, COLOR_MUTED))
+			card.add_child(_label(_location_name(location_id) + " · " + _status_text(survey_state), 14, COLOR_MUTED))
+			card.add_child(_button(I18n.t("factory.location.open", "Open Factory workspace"), _open_location_section.bind(location_id, "industry"), false, COLOR_ACCENT))
 			box.add_child(_wrap_card(card))
 	if not visible_resource_field:
-		box.add_child(_card_text(I18n.core("survey.no_sites"), COLOR_MUTED))
+		var empty := _card()
+		empty.add_child(_label(I18n.core("survey.no_sites"), 16, COLOR_MUTED))
+		var survey_route := _button(I18n.core("nav.system_map"), _switch_page.bind("system_map"))
+		survey_route.name = "FrontierOpenSystemMap"
+		empty.add_child(survey_route)
+		box.add_child(_wrap_card(empty))
 
 
 func _rebuild_inventory() -> void:
 	var box: VBoxContainer = _pages["inventory"]
 	_clear(box)
-	box.add_child(_page_title(I18n.core("page.inventory", "Inventory"), I18n.core("inventory.subtitle", "Search stock, reservations, demand, supply and net flow at the selected Location.")))
+	box.add_child(_page_title(I18n.core("page.inventory"), I18n.core("inventory.subtitle")))
 	var search := LineEdit.new()
 	search.name = "InventorySearch"
-	search.placeholder_text = I18n.core("inventory.search", "Search products")
+	search.placeholder_text = I18n.core("inventory.search")
 	search.text = _inventory_search_text
 	search.text_changed.connect(_on_inventory_search_changed)
 	box.add_child(search)
+	var table := VBoxContainer.new()
+	table.name = "InventoryMaterialTable"
+	table.add_theme_constant_override("separation", 3)
+	var body := HBoxContainer.new()
+	body.name = "InventoryCommandWorkspace"
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 14)
+	var table_column := VBoxContainer.new()
+	table_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	table_column.size_flags_stretch_ratio = 2.2
+	var header := HBoxContainer.new()
+	for entry in [[I18n.core("ui4k.materials"), 3.0], [I18n.core("inventory.available"), 1.0], [I18n.core("inventory.reserved"), 1.0], [I18n.core("ui4k.stock_capacity"), 1.5], [I18n.core("ui4k.net_flow"), 1.2]]:
+		var cell := _label(String(entry[0]), 13, COLOR_MUTED)
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cell.size_flags_stretch_ratio = float(entry[1])
+		header.add_child(cell)
+	table_column.add_child(_wrap_card(header))
 	var analysis: Dictionary = Game.simulation.current_economy_analysis(Game.state, _selected_location_id)
-	var products: Array = analysis.get("products", [])
 	var visible := 0
-	for product_value in products:
+	for product_value in analysis.get("products", []):
 		var product := product_value as Dictionary
 		var product_id := String(product.get("product_id", ""))
 		var product_name := _content_name(Game.content.items.get(product_id, {}), product_id)
 		if not _inventory_search_text.is_empty() and not product_name.to_lower().contains(_inventory_search_text.to_lower()) and not product_id.to_lower().contains(_inventory_search_text.to_lower()):
 			continue
 		visible += 1
-		var card := _card()
+		var row := HBoxContainer.new()
+		row.custom_minimum_size.y = UiTokens.layout_px(40)
 		var status := String(product.get("status", "STABLE"))
-		var status_color := COLOR_BAD if status == "CRITICAL" else (COLOR_WARN if status in ["TIGHT", "STORAGE_FULL"] else COLOR_GOOD)
-		var detail_button := _button(I18n.core("inventory.product_header") % [product_name, _status_text(status)], _open_product_diagnostics.bind(product_id), false, status_color)
-		detail_button.name = "ProductDetails_%s" % product_id
-		card.add_child(detail_button)
-		card.add_child(_label("%d / %.0f · %s %d · %s %d\n+%.2f/h · -%.2f/h · %+.2f/h" % [int(product.get("on_hand", 0)), float(product.get("storage_capacity", 0.0)), I18n.core("inventory.available", "Available"), int(product.get("available", 0)), I18n.core("inventory.reserved", "Reserved"), int(product.get("reserved", 0)), float(product.get("production_rate", 0.0)) + float(product.get("import_rate", 0.0)), float(product.get("consumption_rate", 0.0)) + float(product.get("export_rate", 0.0)), float(product.get("net_rate", 0.0))], 13, COLOR_MUTED))
-		if not product.get("demand_sources", []).is_empty():
-			card.add_child(_label(I18n.core("inventory.demand_sources", "Demand sources") + " · %d" % product.get("demand_sources", []).size(), 12, COLOR_MUTED))
-		if not product.get("blocked_sources", []).is_empty():
-			card.add_child(_button(I18n.core("diagnostics.why", "Why?") + " · " + _status_text(status), _open_product_diagnostics.bind(product_id), false, COLOR_WARN))
-		box.add_child(_wrap_card(card))
+		var tone := COLOR_BAD if status == "CRITICAL" else (COLOR_WARN if status in ["TIGHT", "STORAGE_FULL"] else COLOR_GOOD)
+		var identity := _button(product_name + "  ·  " + _status_text(status), _show_inventory_product.bind(product_id), false, tone)
+		identity.name = "ProductDetails_%s" % product_id
+		identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		identity.size_flags_stretch_ratio = 3.0
+		identity.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		identity.clip_text = true
+		identity.tooltip_text = I18n.core("inventory.demand_sources") + " · %d\n+%.2f/h · -%.2f/h" % [(product.get("demand_sources", []) as Array).size(), float(product.get("production_rate", 0.0)) + float(product.get("import_rate", 0.0)), float(product.get("consumption_rate", 0.0)) + float(product.get("export_rate", 0.0))]
+		row.add_child(identity)
+		for entry in [[str(int(product.get("available", 0))), 1.0], [str(int(product.get("reserved", 0))), 1.0], ["%d / %.0f" % [int(product.get("on_hand", 0)), float(product.get("storage_capacity", 0.0))], 1.5], ["%+.2f/h" % float(product.get("net_rate", 0.0)), 1.2]]:
+			var cell := _label(String(entry[0]), 15, COLOR_TEXT)
+			cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			cell.size_flags_stretch_ratio = float(entry[1])
+			row.add_child(cell)
+		table.add_child(_wrap_card(row))
 	if visible == 0:
-		box.add_child(_card_text(I18n.core("inventory.empty_search", "No products match this search."), COLOR_MUTED))
+		table.add_child(_card_text(I18n.core("inventory.empty_search"), COLOR_MUTED))
+	table_column.add_child(_workspace_scroll(table, "InventoryStockScroll"))
+	body.add_child(table_column)
+	var details := VBoxContainer.new()
+	details.name = "InventoryProductInspector"
+	details.add_theme_constant_override("separation", 12)
+	var details_panel := _wrap_card(_workspace_scroll(details, "InventoryDetailsScroll"))
+	details_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	details_panel.size_flags_stretch_ratio = 1.0
+	body.add_child(details_panel)
+	box.add_child(body)
+	var product_rows: Array = analysis.get("products", [])
+	_show_inventory_product(String(product_rows[0].get("product_id", "")) if not product_rows.is_empty() else "")
+
+
+func _show_inventory_product(product_id: String) -> void:
+	var details := (_pages["inventory"] as Node).find_child("InventoryProductInspector", true, false) as VBoxContainer
+	if not is_instance_valid(details):
+		return
+	_clear(details)
+	var analysis: Dictionary = Game.simulation.current_economy_analysis(Game.state, _selected_location_id)
+	for value in analysis.get("products", []):
+		var product := value as Dictionary
+		if String(product.get("product_id", "")) != product_id:
+			continue
+		details.add_child(_label(_content_name(Game.content.items.get(product_id, {}), product_id), 23, COLOR_TEXT))
+		details.add_child(_label(_status_text(String(product.get("status", "STABLE"))), 14, COLOR_ACCENT))
+		details.add_child(_separator())
+		details.add_child(_label(I18n.core("ui4k.stock_capacity") + " · %d / %.0f" % [int(product.get("on_hand", 0)), float(product.get("storage_capacity", 0))], 16, COLOR_TEXT))
+		details.add_child(_label(I18n.core("inventory.available") + " · %d\n" % int(product.get("available", 0)) + I18n.core("inventory.reserved") + " · %d" % int(product.get("reserved", 0)), 14, COLOR_TEXT_SECONDARY))
+		details.add_child(_label(I18n.core("ui4k.net_flow") + " · %+.2f/h" % float(product.get("net_rate", 0)), 18, COLOR_ACCENT))
+		details.add_child(_label("+%.2f/h  /  −%.2f/h" % [float(product.get("production_rate", 0)) + float(product.get("import_rate", 0)), float(product.get("consumption_rate", 0)) + float(product.get("export_rate", 0))], 14, COLOR_MUTED))
+		details.add_child(_separator())
+		details.add_child(_label(I18n.core("inventory.demand_sources"), 15, COLOR_TEXT))
+		for source_value in product.get("demand_sources", []):
+			var source := source_value as Dictionary
+			details.add_child(_label(_demand_source_text(String(source.get("source_type", ""))) + " · %.1f" % float(source.get("quantity", source.get("rate_per_hour", 0))), 13, COLOR_MUTED))
+		var diagnostics := _button(I18n.core("diagnostics.open_resolution"), _open_product_diagnostics.bind(product_id), false, COLOR_ACCENT)
+		diagnostics.name = "InventoryOpenDiagnostics"
+		details.add_child(diagnostics)
+		var logistics := _button(I18n.core("page.logistics"), _switch_page.bind("logistics"), false, COLOR_MUTED)
+		logistics.name = "InventoryOpenLogistics"
+		details.add_child(logistics)
+		return
+	details.add_child(_label(I18n.core("inventory.empty_search"), 14, COLOR_MUTED))
 
 
 func _on_inventory_search_changed(value: String) -> void:
@@ -2182,7 +2306,8 @@ func _rebuild_industry() -> void:
 	var header := HBoxContainer.new()
 	header.name = "FactoryWorkspaceHeader"
 	header.add_theme_constant_override("separation", 10)
-	var title := _label(I18n.t("factory.workspace.title", "FACTORY GRID"), 20, COLOR_TEXT)
+	var title := _label(I18n.t("factory.operations.page_title", "Industrial operations"), 24, Color("e4ecef"))
+	title.name = "FactoryPageTitle"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	var world_ids: Array[String] = []
@@ -2196,15 +2321,23 @@ func _rebuild_industry() -> void:
 	_rendered_factory_world_id = _selected_factory_world_id
 	var selector := OptionButton.new()
 	selector.name = "FactoryWorldSelector"
+	selector.fit_to_longest_item = false
+	selector.custom_minimum_size.x = 240
 	for world_id in world_ids:
 		var world: Dictionary = Game.state.factory_worlds.get(world_id, {})
-		selector.add_item(I18n.t("factory.workspace.selector", "%s / %s") % [_location_name(str(world.get("location_id", ""))), world_id])
+		selector.add_item(_location_name(str(world.get("location_id", ""))))
 		selector.set_item_metadata(selector.item_count - 1, world_id)
 		if world_id == _selected_factory_world_id:
 			selector.select(selector.item_count - 1)
 	selector.disabled = world_ids.size() <= 1
 	selector.item_selected.connect(_select_factory_world.bind(selector))
 	header.add_child(selector)
+	var survey_button := _button(I18n.core("page.frontier"), _switch_page.bind("frontier"), false, COLOR_ACCENT)
+	survey_button.name = "FactoryOpenSurvey"
+	header.add_child(survey_button)
+	var logistics_button := _button(I18n.core("page.logistics", "Logistics"), _switch_page.bind("logistics"), false, COLOR_ACCENT)
+	logistics_button.name = "FactoryOpenLogistics"
+	header.add_child(logistics_button)
 	box.add_child(header)
 	if _selected_factory_world_id.is_empty():
 		box.add_child(_card_text(I18n.t("factory.workspace.no_world", "Survey a location, then initialize its Factory grid from the Location workspace."), COLOR_WARN))
@@ -2246,18 +2379,11 @@ func _on_factory_refresh_requested(world_id: String) -> void:
 		_factory_workspace.apply_snapshot(Game.factory_workspace_snapshot(world_id))
 
 
-func _configure_industry_workspace(network_workspace: bool) -> void:
-	var scroll = _page_controls.get("industry") as ScrollContainer
-	if not is_instance_valid(scroll):
-		return
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO if network_workspace else ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	var margin := scroll.get_child(0) as MarginContainer if scroll.get_child_count() > 0 else null
-	if is_instance_valid(margin):
-		margin.size_flags_vertical = Control.SIZE_EXPAND_FILL if network_workspace else Control.SIZE_SHRINK_BEGIN
-	var box = _pages.get("industry") as VBoxContainer
-	if is_instance_valid(box):
-		box.size_flags_vertical = Control.SIZE_EXPAND_FILL if network_workspace else Control.SIZE_SHRINK_BEGIN
+func _configure_industry_workspace(_network_workspace: bool) -> void:
+	var page := _page_controls.get("industry") as ScrollContainer
+	if page != null:
+		page.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		page.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 
 
 func _build_background_economy_controls(box: VBoxContainer) -> void:
@@ -2535,7 +2661,9 @@ func _rebuild_megastructure() -> void:
 				intelligence_text = I18n.core("megastructure.site.detected") % [_status_text(String(environment.get("transport_distance_band", "UNKNOWN"))), _status_text(String(environment.get("construction_difficulty_band", "UNKNOWN")))]
 			elif candidate_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
 				intelligence_text = I18n.core("megastructure.site.surveyed") % [float(environment.get("solar_flux", 0.0)), float(environment.get("transport_distance", 0.0)), float(environment.get("maintenance_severity", {}).get("electronics", 1.0))]
-			row.add_child(_label(I18n.core("megastructure.site.candidate") % [_location_name(candidate_id), _status_text(candidate_state), intelligence_text], 13, COLOR_TEXT))
+			var candidate_label := _label(I18n.core("megastructure.site.candidate") % [_location_name(candidate_id), _status_text(candidate_state), intelligence_text], 13, COLOR_TEXT)
+			candidate_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(candidate_label)
 			var selectable := bool(Game.state.completed_projects.get("research_megastructures", false)) and String(candidate.get("survey_state", "")) == LocationState.DEEP_SURVEYED
 			var select_button := _button(I18n.core("megastructure.site.select"), _command.bind(I18n.core("command.megastructure.select_site"), Game.select_megastructure_site.bind(megastructure_id, candidate_id)), not selectable, COLOR_GOOD)
 			select_button.name = "SelectMegastructureSite_%s" % candidate_id
@@ -2644,55 +2772,71 @@ func _quantity_map_text(values: Dictionary) -> String:
 
 func _rebuild_research() -> void:
 	var box: VBoxContainer = _pages["research"]
+	var old_tree := box.find_child("ResearchTechnologyGraph", true, false) as GraphEdit
+	var camera := Vector3.ZERO
+	var restore_view := is_instance_valid(old_tree)
+	if restore_view:
+		camera = Vector3(old_tree.scroll_offset.x, old_tree.scroll_offset.y, old_tree.zoom)
 	_clear(box)
 	box.add_child(_page_title(I18n.core("research.title"), I18n.core("research.subtitle")))
-	_add_unlock_banner(box, "research")
-	var research_summary := _label("%s  %d   ·   %s  %s   ·   %s  %.1f" % [I18n.core("research.stat.completed_programs"), Game.state.completed_projects.size(), I18n.core("research.stat.technologies_spillovers"), I18n.core("common.ratio") % [Game.state.technologies.size(), Game.state.technology_spillovers.size()], I18n.core("research.stat.capacity"), Game.simulation.research_capacity(Game.state)], 12, COLOR_ACCENT)
-	research_summary.autowrap_mode = TextServer.AUTOWRAP_OFF
-	research_summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	box.add_child(_wrap_card(research_summary))
-	var current_id := String(Game.state.research.get("project_id", ""))
-	if not current_id.is_empty():
-		var current := Game.content.research_projects.get(current_id, {}) as Dictionary
-		var current_stage := Game.simulation.research_stage_definition(Game.state, current, int(Game.state.research.get("stage_index", 0)), String(Game.state.research.get("route_id", "")))
-		var card := HBoxContainer.new()
-		card.add_theme_constant_override("separation", UiTokens.SPACING_MD)
-		var identity := VBoxContainer.new()
-		identity.custom_minimum_size.x = UiTokens.layout_px(310.0)
-		identity.add_child(_label(I18n.core("research.current_project") % _content_name(current, current_id), 16, COLOR_ACCENT))
-		var current_route_id := String(Game.state.research.get("route_id", ""))
-		var current_route_name := current_route_id
-		for route_value in current.get("routes", []):
-			var route := route_value as Dictionary
-			if String(route.get("id", "")) == current_route_id:
-				current_route_name = _research_route_name(route)
-				break
-		var current_stage_values := [int(Game.state.research.get("stage_index", 0)) + 1, Game.simulation.research_stages(current).size(), _research_stage_kind_name(String(current_stage.get("kind", "THEORY"))), _research_stage_name(current, current_stage)]
-		var current_stage_caption := I18n.core("research.current_stage") % current_stage_values
-		if not current_route_id.is_empty():
-			current_stage_values.append(current_route_name)
-			current_stage_caption = I18n.core("research.current_stage_route") % current_stage_values
-		identity.add_child(_label(current_stage_caption, 12, COLOR_TEXT_SECONDARY))
-		card.add_child(identity)
-		var progress := _operation_progress(Game.state.research, I18n.core("research.gameplay_state") % _status_text(Game.simulation.research_gameplay_state(Game.state)))
-		progress.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card.add_child(progress)
-		var blocker_guidance := _research_blocker_guidance(Game.state.research.get("blocker", {}))
-		if not blocker_guidance.is_empty():
-			var guidance := _label(I18n.core("research.guidance") % blocker_guidance, 11, COLOR_WARN)
-			guidance.custom_minimum_size.x = UiTokens.layout_px(260.0)
-			card.add_child(guidance)
-		box.add_child(_wrap_card(card))
-
+	var rail := HBoxContainer.new()
+	rail.add_theme_constant_override("separation", 12)
 	var graph_model := _research_graph_model()
-	box.add_child(_build_research_project_index(graph_model))
+	var chooser := OptionButton.new()
+	chooser.name = "ResearchProjectSelector"
+	chooser.custom_minimum_size.x = UiTokens.layout_px(310)
+	chooser.fit_to_longest_item = false
+	var ids: Array[String] = []
+	var current_id := String(Game.state.research.get("project_id", ""))
+	if _selected_research_project_id.is_empty():
+		_selected_research_project_id = current_id
+		if _selected_research_project_id.is_empty():
+			_selected_research_project_id = "research_industrial_coordination"
+	for node_value in graph_model.get("nodes", []):
+		var data := node_value as Dictionary
+		ids.append(String(data.get("id", "")))
+		chooser.add_item(String(data.get("title", "")) + " · " + String(data.get("status", "")))
+		chooser.set_item_metadata(chooser.item_count - 1, ids[-1])
+		if ids[-1] == _selected_research_project_id:
+			chooser.select(ids.size() - 1)
+	if _selected_research_project_id.is_empty() and not ids.is_empty():
+		_selected_research_project_id = ids[0]
+	chooser.item_selected.connect(func(index: int): _select_research_project(ids[index]))
+	rail.add_child(chooser)
+	var summary := _label("%s %d   ·   %s %.1f" % [I18n.core("research.stat.completed_programs"), Game.state.completed_projects.size(), I18n.core("research.stat.capacity"), Game.simulation.research_capacity(Game.state)], 13, COLOR_ACCENT)
+	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rail.add_child(summary)
+	if not current_id.is_empty():
+		var progress := _operation_progress(Game.state.research, I18n.core("research.current_project") % _content_name(Game.content.research_projects.get(current_id, {}), current_id))
+		progress.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rail.add_child(progress)
+	box.add_child(_wrap_card(rail))
+	var workspace := HBoxContainer.new()
+	workspace.name = "ResearchCommandWorkspace"
+	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	workspace.add_theme_constant_override("separation", 12)
 	var tree := ResearchTreeViewScript.new()
 	tree.project_selected.connect(_select_research_project)
 	tree.project_action.connect(_start_research_from_graph)
 	tree.pause_requested.connect(_pause_research_from_graph)
 	tree.unlock_guidance_requested.connect(_open_research_unlock_guidance)
-	box.add_child(tree)
+	tree.size_flags_stretch_ratio = 2.3
+	workspace.add_child(tree)
 	tree.configure(graph_model)
+	if restore_view:
+		tree.call_deferred("restore_camera", camera)
+	else:
+		tree.call_deferred("focus_project", _selected_research_project_id)
+	var inspector := VBoxContainer.new()
+	inspector.name = "ResearchWorkspaceInspector"
+	inspector.add_theme_constant_override("separation", 10)
+	var inspector_panel := _wrap_card(_workspace_scroll(inspector, "ResearchInspectorScroll"))
+	inspector_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inspector_panel.size_flags_stretch_ratio = 1.0
+	workspace.add_child(inspector_panel)
+	box.add_child(workspace)
+	_refresh_research_workspace_inspector()
 
 
 func _build_research_project_index(model: Dictionary) -> Control:
@@ -2700,13 +2844,12 @@ func _build_research_project_index(model: Dictionary) -> Control:
 	panel.add_theme_stylebox_override("panel", UiTokens.panel_style(COLOR_PANEL_ALT, COLOR_BORDER, 3))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 5)
-	column.add_child(_label(I18n.core("research.graph.project_index"), 11, COLOR_MUTED))
-	var scroll := ScrollContainer.new()
+	column.add_child(_label(I18n.core("ui4k.operations"), 11, COLOR_MUTED))
+	var scroll := VBoxContainer.new()
 	scroll.name = "ResearchProjectIndex"
 	scroll.custom_minimum_size.y = UiTokens.layout_px(40.0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var actions := HBoxContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var actions := VBoxContainer.new()
 	actions.add_theme_constant_override("separation", 6)
 	for node_value in model.get("nodes", []):
 		var data := node_value as Dictionary
@@ -2847,7 +2990,17 @@ func _collect_research_technology_requirements(value, result: Array[String]) -> 
 
 func _select_research_project(project_id: String) -> void:
 	_selected_research_project_id = project_id
+	var chooser := (_pages["research"] as Node).find_child("ResearchProjectSelector", true, false) as OptionButton
+	if is_instance_valid(chooser):
+		for index in chooser.item_count:
+			if str(chooser.get_item_metadata(index)) == project_id:
+				chooser.select(index)
+				break
 	_ui_state.select_context("research_project", project_id)
+	_refresh_research_workspace_inspector()
+	var tree := (_pages["research"] as Node).find_child("ResearchTechnologyGraph", true, false)
+	if is_instance_valid(tree):
+		tree.call("focus_project", project_id)
 	_rebuild_sidebar()
 
 
@@ -2921,6 +3074,7 @@ func _research_blocker_guidance(blocker: Dictionary) -> String:
 
 func _rebuild_fleet() -> void:
 	var box: VBoxContainer = _pages["fleet"]
+	_capture_shipyard_session()
 	_clear(box)
 	box.add_theme_constant_override("separation", UiTokens.layout_px(10))
 	if _fleet_section == "shipyard":
@@ -2952,7 +3106,7 @@ func _rebuild_fleet() -> void:
 		formation_selector.add_child(formation_button)
 	var new_formation_name := LineEdit.new()
 	new_formation_name.placeholder_text = I18n.core("ships.formation.new_name", "New task force name")
-	new_formation_name.custom_minimum_size.x = 190.0
+	new_formation_name.custom_minimum_size.x = UiTokens.layout_px(280)
 	formation_selector.add_child(new_formation_name)
 	var create_formation_button := _button(I18n.core("ships.formation.create", "Create Formation"), _create_formation.bind(new_formation_name), false, COLOR_GOOD)
 	create_formation_button.name = "CreateFormation"
@@ -2986,23 +3140,22 @@ func _rebuild_fleet() -> void:
 
 
 func _build_fleet_section_tabs() -> Control:
-	var section_tabs := HFlowContainer.new()
-	section_tabs.name = "FleetSectionTabs"
-	section_tabs.add_theme_constant_override("h_separation", _fleet_roster_px(10.0) if _fleet_section == "roster" else 6)
-	section_tabs.add_theme_constant_override("v_separation", _fleet_roster_px(4.0) if _fleet_section == "roster" else 6)
-	for entry in [["roster", I18n.core("ships.tab.roster")], ["readiness", I18n.core("ships.tab.readiness")], ["shipyard", I18n.core("ships.tab.shipyard")], ["archive", I18n.core("ships.tab.archive")]]:
+	var tabs := HBoxContainer.new()
+	tabs.name = "FleetSectionTabs"
+	tabs.add_theme_constant_override("separation", 8)
+	for entry in [["roster", I18n.core("ships.tab.roster")], ["readiness", I18n.core("ships.tab.readiness")], ["shipyard", I18n.core("ships.tab.shipyard")]]:
 		var section_id := String(entry[0])
-		var section_button := _button(String(entry[1]), _select_fleet_section.bind(section_id), section_id == _fleet_section, COLOR_ACCENT)
-		section_button.name = "FleetSection_%s" % section_id
-		if _fleet_section == "roster":
-			_apply_fleet_roster_section_tab_style(section_button, section_id == _fleet_section)
-		section_tabs.add_child(section_button)
-	var missions_button := _button(I18n.core("ships.missions", "Missions"), _switch_page.bind("expedition"), false, COLOR_ACCENT)
-	missions_button.name = "ShipsMissions"
-	if _fleet_section == "roster":
-		_apply_fleet_roster_section_tab_style(missions_button, false)
-	section_tabs.add_child(missions_button)
-	return section_tabs
+		var button := _button(String(entry[1]), _select_fleet_section.bind(section_id), section_id == _fleet_section, COLOR_ACCENT)
+		button.name = "FleetSection_%s" % section_id
+		_style_section_button(button, section_id == _fleet_section)
+		tabs.add_child(button)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.add_child(spacer)
+	var expeditions := _button(I18n.core("nav.expedition"), _switch_page.bind("expedition"))
+	expeditions.name = "FleetOpenExpeditions"
+	tabs.add_child(expeditions)
+	return tabs
 
 
 func _select_fleet_section(section: String) -> void:
@@ -3014,142 +3167,17 @@ func _select_fleet_section(section: String) -> void:
 
 func _sync_blueprint_workspace_chrome() -> void:
 	if is_instance_valid(_shell):
-		# Both production Ship workspaces own their complete left/right content.
-		# Reusing the existing full-width shell mode preserves the global command
-		# and navigation bars while giving the Golden Reference body its width.
-		_shell.set_blueprint_workspace(_active_page_key == "fleet" and _fleet_section in ["roster", "shipyard"])
-	var roster_workspace := _active_page_key == "fleet" and _fleet_section == "roster"
-	var top_bar := find_child("TopStatusBar", true, false) as Control
-	var workspace_navigation := find_child("WorkspaceNavigationBar", true, false) as Control
-	if top_bar != null:
-		top_bar.custom_minimum_size.y = float(_fleet_roster_px(UiTokens.TOP_BAR_HEIGHT) if roster_workspace else UiTokens.layout_px(UiTokens.TOP_BAR_HEIGHT))
-	if workspace_navigation != null:
-		workspace_navigation.custom_minimum_size.y = float(_fleet_roster_px(UiTokens.WORKSPACE_NAV_HEIGHT) if roster_workspace else UiTokens.workspace_navigation_height())
-	_apply_fleet_roster_shell_chrome(roster_workspace)
-	var fleet_content := _pages.get("fleet") as Control
-	var fleet_margin := fleet_content.get_parent() as MarginContainer if is_instance_valid(fleet_content) else null
-	if fleet_margin != null:
-		fleet_margin.add_theme_constant_override("margin_left", _fleet_roster_px(18.0) if roster_workspace else UiTokens.layout_px(14))
-		fleet_margin.add_theme_constant_override("margin_top", _fleet_roster_px(11.0) if roster_workspace else UiTokens.layout_px(14))
-		fleet_margin.add_theme_constant_override("margin_right", _fleet_roster_px(14.0) if roster_workspace else UiTokens.layout_px(14))
-		fleet_margin.add_theme_constant_override("margin_bottom", _fleet_roster_px(20.0) if roster_workspace else UiTokens.layout_px(20))
+		_shell.set_command_workspace()
+	# One authored shell for every page; no roster-specific scale exceptions.
+	_refresh_group_navigation()
 
 
-func _apply_fleet_roster_shell_chrome(compact: bool) -> void:
-	var header_margin := find_child("TopStatusBarMargin", true, false) as MarginContainer
-	var header_controls := find_child("TopStatusBarControls", true, false) as HBoxContainer
-	var title_box := find_child("ShellTitleBox", true, false) as VBoxContainer
-	var shell_title := find_child("ShellTitle", true, false) as Label
-	var shell_subtitle := find_child("ShellSubtitle", true, false) as Label
-	var navigation_margin := find_child("WorkspaceNavigationMargin", true, false) as MarginContainer
-	var navigation_flow := find_child("WorkspaceNavigationFlow", true, false) as HFlowContainer
-	var operations_title := find_child("OperationsTitle", true, false) as Label
-	if is_instance_valid(header_margin):
-		var compact_header_values := [20.0, 8.0, 15.0, 9.0]
-		var normal_header_values := [float(UiTokens.SPACING_LG), 5.0, float(UiTokens.SPACING_MD), 5.0]
-		var header_values := compact_header_values if compact else normal_header_values
-		for index in 4:
-			var side: String = ["left", "top", "right", "bottom"][index]
-			var value := _fleet_roster_px(float(header_values[index])) if compact else UiTokens.layout_px(float(header_values[index]))
-			header_margin.add_theme_constant_override("margin_%s" % side, value)
-	if is_instance_valid(header_controls):
-		header_controls.add_theme_constant_override("separation", _fleet_roster_px(8.0) if compact else UiTokens.layout_px(6.0))
-	if is_instance_valid(title_box):
-		title_box.custom_minimum_size.x = _fleet_roster_px(168.0) if compact else UiTokens.layout_px(190.0)
-	if is_instance_valid(shell_title):
-		shell_title.add_theme_font_size_override("font_size", _fleet_roster_px(14.0) if compact else UiTokens.font_size(18))
-		shell_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	if is_instance_valid(shell_subtitle):
-		shell_subtitle.visible = not compact
-	if is_instance_valid(_header_status):
-		_header_status.visible = not compact and _ui_scale <= 1.25
-	var header_widths := {
-		"SpeedPause":48.0, "Speed1":40.0, "Speed2":34.0, "Speed5":36.0,
-		"Speed10":44.0, "Speed100":48.0, "ToggleLocale":70.0,
-		"SaveButton":54.0, "RestartButton":50.0
-	}
-	for control_name_value in header_widths.keys():
-		var control_name := String(control_name_value)
-		var button := find_child(control_name, true, false) as Button
-		if not is_instance_valid(button):
-			continue
-		if compact:
-			button.custom_minimum_size = Vector2(_fleet_roster_px(float(header_widths[control_name_value])), _fleet_roster_px(34.0))
-			button.add_theme_font_size_override("font_size", _fleet_roster_px(14.0))
-			_apply_fleet_roster_compact_button_style(button)
-		else:
-			var normal_width := 48.0 if control_name == "Speed100" else (42.0 if control_name.begins_with("Speed") else 0.0)
-			button.custom_minimum_size = Vector2(UiTokens.layout_px(normal_width), UiTokens.layout_px(34.0))
-			button.remove_theme_font_size_override("font_size")
-			for style_name in ["normal", "hover", "pressed", "focus", "disabled"]:
-				button.remove_theme_stylebox_override(style_name)
-	if is_instance_valid(_ui_scale_selector):
-		_ui_scale_selector.custom_minimum_size = Vector2(_fleet_roster_px(76.0), _fleet_roster_px(34.0)) if compact else Vector2(UiTokens.layout_px(92.0), UiTokens.layout_px(34.0))
-		if compact:
-			_ui_scale_selector.add_theme_font_size_override("font_size", _fleet_roster_px(14.0))
-			_ui_scale_selector.add_theme_stylebox_override("normal", _fleet_roster_button_style(UiTokens.COLOR_REGISTRY_CONTROL, UiTokens.COLOR_REGISTRY_BORDER))
-		else:
-			_ui_scale_selector.remove_theme_font_size_override("font_size")
-			_ui_scale_selector.remove_theme_stylebox_override("normal")
-	if is_instance_valid(navigation_margin):
-		var compact_navigation_values := [18.0, 6.0, 18.0, 6.0]
-		var normal_navigation_values := [8.0, 6.0, 8.0, 6.0]
-		var navigation_values := compact_navigation_values if compact else normal_navigation_values
-		for index in 4:
-			var side: String = ["left", "top", "right", "bottom"][index]
-			var value := _fleet_roster_px(float(navigation_values[index])) if compact else UiTokens.layout_px(float(navigation_values[index]))
-			navigation_margin.add_theme_constant_override("margin_%s" % side, value)
-	if is_instance_valid(navigation_flow):
-		navigation_flow.add_theme_constant_override("h_separation", _fleet_roster_px(8.0) if compact else UiTokens.layout_px(4.0))
-		navigation_flow.add_theme_constant_override("v_separation", _fleet_roster_px(4.0) if compact else UiTokens.layout_px(4.0))
-	if is_instance_valid(operations_title):
-		operations_title.visible = not compact and _ui_scale <= 1.0
-	for key_value in _nav_buttons.keys():
-		var navigation_button := _nav_buttons[key_value] as Button
-		if not is_instance_valid(navigation_button):
-			continue
-		navigation_button.custom_minimum_size = Vector2(_fleet_roster_px(98.0), _fleet_roster_px(40.0)) if compact else UiTokens.layout_vector(Vector2(58, 34))
-		navigation_button.add_theme_font_size_override("font_size", _fleet_roster_px(16.0) if compact else UiTokens.font_size(12))
-		if not compact:
-			for style_name in ["hover", "pressed", "focus"]:
-				navigation_button.remove_theme_stylebox_override(style_name)
 
 
-func _fleet_roster_navigation_style(active: bool, hovered: bool) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = UiTokens.COLOR_REGISTRY_CONTROL_ACTIVE if active else (UiTokens.COLOR_REGISTRY_CONTROL_HOVER if hovered else UiTokens.COLOR_REGISTRY_CANVAS)
-	style.border_color = COLOR_ACCENT if active else (UiTokens.COLOR_REGISTRY_BORDER if hovered else UiTokens.COLOR_REGISTRY_SEPARATOR)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(_fleet_roster_px(3.0))
-	style.content_margin_left = _fleet_roster_px(8.0)
-	style.content_margin_right = _fleet_roster_px(8.0)
-	style.content_margin_top = _fleet_roster_px(4.0)
-	style.content_margin_bottom = _fleet_roster_px(4.0)
-	return style
 
 
-func _apply_fleet_roster_section_tab_style(button: Button, selected: bool) -> void:
-	button.custom_minimum_size.y = _fleet_roster_px(38.0)
-	button.add_theme_font_size_override("font_size", _fleet_roster_px(16.0))
-	button.add_theme_color_override("font_color", COLOR_TEXT if selected else COLOR_MUTED)
-	button.add_theme_color_override("font_disabled_color", COLOR_TEXT if selected else COLOR_MUTED)
-	button.add_theme_stylebox_override("normal", _fleet_roster_section_tab_box(selected, false))
-	button.add_theme_stylebox_override("hover", _fleet_roster_section_tab_box(selected, true))
-	button.add_theme_stylebox_override("pressed", _fleet_roster_section_tab_box(true, true))
-	button.add_theme_stylebox_override("focus", _fleet_roster_section_tab_box(true, true))
-	button.add_theme_stylebox_override("disabled", _fleet_roster_section_tab_box(selected, false))
 
 
-func _fleet_roster_section_tab_box(selected: bool, hovered: bool) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = UiTokens.COLOR_REGISTRY_CONTROL_HOVER if hovered else Color.TRANSPARENT
-	style.border_color = COLOR_ACCENT if selected else Color.TRANSPARENT
-	style.border_width_bottom = _fleet_roster_px(3.0) if selected else 0
-	style.content_margin_left = _fleet_roster_px(10.0)
-	style.content_margin_right = _fleet_roster_px(10.0)
-	style.content_margin_top = _fleet_roster_px(4.0)
-	style.content_margin_bottom = _fleet_roster_px(4.0)
-	return style
 
 
 func _ensure_selected_formation() -> void:
@@ -3218,8 +3246,14 @@ func _build_fleet_readiness(box: VBoxContainer) -> void:
 			var ship_id := String(ship.get("instance_id", ""))
 			if Game.state.ship_formation_id(ship_id) == formation_id and String(formation.get("ship_zones", {}).get(ship_id, "FRONT")) == zone:
 				names.append(String(ship.get("name", ship_id)))
-		var zone_card := _stat_card(_zone_text(zone), "\n".join(names) if not names.is_empty() else I18n.core("ships.readiness.unconfigured"), COLOR_TEXT if not names.is_empty() else COLOR_MUTED)
-		zone_columns.add_child(zone_card)
+		var zone_content := _card()
+		zone_content.add_child(_label(_zone_text(zone), 14, COLOR_ACCENT))
+		var roster := _label("\n".join(names) if not names.is_empty() else I18n.core("ships.readiness.unconfigured"), 14, COLOR_TEXT if not names.is_empty() else COLOR_MUTED)
+		roster.autowrap_mode = TextServer.AUTOWRAP_WORD
+		zone_content.add_child(roster)
+		var zone_panel := _wrap_card(zone_content)
+		zone_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		zone_columns.add_child(zone_panel)
 	formation_card.add_child(zone_columns)
 	box.add_child(_wrap_card(formation_card))
 
@@ -3283,7 +3317,7 @@ func _build_fleet_roster_body(visible_ships: Array) -> MarginContainer:
 	inspector_surface.name = "FleetRosterInspectorSurface"
 	inspector_surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inspector_surface.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	inspector_surface.size_flags_stretch_ratio = 0.639
+	inspector_surface.size_flags_stretch_ratio = 0.74
 	inspector_surface.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_SURFACE))
 	# STEP 08 geometry is authored at the 150% Golden calibration and converted
 	# through the same player-selected scale as fonts and controls. Zero vertical
@@ -3298,7 +3332,7 @@ func _build_fleet_roster_body(visible_ships: Array) -> MarginContainer:
 	inspector_margin.add_theme_constant_override("margin_bottom", 0)
 	inspector_margin.name = "FleetRosterInspectorMargin"
 	inspector_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	inspector_margin.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	inspector_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var inspector_host := ShipRegistryInspectorHostScript.new() as Container
 	inspector_host.name = "FleetRosterInspectorHost"
 	inspector_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3308,7 +3342,7 @@ func _build_fleet_roster_body(visible_ships: Array) -> MarginContainer:
 	var detail_column := VBoxContainer.new()
 	detail_column.name = "FleetRosterDetail"
 	detail_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail_column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	detail_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_column.add_theme_constant_override("separation", _fleet_roster_px(3.0))
 	inspector_margin.add_child(detail_column)
 	master_detail.add_child(inspector_surface)
@@ -3321,6 +3355,7 @@ func _build_fleet_roster_body(visible_ships: Array) -> MarginContainer:
 		_build_fleet_roster_inspector_upper(detail_column, ship, blueprint)
 		detail_column.add_child(_build_fleet_roster_inspector_lower(ship, blueprint))
 		detail_column.add_child(_build_fleet_roster_footer_actions(ship))
+		detail_column.add_child(_build_fleet_operations_dock(ship))
 	if selected_ship_id.is_empty():
 		var empty_key := "ships.roster.no_results" if visible_ships.is_empty() and not Game.state.ships.is_empty() else "ships.roster.select_ship"
 		detail_column.add_child(_label(I18n.core(empty_key), 13, COLOR_MUTED))
@@ -3362,7 +3397,7 @@ func _build_fleet_roster_inspector_upper(detail_column: VBoxContainer, ship: Dic
 	# System-font line boxes are taller than their visible glyphs. A small
 	# negative separation preserves the Golden title/subtitle rhythm while both
 	# lines remain real layout children at every UI scale.
-	identity_text.add_theme_constant_override("separation", -_fleet_roster_px(8.0))
+	identity_text.add_theme_constant_override("separation", 0)
 	identity_text.name = "FleetRosterInspectorIdentityText"
 	identity_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var ship_name := _fleet_roster_label(String(ship.get("name", ship_id)).to_upper(), 24, COLOR_TEXT)
@@ -3481,7 +3516,7 @@ func _fleet_roster_label(text_value: String, rendered_size: int, color: Color) -
 	# Inspector typography shares the canonical player-selected scale. Callers
 	# express the approved 150% Golden size; _label then rasterizes its 100% base
 	# at the current UI scale, keeping both 100% and 150% sharp.
-	var base_size := maxi(1, int(round(float(rendered_size) / FLEET_ROSTER_GOLDEN_SCALE)))
+	var base_size := rendered_size
 	return _label(text_value, base_size, color)
 
 
@@ -3647,7 +3682,7 @@ func _add_fleet_roster_operational_row(parent: VBoxContainer, field_id: String, 
 	row.add_child(caption_label)
 	var value_row := HBoxContainer.new()
 	value_row.name = "FleetRosterOperationalValueGroup_%s" % field_id
-	value_row.custom_minimum_size.x = _fleet_roster_px(142.0)
+	value_row.custom_minimum_size.x = _fleet_roster_px(220.0)
 	value_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	value_row.add_theme_constant_override("separation", _fleet_roster_px(13.0))
 	var value_color := COLOR_TEXT
@@ -3703,7 +3738,7 @@ func _build_fleet_roster_inspector_lower(ship: Dictionary, blueprint: Dictionary
 	lower_inset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var lower_row := HBoxContainer.new()
 	lower_row.name = "FleetRosterLowerInfoRow"
-	lower_row.custom_minimum_size.y = _fleet_roster_px(266.0)
+	lower_row.custom_minimum_size.y = _fleet_roster_px(195.0)
 	lower_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lower_row.add_theme_constant_override("separation", _fleet_roster_px(18.0))
 	lower_row.add_child(_build_fleet_roster_basic_information_panel(ship, blueprint))
@@ -3743,14 +3778,14 @@ func _build_fleet_roster_footer_actions(ship: Dictionary) -> MarginContainer:
 
 	# There is no independent Ship-details route in the current screen stack.
 	# Keep this truthful until such a destination exists instead of fabricating it.
-	var details_button := _button(I18n.core("ships.roster.action.view_details"), Callable(), true, COLOR_ACCENT)
+	var details_button := _button(I18n.core("ships.tab.shipyard"), _open_fleet_section.bind("shipyard"), false, COLOR_ACCENT)
 	details_button.name = "FleetRosterViewDetails"
 	details_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details_button.size_flags_stretch_ratio = 1.0
 	details_button.custom_minimum_size.y = _fleet_roster_px(44.0)
 	details_button.add_theme_font_size_override("font_size", _fleet_roster_px(15.0))
 	_apply_fleet_roster_compact_button_style(details_button)
-	details_button.tooltip_text = I18n.core("ships.roster.tooltip.details_unavailable")
+	details_button.tooltip_text = I18n.core("ships.tab.shipyard")
 	details_button.accessibility_name = details_button.tooltip_text
 	actions.add_child(details_button)
 
@@ -4320,8 +4355,10 @@ func _build_fleet_roster_basic_information_panel(ship: Dictionary, blueprint: Di
 		["manufacturer", I18n.core("ships.roster.inspector.manufacturer"), "—"],
 		["built_at", I18n.core("ships.roster.inspector.built_at"), _fleet_roster_simulation_timestamp(int(ship.get("built_at_ms", 0))) if built_at_available else "—"]
 	]
-	var caption_width := 78 if I18n.current_locale == "zh_CN" else 96
+	var caption_width := 136
 	for field_value in fields:
+		if String(field_value[2]) == "—":
+			continue
 		_add_fleet_roster_metadata_row(column, "basic", String(field_value[0]), String(field_value[1]), String(field_value[2]), caption_width)
 	return panel
 
@@ -4339,7 +4376,32 @@ func _build_fleet_roster_configuration_panel(ship: Dictionary) -> PanelContainer
 	]
 	for field_value in fields:
 		var field_id := String(field_value[0])
-		_add_fleet_roster_metadata_row(column, "configuration", field_id, String(field_value[1]), String(summaries.get(field_id, "—")), 96)
+		_add_fleet_roster_metadata_row(column, "configuration", field_id, String(field_value[1]), String(summaries.get(field_id, "—")), 200)
+	return panel
+
+
+func _build_fleet_operations_dock(ship: Dictionary) -> Control:
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 8)
+	content.add_child(_section_title(I18n.core("ui4k.fleet_operations")))
+	var actions := HBoxContainer.new()
+	var missions := _button(I18n.core("ships.missions"), _switch_page.bind("expedition"), false, COLOR_ACCENT)
+	missions.name = "ShipsMissions"
+	actions.add_child(missions)
+	actions.add_child(_button(I18n.core("ships.tab.readiness"), _open_fleet_section.bind("readiness"), false, COLOR_ACCENT))
+	var archive := _button(I18n.core("ships.tab.archive"), _open_fleet_section.bind("archive"), false, COLOR_MUTED)
+	archive.name = "FleetSection_archive"
+	actions.add_child(archive)
+	content.add_child(actions)
+	var assigned := String(ship.get("fleet_assignment", ""))
+	content.add_child(_label(I18n.core("ships.roster.inspector.formation") + " · " + (_formation_name(assigned) if not assigned.is_empty() else "—"), 13, COLOR_TEXT_SECONDARY))
+	var queue := VBoxContainer.new()
+	_build_fleet_archive(queue)
+	content.add_child(_workspace_scroll(queue, "FleetActiveServicesScroll"))
+	var panel := _wrap_card(content)
+	panel.name = "FleetOperationsDock"
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size.y = 185.0
 	return panel
 
 
@@ -4362,7 +4424,7 @@ func _build_fleet_roster_readiness_panel(ship: Dictionary) -> PanelContainer:
 func _fleet_roster_lower_panel(control_name: String, stretch_ratio: float) -> PanelContainer:
 	var panel := _panel(UiTokens.COLOR_REGISTRY_INSET)
 	panel.name = control_name
-	panel.custom_minimum_size.y = _fleet_roster_px(266.0)
+	panel.custom_minimum_size.y = _fleet_roster_px(195.0)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.size_flags_stretch_ratio = stretch_ratio
@@ -4398,14 +4460,15 @@ func _add_fleet_roster_metadata_row(parent: VBoxContainer, group_id: String, fie
 	var row := HBoxContainer.new()
 	row.name = "FleetRoster%sRow_%s" % [group_id.capitalize(), field_id]
 	var configuration_row := group_id == "configuration"
-	row.custom_minimum_size.y = _fleet_roster_px(42.0 if configuration_row else 30.0)
+	row.custom_minimum_size.y = _fleet_roster_px(33.0 if configuration_row else 30.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", _fleet_roster_px(8.0 if configuration_row else 6.0))
 	var caption_label := _fleet_roster_label(caption, 14 if group_id == "basic" else 15, COLOR_MUTED)
 	caption_label.custom_minimum_size.x = _fleet_roster_px(float(caption_width))
 	caption_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	caption_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if configuration_row else TextServer.AUTOWRAP_OFF
-	caption_label.max_lines_visible = 2 if configuration_row else 1
+	caption_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	caption_label.max_lines_visible = 1
+	caption_label.tooltip_text = caption
 	caption_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	row.add_child(caption_label)
 	var value_label := _fleet_roster_label(value_text, 15, COLOR_TEXT)
@@ -4425,7 +4488,7 @@ func _add_fleet_roster_readiness_row(parent: VBoxContainer, field_id: String, ca
 	var percent := clampf(float(metric.get("value", 0.0)), 0.0, 100.0)
 	var row := HBoxContainer.new()
 	row.name = "FleetRosterReadinessRow_%s" % field_id
-	row.custom_minimum_size.y = _fleet_roster_px(50.0)
+	row.custom_minimum_size.y = _fleet_roster_px(36.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", _fleet_roster_px(12.0))
 	var caption_label := _fleet_roster_label(caption, 15, COLOR_MUTED)
@@ -4533,7 +4596,7 @@ func _build_fleet_roster_browser(visible_ships: Array, selected_ship_id: String)
 	browser.name = "FleetRosterListSurface"
 	browser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	browser.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	browser.size_flags_stretch_ratio = 0.341
+	browser.size_flags_stretch_ratio = 0.26
 	browser.add_theme_stylebox_override("panel", _fleet_roster_surface_style(UiTokens.COLOR_REGISTRY_SURFACE))
 	var browser_column := VBoxContainer.new()
 	browser_column.name = "FleetRosterBrowser"
@@ -4661,7 +4724,7 @@ func _build_fleet_roster_ship_row(ship: Dictionary, selected: bool, bulk_selecte
 	# This list is calibrated as a dense 61 px asset row at the canonical 150%
 	# viewport. Typography uses the same Golden-to-base conversion, so both text
 	# lines remain contained without the former independent 92 px row inflation.
-	row.custom_minimum_size.y = _fleet_roster_px(61.0)
+	row.custom_minimum_size.y = UiTokens.full_scale_px(60.0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.focus_mode = Control.FOCUS_ALL
 	row.accessibility_name = I18n.core("ships.roster.accessibility_summary", "%s, %s, %s, %s") % [String(ship.get("name", ship_id)), _fleet_roster_hull_class_and_tier(blueprint), _fleet_roster_lifecycle_text(maintenance_state), formation_name]
@@ -5275,13 +5338,22 @@ func _build_fleet_shipyard(box: VBoxContainer) -> void:
 	_ship_blueprint_editor.configure_for_main_game()
 	_ship_blueprint_editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ship_blueprint_editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_ship_blueprint_editor.custom_minimum_size.y = 680.0
+	_ship_blueprint_editor.custom_minimum_size.y = 400.0
 	_ship_blueprint_editor.blueprint_saved.connect(_on_main_blueprint_saved)
 	box.add_child(_ship_blueprint_editor)
+	_ship_blueprint_editor.set_meta("ui_locale", I18n.current_locale)
+	if not _shipyard_session.is_empty():
+		_ship_blueprint_editor.restore_session_state(_shipyard_session)
 	_shipyard_handoff_content = VBoxContainer.new()
 	_shipyard_handoff_content.name = "ShipyardHandoffContent"
 	_shipyard_handoff_content.add_theme_constant_override("separation", 6)
-	box.add_child(_shipyard_handoff_content)
+	var handoff_host := Control.new()
+	handoff_host.name = "ShipyardOperationsDock"
+	handoff_host.custom_minimum_size.y = 195.0
+	handoff_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(handoff_host)
+	handoff_host.add_child(_shipyard_handoff_content)
+	_shipyard_handoff_content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_rebuild_shipyard_handoff()
 
 
@@ -5319,6 +5391,19 @@ func _rebuild_shipyard_handoff() -> void:
 		_shipyard_handoff_content.add_child(_wrap_card(order_card))
 	if Game.state.shipyard_queue.is_empty():
 		_shipyard_handoff_content.add_child(_card_text(I18n.core("ships.shipyard.empty"), COLOR_MUTED))
+	var dock_entries := _shipyard_handoff_content.get_children()
+	var lanes := HBoxContainer.new()
+	lanes.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	lanes.add_theme_constant_override("separation", 12)
+	var designs := VBoxContainer.new()
+	var orders := VBoxContainer.new()
+	for index in dock_entries.size():
+		var child := dock_entries[index]
+		_shipyard_handoff_content.remove_child(child)
+		(designs if index < 2 else orders).add_child(child)
+	lanes.add_child(_workspace_scroll(designs, "ShipyardDesignsScroll"))
+	lanes.add_child(_workspace_scroll(orders, "ShipyardOrdersScroll"))
+	_shipyard_handoff_content.add_child(lanes)
 
 
 func _build_ship_design_library() -> Control:
@@ -5851,7 +5936,8 @@ func _request_reset_game() -> void:
 	dialog.confirmed.connect(_confirm_reset_game.bind(dialog))
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
-	dialog.popup_centered(Vector2i(520, 220))
+	dialog.popup_centered(Vector2i(600, 240))
+	_apply_destructive_button_style(dialog.get_ok_button())
 	dialog.get_cancel_button().call_deferred("grab_focus")
 
 
@@ -5862,6 +5948,12 @@ func _confirm_reset_game(dialog: ConfirmationDialog) -> void:
 
 
 func _reset_game() -> void:
+	_shipyard_session.clear()
+	if get_tree().root.has_meta("shipyard_ui_session"):
+		get_tree().root.remove_meta("shipyard_ui_session")
+	if is_instance_valid(_ship_blueprint_editor):
+		_ship_blueprint_editor.queue_free()
+		_ship_blueprint_editor = null
 	Engine.time_scale = 1.0
 	Game.reset_game()
 	_selected_location_id = SpaceGameState.MAIN_BASE_LOCATION_ID
@@ -5944,20 +6036,13 @@ func _record_telemetry(event_type: String, payload: Dictionary = {}) -> void:
 func _update_bottom_bar() -> void:
 	if not is_instance_valid(_notice_label):
 		return
-	var alert_count := _active_blocker_cache.size()
-	var latest := String(_event_log.back()) if not _event_log.is_empty() else I18n.core("sidebar.none", "None")
 	var guidance := Game.guidance_snapshot()
-	var task_caption := String(guidance.get("message", guidance.get("reason", ""))).get_slice("\n", 0)
-	if is_instance_valid(_dock_workspace_label):
-		_dock_workspace_label.text = I18n.core(String(NAV_TRANSLATION_KEYS.get(_active_page_key, "nav.%s" % _active_page_key)), _active_page_key.capitalize())
-	if is_instance_valid(_dock_next_button):
-		_dock_next_button.disabled = String(guidance.get("page", "")).is_empty()
-		_dock_next_button.tooltip_text = String(guidance.get("reason", ""))
-	_notice_label.text = I18n.core("bottom.summary") % [
-		I18n.core("bottom.alerts", "Alerts"), alert_count,
-		I18n.core("bottom.task", "Task"), task_caption,
-		I18n.core("bottom.timeline", "Timeline"), latest
-	]
+	var latest := str(_event_log.back()) if not _event_log.is_empty() else I18n.core("sidebar.none", "None")
+	_dock_workspace_label.text = I18n.core(str(NAV_TRANSLATION_KEYS.get(_active_page_key, "nav." + _active_page_key)), _active_page_key.capitalize())
+	_dock_next_button.disabled = str(guidance.get("page", "")).is_empty()
+	_dock_next_button.tooltip_text = str(guidance.get("message", guidance.get("reason", "")))
+	_notice_label.text = "%s %d · %s" % [I18n.core("bottom.alerts", "Alerts"), _active_blocker_cache.size(), latest]
+	_notice_label.tooltip_text = latest
 
 
 func _on_state_changed() -> void:
@@ -6244,7 +6329,7 @@ func _on_right_inspector_toggled(collapsed: bool) -> void:
 
 
 func _on_root_resized() -> void:
-	# The logical root stays 1440x900. Resize only affects the Window's uniform
+	# The logical root stays 1920x1080. Resize only affects the Window's uniform
 	# canvas transform, which Godot applies before dispatching Control input.
 	call_deferred("_reposition_fleet_roster_transients")
 
@@ -6292,9 +6377,16 @@ func _sync_ui_scale_selector_availability() -> void:
 	_select_ui_scale_preference()
 
 
+func _capture_shipyard_session() -> void:
+	if is_instance_valid(_ship_blueprint_editor) and not _ship_blueprint_editor.is_queued_for_deletion():
+		_shipyard_session = _ship_blueprint_editor.capture_session_state()
+
+
 func _reload_ui_for_scale() -> void:
-	# Rebuilding the scene applies every token consistently while the Game
-	# autoload keeps simulation/domain state alive. This is a UI-only reload.
+	# Preserve editor-only work across the explicit accessibility reload. This
+	# session is never a second authority for saved designs or simulation data.
+	_capture_shipyard_session()
+	get_tree().root.set_meta("shipyard_ui_session", _shipyard_session.duplicate(true))
 	get_tree().reload_current_scene()
 
 
@@ -6371,6 +6463,86 @@ func _refresh_shell_locale() -> void:
 	_update_header()
 
 
+func _workspace_scroll(content: Control, node_name: String = "WorkspacePanelScroll") -> ScrollContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = node_name
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(content)
+	return scroll
+
+
+func _compose_workspace(key: String) -> void:
+	if not _page_controls.has(key):
+		return
+	var box: VBoxContainer = _pages[key]
+	if box.find_child("WorkspaceColumns", false, false) != null:
+		return
+	var outer: ScrollContainer = _page_controls[key]
+	outer.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	outer.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	if key in ["industry", "research", "inventory", "construction"] or (key == "fleet" and _fleet_section in ["roster", "shipyard"]):
+		return
+	var pinned := 2 if key == "location" else 1
+	var children := box.get_children()
+	if children.size() <= pinned:
+		return
+	var columns := HBoxContainer.new()
+	columns.name = "WorkspaceColumns"
+	columns.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	columns.add_theme_constant_override("separation", UiTokens.layout_px(12))
+	if key in ["system_map", "megastructure"]:
+		var diagram: Control
+		for child in children:
+			if String(child.name) == "SystemMap2D" or child is MegastructureProgressViewScript:
+				diagram = child
+				break
+		if is_instance_valid(diagram):
+			box.remove_child(diagram)
+			diagram.custom_minimum_size.y = 0
+			diagram.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			diagram.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			diagram.size_flags_stretch_ratio = 2.4 if key == "system_map" else 1.4
+			columns.add_child(diagram)
+		var details := VBoxContainer.new()
+		details.add_theme_constant_override("separation", 10)
+		for child in children.slice(pinned):
+			if child == diagram:
+				continue
+			box.remove_child(child)
+			details.add_child(child)
+		columns.add_child(_workspace_scroll(details, "SystemIntelScroll" if key == "system_map" else "EngineeringProjectScroll"))
+	else:
+		var groups: Array[VBoxContainer] = []
+		var current := VBoxContainer.new()
+		current.add_theme_constant_override("separation", 10)
+		groups.append(current)
+		for child in children.slice(pinned):
+			if child.has_meta("workspace_section") and current.get_child_count() > 0:
+				current = VBoxContainer.new()
+				current.add_theme_constant_override("separation", 10)
+				groups.append(current)
+			box.remove_child(child)
+			current.add_child(child)
+		# Sections are indivisible semantic groups; never split by child index.
+		var lane_count := mini(3, maxi(1, groups.size()))
+		var lanes: Array[VBoxContainer] = []
+		for lane in lane_count:
+			var content := VBoxContainer.new()
+			content.add_theme_constant_override("separation", 14)
+			lanes.append(content)
+			var panel := _wrap_card(_workspace_scroll(content, "WorkspaceLaneScroll%d" % lane))
+			panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			columns.add_child(panel)
+		for index in groups.size():
+			lanes[mini(lane_count - 1, index * lane_count / groups.size())].add_child(groups[index])
+	box.add_child(columns)
+
+
 func _clear(container: Node) -> void:
 	for child in container.get_children():
 		container.remove_child(child)
@@ -6427,14 +6599,20 @@ func _add_unlock_banner(parent: VBoxContainer, page_id: String) -> void:
 
 
 func _page_title(title: String, subtitle: String) -> Control:
-	var box := VBoxContainer.new()
-	box.add_child(_label(title, 24, COLOR_TEXT))
-	box.add_child(_label(subtitle, 14, COLOR_MUTED))
-	return box
+	var row := HBoxContainer.new()
+	row.name = "WorkspacePageHeading"
+	row.custom_minimum_size.y = UiTokens.layout_px(38)
+	var heading := _label(title, 24, COLOR_TEXT)
+	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading.tooltip_text = subtitle
+	row.add_child(heading)
+	return row
 
 
 func _section_title(text_value: String) -> Label:
-	return _label(text_value, 17, COLOR_ACCENT)
+	var heading := _label(text_value, 17, COLOR_ACCENT)
+	heading.set_meta("workspace_section", true)
+	return heading
 
 
 func _label(text_value: String, size: int = 15, color: Color = COLOR_TEXT) -> Label:
@@ -6454,6 +6632,15 @@ func _rich(text_value: String, color: Color = COLOR_TEXT) -> RichTextLabel:
 	value.scroll_active = false
 	value.add_theme_color_override("default_color", color)
 	return value
+
+
+func _style_section_button(button: Button, selected: bool) -> void:
+	button.tooltip_text = "" if selected else button.tooltip_text
+	button.add_theme_stylebox_override("disabled", _button_style(UiTokens.COLOR_CONTROL_ACTIVE, COLOR_ACCENT))
+	button.add_theme_color_override("font_disabled_color", COLOR_TEXT)
+	var keyboard_focus := UiTokens.panel_style(Color.TRANSPARENT, COLOR_MUTED.darkened(0.35), 2)
+	keyboard_focus.set_border_width_all(1)
+	button.add_theme_stylebox_override("focus", keyboard_focus)
 
 
 func _button(text_value: String, callback: Callable, disabled := false, color: Color = COLOR_ACCENT) -> Button:
