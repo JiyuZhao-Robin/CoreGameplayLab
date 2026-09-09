@@ -90,6 +90,10 @@ func _test_content_contract(database: ContentDatabase) -> void:
 		if str(mode.get("id", "")) != "general_cargo" and not bool(mode.get("infrastructure_service", false)):
 			_check(not bool(mode.get("public_base_capacity", false)) and float(mode.get("ship_capacity_multiplier", 0.0)) > 0.0, "specialist service %s derives capacity from physical ships" % mode.get("id", "?"))
 	_check(bool(database.transport_modes.get("general_cargo", {}).get("public_base_capacity", false)), "limited public General Cargo preserves multi-hop new-save bootstrap")
+	var early_belt_corridor: Dictionary = database.logistics_routes.get("lunar_belt_freight", {})
+	var frontier_deployment_hub := int(database.survey_rules.get("deployment_package", {}).get("site_effects", {}).get("hub_throughput", 0))
+	_check(int(early_belt_corridor.get("freight_capacity", 0)) <= frontier_deployment_hub,
+			"the first Belt corridor can expose a route bottleneck before forcing administrative hub upgrades")
 	for project_value in database.research_projects.values():
 		var project := project_value as Dictionary
 		if not project.get("stages", []).is_empty():

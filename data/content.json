@@ -496,7 +496,7 @@
   ],
   "logistics_routes": [
     {"id":"earth_lunar_freight","name":"Earth-Lunar Freight Corridor","from":"earth_orbit","to":"lunar_space","bidirectional":true,"transit_time_ms":30000,"freight_capacity":100,"default_transport_mode":"general_cargo","dispatch_costs":[{"item":"chemical_propellant","quantity":1}]},
-    {"id":"lunar_belt_freight","name":"Lunar-Belt Freight Corridor","from":"lunar_space","to":"asteroid_belt","bidirectional":true,"transit_time_ms":75000,"freight_capacity":72,"default_transport_mode":"general_cargo","dispatch_costs":[{"item":"chemical_propellant","quantity":2}]},
+    {"id":"lunar_belt_freight","name":"Lunar-Belt Freight Corridor","from":"lunar_space","to":"asteroid_belt","bidirectional":true,"transit_time_ms":75000,"freight_capacity":16,"default_transport_mode":"general_cargo","dispatch_costs":[{"item":"chemical_propellant","quantity":2}]},
     {"id":"belt_jovian_freight","name":"Belt-Jovian Freight Corridor","from":"asteroid_belt","to":"gas_giant_region","bidirectional":true,"transit_time_ms":120000,"freight_capacity":64,"default_transport_mode":"general_cargo","dispatch_costs":[{"item":"chemical_propellant","quantity":2}]},
     {"id":"jovian_outer_freight","name":"Jovian-Outer Freight Corridor","from":"gas_giant_region","to":"outer_system","bidirectional":true,"transit_time_ms":180000,"freight_capacity":48,"default_transport_mode":"general_cargo","dispatch_costs":[{"item":"chemical_propellant","quantity":3}]},
     {"id":"outer_deep_freight","name":"Outer-Deep Freight Corridor","from":"outer_system","to":"deep_system","bidirectional":true,"transit_time_ms":300000,"freight_capacity":32,"default_transport_mode":"general_cargo","dispatch_costs":[{"item":"chemical_propellant","quantity":4}]},
