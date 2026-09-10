@@ -2025,11 +2025,16 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 		_add_item_dictionary(I18n.t("factory.field.inventory"), entity.get("inventory", {}))
 	if node_kind == "EXTRACTOR":
 		_add_detail(I18n.t("factory.field.resource", "Resource"), _item_name(str(entity.get("resource_id", ""))))
-		_add_detail(I18n.t("factory.field.coverage", "Resource coverage"), "%d%%" % roundi(float(entity.get("coverage_efficiency", 0.0)) * 100.0))
+		var mining_radius := maxf(0.0,float(entity.get("mining_radius_tiles",0.0)))
+		var area_tiles := maxi(1,int(entity.get("mining_area_tiles",entity.get("footprint_tiles",0))))
+		var coverage := float(entity.get("coverage_efficiency",0.0)) if mining_radius <= 0.0 else clampf(float(entity.get("covered_resource_tiles",0))/float(area_tiles),0.0,1.0)
+		if mining_radius > 0.0:
+			_add_detail(I18n.t("factory.field.circular_range", "Circular mining range"), I18n.t("factory.field.radius_tiles", "Radius %s tiles") % str(mining_radius))
+		_add_detail(I18n.t("factory.field.coverage", "Resource coverage"), "%d%%" % roundi(coverage * 100.0))
 		_add_detail(I18n.t("factory.field.grade", "Grade"), "%.2f" % float(entity.get("average_grade", 0.0)))
 		_add_detail(I18n.t("factory.field.sustainable_rate", "Sustainable field rate"), "%.2f/s" % float(entity.get("sustainable_rate_per_second", 0.0)))
-		_add_detail(I18n.t("factory.field.covered_tiles", "Covered resource tiles"), "%d / %d" % [int(entity.get("covered_resource_tiles", 0)), int(entity.get("footprint_tiles", 0))])
-		_add_meter("ExtractorCoverageMeter", I18n.t("factory.field.coverage", "Resource coverage"), float(entity.get("coverage_efficiency", 0.0)))
+		_add_detail(I18n.t("factory.field.covered_tiles", "Covered resource tiles"), "%d / %d" % [int(entity.get("covered_resource_tiles", 0)), area_tiles])
+		_add_meter("ExtractorCoverageMeter", I18n.t("factory.field.coverage", "Resource coverage"), coverage)
 	if node_kind in ["MACHINE", "POWER"]:
 		_add_capacity_detail(I18n.t("factory.field.input_buffer", "Input buffer"), entity.get("inputs", {}), int(entity.get("input_capacity", 0)))
 		_add_capacity_detail(I18n.t("factory.field.output_buffer", "Output buffer"), entity.get("outputs", {}), int(entity.get("output_capacity", 0)))

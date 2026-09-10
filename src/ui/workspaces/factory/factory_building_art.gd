@@ -9,6 +9,13 @@ extends RefCounted
 const ATLAS_PATH := "res://assets/ui/factory/generated/factory_building_icon_atlas_v1.png"
 const CORE_PATH := "res://assets/ui/factory/core/generated/planetary_core_v1.png"
 const DspArt = preload("res://src/ui/workspaces/factory/factory_dsp_art.gd")
+const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
+## Explicit visual family: pumps, orbital collectors and the development core
+## retain their own art. IDs, footprints and building-item contracts stay intact.
+const CORE_EXTRACTOR_IDS := [
+	"grid_surface_mine", "grid_cryogenic_extractor", "grid_exotic_extractor",
+	"grid_dsp_mining_machine"
+]
 const COLUMNS := 4
 const ROWS := 3
 
@@ -65,6 +72,10 @@ static func atlas_region(texture: Texture2D, definition_id: String, kind: String
 
 
 static func icon_texture(texture: Texture2D, definition_id: String, kind: String) -> AtlasTexture:
+	if uses_core_extractor(definition_id):
+		var miner := CoreExtractorArt.icon_texture()
+		if miner != null:
+			return miner
 	if definition_id.begins_with("grid_dsp_"):
 		var imported := DspArt.texture(definition_id)
 		if imported != null:
@@ -82,3 +93,7 @@ static func icon_texture(texture: Texture2D, definition_id: String, kind: String
 	atlas.atlas = texture
 	atlas.region = region
 	return atlas
+
+
+static func uses_core_extractor(definition_id: String) -> bool:
+	return definition_id in CORE_EXTRACTOR_IDS and CoreExtractorArt.is_available()

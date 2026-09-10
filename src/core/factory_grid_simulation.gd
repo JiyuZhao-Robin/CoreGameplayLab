@@ -350,23 +350,48 @@ func tile_view_snapshot(world: Dictionary, tile: Vector2i, view_mode: String = "
 	return snapshot
 
 
-func resource_coverage_for_footprint(world: Dictionary, footprint: Dictionary, loss_per_missing_tile: float = 0.1) -> Dictionary:
+func resource_coverage_for_footprint(world: Dictionary, footprint: Dictionary, loss_per_missing_tile: float = 0.1, mining_radius_tiles: float = 0.0) -> Dictionary:
 	var origin := _point(footprint.get("origin", {}))
 	var size := _point(footprint.get("size", {}))
 	var footprint_tiles := maxi(0, size.x) * maxi(0, size.y)
+	var radius := maxf(0.0, mining_radius_tiles)
+	var circular_reach := radius > EPSILON
+	var sample_origin := origin
+	var sample_end := origin + Vector2i(maxi(0, size.x), maxi(0, size.y))
+	if circular_reach:
+		var center := Vector2(float(origin.x), float(origin.y)) + Vector2(float(size.x), float(size.y)) * 0.5
+		var bounds: Dictionary = world.get("bounds", {})
+		var world_origin := _point(bounds.get("origin", {}))
+		var world_size := _point(bounds.get("size", {}))
+		var world_end := world_origin + Vector2i(maxi(0, world_size.x), maxi(0, world_size.y))
+		sample_origin = Vector2i(
+			maxi(world_origin.x, floori(center.x - radius)),
+			maxi(world_origin.y, floori(center.y - radius))
+		)
+		sample_end = Vector2i(
+			mini(world_end.x, ceili(center.x + radius)),
+			mini(world_end.y, ceili(center.y + radius))
+		)
+	var sample_footprint := _footprint(sample_origin, Vector2i(maxi(0, sample_end.x - sample_origin.x), maxi(0, sample_end.y - sample_origin.y)))
 	var resource_ids := {}
 	var field_ids := {}
 	var covered_by_field := {}
 	var covered_tiles := 0
+	var mining_area_tiles := 0
 	var grade_sum := 0.0
 	var sustainable_rate := 0.0
 	var resource_category := ""
 	var candidate_fields: Array = []
 	for field_id in _sorted_keys(world.get("resource_fields", {})):
-		if _footprints_overlap(footprint, world["resource_fields"][field_id].get("footprint", {})):
+		if _footprints_overlap(sample_footprint, world["resource_fields"][field_id].get("footprint", {})):
 			candidate_fields.append(field_id)
-	for y in range(origin.y, origin.y + maxi(0, size.y)):
-		for x in range(origin.x, origin.x + maxi(0, size.x)):
+	var circle_center := Vector2(float(origin.x), float(origin.y)) + Vector2(float(size.x), float(size.y)) * 0.5
+	var radius_squared := radius * radius
+	for y in range(sample_origin.y, sample_end.y):
+		for x in range(sample_origin.x, sample_end.x):
+			if circular_reach and Vector2(float(x) + 0.5, float(y) + 0.5).distance_squared_to(circle_center) > radius_squared + EPSILON:
+				continue
+			mining_area_tiles += 1
 			var tile := tile_snapshot(world, Vector2i(x, y), candidate_fields)
 			var resource_id := str(tile.get("resource_id", ""))
 			if resource_id.is_empty():
@@ -383,8 +408,11 @@ func resource_coverage_for_footprint(world: Dictionary, footprint: Dictionary, l
 				resource_category = str(tile.get("resource_category", "solid"))
 	var sorted_resources := _sorted_keys(resource_ids)
 	var sorted_fields := _sorted_keys(field_ids)
-	var missing_tiles := maxi(0, footprint_tiles - covered_tiles)
-	var efficiency := 0.0 if covered_tiles <= 0 else clampf(1.0 - float(missing_tiles) * clampf(loss_per_missing_tile, 0.0, 1.0), 0.0, 1.0)
+	var missing_tiles := 0 if circular_reach else maxi(0, footprint_tiles - covered_tiles)
+	# A circular reach is capacity, not a foundation requirement. Empty tiles in
+	# the disc are unused reach, while any compatible resource tile is full
+	# coverage and remains capped by its summed sustainable density below.
+	var efficiency := 0.0 if covered_tiles <= 0 else (1.0 if circular_reach else clampf(1.0 - float(missing_tiles) * clampf(loss_per_missing_tile, 0.0, 1.0), 0.0, 1.0))
 	return {
 		"resource_id":"" if sorted_resources.is_empty() else str(sorted_resources[0]),
 		"resource_ids":sorted_resources,
@@ -393,6 +421,8 @@ func resource_coverage_for_footprint(world: Dictionary, footprint: Dictionary, l
 		"covered_tiles_by_field":covered_by_field,
 		"covered_resource_tiles":covered_tiles,
 		"footprint_tiles":footprint_tiles,
+		"mining_radius_tiles":radius,
+		"mining_area_tiles":mining_area_tiles,
 		"missing_resource_tiles":missing_tiles,
 		"coverage_efficiency":efficiency,
 		"average_grade":0.0 if covered_tiles <= 0 else grade_sum / float(covered_tiles),
@@ -501,7 +531,7 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 			return _failure("CONSTRUCTION_OCCUPIED", "Building footprint overlaps a construction order")
 	var result := {"ok":true, "footprint":footprint}
 	if str(definition.get("kind", "")) == "EXTRACTOR":
-		var resource_profile := resource_coverage_for_footprint(world, footprint, float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+		var resource_profile := resource_coverage_for_footprint(world, footprint, float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)), float(definition.get("mining_radius_tiles", 0.0)))
 		if int(resource_profile.get("covered_resource_tiles", 0)) <= 0:
 			return _failure("RESOURCE_REQUIRED", "Extractor must cover at least one resource-bearing tile")
 		if bool(resource_profile.get("mixed_resource_types", false)):
@@ -1229,7 +1259,7 @@ func _apply_operational_projection(entity: Dictionary, projection: Dictionary) -
 
 func _extractor_operational_projection(world: Dictionary, entity_id: String, entity: Dictionary, power_factors: Dictionary) -> Dictionary:
 	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
-	var resource_profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+	var resource_profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)), float(definition.get("mining_radius_tiles", 0.0)))
 	_apply_extractor_resource_profile(entity, resource_profile)
 	var projection := {"status":"NO_RESOURCE", "actual_rate":0.0, "resource_profile":resource_profile, "resource_id":str(resource_profile.get("resource_id", "")), "free":0}
 	if int(resource_profile.get("covered_resource_tiles", 0)) <= 0 or bool(resource_profile.get("mixed_resource_types", false)):
@@ -1745,6 +1775,8 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"sustainable_rate_per_second":maxf(0.0, float(entity.get("sustainable_rate_per_second", 0.0))),
 			"covered_resource_tiles":maxi(0, int(entity.get("covered_resource_tiles", 0))),
 			"footprint_tiles":maxi(0, int(entity.get("footprint_tiles", 0))),
+			"mining_radius_tiles":maxf(0.0, float(entity.get("mining_radius_tiles", definition.get("mining_radius_tiles", 0.0)))),
+			"mining_area_tiles":maxi(0, int(entity.get("mining_area_tiles", 0))),
 			"missing_resource_tiles":maxi(0, int(entity.get("missing_resource_tiles", 0))),
 			"ports":_entity_port_snapshot(entity_id, entity, port_connections),
 			"road_connected":bool(road_access.get("road_connected", false)),
@@ -1787,6 +1819,8 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 	for order_id_value in _sorted_keys(world.get("construction_orders", {})):
 		var order_id := str(order_id_value)
 		var order: Dictionary = world.get("construction_orders", {}).get(order_id, {})
+		var order_profile: Dictionary = order.get("resource_profile", {}) as Dictionary
+		var order_definition: Dictionary = building_definitions.get(str(order.get("definition_id", "")), {}) as Dictionary
 		var order_status := str(order.get("status", "WAITING_BUILDING"))
 		construction_orders.append({
 			"id":order_id,
@@ -1794,6 +1828,8 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"definition_id":str(order.get("definition_id", "")),
 			"recipe_id":str(order.get("recipe_id", "")),
 			"footprint":order.get("footprint", {}).duplicate(true),
+			"mining_radius_tiles":maxf(0.0, float(order_profile.get("mining_radius_tiles", order_definition.get("mining_radius_tiles", 0.0)))),
+			"mining_area_tiles":maxi(0, int(order_profile.get("mining_area_tiles", 0))),
 			"required_items":order.get("required_items", {}).duplicate(true),
 			"delivered_items":order.get("delivered_items", {}).duplicate(true),
 			"deployment_item_id":str(order.get("deployment_item_id", "")),
@@ -1865,6 +1901,7 @@ func _workspace_palette_snapshot(world: Dictionary) -> Dictionary:
 			"recipe_ids":definition.get("recipe_ids", []).duplicate(true),
 			"resource_categories":definition.get("resource_categories", []).duplicate(true),
 			"allowed_resource_ids":definition.get("allowed_resource_ids", []).duplicate(true),
+			"mining_radius_tiles":maxf(0.0, float(definition.get("mining_radius_tiles", 0.0))),
 			"deployment_item_id":str(definition.get("deployment_item_id", "")),
 			"power_generation_kw":effective_generation,
 			"power_demand_kw":effective_demand,
@@ -2100,7 +2137,7 @@ func _production_summary(rows: Array) -> Dictionary:
 
 func _theoretical_entity_rate(world: Dictionary, entity_id: String, entity: Dictionary, definition: Dictionary) -> float:
 	if str(entity.get("kind", "")) == "EXTRACTOR":
-		var profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)))
+		var profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)), float(definition.get("mining_radius_tiles", 0.0)))
 		return minf(
 			maxf(0.0, float(definition.get("mining_rate_per_second", 0.0))) * maxf(EPSILON, float(profile.get("average_grade", 1.0))) * clampf(float(profile.get("coverage_efficiency", 0.0)), 0.0, 1.0),
 			maxf(0.0, float(profile.get("sustainable_rate_per_second", 0.0)))
@@ -2218,7 +2255,7 @@ func _create_entity(entity_id: String, definition_id: String, origin: Vector2i, 
 func _apply_extractor_resource_profile(entity: Dictionary, profile: Dictionary) -> void:
 	if str(entity.get("kind", "")) != "EXTRACTOR" or profile.is_empty():
 		return
-	for field in ["resource_id", "resource_category", "resource_field_ids", "covered_tiles_by_field", "covered_resource_tiles", "footprint_tiles", "missing_resource_tiles", "coverage_efficiency", "average_grade", "sustainable_rate_per_second", "mixed_resource_types"]:
+	for field in ["resource_id", "resource_category", "resource_field_ids", "covered_tiles_by_field", "covered_resource_tiles", "footprint_tiles", "mining_radius_tiles", "mining_area_tiles", "missing_resource_tiles", "coverage_efficiency", "average_grade", "sustainable_rate_per_second", "mixed_resource_types"]:
 		if profile.has(field):
 			entity[field] = profile.get(field)
 
@@ -2487,6 +2524,11 @@ func _resource_fields_share_extractor_span(a: Dictionary, b: Dictionary) -> bool
 	for definition_value in building_definitions.values():
 		var definition := definition_value as Dictionary
 		if str(definition.get("kind", "")) != "EXTRACTOR":
+			continue
+		# Circular reach is a placement choice, not a minimum spacing rule for
+		# planetary geology. Enlarging a mine must not delete nearby authored ore
+		# fields (including starter copper). Mixed circles are rejected at placement.
+		if float(definition.get("mining_radius_tiles",0.0)) > EPSILON:
 			continue
 		if not definition.get("resource_categories", []).has(str(a.get("resource_category", "solid"))) or not definition.get("resource_categories", []).has(str(b.get("resource_category", "solid"))):
 			continue

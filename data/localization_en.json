@@ -2112,6 +2112,8 @@
     "factory.field.recipe_outputs": "Recipe outputs",
     "factory.field.resource": "Resource",
     "factory.field.coverage": "Resource coverage",
+    "factory.field.circular_range": "Circular mining range",
+    "factory.field.radius_tiles": "Radius %s tiles",
     "factory.field.sustainable_rate": "Sustainable field rate",
     "factory.field.covered_tiles": "Covered resource tiles",
     "factory.field.input_buffer": "Input buffer",

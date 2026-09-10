@@ -2110,6 +2110,8 @@
     "factory.field.recipe_outputs": "配方输出",
     "factory.field.resource": "开采资源",
     "factory.field.coverage": "资源覆盖率",
+    "factory.field.circular_range": "圆形采掘范围",
+    "factory.field.radius_tiles": "半径 %s 格",
     "factory.field.sustainable_rate": "资源田可持续速率",
     "factory.field.covered_tiles": "已覆盖资源格",
     "factory.field.input_buffer": "输入缓存",

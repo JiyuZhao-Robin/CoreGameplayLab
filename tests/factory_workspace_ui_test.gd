@@ -105,7 +105,8 @@ func _test_bottom_build_palette(workspace, intents: Array) -> void:
 		all_filter.pressed.emit()
 	var mine_card := workspace.find_child("FactoryBuildCardGridSurfaceMine", true, false) as Button
 	var mine_icon := mine_card.icon as AtlasTexture if mine_card != null else null
-	_check(mine_icon != null and mine_icon.region.position == Vector2.ZERO and mine_icon.region.size == Vector2(362, 362), "bottom-dock cards slice the generated transparent 4 × 3 building atlas deterministically")
+	var core_art = load("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
+	_check(mine_icon != null and mine_icon == core_art.icon_texture() and mine_icon.region.size == Vector2(256,256), "bottom-dock mine card uses the shared transparent Core Extractor representative frame")
 	if mine_card != null:
 		mine_card.pressed.emit()
 	_check(
@@ -469,15 +470,15 @@ func _test_construction_intent(workspace, intents: Array) -> void:
 	var payload: Dictionary = intent.get("payload", {})
 	_check(
 		int(intent.get("protocol_version", 0)) == 1
-		and str(intent.get("kind", "")) == "QUEUE_CONSTRUCTION"
+		and str(intent.get("kind", "")) == "DEPLOY_BUILDING"
 		and str(intent.get("world_id", "")) == "ui-grid"
 		and int(intent.get("base_topology_revision", -1)) == 17
 		and int(intent.get("base_runtime_revision", -1)) == 9
 		and str(payload.get("definition_id", "")) == "grid_solar_array"
 		and str(payload.get("recipe_id", "not-empty")) == ""
-		and str(payload.get("funding_policy", "")) == "AUTO_SAME_LOCATION"
+		and not payload.has("funding_policy")
 		and int((payload.get("origin", {}) as Dictionary).get("x", -1)) == 100,
-		"construction intent preserves protocol, immutable revision, empty recipe, automatic same-location funding, and selected footprint origin"
+		"deployment intent preserves protocol, immutable revision, empty recipe and selected footprint origin without onsite funding"
 	)
 
 
@@ -682,7 +683,7 @@ func _test_build_placement_cancel(workspace, intents: Array) -> void:
 		and str(workspace.get("_selected_building_id")) == ""
 		and (canvas.get("_placement_preview") as Dictionary).is_empty()
 		and intents.size() == intent_count_before,
-		"Escape cancels BUILD placement without emitting QUEUE_CONSTRUCTION"
+		"Escape cancels BUILD placement without emitting DEPLOY_BUILDING"
 	)
 	_select_metadata(palette, "grid_solar_array")
 	var right_click := InputEventMouseButton.new()
@@ -694,7 +695,7 @@ func _test_build_placement_cancel(workspace, intents: Array) -> void:
 		and str(workspace.get("_selected_building_id")) == ""
 		and (canvas.get("_placement_preview") as Dictionary).is_empty()
 		and intents.size() == intent_count_before,
-		"right-click cancels BUILD placement without emitting QUEUE_CONSTRUCTION"
+		"right-click cancels BUILD placement without emitting DEPLOY_BUILDING"
 	)
 
 
@@ -847,7 +848,7 @@ func _test_keyboard_canvas_action(workspace, intents: Array) -> void:
 	var payload: Dictionary = intent.get("payload", {})
 	_check(
 		canvas.get("_keyboard_tile") == Vector2i.RIGHT
-		and str(intent.get("kind", "")) == "QUEUE_CONSTRUCTION"
+		and str(intent.get("kind", "")) == "DEPLOY_BUILDING"
 		and int((payload.get("origin", {}) as Dictionary).get("x", -1)) == 1,
 		"focused Factory canvas supports arrow-key tile movement and Enter placement"
 	)
@@ -868,7 +869,7 @@ func _test_mouse_hit_priorities(workspace, intents: Array) -> void:
 	var extractor_intent: Dictionary = intents.back() as Dictionary
 	var extractor_payload: Dictionary = extractor_intent.get("payload", {})
 	_check(
-		str(extractor_intent.get("kind", "")) == "QUEUE_CONSTRUCTION"
+		str(extractor_intent.get("kind", "")) == "DEPLOY_BUILDING"
 		and Vector2i(int((extractor_payload.get("origin", {}) as Dictionary).get("x", -1)), int((extractor_payload.get("origin", {}) as Dictionary).get("y", -1))) == extractor_tile
 		and str((workspace.get("_selection") as Dictionary).get("kind", "")) != "RESOURCE_FIELD",
 		"a real mouse click on an extractor preview over a resource field emits construction instead of selecting the field"

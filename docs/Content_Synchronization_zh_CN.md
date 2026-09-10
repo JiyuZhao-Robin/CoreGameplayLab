@@ -56,6 +56,48 @@ Factory 的详细规则、数据契约和已记录的定向验证见[星球共�
 
 普通脚本运行形式为 `godot --headless --path <project> --script res://tests/<name>_test.gd -- --no-persistence`；UI policy/scale/matrix/catalog 使用对应 `.tscn`。实际日志和真实 3840×2160 地点截图位于 `/tmp/helios-*`，不纳入提交。本轮未运行完整发布脚本、J1–J10 或满负载性能基准。
 
+## 工厂画布视觉修复（2026-09-10）
+
+- 已实现：地表和矿区先绘制，道路、建筑、在途货物和部署幽灵随后绘制，建筑/道路放置预览最后绘制；矿区不再盖住道路及有效或无效选址提示。
+- 道路工业画布直接显示现有透明建筑素材，保持原图比例和颜色，去掉建筑上的信息卡与成片文字。预览携带建筑身份并显示对应图像；实际部署仍使用原始格子占地。扩大的矿机图像可优先于矿区选中，相邻建筑按统一的前后顺序绘制和选择。
+- 地表使用固定世界尺度和镜像连续采样，降低底色对比；矿区在真实边界内做透明过渡，道路使用连续材质及外缘。五张现有建筑/地形/道路素材开启 mipmap；没有新生成图片，既有 PNG 和生成来源记录保持不变。
+- 主代理实际串行通过：`factory_visual_layers_test`（真实 3840×2160 像素断言、矿机点击和相邻建筑重叠）、`factory_visual_capture`（当前核心开局与道路命令驱动的 Main 实机画面）、`factory_canvas_grid_contract_test`、`factory_landing_terrain_ui_test`、`factory_building_deployment_ui_test`、`factory_workspace_ui_test`、`factory_dsp_art_ui_test`、`factory_road_animation_test`、`responsive_ui_policy_test`、`ui_scale_contract_test`、`responsive_ui_matrix_test`、`ui_domain_integrity_test`。将绘制顺序临时改回旧顺序的负对照，正确检出道路和两种放置预览的三项遮挡失败；随后恢复修复并重新通过渲染测试。
+- 证据在本地忽略目录 `artifacts/ui/factory-visuals/{before,after,layers}`；运行使用 `--no-persistence`，未运行完整发布检查或 J1–J10。新增截图脚本使用成品部署与道路，不复用旧端口/现场施工捕获脚本。旧 `factory_workspace_ui_test` 的三项部署断言已同步为 `DEPLOY_BUILDING` 且没有现场 funding 字段；其中其它旧连接夹具仍只是兼容测试。
+
+## 小型美术标定场景（2026-09-10）
+
+- 已实现独立 `art_calibration.tscn`：Hurricane/Nullius 四层真实建筑动画、Malcolm Riley 铁矿、Poly Haven 沙地和 rubberduck 烟雾，提供运行/停机/矿区放置预览与逐层、逐帧、配色、亮度、占地锚点和缩放控制。
+- 选定原图与源定义实际存入 `assets/art_calibration/`，逐文件记录来源和 SHA-256，保留作者署名与许可证据；独立导入脚本可核对和重建 manifest。未修改正式 Factory 的建筑映射、占地、道路或库存。
+- 主代理实际通过正常 OpenGL 4K 场景测试、导入一致性检查及 fixed-layout policy/scale/window-matrix、UI domain 检查。真实截图位于忽略目录 `artifacts/ui/art-calibration`。
+- 启动、来源、当前标定参数和未覆盖范围见[美术标定说明](./Art_Calibration_zh_CN.md)。本样本不代表全游戏美术替换或完整地形素材集已完成。
+
+## 原创矿机模型与动画样本（2026-09-11）
+
+- 已实现原创 HELIX-01：Blender 参数化建模、实体螺旋钻头、钻架进给、液压杆与风扇动作。原生 `.blend` 和自包含 `.glb` 实际保存在 `assets/models/helix_miner/`；GLB 有 178 个网格、5 条运动通道，连续时间轴保留三个片段边界。
+- Cycles 烘焙启动 24 帧、采掘循环 60 帧、停机 24 帧，均为 512×512 RGBA；另有独立静态软阴影、低透明度护板色罩和发光层。相机投影计算地面原点锚点，元数据不从透明边缘推断占地。模型生成脚本及资产哈希已记录。
+- 新增独立 `miner_preview.tscn` 与 `run_miner_preview.ps1`。请求停机先完成当前采掘周期，再播放抬升；中途反向请求保留当前过渡。界面刷新帧数范围会屏蔽滑条信号，避免被误当用户拖帧。地面、矿石和烟雾沿用已署名参考资源；该矿机模型本身不复用参考建筑。
+- 主代理实际通过 `miner_asset_contract_test.py`（源文件哈希、真实 GLB 网格/运动通道/片段连接）、正常 OpenGL 4K `miner_preview_test.gd`（运行、反向请求、延迟停机、静止像素、分层、锚点、固定布局和经济状态不变），以及 policy/scale/window-matrix/UI domain 检查。
+- 这是单方向、独立展示的原创模型原型。Blender 程序化材质完整保留在源文件及烘焙图中，GLB 使用标准 PBR 基础值；尚未替换正式 Factory 矿机，也未宣称完成全部方向、动态阴影、LOD 或大工厂资源预算。详见[矿机资产说明](../assets/models/helix_miner/README.md)。
+
+## 双矿机原素材 demo（2026-09-11，独立美术预览）
+
+- 已实现：Krastorio 2 MK2 与 Hurricane Core Extractor 同窗双面板，原始 PNG 字节不变，44 个来源文件与 48 个独立图层定义保存在 `assets/art_calibration/reference_miners/`，含来源哈希、原许可元数据及实际上游参数证据。
+- MK2 保留四向、主体/前景/输出/阴影与工作效果，30 张钻头原帧按 195 步源序列播放，24 步/秒；Core 采用 704²/120 帧/30 FPS、64+56 双页、独立静态阴影与发光。源像素偏移和贴图缩放独立换算。
+- 启停、拖帧、倍率、图层和方向按钮在各面板独立生效；退出恢复预览进入前的 Game 模拟/持久化开关。不替换正式 Factory 矿机或改变经济状态。
+- 主代理实际通过原图/哈希/UTF-8/动画帧检查、正常 OpenGL 4K 双矿机测试，覆盖按钮绑定、跨页、帧序列、平滑位移、分层、静止像素、固定窗口矩阵及退出恢复；截图在忽略目录 `artifacts/ui/reference-miners/`。
+- 这是源动画的展示适配，未复刻原引擎的完整工作淡入淡出、湿式采矿或资源目标移动时序，也未验证生产级贴图预算。入口与限制见[双矿机说明](../assets/art_calibration/reference_miners/README.md)。
+
+## Core Extractor 正式矿机接入（2026-09-11，当前追加要求）
+
+- 用户选定第二个 Core Extractor，并追加 11×11 大型本体与圆形采掘影响范围。四种地面采掘设施共用真实原素材；新部署占地 11×11，采掘半径 18 格。圆形范围与碰撞/道路接入分开，地形、成品建筑库存及开局包规则继续生效。
+- 正式资源在 `assets/ui/factory/miner/core_extractor/`：120 帧、30 FPS、独立阴影、工作发光。离线切帧与逐帧 mipmap 避免生产运行时解码完整参考图集；图标、背包物品、实体和摆放幽灵使用同一入口。
+- 动画只消费快照的运行状态与实际速率，断电、输出满、无矿时停帧并熄灯；减少动态效果、总览和预算限制冻结动作。圆形采掘圈在选中或摆放时显示。
+- 来源和派生处理见[正式资源署名](../assets/ui/factory/miner/core_extractor/ATTRIBUTION.md)。HELIX、化工标定和双矿机对照仍作为独立预览保留。
+- 主代理本次实际串行通过：`factory_core_extractor_assets_test.py` 固定原图/派生哈希与透明通道；`factory_circular_mining_test.gd` 圆边/角排除、地理保留、真实产率封顶及旧占地保存；正常 OpenGL 4K `factory_core_extractor_test.gd` 真实部署/道路供电/断路恢复/工作像素/停帧/库存图标；`factory_visual_layers_test.gd` 矿区上方实体、幽灵、红绿预览与点选。
+- 主代理本次还通过 `factory_building_deployment_test.gd` 从零原材料到制造新矿机的完整开局闭环、`factory_building_deployment_ui_test.gd`、`factory_dsp_art_ui_test.gd`、`content_sync_ui_test.gd`、`factory_workspace_ui_test.gd`、`factory_road_animation_test.gd`、资产守恒、核心完整性与内容/规划契约检查；固定 policy/scale/window-matrix、UI domain 和双语目录检查通过。未运行全发布门禁或 J1–J10。
+- 运行 `tools/run_core_extractor_factory.ps1` 可打开命令驱动的正式 Main 工厂示例；`-Capture` 仅截图后退出。示例不读取/写入玩家存档，4K 证据在忽略目录 `artifacts/ui/core-extractor-live/`。
+- 旧实体保留历史占地以保护已有道路；重新部署才使用 11×11。旧幽灵在实际部署时重验新占地，不能放下则继续等待。此轮不宣称完成所有建筑美术、有限矿量耗尽、重叠矿机的统一矿格速率分配或大工厂冷加载性能基准。
+
 ## 历史资料
 
 - [1.29 Core Complete Ledger](./archive/remaining-work-1.29.md) 保留原样，记录旧聚合工业的证据，不是当前待办。

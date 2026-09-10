@@ -88,22 +88,30 @@ func placement_preview(snapshot: Dictionary, building: Dictionary, origin: Vecto
 	var bounds_origin := footprint_origin(bounds)
 	var bounds_size := footprint_size(bounds)
 	if origin.x < bounds_origin.x or origin.y < bounds_origin.y or origin.x + size.x > bounds_origin.x + bounds_size.x or origin.y + size.y > bounds_origin.y + bounds_size.y:
-		return {"valid":false, "reason_code":"OUT_OF_BOUNDS", "footprint":footprint}
+		return _building_preview(building, footprint, "OUT_OF_BOUNDS")
 	_ensure_placement_index(snapshot)
 	for y in range(origin.y, origin.y + size.y):
 		for x in range(origin.x, origin.x + size.x):
 			if not Terrain.is_buildable(snapshot, Vector2i(x, y)):
-				return {"valid":false, "reason_code":"TERRAIN_BLOCKED", "footprint":footprint}
+				return _building_preview(building, footprint, "TERRAIN_BLOCKED")
 	var candidates := _placement_chunk_index.query(Rect2(Vector2(origin), Vector2(size)))
 	for entity_id_value in candidates.get("entity_ids", []):
 		var entity: Dictionary = _placement_entities_by_id.get(str(entity_id_value), {})
 		if footprints_overlap(footprint, entity.get("footprint", {})):
-			return {"valid":false, "reason_code":"FOOTPRINT_OCCUPIED", "footprint":footprint}
+			return _building_preview(building, footprint, "FOOTPRINT_OCCUPIED")
 	for order_id_value in candidates.get("order_ids", []):
 		var order: Dictionary = _placement_orders_by_id.get(str(order_id_value), {})
 		if footprints_overlap(footprint, order.get("footprint", {})):
-			return {"valid":false, "reason_code":"CONSTRUCTION_OCCUPIED", "footprint":footprint}
-	return {"valid":true, "reason_code":"", "footprint":footprint}
+			return _building_preview(building, footprint, "CONSTRUCTION_OCCUPIED")
+	return _building_preview(building, footprint)
+
+
+func _building_preview(building: Dictionary, footprint: Dictionary, reason_code: String = "") -> Dictionary:
+	# Presentation identity accompanies both valid and invalid placement. The
+	# footprint remains the only geometry used by validation and command intents.
+	return {"valid":reason_code.is_empty(), "reason_code":reason_code, "footprint":footprint,
+		"definition_id":str(building.get("id", "")), "node_kind":str(building.get("kind", "MACHINE")),
+		"mining_radius_tiles":maxf(0.0,float(building.get("mining_radius_tiles",0.0)))}
 
 
 func _rebuild_palette_indexes(snapshot: Dictionary) -> void:

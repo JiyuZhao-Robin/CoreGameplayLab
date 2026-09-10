@@ -145,7 +145,7 @@ func _test_ore_to_new_building() -> void:
 		if not str(item_id).begins_with("building_grid_"):
 			inventory[item_id] = 0
 	for entry in [
-		["grid_surface_mine",Vector2i(52,52),""],["grid_surface_mine",Vector2i(93,52),""],
+		["grid_surface_mine",Vector2i(42,42),""],["grid_surface_mine",Vector2i(82,42),""],
 		["grid_arc_smelter",Vector2i(8,61),"grid_refine_iron"],
 		["grid_arc_smelter",Vector2i(28,61),"grid_refine_copper"],
 		["grid_engineering_works",Vector2i(52,61),"grid_fabricate_electronics"]
@@ -157,8 +157,8 @@ func _test_ore_to_new_building() -> void:
 	var tiles: Array = []
 	for x in range(8,110):
 		tiles.append({"x":x,"y":60})
-	for x in [52,93]:
-		for y in range(55,60):
+	for x in [42,82]:
+		for y in range(53,60):
 			tiles.append({"x":x,"y":y})
 	for y in range(32,60):
 		tiles.append({"x":109,"y":y})
@@ -188,7 +188,7 @@ func _test_ore_to_new_building() -> void:
 	_check(game.state.item_quantity("building_grid_surface_mine", LOCATION) >= 1, "manufactured building is automatically delivered to planetary stock")
 	if game.state.item_quantity("building_grid_surface_mine", LOCATION) >= 1:
 		var total_before := _total("building_grid_surface_mine")
-		_check(_deploy("grid_surface_mine", Vector2i(49,52)).get("accepted", false), "manufactured mining building deploys for the next expansion")
+		_check(_deploy("grid_surface_mine", Vector2i(30,45)).get("accepted", false), "manufactured mining building deploys for the next expansion")
 		_check(_total("building_grid_surface_mine") == total_before, "expansion preserves finished building custody")
 
 

@@ -28,6 +28,7 @@ signal road_path_rejected(reason_code: String)
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
 const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
+const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
 const TerrainRenderer = preload("res://src/ui/workspaces/factory/factory_terrain_renderer.gd")
 const Terrain = preload("res://src/core/factory_terrain.gd")
 var _terrain_renderer := TerrainRenderer.new()
@@ -121,6 +122,9 @@ var _road_shipments_by_id: Dictionary = {}
 var _shipment_from_progress: Dictionary = {}
 var _shipment_blend_elapsed := ROAD_BLEND_SECONDS
 var _runtime_snapshot_age := 10.0
+## Per-entity presentation clocks only. Never advance production or write state.
+var _miner_animation_seconds: Dictionary = {}
+var _visible_core_miners: Array[String] = []
 var _shipment_ids_by_chunk: Dictionary = {}
 var _shipment_chunk_size := 64
 
@@ -128,6 +132,7 @@ var _shipment_chunk_size := 64
 func _ready() -> void:
 	name = "FactoryCanvas"
 	clip_contents = true
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	focus_mode = Control.FOCUS_ALL
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(360, 300)
@@ -143,11 +148,18 @@ func _ready() -> void:
 func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> void:
 	var previous_layout_signature := _world_layout_signature()
 	var previous_topology_signature := _topology_signature()
+	var world_changed := str(snapshot.get("world_id", "")) != str(_snapshot.get("world_id", ""))
+	if world_changed:
+		_miner_animation_seconds.clear()
+		_visible_core_miners.clear()
 	_update_shipment_interpolation(snapshot)
-	if float(snapshot.get("elapsed_ms", 0.0)) != float(_snapshot.get("elapsed_ms", 0.0)):
+	if world_changed or _snapshot.is_empty() or float(snapshot.get("elapsed_ms", 0.0)) != float(_snapshot.get("elapsed_ms", 0.0)) or int(snapshot.get("runtime_revision", 0)) != int(_snapshot.get("runtime_revision", 0)) or int(snapshot.get("topology_revision", 0)) != int(_snapshot.get("topology_revision", 0)):
 		_runtime_snapshot_age = 0.0
 	_snapshot = snapshot if already_normalized else _view_model.build(snapshot)
 	_rebuild_snapshot_indexes()
+	for miner_id in _miner_animation_seconds.keys():
+		if not _entities_by_id.has(miner_id):
+			_miner_animation_seconds.erase(miner_id)
 	_load_road_surface()
 	if not _port_drag.is_empty() and previous_topology_signature != _topology_signature():
 		cancel_port_drag()
@@ -380,6 +392,7 @@ func set_connection_preview(source_id: String, target_id: String, kind: String, 
 func _process(delta: float) -> void:
 	_shipment_blend_elapsed = minf(ROAD_BLEND_SECONDS, _shipment_blend_elapsed + delta)
 	_runtime_snapshot_age += delta
+	_advance_core_extractors(delta)
 	if not _reduced_motion and is_visible_in_tree() and _visible_active_flow:
 		_flow_redraw_elapsed += delta
 		if _flow_redraw_elapsed >= FLOW_REDRAW_INTERVAL_SECONDS:
@@ -393,6 +406,7 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
 	_visible_active_flow = false
+	_visible_core_miners.clear()
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
 		_visible_records.clear()
 		_invalidate_hit_geometry()
@@ -407,23 +421,28 @@ func _draw() -> void:
 		_terrain_renderer.draw_ground(self, _snapshot, _visible_world_query_rect().intersection(Rect2(Vector2(_bounds_origin()),Vector2(_bounds_size()))), _tile_scale(), _camera)
 	elif _regolith_tile != null and world_rect.has_area():
 		_draw_regolith_ground()
-	_draw_roads()
-	_draw_grid()
-	_draw_chunk_boundaries()
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
 	_port_hit_rects.clear()
-	_draw_road_preview()
-	_draw_placement_preview()
+	# Ground and deposits form one surface. All built infrastructure, sprites
+	# and interaction overlays must be submitted after their opaque textures.
+	_draw_resource_fields()
+	_draw_grid()
+	_draw_roads()
+	_draw_selected_mining_range()
 	if not _road_logistics_mode:
 		_draw_links()
-	_draw_connection_preview()
-	_draw_resource_fields()
+	_draw_core_extractor_shadows()
 	_draw_entities()
 	_draw_road_cargo()
 	_draw_construction_orders()
 	draw_rect(world_rect, WORLD_BOUNDARY_COLOR, false, 2.0)
+	# Match the topmost action priority in _select_at(). Invalid previews also
+	# remain visible over occupied buildings so their rejection is legible.
+	_draw_connection_preview()
+	_draw_road_preview()
+	_draw_placement_preview()
 	_hit_geometry_dirty = false
 
 
@@ -443,7 +462,8 @@ func _draw_grid() -> void:
 	var is_exact_tile_grid := step_tiles == 1
 	# Macro-grid lines use lower contrast and a slightly heavier stroke so they
 	# read as a navigation LOD, never as a misleading 1:1 placement lattice.
-	var line_color := Color(GRID_COLOR, 0.34 if is_exact_tile_grid else 0.20)
+	var is_building := not _placement_preview.is_empty() or not _road_tool_mode.is_empty()
+	var line_color := Color(GRID_COLOR, (0.34 if is_building else 0.16) if is_exact_tile_grid else 0.18)
 	var line_width := 1.0 if is_exact_tile_grid else 1.35
 	var origin := _bounds_origin()
 	var first_x := _first_grid_coordinate(visible_world.position.x, origin.x, step_tiles)
@@ -525,13 +545,31 @@ func _draw_roads() -> void:
 		if not tile_rect.intersects(_visible_draw_rect()):
 			continue
 		var tier := clampi(int(road.get("tier", 1)), 1, 2)
-		var tint := Color("8eaabd") if tier == 1 else Color("b5d4e0")
+		var tint := Color("b8c8cf") if tier == 1 else Color("d5e7ec")
 		if _road_surface != null and _tile_scale() >= 0.75:
-			draw_texture_rect(_road_surface, tile_rect, false, tint)
+			# The authored surface is pavement, not a sprite for each tile.
+			# Sample a continuous eight-tile material so panels don't repeat
+			# hundreds of times along a single road.
+			var source_cell := _road_surface.get_size() / 8.0
+			var source_origin := Vector2(posmod(int(road.get("x",0)),8),posmod(int(road.get("y",0)),8)) * source_cell
+			draw_texture_rect_region(_road_surface, tile_rect, Rect2(source_origin,source_cell), tint)
+			if _tile_scale() >= 3.0:
+				_draw_road_edges(road, tile_rect, tier)
 		else:
 			# This is only the low-detail / parallel-asset fallback. Normal detail
 			# always uses the generated overhead pavement texture above.
 			draw_rect(tile_rect, Color(tint, 0.80), true)
+
+
+func _draw_road_edges(road: Dictionary, rect: Rect2, tier: int) -> void:
+	var tile := Vector2i(int(road.get("x",0)),int(road.get("y",0)))
+	var edge := Color("849895") if tier == 1 else Color("b6b387")
+	var corners := [rect.position,Vector2(rect.end.x,rect.position.y),rect.end,Vector2(rect.position.x,rect.end.y)]
+	var directions := [Vector2i.UP,Vector2i.RIGHT,Vector2i.DOWN,Vector2i.LEFT]
+	for index in range(4):
+		var neighbour: Vector2i = tile + directions[index]
+		if not _roads_by_id.has("%d:%d" % [neighbour.x,neighbour.y]):
+			draw_line(corners[index],corners[(index + 1) % 4],edge,1.0,true)
 
 
 func _draw_road_preview() -> void:
@@ -721,7 +759,8 @@ func _draw_resource_fields() -> void:
 func _draw_entities() -> void:
 	var visible_rect := _visible_draw_rect()
 	var detail_stage := _detail_stage()
-	for entity_id_value in _visible_records.get("entity_ids", []):
+	var entity_ids: Array = _world_entity_draw_ids() if _road_logistics_mode else _visible_records.get("entity_ids", [])
+	for entity_id_value in entity_ids:
 		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
 		if entity.is_empty():
 			continue
@@ -732,6 +771,9 @@ func _draw_entities() -> void:
 		var status := str(entity.get("status", "IDLE"))
 		var tone := _status_color(status)
 		var selected := _selected_node_id == str(entity.get("id", ""))
+		if _road_logistics_mode:
+			_draw_world_building(entity, rect, detail_stage, tone, selected)
+			continue
 		draw_style_box(_node_style(tone, selected), rect)
 		_draw_entity_silhouette(entity, rect, detail_stage)
 		if not _road_logistics_mode:
@@ -781,18 +823,149 @@ func _draw_entities() -> void:
 			draw_string(font, rect.position + Vector2(8, bar.position.y - rect.position.y - 4.0), rate, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 16, 9, Color("9aa6a1"))
 
 
+func _world_entity_draw_ids() -> Array:
+	var records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
+	var ids: Array = records.get("entity_ids", []).duplicate()
+	ids.sort_custom(func(left, right):
+		var a: Dictionary = _entities_by_id.get(str(left), {}).get("footprint", {})
+		var b: Dictionary = _entities_by_id.get(str(right), {}).get("footprint", {})
+		var a_origin := _view_model.footprint_origin(a)
+		var b_origin := _view_model.footprint_origin(b)
+		var a_bottom := a_origin.y + _view_model.footprint_size(a).y
+		var b_bottom := b_origin.y + _view_model.footprint_size(b).y
+		if a_bottom != b_bottom:
+			return a_bottom < b_bottom
+		if a_origin.x != b_origin.x:
+			return a_origin.x < b_origin.x
+		return str(left) < str(right)
+	)
+	return ids
+
+
+func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: String, tone: Color, selected: bool) -> void:
+	var art := BuildingArt.icon_texture(_building_atlas, str(entity.get("definition_id","")), str(entity.get("node_kind","MACHINE")))
+	var art_rect := _entity_visible_icon_rect(footprint, detail_stage)
+	if selected:
+		draw_rect(footprint, Color(FOCUS_COLOR, 0.14), true)
+	if art != null:
+		art_rect = _fit_art_rect(art, art_rect)
+		# Use the actual transparent building sprite, with its authored colors.
+		# Operational information lives in the inspector, not across its roof.
+		if BuildingArt.uses_core_extractor(str(entity.get("definition_id", ""))):
+			var miner_id := str(entity.get("id", ""))
+			_visible_core_miners.append(miner_id)
+			if not _miner_animation_seconds.has(miner_id):
+				_miner_animation_seconds[miner_id] = 0.0
+			var frame := CoreExtractorArt.frame_index(float(_miner_animation_seconds[miner_id]))
+			var layer := "working" if _core_extractor_working(entity) else "body"
+			var texture := CoreExtractorArt.frame_texture(layer, frame)
+			draw_texture_rect(texture if texture != null else art, art_rect, false)
+		else:
+			draw_texture_rect(art, Rect2(art_rect.position + Vector2(2,4),art_rect.size), false, Color(0,0,0,0.45))
+			var brightness := _building_activity_brightness(entity)
+			draw_texture_rect(art, art_rect, false, Color(brightness,brightness,brightness,1.0))
+	else:
+		draw_rect(footprint, tone, false, 1.0)
+	var marker := Vector2(art_rect.end.x - 4.0, art_rect.end.y - 5.0)
+	draw_circle(marker, 4.5, Color("101c25"))
+	draw_circle(marker, 2.5, tone)
+	if selected:
+		draw_rect(footprint, FOCUS_COLOR, false, 1.6)
+		_draw_world_label(str(entity.get("name",entity.get("id",""))), Vector2(art_rect.position.x, art_rect.position.y - 7.0), FOCUS_COLOR)
+
+
+func _core_extractor_working(entity: Dictionary) -> bool:
+	return float(entity.get("actual_rate", 0.0)) > 0.00001 and str(entity.get("status", "")) in ["RUNNING", "POWER_LIMITED", "PARTIAL_COVERAGE"]
+
+
+func _advance_core_extractors(delta: float) -> void:
+	if not _road_logistics_mode or not is_visible_in_tree() or not _road_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+		return
+	var changed := false
+	for miner_id in _visible_core_miners:
+		var entity: Dictionary = _entities_by_id.get(miner_id, {})
+		if not _core_extractor_working(entity):
+			continue
+		var previous := float(_miner_animation_seconds.get(miner_id, 0.0))
+		var next := fposmod(previous + maxf(0.0, delta), 4.0)
+		_miner_animation_seconds[miner_id] = next
+		changed = changed or CoreExtractorArt.frame_index(previous) != CoreExtractorArt.frame_index(next)
+	if changed:
+		queue_redraw()
+
+
+func _draw_core_extractor_shadows() -> void:
+	if not _road_logistics_mode:
+		return
+	# Ground shadows are submitted before every building, so a rear machine's
+	# wide transparent shadow never darkens a foreground roof or its light.
+	for entity_id in _visible_records.get("entity_ids", []):
+		var entity: Dictionary = _entities_by_id.get(str(entity_id), {})
+		if not BuildingArt.uses_core_extractor(str(entity.get("definition_id", ""))):
+			continue
+		var body_rect := _entity_visible_icon_rect(_footprint_rect(entity.get("footprint", {})), _detail_stage())
+		var shadow := CoreExtractorArt.frame_texture("shadow", 0)
+		if shadow != null:
+			draw_texture_rect(shadow, CoreExtractorArt.shadow_rect(body_rect), false)
+
+
+func _mining_range_geometry(record: Dictionary) -> Dictionary:
+	var radius := maxf(0.0, float(record.get("mining_radius_tiles", 0.0)))
+	if radius <= 0.0:
+		return {}
+	return {"center":_footprint_rect(record.get("footprint", {})).get_center(), "radius":radius * _tile_scale()}
+
+
+func _draw_mining_range(record: Dictionary, tone: Color) -> void:
+	var geometry := _mining_range_geometry(record)
+	if geometry.is_empty():
+		return
+	var center: Vector2 = geometry.center
+	var radius := float(geometry.radius)
+	draw_circle(center,radius,Color(tone,0.065))
+	draw_arc(center,radius,0.0,TAU,96,Color(tone,0.8),1.6,true)
+	# One circle describes actual mining reach. It is never added to selection,
+	# collision, road adjacency or the building's physical deployment footprint.
+	for direction in [Vector2.LEFT,Vector2.RIGHT,Vector2.UP,Vector2.DOWN]:
+		draw_line(center+direction*(radius-4.0),center+direction*(radius+4.0),tone,1.4,true)
+
+
+func _draw_selected_mining_range() -> void:
+	if not _placement_preview.is_empty():
+		return
+	var entity: Dictionary = _entities_by_id.get(_selected_node_id,{})
+	if not entity.is_empty():
+		_draw_mining_range(entity,FOCUS_COLOR)
+
+
+func _fit_art_rect(texture: Texture2D, target: Rect2) -> Rect2:
+	var source_size := texture.get_size()
+	if source_size.x <= 0.0 or source_size.y <= 0.0:
+		return target
+	var factor := minf(target.size.x / source_size.x, target.size.y / source_size.y)
+	var extent := source_size * factor
+	return Rect2(target.get_center() - extent * 0.5, extent)
+
+
+func _draw_world_label(text: String, baseline: Vector2, tone: Color) -> void:
+	var font := get_theme_default_font()
+	var width := minf(220.0, font.get_string_size(text,HORIZONTAL_ALIGNMENT_LEFT,-1,11).x + 12.0)
+	var position := Vector2(clampf(baseline.x,4.0,maxf(4.0,size.x-width-4.0)),clampf(baseline.y,20.0,maxf(20.0,size.y-6.0)))
+	draw_rect(Rect2(position + Vector2(-3,-14),Vector2(width,20)),Color(0.035,0.065,0.075,0.92),true)
+	draw_string(font,position,text,HORIZONTAL_ALIGNMENT_LEFT,width-9.0,11,tone)
+
+
 func _draw_entity_silhouette(entity: Dictionary, rect: Rect2, detail_stage: String) -> void:
 	if _building_atlas == null:
 		return
 	var definition_id := str(entity.get("definition_id", ""))
 	var kind := str(entity.get("node_kind", ""))
-	var source_region := BuildingArt.atlas_region(_building_atlas, definition_id, kind)
 	var silhouette := BuildingArt.icon_texture(_building_atlas, definition_id, kind)
-	if source_region.size.x <= 0.0 or source_region.size.y <= 0.0:
+	if silhouette == null:
 		return
 	# The icon can be larger than a tiny world footprint, but it is intentionally
-	# separate from the node/placement hit rectangle. A click outside the exact
-	# grid footprint selects its tile instead of expanding a building's authority.
+	# separate from the node/placement hit rectangle. Sprite selection may use
+	# this visual extent, but deployment still uses only the exact grid footprint.
 	var art_rect := _entity_visible_icon_rect(rect, detail_stage)
 	if art_rect.size.x <= 0.0 or art_rect.size.y <= 0.0:
 		return
@@ -817,6 +990,10 @@ func _building_activity_brightness(entity: Dictionary) -> float:
 ## construction hit maps, port maps, or placement validation. This explicit
 ## separation preserves exact tiles at compact 4K-readable visual LOD.
 func _entity_visible_icon_rect(footprint_rect: Rect2, detail_stage: String) -> Rect2:
+	if _road_logistics_mode:
+		var minimum := 38.0 if detail_stage == "COMPACT" else 52.0
+		var extent := footprint_rect.size.max(Vector2.ONE * minimum)
+		return Rect2(footprint_rect.get_center() - extent * 0.5, extent)
 	if detail_stage == "COMPACT" or footprint_rect.size.x < 96.0 or footprint_rect.size.y < 72.0:
 		var badge_size := clampf(maxf(footprint_rect.size.x, footprint_rect.size.y), 38.0, 62.0)
 		return Rect2(footprint_rect.get_center() - Vector2.ONE * badge_size * 0.5, Vector2.ONE * badge_size)
@@ -860,6 +1037,15 @@ func _draw_construction_orders() -> void:
 			continue
 		_construction_order_rects[str(order.get("id", ""))] = {"rect":rect, "data":order}
 		var tone := _status_color(str(order.get("status", "WAITING_BUILDING")))
+		if _road_logistics_mode:
+			var art := BuildingArt.icon_texture(_building_atlas,str(order.get("definition_id","")),"MACHINE")
+			var art_rect := _entity_visible_icon_rect(rect,_detail_stage())
+			if art != null:
+				draw_texture_rect(art,_fit_art_rect(art,art_rect),false,Color(0.62,0.9,1.0,0.52))
+			_draw_footprint_outline(rect, tone, 1.3)
+			if _detail_stage() != "COMPACT" and _tile_scale() >= 4.0:
+				_draw_world_label(I18n.t("factory.canvas.waiting_building", "Awaiting building"),Vector2(art_rect.position.x,art_rect.position.y - 7.0),tone)
+			continue
 		if rect.size.x < 40.0 or rect.size.y < 18.0:
 			draw_rect(rect, tone, false, 1.0)
 			continue
@@ -883,15 +1069,36 @@ func _draw_placement_preview() -> void:
 	if not footprint_value is Dictionary:
 		return
 	var rect := _footprint_rect(footprint_value)
+	if not rect.has_area() or not rect.grow(64.0).intersects(_visible_draw_rect()):
+		return
 	var is_valid := bool(_placement_preview.get("valid", false))
-	var tone := Color("6fbf92") if is_valid else Color("d86e63")
-	draw_rect(rect, Color(tone, 0.20), true)
-	draw_dashed_line(rect.position, Vector2(rect.end.x, rect.position.y), tone, 2.0, 5.0)
-	draw_dashed_line(Vector2(rect.end.x, rect.position.y), rect.end, tone, 2.0, 5.0)
-	draw_dashed_line(rect.end, Vector2(rect.position.x, rect.end.y), tone, 2.0, 5.0)
-	draw_dashed_line(Vector2(rect.position.x, rect.end.y), rect.position, tone, 2.0, 5.0)
+	var tone := Color("73f1ca") if is_valid else Color("ff827b")
+	_draw_mining_range(_placement_preview,tone)
+	draw_rect(rect, Color(tone, 0.24), true)
+	var art_rect := _entity_visible_icon_rect(rect,_detail_stage())
+	var definition_id := str(_placement_preview.get("definition_id",""))
+	if not definition_id.is_empty():
+		var art := BuildingArt.icon_texture(_building_atlas,definition_id,str(_placement_preview.get("node_kind","MACHINE")))
+		if art != null:
+			art_rect = _fit_art_rect(art,art_rect)
+			if BuildingArt.uses_core_extractor(definition_id):
+				var shadow := CoreExtractorArt.frame_texture("shadow", 0)
+				if shadow != null:
+					draw_texture_rect(shadow,CoreExtractorArt.shadow_rect(art_rect),false,Color(1,1,1,0.65))
+			else:
+				draw_texture_rect(art,Rect2(art_rect.position + Vector2(2,3),art_rect.size),false,Color(0,0,0,0.48))
+			draw_texture_rect(art,art_rect,false,Color(0.76,1.0,0.9,0.83) if is_valid else Color(1.0,0.46,0.42,0.83))
+	# The dark under-stroke stays legible on both bright ore and dark pavement.
+	draw_rect(rect.grow(1.0),Color(0.02,0.06,0.08,0.95),false,4.0)
+	_draw_footprint_outline(rect,tone,2.0)
 	var status := _status_name("READY") if is_valid else _placement_reason_name(str(_placement_preview.get("reason_code", "BLOCKED")))
-	draw_string(get_theme_default_font(), rect.position + Vector2(4, -4), status, HORIZONTAL_ALIGNMENT_LEFT, 160, 10, tone)
+	_draw_world_label(status,Vector2(art_rect.position.x,minf(art_rect.position.y,rect.position.y)-7.0),tone)
+
+
+func _draw_footprint_outline(rect: Rect2, tone: Color, width: float) -> void:
+	var corners := [rect.position,Vector2(rect.end.x,rect.position.y),rect.end,Vector2(rect.position.x,rect.end.y)]
+	for index in range(4):
+		draw_dashed_line(corners[index],corners[(index + 1) % 4],tone,width,5.0)
 
 
 func _draw_connection_preview() -> void:
@@ -1952,8 +2159,17 @@ func _select_at(point: Vector2) -> void:
 			return
 	var node_ids: Array = _node_rects.keys()
 	node_ids.reverse()
-	# Entities are drawn above resource fields, and both are drawn above links.
+	# Exact building footprints win over neighbouring enlarged sprites. After
+	# that, sprite selection must still win over the ore texture underneath.
 	for entity_pass in [true, false]:
+		if not entity_pass:
+			var icon_entity := _visible_entity_icon_at(point)
+			if not icon_entity.is_empty():
+				_selected_node_id = str(icon_entity.get("id", ""))
+				_selected_link_id = ""
+				entity_selected.emit(icon_entity.duplicate(true))
+				queue_redraw()
+				return
 		for node_id_value in node_ids:
 			var node_id := str(node_id_value)
 			var row: Dictionary = _node_rects.get(node_id, {})
@@ -1972,17 +2188,6 @@ func _select_at(point: Vector2) -> void:
 				resource_field_selected.emit((row.get("data", {}) as Dictionary).duplicate(true))
 			queue_redraw()
 			return
-	# Compact building art may deliberately extend beyond a one- or two-tile
-	# footprint so the player can recognise it at operational zoom. Exact domain
-	# rectangles above always win; this is a secondary, deterministic selection
-	# affordance only and never changes construction, placement, or port geometry.
-	var icon_entity := _visible_entity_icon_at(point)
-	if not icon_entity.is_empty():
-		_selected_node_id = str(icon_entity.get("id", ""))
-		_selected_link_id = ""
-		entity_selected.emit(icon_entity.duplicate(true))
-		queue_redraw()
-		return
 	var link_id := _nearest_link_at(point)
 	if not link_id.is_empty():
 		_selected_link_id = link_id
@@ -2014,12 +2219,22 @@ func _point_has_interactive_hit(point: Vector2) -> bool:
 	return not _nearest_link_at(point).is_empty()
 
 
-## Icon selection is intentionally a second pass after the exact footprint
-## maps. This lets compact artwork be click-friendly without giving it domain
-## authority. If icons overlap, choose nearest centre, then lexicographic ID so
-## the same view always resolves to the same building.
+## Sprite selection follows exact building footprints and precedes ground.
+## World sprites use the painter order; legacy node views retain their nearest
+## centre/ID tie-break. Neither path changes deployment geometry.
 func _visible_entity_icon_at(point: Vector2) -> Dictionary:
 	var detail_stage := _detail_stage()
+	if _road_logistics_mode:
+		# The same painter order drives visible sprite picking. Domain
+		# footprints have already had priority in _select_at().
+		var draw_ids := _world_entity_draw_ids()
+		draw_ids.reverse()
+		for entity_id in draw_ids:
+			var entity: Dictionary = _entities_by_id.get(str(entity_id),{})
+			var rect := _entity_visible_icon_rect(_footprint_rect(entity.get("footprint",{})),detail_stage)
+			if rect.has_point(point):
+				return entity
+		return {}
 	var visible_records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
 	var entity_ids: Array = visible_records.get("entity_ids", [])
 	var best: Dictionary = {}

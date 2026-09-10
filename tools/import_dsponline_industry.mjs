@@ -232,6 +232,7 @@ function requirementMetadata(sourceTechnologyId) {
   };
 }
 function footprintFor(building) {
+	if (building.id === "mining_machine") return { width: 11, height: 11 };
   if (building.megastructure) return { width: 32, height: 32 };
   if (["vertical_launching_silo", "em_rail_ejector", "miniature_particle_collider"].includes(building.id)) return { width: 20, height: 20 };
   if (["planetary_logistics_station", "interstellar_logistics_station", "orbital_collector", "energy_exchanger"].includes(building.id)) return { width: 16, height: 16 };
@@ -412,6 +413,7 @@ const factoryBuildings = sourceBuildings.map((building, artIndex) => {
       resource_coverage_loss_per_missing_tile: 0.1,
       output_capacity: building.outputCapacity,
     });
+	if (building.id === "mining_machine") result.mining_radius_tiles = 18;
   } else if (kind === "MACHINE") {
     Object.assign(result, {
       recipe_ids: buildingRecipeIds,

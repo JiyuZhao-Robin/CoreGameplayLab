@@ -96,6 +96,10 @@ static func atlas_texture() -> Texture2D:
 
 
 static func texture_for_item(item_id: String) -> Texture2D:
+	# A selected building family's production art takes precedence over the
+	# original DSP item atlas, just as it does in the Factory palette.
+	if item_id.begins_with("building_grid_") and BuildingArt.uses_core_extractor(item_id.trim_prefix("building_")):
+		return BuildingArt.CoreExtractorArt.icon_texture()
 	var imported := BuildingArt.DspArt.texture(item_id)
 	if imported != null:
 		return imported
