@@ -19,10 +19,18 @@ signal machine_configuration_paste_requested(entity: Dictionary)
 signal port_drag_started(entity_id: String, port: Dictionary, visible_candidates: Array)
 signal port_connection_requested(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary)
 signal port_drag_preview(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary, valid: bool)
+## Road gestures remain presentation-only. The workspace emits the matching
+## versioned BUILD_ROAD / REMOVE_ROAD command without handing state authority to
+## this canvas.
+signal road_path_requested(command_kind: String, tiles: Array, tier: int)
+signal road_path_rejected(reason_code: String)
 
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
 const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
+const TerrainRenderer = preload("res://src/ui/workspaces/factory/factory_terrain_renderer.gd")
+const Terrain = preload("res://src/core/factory_terrain.gd")
+var _terrain_renderer := TerrainRenderer.new()
 const CANVAS_COLOR := Color("0c141c")
 const WORLD_COLOR := Color("101c25")
 const WORLD_BOUNDARY_COLOR := Color("65d9d1")
@@ -46,6 +54,10 @@ const POINTER_DRAG_THRESHOLD_PIXELS := 8.0
 const PORT_START_HIT_RADIUS_PIXELS := 10.0
 const PORT_SNAP_HIT_RADIUS_PIXELS := 24.0
 const REGOLITH_TILE_PATH := "res://assets/ui/factory/operations_art/regolith_tile.png"
+const ROAD_SURFACE_PATH := "res://assets/ui/factory/roads/generated/road_surface_v1.png"
+const CargoArt = preload("res://src/ui/workspaces/location/location_item_icon.gd")
+const ROAD_BLEND_SECONDS := 0.25
+const MAX_VISIBLE_CARGO_ICONS := 64
 ## A ground texture cell is a world-space material tile, not a backdrop scaled
 ## to the current planet. Keeping this value in tiles makes its phase stable
 ## through pan, zoom, non-zero world origins, and the 1920 -> 3840 render scale.
@@ -54,6 +66,7 @@ const REGOLITH_WORLD_TILE_TILES := 64
 ## are readable. Below it the grid deliberately switches to macro-grid LOD.
 const ACTUAL_TILE_GRID_MIN_PIXELS := 8.0
 const MACRO_GRID_MIN_PIXELS := 24.0
+const MAX_ROAD_COMMAND_TILES := 2048
 
 ## Keep the canvas independently loadable by SceneTree-based component tests.
 @onready var I18n = get_node("/root/I18n")
@@ -85,6 +98,7 @@ var _entities_by_id: Dictionary = {}
 var _links_by_id: Dictionary = {}
 var _resources_by_id: Dictionary = {}
 var _orders_by_id: Dictionary = {}
+var _roads_by_id: Dictionary = {}
 var _recipe_names_by_id: Dictionary = {}
 var _visible_records: Dictionary = {}
 var _has_active_flow_cache := false
@@ -96,8 +110,19 @@ var _port_drag: Dictionary = {}
 var _left_pointer: Dictionary = {}
 var _configuration_gestures_enabled := true
 var _port_connections_enabled := true
+var _road_logistics_mode := false
+var _road_tool_mode := ""
+var _road_tier := 1
+var _road_drag: Dictionary = {}
 var _building_atlas: Texture2D
 var _regolith_tile: Texture2D
+var _road_surface: Texture2D
+var _road_shipments_by_id: Dictionary = {}
+var _shipment_from_progress: Dictionary = {}
+var _shipment_blend_elapsed := ROAD_BLEND_SECONDS
+var _runtime_snapshot_age := 10.0
+var _shipment_ids_by_chunk: Dictionary = {}
+var _shipment_chunk_size := 64
 
 
 func _ready() -> void:
@@ -112,13 +137,18 @@ func _ready() -> void:
 	_building_atlas = BuildingArt.atlas_texture()
 	if ResourceLoader.exists(REGOLITH_TILE_PATH):
 		_regolith_tile = load(REGOLITH_TILE_PATH) as Texture2D
+	_load_road_surface()
 
 
 func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> void:
 	var previous_layout_signature := _world_layout_signature()
 	var previous_topology_signature := _topology_signature()
+	_update_shipment_interpolation(snapshot)
+	if float(snapshot.get("elapsed_ms", 0.0)) != float(_snapshot.get("elapsed_ms", 0.0)):
+		_runtime_snapshot_age = 0.0
 	_snapshot = snapshot if already_normalized else _view_model.build(snapshot)
 	_rebuild_snapshot_indexes()
+	_load_road_surface()
 	if not _port_drag.is_empty() and previous_topology_signature != _topology_signature():
 		cancel_port_drag()
 	var next_chunk_index_signature := _chunk_layout_signature()
@@ -151,9 +181,44 @@ func set_configuration_gestures_enabled(enabled: bool) -> void:
 
 
 func set_port_connections_enabled(enabled: bool) -> void:
-	_port_connections_enabled = enabled
+	_port_connections_enabled = enabled and not _road_logistics_mode
 	if not enabled:
 		cancel_port_drag()
+	queue_redraw()
+
+
+func set_road_logistics_mode(enabled: bool) -> void:
+	if _road_logistics_mode == enabled:
+		return
+	_road_logistics_mode = enabled
+	if enabled:
+		_port_connections_enabled = false
+		_connection_preview = {"source_id":"", "target_id":"", "kind":""}
+		_connection_candidate_ids.clear()
+		cancel_port_drag()
+		_selected_link_id = ""
+	else:
+		_port_connections_enabled = true
+		_road_tool_mode = ""
+		_road_drag.clear()
+	_invalidate_hit_geometry()
+	queue_redraw()
+
+
+func set_road_tool(tool_mode: String, tier: int = 1) -> void:
+	var normalized := tool_mode.to_upper()
+	var next_tool := normalized if normalized in ["BUILD", "REMOVE"] else ""
+	var next_tier := clampi(tier, 1, 2)
+	if _road_tool_mode == next_tool and _road_tier == next_tier:
+		return
+	_road_tool_mode = next_tool
+	_road_tier = next_tier
+	_road_drag.clear()
+	queue_redraw()
+
+
+func road_tool_mode() -> String:
+	return _road_tool_mode
 
 
 func selected_node_id() -> String:
@@ -313,7 +378,9 @@ func set_connection_preview(source_id: String, target_id: String, kind: String, 
 
 
 func _process(delta: float) -> void:
-	if not _reduced_motion and visible and _visible_active_flow:
+	_shipment_blend_elapsed = minf(ROAD_BLEND_SECONDS, _shipment_blend_elapsed + delta)
+	_runtime_snapshot_age += delta
+	if not _reduced_motion and is_visible_in_tree() and _visible_active_flow:
 		_flow_redraw_elapsed += delta
 		if _flow_redraw_elapsed >= FLOW_REDRAW_INTERVAL_SECONDS:
 			_visual_phase = fmod(_visual_phase + _flow_redraw_elapsed, 120.0)
@@ -335,19 +402,26 @@ func _draw() -> void:
 	var world_rect := _world_screen_rect()
 	_visible_records = _chunk_index.query(_visible_world_query_rect())
 	draw_rect(world_rect, WORLD_COLOR, true)
-	if _regolith_tile != null and world_rect.has_area():
+	_terrain_renderer.configure(_snapshot)
+	if bool(_snapshot.get("terrain_enabled", false)) and _terrain_renderer.has_art():
+		_terrain_renderer.draw_ground(self, _snapshot, _visible_world_query_rect().intersection(Rect2(Vector2(_bounds_origin()),Vector2(_bounds_size()))), _tile_scale(), _camera)
+	elif _regolith_tile != null and world_rect.has_area():
 		_draw_regolith_ground()
+	_draw_roads()
 	_draw_grid()
 	_draw_chunk_boundaries()
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
 	_port_hit_rects.clear()
+	_draw_road_preview()
 	_draw_placement_preview()
-	_draw_links()
+	if not _road_logistics_mode:
+		_draw_links()
 	_draw_connection_preview()
 	_draw_resource_fields()
 	_draw_entities()
+	_draw_road_cargo()
 	_draw_construction_orders()
 	draw_rect(world_rect, WORLD_BOUNDARY_COLOR, false, 2.0)
 	_hit_geometry_dirty = false
@@ -432,6 +506,148 @@ func _draw_regolith_ground() -> void:
 			)
 
 
+func _load_road_surface() -> void:
+	if _road_surface != null or not ResourceLoader.exists(ROAD_SURFACE_PATH):
+		return
+	_road_surface = load(ROAD_SURFACE_PATH) as Texture2D
+	if _road_surface != null:
+		queue_redraw()
+
+
+func _draw_roads() -> void:
+	# The chunk index returns only road coordinates covered by the viewport;
+	# do not walk the planet-wide road list during every draw.
+	for road_id_value in _visible_records.get("road_ids", []):
+		var road: Dictionary = _roads_by_id.get(str(road_id_value), {})
+		if road.is_empty():
+			continue
+		var tile_rect := _world_rect_to_screen(Rect2(Vector2(int(road.get("x", 0)), int(road.get("y", 0))), Vector2.ONE))
+		if not tile_rect.intersects(_visible_draw_rect()):
+			continue
+		var tier := clampi(int(road.get("tier", 1)), 1, 2)
+		var tint := Color("8eaabd") if tier == 1 else Color("b5d4e0")
+		if _road_surface != null and _tile_scale() >= 0.75:
+			draw_texture_rect(_road_surface, tile_rect, false, tint)
+		else:
+			# This is only the low-detail / parallel-asset fallback. Normal detail
+			# always uses the generated overhead pavement texture above.
+			draw_rect(tile_rect, Color(tint, 0.80), true)
+
+
+func _draw_road_preview() -> void:
+	if not _road_logistics_mode or _road_tool_mode.is_empty() or _road_drag.is_empty():
+		return
+	var preview_color := Color("72d5c4", 0.58) if _road_tool_mode == "BUILD" else Color("e17d70", 0.54)
+	for tile in _road_drag_tiles():
+		var tile_rect := _world_rect_to_screen(Rect2(Vector2(tile), Vector2.ONE))
+		draw_rect(tile_rect, preview_color, true)
+		draw_rect(tile_rect.grow(-0.5), Color(preview_color, 0.90), false, 1.0)
+
+
+func _update_shipment_interpolation(snapshot: Dictionary) -> void:
+	var next: Dictionary = {}
+	var from_progress: Dictionary = {}
+	_shipment_ids_by_chunk.clear()
+	_shipment_chunk_size = maxi(1, int(snapshot.get("chunk_size_tiles", 64)))
+	var same_world := str(snapshot.get("world_id", "")) == str(_snapshot.get("world_id", ""))
+	for value in snapshot.get("road_shipments", []):
+		if value is not Dictionary:
+			continue
+		var row := value as Dictionary
+		var id := str(row.get("id", ""))
+		next[id] = row
+		var previous: Dictionary = _road_shipments_by_id.get(id, {})
+		var progress := float(row.get("path_progress", row.get("travel_progress", 0.0)))
+		if same_world and not previous.is_empty() and str(row.get("phase", "")) == "TRAVEL" and str(previous.get("phase", "")) == "TRAVEL" and previous.get("path_tiles", []) == row.get("path_tiles", []):
+			from_progress[id] = minf(progress, _cargo_draw_progress(previous))
+		else:
+			from_progress[id] = progress
+		var chunks := {}
+		for tile_value in row.get("path_tiles", []):
+			var parts := str(tile_value).split(",")
+			if parts.size() == 2:
+				chunks[Vector2i(floori(float(parts[0]) / _shipment_chunk_size), floori(float(parts[1]) / _shipment_chunk_size))] = true
+		for chunk in chunks:
+			if not _shipment_ids_by_chunk.has(chunk):
+				_shipment_ids_by_chunk[chunk] = []
+			_shipment_ids_by_chunk[chunk].append(id)
+	_road_shipments_by_id = next
+	_shipment_from_progress = from_progress
+	_shipment_blend_elapsed = 0.0
+
+
+func _cargo_draw_progress(row: Dictionary) -> float:
+	var progress := clampf(float(row.get("path_progress", row.get("travel_progress", 0.0))), 0.0, 1.0)
+	if not _road_feedback_animation_allowed() or str(row.get("phase", "")) != "TRAVEL":
+		return progress
+	# Interpolate only between TWO observed authoritative positions. Never
+	# extrapolate past the latest snapshot or loop cargo around an idle road.
+	return lerpf(float(_shipment_from_progress.get(str(row.get("id", "")), progress)), progress, clampf(_shipment_blend_elapsed / ROAD_BLEND_SECONDS, 0.0, 1.0))
+
+
+func _cargo_world_position(row: Dictionary) -> Vector2:
+	var path: Array = row.get("path_tiles", [])
+	if path.is_empty():
+		var position: Dictionary = row.get("position", {})
+		return Vector2(float(position.get("x", 0.0)), float(position.get("y", 0.0)))
+	var offset := _cargo_draw_progress(row) * maxi(0, path.size() - 1)
+	var index := mini(floori(offset), path.size() - 1)
+	var a := str(path[index]).split(",")
+	var b := str(path[mini(index + 1, path.size() - 1)]).split(",")
+	if a.size() != 2 or b.size() != 2:
+		return Vector2.ZERO
+	return Vector2(float(a[0]), float(a[1])).lerp(Vector2(float(b[0]), float(b[1])), offset - floorf(offset)) + Vector2.ONE * 0.5
+
+
+func _visible_shipment_ids() -> Array:
+	var query := _visible_world_query_rect()
+	var ids := {}
+	for y in range(floori(query.position.y / _shipment_chunk_size), floori(query.end.y / _shipment_chunk_size) + 1):
+		for x in range(floori(query.position.x / _shipment_chunk_size), floori(query.end.x / _shipment_chunk_size) + 1):
+			for id in _shipment_ids_by_chunk.get(Vector2i(x,y), []):
+				ids[id] = true
+	var result := ids.keys()
+	result.sort()
+	return result
+
+
+func _road_feedback_animation_allowed() -> bool:
+	return not _reduced_motion and not _overview_mode and _tile_scale() >= 0.75 and _visible_record_count() + _road_shipments_by_id.size() <= MAX_ANIMATED_SNAPSHOT_RECORDS
+
+
+func _draw_road_cargo() -> void:
+	if not _road_logistics_mode or _tile_scale() < 0.75:
+		return
+	var visible_rect := _visible_draw_rect()
+	var world_rect := _world_screen_rect()
+	var drawn := 0
+	for id in _visible_shipment_ids():
+		var row: Dictionary = _road_shipments_by_id[id]
+		if row.get("path_tiles", []).is_empty() or int(row.get("quantity", 0)) <= 0:
+			continue
+		var point := _world_to_screen(_cargo_world_position(row))
+		if not visible_rect.has_point(point) or not world_rect.has_point(point):
+			continue
+		var texture: Texture2D = CargoArt.texture_for_item(str(row.get("item_id", "")))
+		if texture == null:
+			continue
+		var edge := clampf(_tile_scale() * 2.0, 16.0, 24.0)
+		var rect := Rect2(point - Vector2.ONE * edge * 0.5, Vector2.ONE * edge)
+		var blocked := str(row.get("phase", "")) == "BLOCKED"
+		var clipped := rect.intersection(world_rect).intersection(visible_rect)
+		var texture_size := Vector2(texture.get_size())
+		var source_rect := Rect2((clipped.position - rect.position) / rect.size * texture_size, clipped.size / rect.size * texture_size)
+		draw_style_box(_node_style(Color("ef867d") if blocked else Color("65d9d1"), false), rect.grow(2.0).intersection(world_rect).intersection(visible_rect))
+		draw_texture_rect_region(texture, clipped, source_rect)
+		if blocked and world_rect.encloses(rect) and visible_rect.encloses(rect):
+			draw_string(get_theme_default_font(), rect.position + Vector2(edge - 3.0, 8.0), "!", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Color("ef867d"))
+		if _road_feedback_animation_allowed() and not blocked and str(row.get("phase", "")) == "TRAVEL" and _shipment_blend_elapsed < ROAD_BLEND_SECONDS:
+			_visible_active_flow = true
+		drawn += 1
+		if drawn >= MAX_VISIBLE_CARGO_ICONS:
+			break
+
+
 func _ground_cell_coordinate(world_coordinate: float, world_origin_coordinate: int) -> int:
 	return world_origin_coordinate + floori((world_coordinate - float(world_origin_coordinate)) / float(REGOLITH_WORLD_TILE_TILES)) * REGOLITH_WORLD_TILE_TILES
 
@@ -468,6 +684,7 @@ func _chunk_boundary_offsets(extent: int, first_chunk: int, last_chunk: int, chu
 func _draw_resource_fields() -> void:
 	var visible_rect := _visible_draw_rect()
 	var detail_stage := _detail_stage()
+	var detailed_fields := 0
 	for field_id_value in _visible_records.get("resource_ids", []):
 		var field: Dictionary = _resources_by_id.get(str(field_id_value), {})
 		if field.is_empty():
@@ -478,8 +695,22 @@ func _draw_resource_fields() -> void:
 		_node_rects[str(field.get("id", ""))] = {"rect":rect, "data":field, "is_entity":false}
 		var color := _parse_color(str(field.get("resource_color", "#86936D")), Color("86936d"))
 		var selected := _selected_node_id == str(field.get("id", ""))
-		draw_rect(rect, Color(color, 0.18), true)
-		draw_rect(rect, FOCUS_COLOR if selected else Color(color, 0.72), false, 1.4)
+		if detail_stage == "COMPACT" or _tile_scale() < 1.0 or detailed_fields >= 128:
+			# Overview uses the authored resource icon. Do not rebuild hundreds
+			# of irregular meshes through a 128-entry cache on every redraw.
+			var icon: Texture2D = CargoArt.texture_for_item(str(field.get("resource_id", "")))
+			if icon != null:
+				draw_texture_rect(icon, rect, false)
+			if selected:
+				draw_rect(rect, FOCUS_COLOR, false, 1.4)
+		elif str(field.get("shape", "")) == "IRREGULAR" and _terrain_renderer.has_art():
+			detailed_fields += 1
+			_terrain_renderer.draw_field(self, field, _tile_scale(), _camera)
+			if selected:
+				draw_rect(rect, FOCUS_COLOR, false, 1.4)
+		else:
+			draw_rect(rect, Color(color, 0.18), true)
+			draw_rect(rect, FOCUS_COLOR if selected else Color(color, 0.72), false, 1.4)
 		var font := get_theme_default_font()
 		var resource_id := str(field.get("resource_id", ""))
 		if detail_stage != "COMPACT" and rect.size.x >= 48.0 and rect.size.y >= 18.0:
@@ -503,7 +734,8 @@ func _draw_entities() -> void:
 		var selected := _selected_node_id == str(entity.get("id", ""))
 		draw_style_box(_node_style(tone, selected), rect)
 		_draw_entity_silhouette(entity, rect, detail_stage)
-		_draw_connection_ports(entity, rect, detail_stage)
+		if not _road_logistics_mode:
+			_draw_connection_ports(entity, rect, detail_stage)
 		if detail_stage == "COMPACT" or rect.size.x < 96.0 or rect.size.y < 72.0:
 			# At operational overview distance the silhouette and ports carry
 			# identity. Tiny stacked text would cover the artwork entirely.
@@ -555,6 +787,7 @@ func _draw_entity_silhouette(entity: Dictionary, rect: Rect2, detail_stage: Stri
 	var definition_id := str(entity.get("definition_id", ""))
 	var kind := str(entity.get("node_kind", ""))
 	var source_region := BuildingArt.atlas_region(_building_atlas, definition_id, kind)
+	var silhouette := BuildingArt.icon_texture(_building_atlas, definition_id, kind)
 	if source_region.size.x <= 0.0 or source_region.size.y <= 0.0:
 		return
 	# The icon can be larger than a tiny world footprint, but it is intentionally
@@ -563,11 +796,21 @@ func _draw_entity_silhouette(entity: Dictionary, rect: Rect2, detail_stage: Stri
 	var art_rect := _entity_visible_icon_rect(rect, detail_stage)
 	if art_rect.size.x <= 0.0 or art_rect.size.y <= 0.0:
 		return
+	var brightness := _building_activity_brightness(entity)
+	var art_tint := Color(0.82, 0.95, 1.0, 0.92) * Color(brightness, brightness, brightness, 1.0)
 	if detail_stage == "COMPACT" or rect.size.x < 96.0 or rect.size.y < 72.0:
 		draw_style_box(_node_style(Color("65d9d1"), false), art_rect)
-		draw_texture_rect_region(_building_atlas, art_rect.grow(-3.0), source_region, Color(0.82, 0.95, 1.0, 0.92))
+		draw_texture_rect(silhouette, art_rect.grow(-3.0), false, art_tint)
 		return
-	draw_texture_rect_region(_building_atlas, art_rect, source_region, Color(0.82, 0.95, 1.0, 0.88))
+	draw_texture_rect(silhouette, art_rect, false, art_tint)
+
+
+func _building_activity_brightness(entity: Dictionary) -> float:
+	if not _road_feedback_animation_allowed() or not _road_logistics_mode or _runtime_snapshot_age > 1.25 or float(entity.get("actual_rate", 0.0)) <= 0.00001 or str(entity.get("status", "")) not in ["RUNNING", "POWER_LIMITED", "PARTIAL_COVERAGE"]:
+		return 1.0
+	_visible_active_flow = true
+	var phase := float(_snapshot.get("elapsed_ms", 0.0)) / 1000.0 + minf(_runtime_snapshot_age, ROAD_BLEND_SECONDS)
+	return 1.06 + 0.14 * sin(phase * TAU / 1.5)
 
 
 ## Presentation-only icon geometry. It is never inserted into _node_rects,
@@ -616,16 +859,21 @@ func _draw_construction_orders() -> void:
 		if not rect.intersects(visible_rect):
 			continue
 		_construction_order_rects[str(order.get("id", ""))] = {"rect":rect, "data":order}
-		var tone := _status_color(str(order.get("status", "WAITING_MATERIALS")))
+		var tone := _status_color(str(order.get("status", "WAITING_BUILDING")))
 		if rect.size.x < 40.0 or rect.size.y < 18.0:
 			draw_rect(rect, tone, false, 1.0)
 			continue
+		if _building_atlas != null:
+			var definition_id := str(order.get("definition_id", ""))
+			var ghost_art := BuildingArt.icon_texture(_building_atlas, definition_id, "MACHINE")
+			if ghost_art != null:
+				draw_texture_rect(ghost_art, rect.grow(-2.0), false, Color(0.6, 0.95, 0.85, 0.3))
 		draw_dashed_line(rect.position, Vector2(rect.end.x, rect.position.y), tone, 1.0, 4.0)
 		draw_dashed_line(Vector2(rect.end.x, rect.position.y), rect.end, tone, 1.0, 4.0)
 		draw_dashed_line(rect.end, Vector2(rect.position.x, rect.end.y), tone, 1.0, 4.0)
 		draw_dashed_line(Vector2(rect.position.x, rect.end.y), rect.position, tone, 1.0, 4.0)
 		var font := get_theme_default_font()
-		draw_string(font, rect.position + Vector2(5, 14), I18n.t("factory.canvas.build_progress") % roundi(float(order.get("progress", 0.0)) * 100.0), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 8, 9, tone)
+		draw_string(font, rect.position + Vector2(5, 14), I18n.t("factory.canvas.waiting_building", "Awaiting building"), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 8, 9, tone)
 
 
 func _draw_placement_preview() -> void:
@@ -1195,11 +1443,13 @@ func _on_canvas_resized() -> void:
 
 func _on_gui_input(event: InputEvent) -> void:
 	var connection_active := not str(_connection_preview.get("kind", "")).is_empty()
-	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty() or not _left_pointer.is_empty()):
+	var road_tool_active := _road_logistics_mode and not _road_tool_mode.is_empty()
+	if _is_placement_cancel_event(event) and (road_tool_active or not _road_drag.is_empty() or not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty() or not _left_pointer.is_empty()):
 		_left_pointer.clear()
 		_dragging = false
+		_road_drag.clear()
 		cancel_port_drag()
-		if not _placement_preview.is_empty() or connection_active:
+		if road_tool_active or not _placement_preview.is_empty() or connection_active:
 			placement_cancelled.emit()
 		accept_event()
 		return
@@ -1236,6 +1486,20 @@ func _on_gui_input(event: InputEvent) -> void:
 			if _dragging:
 				accept_event()
 				return
+			if road_tool_active:
+				if mouse_event.pressed:
+					var start_tile := _screen_to_tile(mouse_event.position)
+					# A click outside the finite planet remains available for normal pan;
+					# command coordinates are never silently projected into a new world.
+					if _tile_in_bounds(start_tile):
+						_road_drag = {"start":start_tile, "end":start_tile}
+						queue_redraw()
+						accept_event()
+						return
+				elif not _road_drag.is_empty():
+					_finish_road_drag(_clamp_tile_to_bounds(_screen_to_tile(mouse_event.position)))
+					accept_event()
+					return
 			if mouse_event.pressed:
 				if bool(_port_drag.get("click_mode", false)):
 					_finish_port_drag(mouse_event.position, true)
@@ -1263,6 +1527,11 @@ func _on_gui_input(event: InputEvent) -> void:
 			_last_pointer = motion.position
 			_clamp_camera_to_bounds()
 			_invalidate_hit_geometry()
+			queue_redraw()
+			accept_event()
+			return
+		if not _road_drag.is_empty():
+			_road_drag["end"] = _clamp_tile_to_bounds(_screen_to_tile(motion.position))
 			queue_redraw()
 			accept_event()
 			return
@@ -1318,7 +1587,38 @@ func _on_gui_input(event: InputEvent) -> void:
 
 
 func _configuration_gestures_allowed() -> bool:
-	return not _dragging and _configuration_gestures_enabled and _placement_preview.is_empty() and str(_connection_preview.get("kind", "")).is_empty() and _port_drag.is_empty()
+	return not _dragging and _configuration_gestures_enabled and _placement_preview.is_empty() and str(_connection_preview.get("kind", "")).is_empty() and _port_drag.is_empty() and _road_tool_mode.is_empty()
+
+
+func _road_drag_tiles() -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	if _road_drag.is_empty():
+		return result
+	var start: Vector2i = _road_drag.get("start", Vector2i.ZERO)
+	var finish: Vector2i = _road_drag.get("end", start)
+	var horizontal_step := 1 if finish.x >= start.x else -1
+	for x in range(start.x, finish.x + horizontal_step, horizontal_step):
+		result.append(Vector2i(x, start.y))
+	var vertical_step := 1 if finish.y >= start.y else -1
+	for y in range(start.y + vertical_step, finish.y + vertical_step, vertical_step):
+		result.append(Vector2i(finish.x, y))
+	return result
+
+
+func _finish_road_drag(finish: Vector2i) -> void:
+	if _road_drag.is_empty():
+		return
+	_road_drag["end"] = finish
+	var road_tiles := _road_drag_tiles()
+	_road_drag.clear()
+	queue_redraw()
+	if road_tiles.is_empty() or road_tiles.size() > MAX_ROAD_COMMAND_TILES:
+		road_path_rejected.emit("ROAD_PATH_TOO_LONG")
+		return
+	var payload_tiles: Array = []
+	for tile in road_tiles:
+		payload_tiles.append({"x":tile.x, "y":tile.y})
+	road_path_requested.emit("BUILD_ROAD" if _road_tool_mode == "BUILD" else "REMOVE_ROAD", payload_tiles, _road_tier)
 
 
 func _machine_at(point: Vector2) -> Dictionary:
@@ -1608,25 +1908,26 @@ func _ensure_hit_geometry() -> void:
 		var entity_rect := _footprint_rect(entity.get("footprint", {}))
 		if entity_rect.intersects(visible_rect):
 			_node_rects[str(entity.get("id", ""))] = {"rect":entity_rect, "data":entity, "is_entity":true}
-			if hit_detail_stage != "COMPACT":
+			if not _road_logistics_mode and hit_detail_stage != "COMPACT":
 				_register_entity_port_hits(entity, entity_rect, 4.0 if hit_detail_stage == "FULL" else 3.0)
 	for order_id_value in visible_records.get("order_ids", []):
 		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
 		var order_rect := _footprint_rect(order.get("footprint", {}))
 		if order_rect.intersects(visible_rect):
 			_construction_order_rects[str(order.get("id", ""))] = {"rect":order_rect, "data":order}
-	for link_id_value in visible_records.get("link_ids", []):
-		var link: Dictionary = _links_by_id.get(str(link_id_value), {})
-		var source: Dictionary = _entities_by_id.get(str(link.get("source_id", "")), {})
-		var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
-		if source.is_empty() or target.is_empty():
-			continue
-		var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")), str(link.get("source_port_id", "")), str(link.get("target_port_id", "")))
-		var from: Vector2 = endpoints[0]
-		var to: Vector2 = endpoints[1]
-		var hit := _route_bounds(_link_route(link, from, to)).grow(8.0)
-		if hit.intersects(visible_rect):
-			_link_hit_rects[str(link.get("id", ""))] = hit
+	if not _road_logistics_mode:
+		for link_id_value in visible_records.get("link_ids", []):
+			var link: Dictionary = _links_by_id.get(str(link_id_value), {})
+			var source: Dictionary = _entities_by_id.get(str(link.get("source_id", "")), {})
+			var target: Dictionary = _entities_by_id.get(str(link.get("target_id", "")), {})
+			if source.is_empty() or target.is_empty():
+				continue
+			var endpoints := _connection_endpoints(source, target, str(link.get("kind", "CARGO")), str(link.get("source_port_id", "")), str(link.get("target_port_id", "")))
+			var from: Vector2 = endpoints[0]
+			var to: Vector2 = endpoints[1]
+			var hit := _route_bounds(_link_route(link, from, to)).grow(8.0)
+			if hit.intersects(visible_rect):
+				_link_hit_rects[str(link.get("id", ""))] = hit
 	_hit_geometry_dirty = false
 
 
@@ -1660,6 +1961,8 @@ func _select_at(point: Vector2) -> void:
 				continue
 			var rect: Rect2 = row.get("rect", Rect2())
 			if not rect.has_point(point):
+				continue
+			if not entity_pass and not Terrain.field_contains(row.get("data", {}), Vector2i(_screen_to_world(point).floor())):
 				continue
 			_selected_node_id = node_id
 			_selected_link_id = ""
@@ -1853,7 +2156,7 @@ func _flow_animation_allowed() -> bool:
 
 func _visible_record_count() -> int:
 	var records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
-	return int(records.get("resource_ids", []).size()) + int(records.get("entity_ids", []).size()) + int(records.get("link_ids", []).size()) + int(records.get("order_ids", []).size())
+	return int(records.get("resource_ids", []).size()) + int(records.get("entity_ids", []).size()) + int(records.get("link_ids", []).size()) + int(records.get("order_ids", []).size()) + int(records.get("road_ids", []).size())
 
 
 func _detail_stage() -> String:
@@ -1876,6 +2179,7 @@ func _rebuild_snapshot_indexes() -> void:
 	_links_by_id.clear()
 	_resources_by_id.clear()
 	_orders_by_id.clear()
+	_roads_by_id.clear()
 	_recipe_names_by_id.clear()
 	_visible_records.clear()
 	_has_active_flow_cache = false
@@ -1897,6 +2201,11 @@ func _rebuild_snapshot_indexes() -> void:
 		if order_value is Dictionary:
 			var order := order_value as Dictionary
 			_orders_by_id[str(order.get("id", ""))] = order
+	for road_value in _snapshot.get("roads", []):
+		if road_value is Dictionary:
+			var road := road_value as Dictionary
+			var road_id := "%d:%d" % [int(road.get("x", 0)), int(road.get("y", 0))]
+			_roads_by_id[road_id] = road
 	var palette: Dictionary = _snapshot.get("palette", {}) if _snapshot.get("palette", {}) is Dictionary else {}
 	for recipe_value in palette.get("recipes", []):
 		if recipe_value is Dictionary:

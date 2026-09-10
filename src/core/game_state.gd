@@ -940,6 +940,8 @@ func factory_world_item_ledger() -> Dictionary:
 	var all_items := {}
 	var all_entity_buffers := {}
 	var all_construction_staging := {}
+	var all_road_transit := {}
+	var all_installed_buildings := {}
 	var all_produced := {}
 	var all_consumed := {}
 	var by_world := {}
@@ -950,6 +952,7 @@ func factory_world_item_ledger() -> Dictionary:
 			continue
 		var world := world_value as Dictionary
 		var entity_buffers := {}
+		var installed_buildings := {}
 		var construction_staging := {}
 		var entities := {}
 		var orders := {}
@@ -960,6 +963,10 @@ func factory_world_item_ledger() -> Dictionary:
 				continue
 			var entity := entity_value as Dictionary
 			var entity_items := {}
+			var building_item_id := str(entity.get("deployment_item_id", ""))
+			if not building_item_id.is_empty():
+				_ledger_add(installed_buildings, building_item_id, 1)
+				_ledger_add(all_installed_buildings, building_item_id, 1)
 			for field in ["inputs", "outputs", "inventory"]:
 				var item_map_value = entity.get(field, {})
 				if item_map_value is not Dictionary:
@@ -990,6 +997,16 @@ func factory_world_item_ledger() -> Dictionary:
 			if not order_items.is_empty():
 				orders[order_id] = order_items
 		var world_items := entity_buffers.duplicate(true)
+		for item_id in installed_buildings:
+			_ledger_add(world_items, str(item_id), int(installed_buildings[item_id]))
+		var road_transit := {}
+		for job_value in world.get("road_shipments", {}).values():
+			var cargo: Dictionary = (job_value as Dictionary).get("cargo", {})
+			for item_id_value in cargo.keys():
+				var quantity := maxi(0, int(cargo[item_id_value]))
+				_ledger_add(road_transit, str(item_id_value), quantity)
+				_ledger_add(all_road_transit, str(item_id_value), quantity)
+				_ledger_add(world_items, str(item_id_value), quantity)
 		for item_id_value in construction_staging.keys():
 			_ledger_add(world_items, str(item_id_value), int(construction_staging.get(item_id_value, 0)))
 		for item_id_value in world_items.keys():
@@ -1004,6 +1021,8 @@ func factory_world_item_ledger() -> Dictionary:
 			"Items":world_items,
 			"EntityBuffers":entity_buffers,
 			"ConstructionStaging":construction_staging,
+			"RoadTransit":road_transit,
+			"InstalledBuildings":installed_buildings,
 			"Entities":entities,
 			"Orders":orders,
 			"Produced":produced,
@@ -1013,6 +1032,8 @@ func factory_world_item_ledger() -> Dictionary:
 		"Items":all_items,
 		"EntityBuffers":all_entity_buffers,
 		"ConstructionStaging":all_construction_staging,
+		"RoadTransit":all_road_transit,
+		"InstalledBuildings":all_installed_buildings,
 		"Produced":all_produced,
 		"Consumed":all_consumed,
 		"ByWorld":by_world

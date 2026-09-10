@@ -22,17 +22,14 @@ func _run() -> void:
 	earth_button.pressed.emit()
 	await _redraw()
 	_check(main.get("_selected_location_id") == "earth_orbit", "clicking System Map enters Earth Orbit Location")
-	_check(_has_text_fragment(main, "× 120"), "Location Overview displays real starter inventory")
-	for section in ["overview", "resources", "industry", "logistics", "projects"]:
-		_check(main.find_child("LocationTab_%s" % section, true, false) != null, "Location %s tab is reachable" % section)
-	var resources_tab := main.find_child("LocationTab_resources", true, false) as Button
-	resources_tab.pressed.emit()
+	_check(main.find_child("LocationOperationsWorkspace", true, false) != null, "Location opens the integrated operations dashboard")
+	var snapshot: Dictionary = Game.location_operations_snapshot("earth_orbit")
+	_check((snapshot.get("inventory", []) as Array).any(func(row): return row.get("id", "") == "kinetic_munitions" and int(row.get("quantity", 0)) == 120), "dashboard projects real starter inventory")
+	for action in ["LocationResourcesOpen", "LocationOpenProduction", "LocationInventoryOpen", "LocationTasksOpen", "LocationOpenFleet", "LocationEnvironmentDetailsButton"]:
+		_check(main.find_child(action, true, false) != null, "integrated action %s is reachable" % action)
+	_check(main.find_child("LocationTab_resources", true, false) == null, "dashboard does not retain obsolete resource tabs")
+	main.call("_on_location_operations_action", {"kind":"OPEN_LOGISTICS"})
 	await _redraw()
-	_check(_has_text_fragment(main, I18n.core("location.resources.known_sites", "Mapped tile resource fields")), "Resources tab reads mapped physical Factory resource fields")
-	var logistics_tab := main.find_child("LocationTab_logistics", true, false) as Button
-	logistics_tab.pressed.emit()
-	await _redraw()
-	_check(_has_text_fragment(main, "供给 / 需求策略"), "Logistics exposes configurable policy controls")
 	var advanced_policy_toggle := main.find_child("LogisticsPolicyAdvancedToggle", true, false) as Button
 	_check(advanced_policy_toggle != null, "Logistics keeps per-product administration behind an explicit Advanced Policy Exceptions control")
 	if advanced_policy_toggle != null:
@@ -40,10 +37,9 @@ func _run() -> void:
 		await _redraw()
 	_check(main.find_child("LogisticsItemSelector", true, false) != null, "Logistics can add a policy for any content item")
 	_check(not _has_text_fragment(main, "Shipment is intentionally not implemented"), "Logistics no longer renders the Phase 1 placeholder")
-	var projects_tab := main.find_child("LocationTab_projects", true, false) as Button
-	projects_tab.pressed.emit()
+	main.call("_open_location_section", "earth_orbit", "tasks")
 	await _redraw()
-	_check(_has_text_fragment(main, "当前没有进行中的工程"), "Projects reads the real empty queues")
+	_check(main.find_child("LocationTasksOpen", true, false) != null, "legacy projects route returns to integrated live tasks")
 	_finish()
 
 

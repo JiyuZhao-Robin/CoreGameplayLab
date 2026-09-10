@@ -1,5 +1,14 @@
 {
   "core_ui": {
+    "location.operations.prepare_surface": "Prepare Planet Surface",
+    "location.operations.prepare_surface_hint": "Initialize this surveyed planet surface before deploying a delivered Development Core.",
+    "location.operations.surface_preparation_required": "Prepare the surveyed planetary surface before deploying industry.",
+    "status.DEPLOYMENT": "Finished-building deployment",
+    "location.operations.deploy_core": "Deploy Development Core",
+    "location.operations.deploy_core_hint": "Choose a legal site for the Planetary Development Core.",
+    "location.operations.core_required": "Deploy the Planetary Development Core before operating industry.",
+    "location.operations.manufacture_or_deploy": "Manufacture / deploy a building",
+    "location.operations.location_custody": "Location-held %d · In transit %d",
     "ui4k.group.system_map": "Territory",
     "ui4k.group.industry": "Industry",
     "ui4k.group.inventory": "Supply",
@@ -40,7 +49,7 @@
     "resource_rail.title": "LOCATION RESOURCES",
     "resource_rail.storage": "STORAGE",
     "resource_rail.inventory": "LOCAL INVENTORY",
-    "resource_rail.storage_value": "%d / %d units · %d%%",
+    "resource_rail.storage_value": "%d / %d full slots · peak %d%%",
     "resource_rail.available": "Available: %d",
     "resource_rail.open_inventory": "Open inventory",
     "resource_rail.current_task": "CURRENT TASK",
@@ -127,15 +136,12 @@
     "facility.queue_install": "Queue Installation · %s · %s",
     "command.set_power_priority": "Set Power Priority",
     "command.queue_facility_module": "Queue Facility Module Installation",
-    "guidance.restore_starter_ship": "The initial mining configuration is missing. Use Restart to create a fresh mining-priority save.",
-    "guidance.assign_starter_miner": "1. Open Ships and assign the starter survey vessel to the Mining Fleet.",
-    "guidance.extract_mixed_ore": "2. Open Survey and start the permanent near-Earth extraction site.\n\nTip: use 5× / 10× in the top bar.",
-    "guidance.prepare_first_frame": "3. In the Factory grid, refine 2 Iron Ingots and 1 Copper Ingot for the first Structural Frame.\nCurrent Factory custody: %s\n\nConnect the physical outputs to a compatible engineering machine or depot.",
-    "guidance.assemble_first_frame": "4. Materials are ready in Factory custody: %s. Select Structural Frame assembly on a connected engineering machine.",
-    "guidance.foundry_queued": "5. The Macro Arc Smelter is in the Factory construction queue (%s).\nDelivered/available material progress: %s\n\nFund its physical order from the same-location depot; Factory construction then resumes automatically.",
-    "guidance.supply_foundry": "5. The Macro Arc Smelter needs 1 Structural Frame, 4 Iron Ingots and 2 Electronic Components.\nCurrent Factory custody: %s\n\nKeep the completed frame and route the remaining refined inputs into storage.",
-    "guidance.commission_foundry": "5. Macro Arc Smelter materials are ready in Factory custody: %s. Queue and fund it on the Factory canvas.",
-    "guidance.commission_research": "6. Build, fund and power the High-Energy Electronics Works and Grid Research Complex on the Factory canvas to open the industrial R&D chain.",
+    "guidance.start.deploy_core": "Choose a clear site and deploy your Planetary Development Core. It provides shared storage, road transport and 400 kW, then grants two miners, two furnaces and one assembler.",
+    "guidance.start.deploy_building": "Deploy %s from the starter inventory. Miners belong on compatible deposits; connect buildings and the core by roads. Missing stock requires manufacturing its finished building item.",
+    "guidance.start.connect_roads": "Join the core, miners, furnaces and assembler with basic roads. Roads carry goods and power. Configure iron/copper smelting on the furnaces; mined products are transported automatically.",
+    "guidance.start.prepare_frame": "Smelt the inputs for Structural Frame in the furnaces. Available planetary stock: %s. Roads move materials between machines and the shared planetary inventory.",
+    "guidance.start.assemble_frame": "Frame inputs are available: %s. Select Structural Frame on the connected automatic assembler; then manufacture finished buildings there to expand.",
+    "guidance.start.commission_research": "Manufacture the Electronics Works and Research Complex as finished buildings in the assembler. Deploy them and connect their roads to power and shared storage to start industrial research.",
     "guidance.research_blocker": "%s · %s\nNext step: %s",
     "guidance.research.activity_complete": "Manufacture %s on the Factory grid; the prototype must come from a real physical recipe.",
     "guidance.research.install_module": "Build and power the Factory provider that installs %s.",
@@ -290,6 +296,16 @@
     "status.INPUT_SHORTAGE": "Input Shortage",
     "status.NO_RESOURCE": "No Resource Field",
     "status.NO_POWER": "No Power Connection",
+    "status.MISSING_FUEL": "Fuel required",
+    "status.CHARGING": "Charging",
+    "status.MISSING_CHARGED_CELL": "Charged accumulator required",
+    "status.MISSING_EMPTY_CELL": "Empty accumulator required",
+    "status.NO_DYSON_POWER": "Insufficient Dyson power",
+    "status.ENERGY_BUDGET_EMPTY": "Waiting for energy settlement",
+    "factory.reason.destruction_confirmation_required": "Confirm permanent destruction of the selected material first.",
+    "factory.reason.energy_settlement_pending": "Finish charging or discharging the current accumulator before changing its recipe.",
+    "factory.reason.unique_building_exists": "This planet already has this unique building.",
+    "factory.reason.terrain_blocked": "Water or mountains block this footprint. Choose buildable land.",
     "status.PARTIAL_COVERAGE": "Partial Resource Coverage",
     "status.OUTPUT_FULL": "Output Buffer Full",
     "status.NO_RECIPE": "No Recipe",
@@ -297,6 +313,7 @@
     "status.SOURCE_EMPTY": "Source Empty",
     "status.TARGET_FULL": "Target Full",
     "status.WAITING_MATERIALS": "Waiting for Materials",
+    "status.WAITING_BUILDING": "Awaiting finished building",
     "status.MISSING_TECH": "Missing Technology",
     "status.MISSING_FACILITY": "Missing Facility",
     "status.MISSING_SCALE_STAGE": "Missing Scale Stage",
@@ -415,6 +432,92 @@
     "location.tab.industry": "Industry",
     "location.tab.logistics": "Logistics",
     "location.tab.projects": "Projects",
+    "location.operations.eyebrow": "LOCATION OPERATIONS",
+    "location.operations.power_short": "Power",
+    "location.operations.stocked": "stocked",
+    "location.operations.full": "full",
+    "location.operations.build_first_facility": "Build first facility",
+    "location.operations.trend_unknown": "No trend",
+    "location.operations.balanced": "Balanced",
+    "location.operations.individual_storage": "Individual storage",
+    "location.operations.survey": "Survey",
+    "location.operations.select_ship_tooltip": "Choose an eligible vessel for the next survey mission.",
+    "location.operations.assign_survey_ship": "Assign to Survey Formation",
+    "location.operations.assign_survey_ship_tooltip": "Assign this existing vessel to the Survey Formation; no vessel is created.",
+    "location.operations.assign_before_survey": "Assign vessel before survey",
+    "location.operations.open_factory": "Open Factory",
+    "location.operations.logistics": "Arrange Logistics",
+    "location.operations.power": "Power / Load",
+    "location.operations.industry": "Industrial Operations",
+    "location.operations.storage": "Local Storage",
+    "location.operations.tasks_logistics": "Tasks / Logistics",
+    "location.operations.running": "running",
+    "location.operations.blocked": "blocked",
+    "location.operations.active": "active",
+    "location.operations.fleet_short": "fleet",
+    "location.operations.vessels": "vessels",
+    "location.operations.resources": "Resource Intelligence",
+    "location.operations.view_factory": "View Factory →",
+    "location.operations.resource": "Resource",
+    "location.operations.grade": "Grade",
+    "location.operations.potential": "Survey potential",
+    "location.operations.development": "Development",
+    "location.operations.exploited": "Developed",
+    "location.operations.available": "Available",
+    "location.operations.resources_empty": "No resource intelligence is currently revealed.",
+    "location.operations.inventory": "Local Inventory",
+    "location.operations.inventory_filter_tooltip": "Filter visible local inventory by its authoritative category.",
+    "location.operations.all_inventory": "All",
+    "location.operations.open_inventory": "Open Inventory",
+    "location.operations.item": "Item",
+    "location.operations.quantity": "Stored",
+    "location.operations.incoming": "Incoming",
+    "location.operations.category": "Category",
+    "location.operations.inventory_empty": "Local inventory is empty.",
+    "location.operations.open_production": "Open Production →",
+    "location.operations.production_line": "Production line",
+    "location.operations.product": "Product",
+    "location.operations.rate": "Actual output",
+    "location.operations.status": "Status",
+    "location.operations.facilities_empty": "No deployed production buildings.",
+    "location.operations.attention": "Attention",
+    "location.operations.alerts_clear": "No active industrial alerts.",
+    "location.operations.tasks": "Local Tasks",
+    "location.operations.open_engineering": "Engineering →",
+    "location.operations.task": "Task",
+    "location.operations.progress": "Progress",
+    "location.operations.eta": "Estimated completion",
+    "location.operations.tasks_empty": "No active local tasks.",
+    "location.operations.stationed_fleet": "Stationed Fleet",
+    "location.operations.open_fleet": "View Fleet →",
+    "location.operations.environment": "Environmental Conditions",
+    "location.operations.environment_details": "Environmental Effects",
+    "location.operations.environment_empty": "No environmental readings are revealed.",
+    "location.operations.gravity": "Gravity",
+    "location.operations.atmosphere": "Atmosphere",
+    "location.operations.radiation": "Radiation",
+    "location.operations.solar_flux": "Solar flux",
+    "location.operations.thermal": "Thermal environment",
+    "location.operations.solar_generation": "Solar generation",
+    "location.operations.power_demand": "Power demand",
+    "location.operations.construction_work": "Construction work",
+    "location.operations.construction_speed": "Construction speed",
+    "location.operations.construction_difficulty": "Construction difficulty",
+    "location.operations.transport_distance": "Transport distance",
+    "location.operations.thermal_power": "Thermal power",
+    "location.operations.radiation_power": "Radiation power",
+    "location.operations.gravity_power": "Gravity power",
+    "location.operations.atmosphere_power": "Atmosphere power",
+    "location.operations.unknown": "Unknown",
+    "location.operations.open_detail": "Open the related operation.",
+    "location.operations.actual_outputs": "Actual outputs",
+    "location.operations.no_survey_ship": "No survey vessels",
+    "location.operations.survey_active": "Survey in progress",
+    "location.operations.survey_complete": "Survey complete",
+    "location.operations.configure_survey_ship": "Configure Survey Ship",
+    "location.operations.no_eligible_ship": "No ship can perform the next survey.",
+    "location.operations.start_survey": "Start %s",
+    "location.operations.close": "Close",
     "location.info": "Location Information",
     "location.identity_summary": "Type %s\nSystem %s\nSurvey state %s",
     "system.sol": "Sol System",
@@ -512,9 +615,11 @@
     "common.disabled_gameplay_action": "This action is unavailable in the current state. Review the surrounding status and blocker explanation.",
     "command.queue_capacity_project": "Queue Capacity Project",
     "command.apply_industrial_template": "Apply Industrial Template",
-    "location.logistics.summary": "%s · Routes %d · Inbound %d · Outbound %d\nWeighted storage %.0f / %.0f · Hub throughput per dispatch %d\nTransport technology %s · Volume ×%.2f · Transit time ×%.2f · Fuel ×%.2f · Energy %.2f/unit/route · Handling %.0f ms/unit/endpoint",
-    "location.logistics.storage_class": "%s: %.0f / %.0f (%.0f%%)",
-    "location.logistics.capacity_help": "Inventory and hub capacity cannot be changed instantly for free. Queue upgrades under Location Capacity Projects on this Location's Industry page.",
+    "location.logistics.summary": "%s · Routes %d · Inbound %d · Outbound %d\nFull item slots %.0f / %.0f · Hub throughput per dispatch %d\nTransport technology %s · Volume ×%.2f · Transit time ×%.2f · Fuel ×%.2f · Energy %.2f/unit/route · Handling %.0f ms/unit/endpoint",
+    "location.logistics.storage_class": "%s: %.0f per material · %.0f types · peak %.0f%%",
+    "location.logistics.capacity_help": "Each material has independent capacity in one shared planetary inventory. Deploy manufactured warehouses to add capacity and road loading access; warehouses do not hold duplicate stock.",
+    "location.operations.full_slots": "Full item slots",
+    "location.operations.trend_help": "Arrows measure recent Location inventory changes in simulation time, not theoretical production. Machine supplies and incoming products change actual stored stock.",
     "location.logistics.route_services": "Route Logistics Services",
     "location.logistics.no_routes": "No freight route connected to this Location has been discovered.",
     "location.logistics.service_header": "%s · %s · %s",
@@ -1120,7 +1225,7 @@
     "command.install_manufacturing_module": "Install Manufacturing Module",
     "diagnostics.economy.title": "Current Economy Analysis",
     "diagnostics.economy.help": "Inventory status is calculated from actual production, continuous demand, project commitments, shipments, and storage classes. Per-product target stocks and production percentages are unnecessary.",
-    "diagnostics.economy.storage_utilization": "Storage Utilization",
+    "diagnostics.economy.storage_utilization": "Peak Receiving Slot Fill",
     "diagnostics.economy.power_margin": "Power Margin",
     "diagnostics.economy.local_logistics": "Local Logistics",
     "diagnostics.economy.empty": "This Location has no inventory flow or registered demand.",
@@ -1392,7 +1497,231 @@
     "megastructure.progress_tooltip": "%s · %d / %d",
     "megastructure.progress_default_stage": "STELLAR ENGINEERING"
   },
-  "ui": {
+ "ui": {
+    "factory.deployment.title": "Deployment ghosts",
+    "factory.deployment.hint": "Missing finished buildings deploy automatically when they reach planet inventory.",
+    "factory.deployment.empty": "No deployment ghosts are awaiting a finished building.",
+    "factory.deployment.inactive_record": "This record is not an active deployment ghost.",
+    "factory.operations.planetary_inventory": "Planetary inventory",
+    "factory.dsp.confirm_destroy": "This will permanently destroy the selected material delivered by road. Continue?",
+    "factory.dsp.destroy_recipe": "Destroy · %s",
+    "factory.dsp.station_recipe": "Orbital station %02d · %s",
+    "factory.dsp.research_points": "Matrix research",
+    "factory.dsp.dyson_sails": "Active solar sails",
+    "factory.dsp.dyson_structure": "Dyson structure",
+    "factory.dsp.ray_available_kw": "Stellar reception / kW",
+    "factory.dsp.galactic_credits": "Galactic credits",
+    "factory.dsp.destroyed": "Permanently destroyed",
+    "factory.dsp.station_stage": "Orbital station material phase",
+    "factory.dsp.time_warp": "Realtime simulation",
+    "factory.dsp.universe_archive": "Universe archive",
+    "factory.dsp.solar_sail_array": "Solar sail array",
+    "factory.dsp.carrier_rocket_fleet": "Carrier rocket fleet",
+    "factory.dsp.antimatter_exchange": "Antimatter exchange",
+    "factory.recipe.dsp_matrix_research_energy_matrix": "Research Energy Matrix",
+    "factory.recipe.dsp_matrix_research_structure_matrix": "Research Structure Matrix",
+    "factory.recipe.dsp_matrix_research_information_matrix": "Research Information Matrix",
+    "factory.recipe.dsp_matrix_research_gravity_matrix": "Research Gravity Matrix",
+    "factory.recipe.dsp_matrix_research_universe_matrix": "Research Universe Matrix",
+    "factory.building.grid_dsp_wind_turbine": "Wind Turbine",
+    "factory.recipe.manufacture_grid_dsp_wind_turbine": "Manufacture Wind Turbine",
+    "factory.building.grid_dsp_solar_panel": "Solar Panel",
+    "factory.recipe.manufacture_grid_dsp_solar_panel": "Manufacture Solar Panel",
+    "factory.building.grid_dsp_geothermal_power_station": "Geothermal Power Station",
+    "factory.recipe.manufacture_grid_dsp_geothermal_power_station": "Manufacture Geothermal Power Station",
+    "factory.building.grid_dsp_thermal_power_plant": "Thermal Power Plant",
+    "factory.recipe.manufacture_grid_dsp_thermal_power_plant": "Manufacture Thermal Power Plant",
+    "factory.building.grid_dsp_mini_fusion_power_plant": "Mini Fusion Power Plant",
+    "factory.recipe.manufacture_grid_dsp_mini_fusion_power_plant": "Manufacture Mini Fusion Power Plant",
+    "factory.building.grid_dsp_artificial_star": "Artificial Star",
+    "factory.recipe.manufacture_grid_dsp_artificial_star": "Manufacture Artificial Star",
+    "factory.building.grid_dsp_accumulator": "Accumulator",
+    "factory.recipe.manufacture_grid_dsp_accumulator": "Manufacture Accumulator",
+    "factory.building.grid_dsp_energy_exchanger": "Energy Exchanger",
+    "factory.recipe.manufacture_grid_dsp_energy_exchanger": "Manufacture Energy Exchanger",
+    "factory.building.grid_dsp_mining_machine": "Mining Machine",
+    "factory.recipe.manufacture_grid_dsp_mining_machine": "Manufacture Mining Machine",
+    "factory.building.grid_dsp_arc_smelter": "Arc Smelter",
+    "factory.recipe.manufacture_grid_dsp_arc_smelter": "Manufacture Arc Smelter",
+    "factory.building.grid_dsp_plane_smelter": "Plane Smelter",
+    "factory.recipe.manufacture_grid_dsp_plane_smelter": "Manufacture Plane Smelter",
+    "factory.building.grid_dsp_assembling_machine_mk1": "Assembling Machine Mk.I",
+    "factory.recipe.manufacture_grid_dsp_assembling_machine_mk1": "Manufacture Assembling Machine Mk.I",
+    "factory.building.grid_dsp_assembling_machine_mk2": "Assembling Machine Mk.II",
+    "factory.recipe.manufacture_grid_dsp_assembling_machine_mk2": "Manufacture Assembling Machine Mk.II",
+    "factory.building.grid_dsp_assembling_machine_mk3": "Assembling Machine Mk.III",
+    "factory.recipe.manufacture_grid_dsp_assembling_machine_mk3": "Manufacture Assembling Machine Mk.III",
+    "factory.building.grid_dsp_spray_coater": "Spray Coater",
+    "factory.recipe.manufacture_grid_dsp_spray_coater": "Manufacture Spray Coater",
+    "factory.building.grid_dsp_matrix_lab": "Matrix Lab",
+    "factory.recipe.manufacture_grid_dsp_matrix_lab": "Manufacture Matrix Lab",
+    "factory.building.grid_dsp_oil_extractor": "Oil Extractor",
+    "factory.recipe.manufacture_grid_dsp_oil_extractor": "Manufacture Oil Extractor",
+    "factory.building.grid_dsp_oil_refinery": "Oil Refinery",
+    "factory.recipe.manufacture_grid_dsp_oil_refinery": "Manufacture Oil Refinery",
+    "factory.building.grid_dsp_water_pump": "Water Pump",
+    "factory.recipe.manufacture_grid_dsp_water_pump": "Manufacture Water Pump",
+    "factory.building.grid_dsp_chemical_plant": "Chemical Plant",
+    "factory.recipe.manufacture_grid_dsp_chemical_plant": "Manufacture Chemical Plant",
+    "factory.building.grid_dsp_quantum_chemical_plant": "Quantum Chemical Plant",
+    "factory.recipe.manufacture_grid_dsp_quantum_chemical_plant": "Manufacture Quantum Chemical Plant",
+    "factory.building.grid_dsp_fractionator": "Fractionator",
+    "factory.recipe.manufacture_grid_dsp_fractionator": "Manufacture Fractionator",
+    "factory.building.grid_dsp_miniature_particle_collider": "Miniature Particle Collider",
+    "factory.recipe.manufacture_grid_dsp_miniature_particle_collider": "Manufacture Miniature Particle Collider",
+    "factory.building.grid_dsp_em_rail_ejector": "EM Rail Ejector",
+    "factory.recipe.manufacture_grid_dsp_em_rail_ejector": "Manufacture EM Rail Ejector",
+    "factory.building.grid_dsp_ray_receiver": "Ray Receiver",
+    "factory.recipe.manufacture_grid_dsp_ray_receiver": "Manufacture Ray Receiver",
+    "factory.building.grid_dsp_vertical_launching_silo": "Vertical Launching Silo",
+    "factory.recipe.manufacture_grid_dsp_vertical_launching_silo": "Manufacture Vertical Launching Silo",
+    "factory.building.grid_dsp_planetary_logistics_station": "Planetary Logistics Station",
+    "factory.recipe.manufacture_grid_dsp_planetary_logistics_station": "Manufacture Planetary Logistics Station",
+    "factory.building.grid_dsp_interstellar_logistics_station": "Interstellar Logistics Station",
+    "factory.recipe.manufacture_grid_dsp_interstellar_logistics_station": "Manufacture Interstellar Logistics Station",
+    "factory.building.grid_dsp_orbital_collector": "Orbital Collector",
+    "factory.recipe.manufacture_grid_dsp_orbital_collector": "Manufacture Orbital Collector",
+    "factory.building.grid_dsp_storage_mk1": "Storage Mk.I",
+    "factory.recipe.manufacture_grid_dsp_storage_mk1": "Manufacture Storage Mk.I",
+    "factory.building.grid_dsp_material_delivery_hub": "Material Delivery Hub",
+    "factory.recipe.manufacture_grid_dsp_material_delivery_hub": "Manufacture Material Delivery Hub",
+    "factory.building.grid_dsp_orbital_cargo_terminal": "Orbital Cargo Terminal",
+    "factory.recipe.manufacture_grid_dsp_orbital_cargo_terminal": "Manufacture Orbital Cargo Terminal",
+    "factory.building.grid_dsp_storage_tank": "Storage Tank",
+    "factory.recipe.manufacture_grid_dsp_storage_tank": "Manufacture Storage Tank",
+    "factory.building.grid_dsp_splitter_4way": "Splitter 4way",
+    "factory.recipe.manufacture_grid_dsp_splitter_4way": "Manufacture Splitter 4way",
+    "factory.building.grid_dsp_construction_center": "Construction Center",
+    "factory.recipe.manufacture_grid_dsp_construction_center": "Manufacture Construction Center",
+    "factory.building.grid_dsp_galactic_material_exporter": "Galactic Material Exporter",
+    "factory.recipe.manufacture_grid_dsp_galactic_material_exporter": "Manufacture Galactic Material Exporter",
+    "factory.building.grid_dsp_micro_black_hole_connector": "Micro Black Hole Connector",
+    "factory.recipe.manufacture_grid_dsp_micro_black_hole_connector": "Manufacture Micro Black Hole Connector",
+    "factory.building.grid_dsp_time_warp_device": "Time Warp Device",
+    "factory.recipe.manufacture_grid_dsp_time_warp_device": "Manufacture Time Warp Device",
+    "factory.building.grid_dsp_space_station_construction_launcher": "Space Station Construction Launcher",
+    "factory.recipe.manufacture_grid_dsp_space_station_construction_launcher": "Manufacture Space Station Construction Launcher",
+    "factory.recipe.dsp_iron_ingot": "Iron Ingot",
+    "factory.recipe.dsp_copper_ingot": "Copper Ingot",
+    "factory.recipe.dsp_magnet": "Magnet",
+    "factory.recipe.dsp_stone_brick": "Stone Brick",
+    "factory.recipe.dsp_glass": "Glass",
+    "factory.recipe.dsp_steel": "Steel",
+    "factory.recipe.dsp_energetic_graphite": "Energetic Graphite",
+    "factory.recipe.dsp_gear": "Gear",
+    "factory.recipe.dsp_magnetic_coil": "Magnetic Coil",
+    "factory.recipe.dsp_circuit_board": "Circuit Board",
+    "factory.recipe.dsp_prism": "Prism",
+    "factory.recipe.dsp_plasma_exciter": "Plasma Exciter",
+    "factory.recipe.dsp_plasma_refining": "Plasma Refining",
+    "factory.recipe.dsp_xray_cracking": "X-Ray Cracking",
+    "factory.recipe.dsp_reforming_refine": "Reforming Refine",
+    "factory.recipe.dsp_high_purity_silicon": "High Purity Silicon",
+    "factory.recipe.dsp_silicon_ore_from_stone": "Silicon Ore From Stone",
+    "factory.recipe.dsp_titanium_ingot": "Titanium Ingot",
+    "factory.recipe.dsp_sulfuric_acid": "Sulfuric Acid",
+    "factory.recipe.dsp_titanium_alloy": "Titanium Alloy",
+    "factory.recipe.dsp_microcrystalline_component": "Microcrystalline Component",
+    "factory.recipe.dsp_processor": "Processor",
+    "factory.recipe.dsp_logistics_drone": "Logistics Drone",
+    "factory.recipe.dsp_logistics_vessel": "Logistics Vessel",
+    "factory.recipe.dsp_space_warper": "Space Warper",
+    "factory.recipe.dsp_space_warper_from_gravity_matrix": "Space Warper From Gravity Matrix",
+    "factory.recipe.dsp_accumulator": "Accumulator",
+    "factory.recipe.dsp_accumulator_charge": "Accumulator Charge",
+    "factory.recipe.dsp_accumulator_discharge": "Accumulator Discharge",
+    "factory.recipe.dsp_hydrogen_fuel_rod": "Hydrogen Fuel Rod",
+    "factory.recipe.dsp_deuterium_fractionation": "Deuterium Fractionation",
+    "factory.recipe.dsp_graphene": "Graphene",
+    "factory.recipe.dsp_graphene_from_fire_ice": "Graphene From Fire Ice",
+    "factory.recipe.dsp_carbon_nanotube": "Carbon Nanotube",
+    "factory.recipe.dsp_carbon_nanotube_from_spiniform": "Carbon Nanotube From Spiniform",
+    "factory.recipe.dsp_proliferator_mk1": "Proliferator Mk.I",
+    "factory.recipe.dsp_proliferator_mk2": "Proliferator Mk.II",
+    "factory.recipe.dsp_proliferator_mk3": "Proliferator Mk.III",
+    "factory.recipe.dsp_crystal_silicon": "Crystal Silicon",
+    "factory.recipe.dsp_crystal_silicon_from_fractal": "Crystal Silicon From Fractal",
+    "factory.recipe.dsp_particle_broadband": "Particle Broadband",
+    "factory.recipe.dsp_electric_motor": "Electric Motor",
+    "factory.recipe.dsp_electromagnetic_turbine": "Electromagnetic Turbine",
+    "factory.recipe.dsp_super_magnetic_ring": "Super Magnetic Ring",
+    "factory.recipe.dsp_particle_container": "Particle Container",
+    "factory.recipe.dsp_particle_container_from_unipolar": "Particle Container From Unipolar",
+    "factory.recipe.dsp_deuterium": "Deuterium",
+    "factory.recipe.dsp_deuteron_fuel_rod": "Deuteron Fuel Rod",
+    "factory.recipe.dsp_titanium_glass": "Titanium Glass",
+    "factory.recipe.dsp_casimir_crystal": "Casimir Crystal",
+    "factory.recipe.dsp_casimir_crystal_advanced": "Casimir Crystal Advanced",
+    "factory.recipe.dsp_plane_filter": "Plane Filter",
+    "factory.recipe.dsp_quantum_chip": "Quantum Chip",
+    "factory.recipe.dsp_strange_matter": "Strange Matter",
+    "factory.recipe.dsp_graviton_lens": "Graviton Lens",
+    "factory.recipe.dsp_photon_combiner": "Photon Combiner",
+    "factory.recipe.dsp_photon_combiner_from_grating": "Photon Combiner From Grating",
+    "factory.recipe.dsp_solar_sail": "Solar Sail",
+    "factory.recipe.dsp_solar_sail_launch": "Solar Sail Launch",
+    "factory.recipe.dsp_ray_power": "Ray Power",
+    "factory.recipe.dsp_critical_photon": "Critical Photon",
+    "factory.recipe.dsp_antimatter": "Antimatter",
+    "factory.recipe.dsp_annihilation_constraint_sphere": "Annihilation Constraint Sphere",
+    "factory.recipe.dsp_antimatter_fuel_rod": "Antimatter Fuel Rod",
+    "factory.recipe.dsp_frame_material": "Frame Material",
+    "factory.recipe.dsp_dyson_sphere_component": "Dyson Sphere Component",
+    "factory.recipe.dsp_small_carrier_rocket": "Small Carrier Rocket",
+    "factory.recipe.dsp_carrier_rocket_launch": "Carrier Rocket Launch",
+    "factory.recipe.dsp_diamond": "Diamond",
+    "factory.recipe.dsp_diamond_from_kimberlite": "Diamond From Kimberlite",
+    "factory.recipe.dsp_plastic": "Plastic",
+    "factory.recipe.dsp_organic_crystal": "Organic Crystal",
+    "factory.recipe.dsp_titanium_crystal": "Titanium Crystal",
+    "factory.recipe.dsp_electromagnetic_matrix": "Electromagnetic Matrix",
+    "factory.recipe.dsp_energy_matrix": "Energy Matrix",
+    "factory.recipe.dsp_structure_matrix": "Structure Matrix",
+    "factory.recipe.dsp_information_matrix": "Information Matrix",
+    "factory.recipe.dsp_gravity_matrix": "Gravity Matrix",
+    "factory.recipe.dsp_universe_matrix": "Universe Matrix",
+    "factory.recipe.dsp_matrix_research": "Matrix Research",
+   "factory.road.build_tier_one": "Basic road",
+    "factory.road.build_tier_one_tooltip": "Draw a shared local road. Basic roads are free during bootstrap.",
+    "factory.road.build_tier_two": "Reinforced road",
+    "factory.road.build_tier_two_tooltip": "Draw or upgrade a faster shared road. Costs 1 iron ingot per tile.",
+    "factory.road.remove": "Remove road",
+    "factory.road.remove_tooltip": "Remove road tiles.",
+    "factory.road.cost_hint": "Basic roads are free. Reinforced roads cost 1 iron ingot per tile.",
+    "factory.road.cost_tier_one": "Basic road · free",
+    "factory.road.cost_tier_two": "1 iron ingot / tile",
+    "factory.road.connection": "Road access",
+    "factory.road.connected": "Connected",
+    "factory.road.disconnected": "Disconnected — build a road to collect goods automatically.",
+    "factory.road.component": "Road network",
+    "factory.road.power_notice": "Power",
+    "factory.road.roads_carry_power": "Power travels along roads; a broken road network disconnects this building.",
+    "factory.road.shared_inventory": "Planet shared inventory",
+    "factory.road.shared_inventory_hint": "Warehouses access one planetary stockpile; road-connected machines collect automatically.",
+    "factory.road.shipments": "Road deliveries",
+    "factory.road.shipments_count": "%d local road deliveries",
+    "factory.road.shipments_tooltip": "Timed road deliveries for this building. Cargo stays in transit until it reaches its destination.",
+    "factory.road.shipments_empty": "No local road deliveries are active for this building.",
+    "factory.road.shipment.sending": "Sending",
+    "factory.road.shipment.receiving": "Receiving",
+    "factory.road.shipment.transfer": "Local transfer",
+    "factory.road.shipment.travel": "En route",
+    "factory.road.shipment.loading": "Loading",
+    "factory.road.shipment.unloading": "Unloading",
+    "factory.road.shipment.blocked": "Blocked",
+    "factory.road.shipment.blocked_path": "Blocked: road path unavailable",
+    "factory.road.shipment.blocked_target_full": "Blocked: destination storage full",
+    "factory.road.shipment.blocked_target": "Blocked: destination unavailable",
+    "factory.road.shipment.blocked_manifest": "Blocked: cargo manifest needs attention",
+    "factory.road.shipment.no_eta": "No ETA",
+    "factory.road.shipment.eta": "Remaining ≥ %s",
+    "factory.road.shipment.eta_tooltip": "Remaining time is a lower bound and excludes warehouse loading queues.",
+    "factory.road.shipment.unknown_endpoint": "Unknown endpoint",
+    "factory.road.network_metrics": "%d nodes · %d road tiles · %d/%d capacity",
+    "factory.road.network_tooltip": "%d active shipments · %d%% utilization",
+    "factory.road.path_too_long": "Road path is too long.",
+    "factory.road.order_funding_hint": "Construction materials are staged from the shared planet inventory.",
+    "category.Waste": "Waste",
     "button.save": "Save Now",
     "freight_class.BULK": "Bulk Cargo",
     "freight_class.STANDARD": "Standard Cargo",
@@ -1455,7 +1784,7 @@
     "factory.tab.overview": "Overview",
     "factory.tab.canvas": "Canvas",
     "factory.tab.production": "Production",
-    "factory.tab.construction": "Construction",
+    "factory.tab.construction": "Deployment ghosts",
     "factory.tooltip.open_overview": "Open the Factory operations overview.",
     "factory.tooltip.open_canvas": "Open the Factory canvas.",
     "factory.tooltip.open_production": "Open production management.",
@@ -1535,7 +1864,6 @@
     "factory.operations.alert_material": "%s short by %d",
     "factory.operations.status.material_shortage": "Material shortage",
     "factory.operations.production_board_hint": "Live rate, utilization and connected routes",
-    "factory.operations.construction_board_hint": "Orders, staged stock and automatic replenishment",
     "factory.operations.world_telemetry": "LOCAL GRID · %s",
     "factory.operations.live_world": "Live factory telemetry · %s",
     "factory.operations.network_metrics": "%d nodes · %d routes · %d orders",
@@ -1588,6 +1916,10 @@
     "factory.success.remove_link": "Factory connection removed.",
     "factory.success.cancel_construction": "Factory construction cancelled and delivered materials returned to location inventory.",
     "factory.success.remove_entity": "Factory entity removed.",
+    "factory.success.build_road": "Roads built. Transport and power connectivity updated.",
+    "factory.success.remove_road": "Roads removed. Disconnected deliveries pause without losing cargo.",
+    "factory.reason.legacy_links_retired": "Use roads and the shared planetary inventory; manual factory links and warehouse transfers are retired.",
+    "factory.reason.road_materials": "Reinforced roads require one iron ingot per tile.",
     "factory.success.import_from_location": "Cargo transferred into Factory storage.",
     "factory.success.export_to_location": "Cargo transferred to Location inventory.",
     "factory.reason.unsupported_protocol": "This Factory workspace protocol is not supported.",
@@ -1666,7 +1998,7 @@
     "factory.action.paste_machine_configuration": "Paste machine configuration",
     "factory.action.remove_link": "Remove link",
     "factory.action.remove_entity": "Remove entity",
-    "factory.action.cancel_construction": "Cancel construction",
+    "factory.action.cancel_construction": "Cancel ghost",
     "factory.action.configure_link": "Apply route priority",
     "factory.action.focus": "Focus",
     "factory.action.focus_named": "Focus %s",
@@ -1677,7 +2009,7 @@
     "factory.tooltip.reset_view": "Return the canvas camera to the world origin (Home).",
     "factory.tooltip.refresh": "Ask the mounting host for a new Factory snapshot.",
     "factory.tooltip.reduced_motion": "Disable flow-packet animation.",
-    "factory.tooltip.building_palette": "Choose a building, then click a free tile to queue construction.",
+    "factory.tooltip.building_palette": "Choose a finished building and deploy it. Missing stock creates a ghost that deploys when its building arrives.",
     "factory.tooltip.recipe_palette": "Choose a recipe for the selected machine.",
     "factory.tooltip.cargo": "Select a cargo source and target, then choose an item.",
     "factory.tooltip.power": "Select a power producer and a power-consuming target.",
@@ -1696,7 +2028,7 @@
     "factory.tooltip.center_resource": "Focus the camera on this resource field.",
     "factory.tooltip.remove_link": "Emit a versioned REMOVE_LINK intent.",
     "factory.tooltip.remove_entity": "Remove this empty Factory entity and its incident routes.",
-    "factory.tooltip.cancel_construction": "Cancel this order and return delivered materials to same-location inventory.",
+    "factory.tooltip.cancel_construction": "Cancel this deployment ghost. No finished building is consumed.",
     "factory.tooltip.configure_link": "Configure route priority.",
     "factory.tooltip.route_capacity": "Capacity per second; lanes and tier describe the physical route.",
     "factory.tooltip.focus_production": "Locate this production unit on the canvas.",
@@ -1743,10 +2075,10 @@
     "factory.select.storage": "Select Factory storage...",
     "factory.select.item": "Select item...",
     "factory.inspector.title": "Inspector",
-    "factory.inspector.empty": "Select a factory entity, resource field, link, or construction order.",
+    "factory.inspector.empty": "Select a building, resource field, or construction order; use the bottom road tools to draw roads.",
     "factory.inspector.tile": "Tile %s",
     "factory.inspector.link": "%s link",
-    "factory.inspector.order": "Construction order",
+    "factory.inspector.order": "Deployment ghost",
     "factory.resource_field": "Resource field",
     "factory.transfer.title": "Location transfer",
     "factory.field.id": "ID",
@@ -1798,6 +2130,8 @@
     "factory.build.ready": "Ready to place",
     "factory.command.initialize": "Initialize Factory grid",
     "factory.command.queue_construction": "Queue construction",
+    "factory.command.build_road": "Build road",
+    "factory.command.remove_road": "Remove road",
     "factory.command.connect_entities": "Connect entities",
     "factory.command.configure_link": "Configure route",
     "factory.command.remove_link": "Remove link",
@@ -1812,7 +2146,7 @@
     "factory.building.grid_surface_mine": "Surface Mining Field",
     "factory.building.grid_cryogenic_extractor": "Cryogenic Field Extractor",
     "factory.building.grid_exotic_extractor": "Exotic Matter Extractor",
-    "factory.building.grid_engineering_works": "Grid Engineering Works",
+    "factory.building.grid_engineering_works": "Automatic Assembler",
     "factory.building.grid_arc_smelter": "Macro Arc Smelter",
     "factory.building.grid_electronics_works": "High-Energy Electronics Works",
     "factory.building.grid_assembly_array": "Microstructure Assembly Array",
@@ -1845,6 +2179,92 @@
     "factory.building.grid_starport_expansion_iii": "Orbital Starport Expansion III",
     "factory.building.grid_starport_expansion_iv": "Orbital Starport Expansion IV",
     "factory.building.grid_starport_expansion_v": "Orbital Starport Expansion V",
+    "factory.item.building_grid_solar_array": "Surface Solar Array Kit",
+    "factory.recipe.manufacture_grid_solar_array": "Manufacture Surface Solar Array",
+    "factory.item.building_grid_surface_mine": "Surface Mining Field Kit",
+    "factory.recipe.manufacture_grid_surface_mine": "Manufacture Surface Mining Field",
+    "factory.item.building_grid_cryogenic_extractor": "Cryogenic Field Extractor Kit",
+    "factory.recipe.manufacture_grid_cryogenic_extractor": "Manufacture Cryogenic Field Extractor",
+    "factory.item.building_grid_exotic_extractor": "Exotic Matter Extractor Kit",
+    "factory.recipe.manufacture_grid_exotic_extractor": "Manufacture Exotic Matter Extractor",
+    "factory.item.building_grid_engineering_works": "Automatic Assembler Kit",
+    "factory.recipe.manufacture_grid_engineering_works": "Manufacture Automatic Assembler",
+    "factory.item.building_grid_arc_smelter": "Macro Arc Smelter Kit",
+    "factory.recipe.manufacture_grid_arc_smelter": "Manufacture Macro Arc Smelter",
+    "factory.item.building_grid_electronics_works": "High-Energy Electronics Works Kit",
+    "factory.recipe.manufacture_grid_electronics_works": "Manufacture High-Energy Electronics Works",
+    "factory.item.building_grid_assembly_array": "Microstructure Assembly Array Kit",
+    "factory.recipe.manufacture_grid_assembly_array": "Manufacture Microstructure Assembly Array",
+    "factory.item.building_grid_bulk_depot": "Bulk Storage Depot Kit",
+    "factory.recipe.manufacture_grid_bulk_depot": "Manufacture Bulk Storage Depot",
+    "factory.item.building_grid_component_depot": "Component Storage Vault Kit",
+    "factory.recipe.manufacture_grid_component_depot": "Manufacture Component Storage Vault",
+    "factory.item.building_grid_fluid_tank": "Cryogenic Fluid Tank Kit",
+    "factory.recipe.manufacture_grid_fluid_tank": "Manufacture Cryogenic Fluid Tank",
+    "factory.item.building_grid_special_vault": "Special Material Vault Kit",
+    "factory.recipe.manufacture_grid_special_vault": "Manufacture Special Material Vault",
+    "factory.item.building_grid_construction_yard": "Surface Construction Yard Kit",
+    "factory.recipe.manufacture_grid_construction_yard": "Manufacture Surface Construction Yard",
+    "factory.item.building_grid_research_complex": "Grid Research Complex Kit",
+    "factory.recipe.manufacture_grid_research_complex": "Manufacture Grid Research Complex",
+    "factory.item.building_grid_research_complex_ii": "Research Complex Expansion II Kit",
+    "factory.recipe.manufacture_grid_research_complex_ii": "Manufacture Research Complex Expansion II",
+    "factory.item.building_grid_cooling_service": "Thermal Service Plant Kit",
+    "factory.recipe.manufacture_grid_cooling_service": "Manufacture Thermal Service Plant",
+    "factory.item.building_grid_repair_dock": "Grid Repair Dock Kit",
+    "factory.recipe.manufacture_grid_repair_dock": "Manufacture Grid Repair Dock",
+    "factory.item.building_grid_energy_array": "Fusion Power Array Kit",
+    "factory.recipe.manufacture_grid_energy_array": "Manufacture Fusion Power Array",
+    "factory.item.building_grid_fusion_test_rig": "Fusion Component Test Rig Kit",
+    "factory.recipe.manufacture_grid_fusion_test_rig": "Manufacture Fusion Component Test Rig",
+    "factory.item.building_grid_precision_mechanics_cell": "Grid Precision Mechanics Cell Kit",
+    "factory.recipe.manufacture_grid_precision_mechanics_cell": "Manufacture Grid Precision Mechanics Cell",
+    "factory.item.building_grid_cryogenic_process_unit": "Grid Cryogenic Process Unit Kit",
+    "factory.recipe.manufacture_grid_cryogenic_process_unit": "Manufacture Grid Cryogenic Process Unit",
+    "factory.item.building_grid_radiation_electronics_cell": "Grid Radiation Electronics Cell Kit",
+    "factory.recipe.manufacture_grid_radiation_electronics_cell": "Manufacture Grid Radiation Electronics Cell",
+    "factory.item.building_grid_advanced_alloy_cell": "Grid Advanced Alloy Cell Kit",
+    "factory.recipe.manufacture_grid_advanced_alloy_cell": "Manufacture Grid Advanced Alloy Cell",
+    "factory.item.building_grid_photonic_integration_line": "Grid Photonic Integration Line Kit",
+    "factory.recipe.manufacture_grid_photonic_integration_line": "Manufacture Grid Photonic Integration Line",
+    "factory.item.building_grid_field_engineering_complex": "Field Engineering Complex Kit",
+    "factory.recipe.manufacture_grid_field_engineering_complex": "Manufacture Field Engineering Complex",
+    "factory.item.building_grid_frontier_matterworks": "Frontier Matterworks Kit",
+    "factory.recipe.manufacture_grid_frontier_matterworks": "Manufacture Frontier Matterworks",
+    "factory.item.building_grid_command_array": "Deep-Space Command Array Kit",
+    "factory.recipe.manufacture_grid_command_array": "Manufacture Deep-Space Command Array",
+    "factory.item.building_grid_power_substation_ii": "Power Grid Expansion II Kit",
+    "factory.recipe.manufacture_grid_power_substation_ii": "Manufacture Power Grid Expansion II",
+    "factory.item.building_grid_power_substation_iii": "Power Grid Expansion III Kit",
+    "factory.recipe.manufacture_grid_power_substation_iii": "Manufacture Power Grid Expansion III",
+    "factory.item.building_grid_construction_yard_ii": "Construction Yard Expansion II Kit",
+    "factory.recipe.manufacture_grid_construction_yard_ii": "Manufacture Construction Yard Expansion II",
+    "factory.item.building_grid_construction_yard_iii": "Construction Yard Expansion III Kit",
+    "factory.recipe.manufacture_grid_construction_yard_iii": "Manufacture Construction Yard Expansion III",
+    "factory.item.building_grid_starport_expansion_ii": "Orbital Starport Expansion II Kit",
+    "factory.recipe.manufacture_grid_starport_expansion_ii": "Manufacture Orbital Starport Expansion II",
+    "factory.item.building_grid_starport_expansion_iii": "Orbital Starport Expansion III Kit",
+    "factory.recipe.manufacture_grid_starport_expansion_iii": "Manufacture Orbital Starport Expansion III",
+    "factory.item.building_grid_starport_expansion_iv": "Orbital Starport Expansion IV Kit",
+    "factory.recipe.manufacture_grid_starport_expansion_iv": "Manufacture Orbital Starport Expansion IV",
+    "factory.item.building_grid_starport_expansion_v": "Orbital Starport Expansion V Kit",
+    "factory.recipe.manufacture_grid_starport_expansion_v": "Manufacture Orbital Starport Expansion V",
+    "factory.building.available": "Available: %d",
+    "factory.building.deploy_available_hint": "Deploys one finished building from planet inventory.",
+    "factory.building.deploy_missing_hint": "No finished building available. Placement creates a ghost that deploys automatically when one arrives.",
+    "factory.construction.waiting_building": "Awaiting finished building",
+    "factory.construction.waiting_building_hint": "This ghost deploys automatically when %s reaches local available inventory.",
+    "factory.machine.recipe_building": "Manufactures building: %s",
+    "factory.building.grid_planetary_core": "Planetary Development Core",
+    "factory.item.building_grid_planetary_core": "Planetary Development Core Kit",
+    "factory.recipe.manufacture_grid_planetary_core": "Manufacture Planetary Development Core",
+    "factory.canvas.waiting_building": "Awaiting building",
+    "factory.reason.missing_building": "A finished building is required before this ghost can deploy.",
+    "factory.landing.title": "Planetary Landing",
+    "factory.landing.instruction": "Choose a site and deploy the core: shared storage, road transport, 400 kW and a one-time starter kit of 2 miners, 2 furnaces and 1 assembler.",
+    "factory.reason.landing_required": "Deploy the Planetary Development Core before placing other buildings.",
+    "factory.success.deploy_building": "Finished building deployed. A missing item creates a deployment ghost.",
+    "factory.reason.construction_retired": "Construction materials are retired. Manufacture a finished building, then deploy it.",
     "notice.aggregate_industry_removed": "The location-level mining, Production Line and generic Construction runtime has been removed. Use the factory grid.",
     "notice.formation_name_invalid": "Formation name must contain 1–32 characters",
     "notice.formation_created": "Tactical formation created: %s",
@@ -2552,9 +2972,362 @@
     "首要阻塞：": "Primary blocker: ",
     "已结算": "Simulated",
     "个状态边界": "state boundaries",
-    "剩余待结算": "Remaining"
+   "剩余待结算": "Remaining"
+ },
+  "content": {
+    "iron_ore": {
+      "name": "Iron Ore"
+    },
+    "copper_ore": {
+      "name": "Copper Ore"
+    },
+    "dsp_coal": {
+      "name": "Coal"
+    },
+    "dsp_stone": {
+      "name": "Stone"
+    },
+    "dsp_crude_oil": {
+      "name": "Crude Oil"
+    },
+    "dsp_silicon_ore": {
+      "name": "Silicon Ore"
+    },
+    "titanium_ore": {
+      "name": "Titanium Ore"
+    },
+    "dsp_fire_ice": {
+      "name": "Fire Ice"
+    },
+    "dsp_kimberlite_ore": {
+      "name": "Kimberlite Ore"
+    },
+    "dsp_fractal_silicon": {
+      "name": "Fractal Silicon"
+    },
+    "dsp_optical_grating_crystal": {
+      "name": "Optical Grating Crystal"
+    },
+    "dsp_spiniform_stalagmite_crystal": {
+      "name": "Spiniform Stalagmite Crystal"
+    },
+    "dsp_unipolar_magnet": {
+      "name": "Unipolar Magnet"
+    },
+    "dsp_water": {
+      "name": "Water"
+    },
+    "dsp_sulfuric_acid": {
+      "name": "Sulfuric Acid"
+    },
+    "iron_ingot": {
+      "name": "Iron Ingot"
+    },
+    "copper_ingot": {
+      "name": "Copper Ingot"
+    },
+    "dsp_magnet": {
+      "name": "Magnet"
+    },
+    "dsp_stone_brick": {
+      "name": "Stone Brick"
+    },
+    "dsp_glass": {
+      "name": "Glass"
+    },
+    "dsp_steel": {
+      "name": "Steel"
+    },
+    "dsp_gear": {
+      "name": "Gear"
+    },
+    "dsp_magnetic_coil": {
+      "name": "Magnetic Coil"
+    },
+    "dsp_circuit_board": {
+      "name": "Circuit Board"
+    },
+    "dsp_prism": {
+      "name": "Prism"
+    },
+    "dsp_plasma_exciter": {
+      "name": "Plasma Exciter"
+    },
+    "dsp_energetic_graphite": {
+      "name": "Energetic Graphite"
+    },
+    "dsp_refined_oil": {
+      "name": "Refined Oil"
+    },
+    "dsp_hydrogen": {
+      "name": "Hydrogen"
+    },
+    "dsp_high_purity_silicon": {
+      "name": "High Purity Silicon"
+    },
+    "dsp_titanium_ingot": {
+      "name": "Titanium Ingot"
+    },
+    "titanium_alloy": {
+      "name": "Titanium Alloy"
+    },
+    "dsp_microcrystalline_component": {
+      "name": "Microcrystalline Component"
+    },
+    "dsp_processor": {
+      "name": "Processor"
+    },
+    "dsp_logistics_drone": {
+      "name": "Logistics Drone"
+    },
+    "dsp_logistics_vessel": {
+      "name": "Logistics Vessel"
+    },
+    "dsp_space_warper": {
+      "name": "Space Warper"
+    },
+    "dsp_accumulator": {
+      "name": "Accumulator"
+    },
+    "dsp_charged_accumulator": {
+      "name": "Charged Accumulator"
+    },
+    "dsp_graphene": {
+      "name": "Graphene"
+    },
+    "dsp_carbon_nanotube": {
+      "name": "Carbon Nanotube"
+    },
+    "dsp_proliferator_mk1": {
+      "name": "Proliferator Mk.I"
+    },
+    "dsp_proliferator_mk2": {
+      "name": "Proliferator Mk.II"
+    },
+    "dsp_proliferator_mk3": {
+      "name": "Proliferator Mk.III"
+    },
+    "dsp_crystal_silicon": {
+      "name": "Crystal Silicon"
+    },
+    "dsp_particle_broadband": {
+      "name": "Particle Broadband"
+    },
+    "dsp_electric_motor": {
+      "name": "Electric Motor"
+    },
+    "dsp_electromagnetic_turbine": {
+      "name": "Electromagnetic Turbine"
+    },
+    "dsp_super_magnetic_ring": {
+      "name": "Super Magnetic Ring"
+    },
+    "dsp_particle_container": {
+      "name": "Particle Container"
+    },
+    "dsp_deuterium": {
+      "name": "Deuterium"
+    },
+    "dsp_hydrogen_fuel_rod": {
+      "name": "Hydrogen Fuel Rod"
+    },
+    "dsp_deuteron_fuel_rod": {
+      "name": "Deuteron Fuel Rod"
+    },
+    "dsp_titanium_glass": {
+      "name": "Titanium Glass"
+    },
+    "dsp_casimir_crystal": {
+      "name": "Casimir Crystal"
+    },
+    "dsp_plane_filter": {
+      "name": "Plane Filter"
+    },
+    "dsp_quantum_chip": {
+      "name": "Quantum Chip"
+    },
+    "dsp_strange_matter": {
+      "name": "Strange Matter"
+    },
+    "dsp_graviton_lens": {
+      "name": "Graviton Lens"
+    },
+    "dsp_photon_combiner": {
+      "name": "Photon Combiner"
+    },
+    "dsp_solar_sail": {
+      "name": "Solar Sail"
+    },
+    "dsp_critical_photon": {
+      "name": "Critical Photon"
+    },
+    "dsp_antimatter": {
+      "name": "Antimatter"
+    },
+    "dsp_annihilation_constraint_sphere": {
+      "name": "Annihilation Constraint Sphere"
+    },
+    "dsp_antimatter_fuel_rod": {
+      "name": "Antimatter Fuel Rod"
+    },
+    "dsp_frame_material": {
+      "name": "Frame Material"
+    },
+    "dsp_dyson_sphere_component": {
+      "name": "Dyson Sphere Component"
+    },
+    "dsp_small_carrier_rocket": {
+      "name": "Small Carrier Rocket"
+    },
+    "dsp_diamond": {
+      "name": "Diamond"
+    },
+    "dsp_plastic": {
+      "name": "Plastic"
+    },
+    "dsp_organic_crystal": {
+      "name": "Organic Crystal"
+    },
+    "dsp_titanium_crystal": {
+      "name": "Titanium Crystal"
+    },
+    "dsp_electromagnetic_matrix": {
+      "name": "Electromagnetic Matrix"
+    },
+    "dsp_energy_matrix": {
+      "name": "Energy Matrix"
+    },
+    "dsp_structure_matrix": {
+      "name": "Structure Matrix"
+    },
+    "dsp_information_matrix": {
+      "name": "Information Matrix"
+    },
+    "dsp_gravity_matrix": {
+      "name": "Gravity Matrix"
+    },
+    "dsp_universe_matrix": {
+      "name": "Universe Matrix"
+    },
+    "building_grid_dsp_wind_turbine": {
+      "name": "Wind Turbine Kit"
+    },
+    "building_grid_dsp_solar_panel": {
+      "name": "Solar Panel Kit"
+    },
+    "building_grid_dsp_geothermal_power_station": {
+      "name": "Geothermal Power Station Kit"
+    },
+    "building_grid_dsp_thermal_power_plant": {
+      "name": "Thermal Power Plant Kit"
+    },
+    "building_grid_dsp_mini_fusion_power_plant": {
+      "name": "Mini Fusion Power Plant Kit"
+    },
+    "building_grid_dsp_artificial_star": {
+      "name": "Artificial Star Kit"
+    },
+    "building_grid_dsp_accumulator": {
+      "name": "Accumulator Kit"
+    },
+    "building_grid_dsp_energy_exchanger": {
+      "name": "Energy Exchanger Kit"
+    },
+    "building_grid_dsp_mining_machine": {
+      "name": "Mining Machine Kit"
+    },
+    "building_grid_dsp_arc_smelter": {
+      "name": "Arc Smelter Kit"
+    },
+    "building_grid_dsp_plane_smelter": {
+      "name": "Plane Smelter Kit"
+    },
+    "building_grid_dsp_assembling_machine_mk1": {
+      "name": "Assembling Machine Mk.I Kit"
+    },
+    "building_grid_dsp_assembling_machine_mk2": {
+      "name": "Assembling Machine Mk.II Kit"
+    },
+    "building_grid_dsp_assembling_machine_mk3": {
+      "name": "Assembling Machine Mk.III Kit"
+    },
+    "building_grid_dsp_spray_coater": {
+      "name": "Spray Coater Kit"
+    },
+    "building_grid_dsp_matrix_lab": {
+      "name": "Matrix Lab Kit"
+    },
+    "building_grid_dsp_oil_extractor": {
+      "name": "Oil Extractor Kit"
+    },
+    "building_grid_dsp_oil_refinery": {
+      "name": "Oil Refinery Kit"
+    },
+    "building_grid_dsp_water_pump": {
+      "name": "Water Pump Kit"
+    },
+    "building_grid_dsp_chemical_plant": {
+      "name": "Chemical Plant Kit"
+    },
+    "building_grid_dsp_quantum_chemical_plant": {
+      "name": "Quantum Chemical Plant Kit"
+    },
+    "building_grid_dsp_fractionator": {
+      "name": "Fractionator Kit"
+    },
+    "building_grid_dsp_miniature_particle_collider": {
+      "name": "Miniature Particle Collider Kit"
+    },
+    "building_grid_dsp_em_rail_ejector": {
+      "name": "EM Rail Ejector Kit"
+    },
+    "building_grid_dsp_ray_receiver": {
+      "name": "Ray Receiver Kit"
+    },
+    "building_grid_dsp_vertical_launching_silo": {
+      "name": "Vertical Launching Silo Kit"
+    },
+    "building_grid_dsp_planetary_logistics_station": {
+      "name": "Planetary Logistics Station Kit"
+    },
+    "building_grid_dsp_interstellar_logistics_station": {
+      "name": "Interstellar Logistics Station Kit"
+    },
+    "building_grid_dsp_orbital_collector": {
+      "name": "Orbital Collector Kit"
+    },
+    "building_grid_dsp_storage_mk1": {
+      "name": "Storage Mk.I Kit"
+    },
+    "building_grid_dsp_material_delivery_hub": {
+      "name": "Material Delivery Hub Kit"
+    },
+    "building_grid_dsp_orbital_cargo_terminal": {
+      "name": "Orbital Cargo Terminal Kit"
+    },
+    "building_grid_dsp_storage_tank": {
+      "name": "Storage Tank Kit"
+    },
+    "building_grid_dsp_splitter_4way": {
+      "name": "Splitter 4way Kit"
+    },
+    "building_grid_dsp_construction_center": {
+      "name": "Construction Center Kit"
+    },
+    "building_grid_dsp_galactic_material_exporter": {
+      "name": "Galactic Material Exporter Kit"
+    },
+    "building_grid_dsp_micro_black_hole_connector": {
+      "name": "Micro Black Hole Connector Kit"
+    },
+    "building_grid_dsp_time_warp_device": {
+      "name": "Time Warp Device Kit"
+    },
+    "building_grid_dsp_space_station_construction_launcher": {
+      "name": "Space Station Construction Launcher Kit"
+    }
   },
-  "goal_steps": {
+ "goal_steps": {
     "extract_mixed_ore": "Extract the first batch of mixed ore",
     "separate_iron": "Separate iron-bearing ore",
     "separate_copper": "Separate copper-bearing ore",

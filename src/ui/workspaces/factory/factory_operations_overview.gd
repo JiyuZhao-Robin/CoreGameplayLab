@@ -483,12 +483,14 @@ func _materials_ledger() -> Control:
 	var warehouse_thumbnail := TextureRect.new()
 	warehouse_thumbnail.name = "FactoryOperationsWarehouseThumbnail"
 	warehouse_thumbnail.custom_minimum_size = UiTokens.layout_vector(Vector2(28, 28))
-	warehouse_thumbnail.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), "grid_bulk_depot", "STORAGE")
+	# The ledger describes the one Location-owned planetary inventory. It is not
+	# an implied preplaced bulk depot or a second Factory-side store.
+	warehouse_thumbnail.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), "grid_planetary_core", "STORAGE")
 	warehouse_thumbnail.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	warehouse_thumbnail.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	warehouse_thumbnail.modulate = Color(0.74, 0.90, 0.98, 0.86)
 	warehouse_heading.add_child(warehouse_thumbnail)
-	var warehouse_title := _label(_t("factory.operations.materials", "Available materials"), 11, MUTED)
+	var warehouse_title := _label(_t("factory.operations.planetary_inventory", "Planetary inventory"), 11, MUTED)
 	warehouse_title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	warehouse_heading.add_child(warehouse_title)
 	ledger.add_child(warehouse_heading)

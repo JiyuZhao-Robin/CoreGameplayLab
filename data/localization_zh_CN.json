@@ -1,5 +1,14 @@
 {
   "core_ui": {
+    "location.operations.prepare_surface": "准备星球地表",
+    "location.operations.prepare_surface_hint": "初始化已勘测的星球地表，随后部署运达的开发核心。",
+    "location.operations.surface_preparation_required": "先准备已勘测的星球地表，再部署工业建筑。",
+    "status.DEPLOYMENT": "成品建筑部署",
+    "location.operations.deploy_core": "部署星球开发核心基地",
+    "location.operations.deploy_core_hint": "为星球开发核心基地选择合法地块。",
+    "location.operations.core_required": "运行工业前请先部署星球开发核心基地。",
+    "location.operations.manufacture_or_deploy": "制造成品或部署建筑",
+    "location.operations.location_custody": "星球库存 %d · 在途 %d",
     "ui4k.group.system_map": "星域",
     "ui4k.group.industry": "工业",
     "ui4k.group.inventory": "供应",
@@ -40,7 +49,7 @@
     "resource_rail.title": "地点资源",
     "resource_rail.storage": "仓储",
     "resource_rail.inventory": "本地库存",
-    "resource_rail.storage_value": "%d / %d 单位 · %d%%",
+    "resource_rail.storage_value": "%d / %d 种满仓 · 最高 %d%%",
     "resource_rail.available": "可用：%d",
     "resource_rail.open_inventory": "打开库存",
     "resource_rail.current_task": "当前任务",
@@ -127,15 +136,12 @@
     "facility.queue_install": "排队安装 · %s · %s",
     "command.set_power_priority": "设置能源优先级",
     "command.queue_facility_module": "排队安装设施模块",
-    "guidance.restore_starter_ship": "初始采矿配置缺失。请点击“重开”生成新的采矿优先存档。",
-    "guidance.assign_starter_miner": "1. 到“舰船”把初始勘探船调入采矿舰队。",
-    "guidance.extract_mixed_ore": "2. 到“勘测”启动近地永久采集点。\n\n提示：可用顶部 5× / 10× 加速。",
-    "guidance.prepare_first_frame": "3. 在工厂网格中为第一套结构框架精炼 2 铁锭 + 1 铜锭。\n当前工厂保管量：%s\n\n把实体产物连接到兼容的工程设备或仓库。",
-    "guidance.assemble_first_frame": "4. 工厂保管的物料已齐：%s。请在已连接的工程设备上选择结构框架配方。",
-    "guidance.foundry_queued": "5. 宏型电弧熔炼炉已进入工厂建造队列（%s）。\n已交付/可用物料进度：%s\n\n从同地点仓库为实体订单供料；工厂建造随后自动继续。",
-    "guidance.supply_foundry": "5. 宏型电弧熔炼炉需要 1 结构框架 + 4 铁锭 + 2 电子元件。\n当前工厂保管量：%s\n\n保留已完成的框架，并把其余精炼投入送入仓库。",
-    "guidance.commission_foundry": "5. 工厂保管的宏型电弧熔炼炉物料已齐：%s。请在工厂画布上排队并供料。",
-    "guidance.commission_research": "6. 在工厂画布上建造、供料并通电高能电子工坊和网格科研综合体，开启工业研发链路。",
+    "guidance.start.deploy_core": "选择可建设地块部署星球开发核心。核心提供共享仓储接入、道路运输和 400 kW 电力，并一次性发放 2 台矿机、2 台锻炉、1 台自动制造机。",
+    "guidance.start.deploy_building": "从初始库存部署%s。矿机放在兼容矿区上，通过道路连接建筑与核心；缺货时先制造对应建筑成品。",
+    "guidance.start.connect_roads": "用基础道路连接核心、矿机、锻炉和自动制造机，道路同时输送物资与电力；在锻炉选择铁/铜冶炼配方，矿物会自动运输。",
+    "guidance.start.prepare_frame": "在锻炉冶炼结构框架所需材料。星球可用库存：%s。道路负责机器与星球共享库存之间的物资运输。",
+    "guidance.start.assemble_frame": "框架所需材料已具备：%s。在接路的自动制造机上选择结构框架，随后制造建筑成品用于扩张。",
+    "guidance.start.commission_research": "在自动制造机中制造电子工坊与科研综合体成品，部署并接入道路、电力和共享库存，开启工业研发。",
     "guidance.research_blocker": "%s · %s\n下一步：%s",
     "guidance.research.activity_complete": "在工厂网格制造 %s；原型必须来自真实实体配方。",
     "guidance.research.install_module": "建造并通电能够安装 %s 的工厂实体。",
@@ -290,6 +296,16 @@
     "status.INPUT_SHORTAGE": "输入短缺",
     "status.NO_RESOURCE": "未覆盖资源区",
     "status.NO_POWER": "未接入供电",
+    "status.MISSING_FUEL": "缺少燃料",
+    "status.CHARGING": "充电中",
+    "status.MISSING_CHARGED_CELL": "缺少满电蓄电器",
+    "status.MISSING_EMPTY_CELL": "缺少空蓄电器",
+    "status.NO_DYSON_POWER": "戴森能源不足",
+    "status.ENERGY_BUDGET_EMPTY": "等待能量结算",
+    "factory.reason.destruction_confirmation_required": "请先明确确认永久销毁所选物资。",
+    "factory.reason.energy_settlement_pending": "请先完成当前蓄电器的充电或放电，再切换配方。",
+    "factory.reason.unique_building_exists": "本星球已部署该唯一建筑。",
+    "factory.reason.terrain_blocked": "建筑占地包含水域或山脉，请选择可建设地块。",
     "status.PARTIAL_COVERAGE": "资源覆盖不完整",
     "status.OUTPUT_FULL": "输出缓存已满",
     "status.NO_RECIPE": "未配置配方",
@@ -297,6 +313,7 @@
     "status.SOURCE_EMPTY": "来源为空",
     "status.TARGET_FULL": "目标已满",
     "status.WAITING_MATERIALS": "等待材料",
+    "status.WAITING_BUILDING": "等待成品建筑",
     "status.MISSING_TECH": "缺少科技",
     "status.MISSING_FACILITY": "缺少设施",
     "status.MISSING_SCALE_STAGE": "工业等级不足",
@@ -415,6 +432,92 @@
     "location.tab.industry": "工业",
     "location.tab.logistics": "物流",
     "location.tab.projects": "工程",
+    "location.operations.eyebrow": "地点运营总览",
+    "location.operations.power_short": "电力",
+    "location.operations.stocked": "已存放",
+    "location.operations.full": "已满",
+    "location.operations.build_first_facility": "建造首座设施",
+    "location.operations.trend_unknown": "暂无趋势",
+    "location.operations.balanced": "收支平衡",
+    "location.operations.individual_storage": "独立仓位",
+    "location.operations.survey": "勘测",
+    "location.operations.select_ship_tooltip": "选择可执行下一阶段勘测任务的舰船。",
+    "location.operations.assign_survey_ship": "编入勘测编队",
+    "location.operations.assign_survey_ship_tooltip": "将已有舰船编入勘测编队；不会免费生成舰船。",
+    "location.operations.assign_before_survey": "请先编入勘测编队",
+    "location.operations.open_factory": "进入工厂",
+    "location.operations.logistics": "安排运输",
+    "location.operations.power": "供电 / 负载",
+    "location.operations.industry": "工业运行",
+    "location.operations.storage": "本地仓储",
+    "location.operations.tasks_logistics": "任务 / 运输",
+    "location.operations.running": "运行",
+    "location.operations.blocked": "停机",
+    "location.operations.active": "进行中",
+    "location.operations.fleet_short": "舰队",
+    "location.operations.vessels": "艘舰船",
+    "location.operations.resources": "资源情报",
+    "location.operations.view_factory": "查看厂区 →",
+    "location.operations.resource": "资源",
+    "location.operations.grade": "品位",
+    "location.operations.potential": "勘测潜力",
+    "location.operations.development": "开发状态",
+    "location.operations.exploited": "已开发",
+    "location.operations.available": "可开发",
+    "location.operations.resources_empty": "当前尚未公开资源情报。",
+    "location.operations.inventory": "本地库存",
+    "location.operations.inventory_filter_tooltip": "按权威快照提供的物资类别筛选本地库存。",
+    "location.operations.all_inventory": "全部",
+    "location.operations.open_inventory": "打开仓库",
+    "location.operations.item": "物品",
+    "location.operations.quantity": "库存",
+    "location.operations.incoming": "在途",
+    "location.operations.category": "类别",
+    "location.operations.inventory_empty": "本地库存为空。",
+    "location.operations.open_production": "打开生产管理 →",
+    "location.operations.production_line": "生产线",
+    "location.operations.product": "产品",
+    "location.operations.rate": "实际产出",
+    "location.operations.status": "状态",
+    "location.operations.facilities_empty": "尚未部署生产建筑。",
+    "location.operations.attention": "需要处理",
+    "location.operations.alerts_clear": "当前没有工业警报。",
+    "location.operations.tasks": "本地任务",
+    "location.operations.open_engineering": "工程管理 →",
+    "location.operations.task": "任务",
+    "location.operations.progress": "进度",
+    "location.operations.eta": "预计完成",
+    "location.operations.tasks_empty": "当前没有本地任务。",
+    "location.operations.stationed_fleet": "驻留舰队",
+    "location.operations.open_fleet": "查看舰队 →",
+    "location.operations.environment": "环境条件",
+    "location.operations.environment_details": "环境实际效果",
+    "location.operations.environment_empty": "尚未公开环境读数。",
+    "location.operations.gravity": "重力",
+    "location.operations.atmosphere": "大气",
+    "location.operations.radiation": "辐射",
+    "location.operations.solar_flux": "太阳辐照",
+    "location.operations.thermal": "热环境",
+    "location.operations.solar_generation": "太阳能发电",
+    "location.operations.power_demand": "电力需求",
+    "location.operations.construction_work": "建设工作量",
+    "location.operations.construction_speed": "建设速度",
+    "location.operations.construction_difficulty": "建设难度",
+    "location.operations.transport_distance": "运输距离",
+    "location.operations.thermal_power": "热环境电力",
+    "location.operations.radiation_power": "辐射环境电力",
+    "location.operations.gravity_power": "重力环境电力",
+    "location.operations.atmosphere_power": "大气环境电力",
+    "location.operations.unknown": "未知",
+    "location.operations.open_detail": "打开关联作业。",
+    "location.operations.actual_outputs": "实际产出",
+    "location.operations.no_survey_ship": "没有勘测舰",
+    "location.operations.survey_active": "勘测进行中",
+    "location.operations.survey_complete": "勘测已完成",
+    "location.operations.configure_survey_ship": "配置勘测舰",
+    "location.operations.no_eligible_ship": "没有舰船能执行下一阶段勘测。",
+    "location.operations.start_survey": "开始%s任务",
+    "location.operations.close": "关闭",
     "location.info": "地点信息",
     "location.identity_summary": "类型 %s\n所属系统 %s\n勘测状态 %s",
     "system.sol": "太阳系",
@@ -512,9 +615,11 @@
     "common.disabled_gameplay_action": "当前状态下无法执行此操作；请查看附近的状态与阻塞原因。",
     "command.queue_capacity_project": "排队容量工程",
     "command.apply_industrial_template": "应用工业模板",
-    "location.logistics.summary": "%s · 航线 %d · 入站 %d · 出站 %d\n加权仓储 %.0f / %.0f · 枢纽单次吞吐 %d\n运输技术 %s · 运量 ×%.2f · 耗时 ×%.2f · 燃料 ×%.2f · 能耗 %.2f/单位/航线 · 装卸 %.0f 毫秒/单位/端点",
-    "location.logistics.storage_class": "%s：%.0f / %.0f（%.0f%%）",
-    "location.logistics.capacity_help": "库存和枢纽容量不再免费即时修改；请在本地点“工业”页的地点容量工程中排队升级。",
+    "location.logistics.summary": "%s · 航线 %d · 入站 %d · 出站 %d\n满仓物资 %.0f / %.0f 种 · 枢纽单次吞吐 %d\n运输技术 %s · 运量 ×%.2f · 耗时 ×%.2f · 燃料 ×%.2f · 能耗 %.2f/单位/航线 · 装卸 %.0f 毫秒/单位/端点",
+    "location.logistics.storage_class": "%s：每种物资 %.0f · %.0f 种 · 最高 %.0f%%",
+    "location.logistics.capacity_help": "每种物资在唯一星球共享库存中享有独立容量。部署制造好的仓库可增加容量与道路装卸接入；仓库不另存第二份库存。",
+    "location.operations.full_slots": "满仓物资种类",
+    "location.operations.trend_help": "箭头按模拟时间内星球库存的实际净变化计算，不是理论产量；向机器供料和产物入库都会改变实存。",
     "location.logistics.route_services": "航线物流服务",
     "location.logistics.no_routes": "尚未发现与本地点连通的货运航线。",
     "location.logistics.service_header": "%s · %s · %s",
@@ -1120,7 +1225,7 @@
     "command.install_manufacturing_module": "安装制造模块",
     "diagnostics.economy.title": "当前经济诊断",
     "diagnostics.economy.help": "库存状态由实际生产、持续需求、项目承诺、运输与分级仓储自动计算；无需逐产品设置目标库存或生产百分比。",
-    "diagnostics.economy.storage_utilization": "仓储利用率",
+    "diagnostics.economy.storage_utilization": "地点收货仓最高填充率",
     "diagnostics.economy.power_margin": "电力余量",
     "diagnostics.economy.local_logistics": "本地物流",
     "diagnostics.economy.empty": "当前地点尚无库存流或登记需求。",
@@ -1392,7 +1497,231 @@
     "megastructure.progress_tooltip": "%s · %d / %d",
     "megastructure.progress_default_stage": "恒星工程"
   },
-  "ui": {
+ "ui": {
+    "factory.deployment.title": "部署幽灵",
+    "factory.deployment.hint": "缺少的成品建筑到达星球库存后会自动部署。",
+    "factory.deployment.empty": "当前没有等待成品建筑的部署幽灵。",
+    "factory.deployment.inactive_record": "此记录不是有效的部署幽灵。",
+    "factory.operations.planetary_inventory": "星球共享库存",
+    "factory.dsp.confirm_destroy": "这会永久销毁道路送来的所选物资。确认启动？",
+    "factory.dsp.destroy_recipe": "销毁 · %s",
+    "factory.dsp.station_recipe": "空间站阶段 %02d · %s",
+    "factory.dsp.research_points": "矩阵科研积分",
+    "factory.dsp.dyson_sails": "在役太阳帆",
+    "factory.dsp.dyson_structure": "戴森结构点",
+    "factory.dsp.ray_available_kw": "恒星接收功率 / kW",
+    "factory.dsp.galactic_credits": "银河出口积分",
+    "factory.dsp.destroyed": "永久销毁",
+    "factory.dsp.station_stage": "空间站材料阶段",
+    "factory.dsp.time_warp": "实时模拟倍率",
+    "factory.dsp.universe_archive": "宇宙矩阵档案",
+    "factory.dsp.solar_sail_array": "太阳帆阵列",
+    "factory.dsp.carrier_rocket_fleet": "运载火箭舰队",
+    "factory.dsp.antimatter_exchange": "反物质能源交换",
+    "factory.recipe.dsp_matrix_research_energy_matrix": "能量矩阵科研",
+    "factory.recipe.dsp_matrix_research_structure_matrix": "结构矩阵科研",
+    "factory.recipe.dsp_matrix_research_information_matrix": "信息矩阵科研",
+    "factory.recipe.dsp_matrix_research_gravity_matrix": "引力矩阵科研",
+    "factory.recipe.dsp_matrix_research_universe_matrix": "宇宙矩阵科研",
+    "factory.building.grid_dsp_wind_turbine": "风力涡轮机",
+    "factory.recipe.manufacture_grid_dsp_wind_turbine": "制造风力涡轮机",
+    "factory.building.grid_dsp_solar_panel": "太阳能板",
+    "factory.recipe.manufacture_grid_dsp_solar_panel": "制造太阳能板",
+    "factory.building.grid_dsp_geothermal_power_station": "地热发电站",
+    "factory.recipe.manufacture_grid_dsp_geothermal_power_station": "制造地热发电站",
+    "factory.building.grid_dsp_thermal_power_plant": "火力发电厂",
+    "factory.recipe.manufacture_grid_dsp_thermal_power_plant": "制造火力发电厂",
+    "factory.building.grid_dsp_mini_fusion_power_plant": "微型聚变发电站",
+    "factory.recipe.manufacture_grid_dsp_mini_fusion_power_plant": "制造微型聚变发电站",
+    "factory.building.grid_dsp_artificial_star": "人造恒星",
+    "factory.recipe.manufacture_grid_dsp_artificial_star": "制造人造恒星",
+    "factory.building.grid_dsp_accumulator": "蓄电器",
+    "factory.recipe.manufacture_grid_dsp_accumulator": "制造蓄电器",
+    "factory.building.grid_dsp_energy_exchanger": "能量枢纽",
+    "factory.recipe.manufacture_grid_dsp_energy_exchanger": "制造能量枢纽",
+    "factory.building.grid_dsp_mining_machine": "采矿机",
+    "factory.recipe.manufacture_grid_dsp_mining_machine": "制造采矿机",
+    "factory.building.grid_dsp_arc_smelter": "电弧熔炉",
+    "factory.recipe.manufacture_grid_dsp_arc_smelter": "制造电弧熔炉",
+    "factory.building.grid_dsp_plane_smelter": "位面熔炉",
+    "factory.recipe.manufacture_grid_dsp_plane_smelter": "制造位面熔炉",
+    "factory.building.grid_dsp_assembling_machine_mk1": "制造台 Mk.I",
+    "factory.recipe.manufacture_grid_dsp_assembling_machine_mk1": "制造制造台 Mk.I",
+    "factory.building.grid_dsp_assembling_machine_mk2": "制造台 Mk.II",
+    "factory.recipe.manufacture_grid_dsp_assembling_machine_mk2": "制造制造台 Mk.II",
+    "factory.building.grid_dsp_assembling_machine_mk3": "制造台 Mk.III",
+    "factory.recipe.manufacture_grid_dsp_assembling_machine_mk3": "制造制造台 Mk.III",
+    "factory.building.grid_dsp_spray_coater": "喷涂机",
+    "factory.recipe.manufacture_grid_dsp_spray_coater": "制造喷涂机",
+    "factory.building.grid_dsp_matrix_lab": "矩阵研究站",
+    "factory.recipe.manufacture_grid_dsp_matrix_lab": "制造矩阵研究站",
+    "factory.building.grid_dsp_oil_extractor": "原油萃取站",
+    "factory.recipe.manufacture_grid_dsp_oil_extractor": "制造原油萃取站",
+    "factory.building.grid_dsp_oil_refinery": "原油精炼厂",
+    "factory.recipe.manufacture_grid_dsp_oil_refinery": "制造原油精炼厂",
+    "factory.building.grid_dsp_water_pump": "抽水站",
+    "factory.recipe.manufacture_grid_dsp_water_pump": "制造抽水站",
+    "factory.building.grid_dsp_chemical_plant": "化工厂",
+    "factory.recipe.manufacture_grid_dsp_chemical_plant": "制造化工厂",
+    "factory.building.grid_dsp_quantum_chemical_plant": "量子化工厂",
+    "factory.recipe.manufacture_grid_dsp_quantum_chemical_plant": "制造量子化工厂",
+    "factory.building.grid_dsp_fractionator": "分馏塔",
+    "factory.recipe.manufacture_grid_dsp_fractionator": "制造分馏塔",
+    "factory.building.grid_dsp_miniature_particle_collider": "微型粒子对撞机",
+    "factory.recipe.manufacture_grid_dsp_miniature_particle_collider": "制造微型粒子对撞机",
+    "factory.building.grid_dsp_em_rail_ejector": "电磁轨道弹射器",
+    "factory.recipe.manufacture_grid_dsp_em_rail_ejector": "制造电磁轨道弹射器",
+    "factory.building.grid_dsp_ray_receiver": "射线接收站",
+    "factory.recipe.manufacture_grid_dsp_ray_receiver": "制造射线接收站",
+    "factory.building.grid_dsp_vertical_launching_silo": "垂直发射井",
+    "factory.recipe.manufacture_grid_dsp_vertical_launching_silo": "制造垂直发射井",
+    "factory.building.grid_dsp_planetary_logistics_station": "行星物流站",
+    "factory.recipe.manufacture_grid_dsp_planetary_logistics_station": "制造行星物流站",
+    "factory.building.grid_dsp_interstellar_logistics_station": "星际物流站",
+    "factory.recipe.manufacture_grid_dsp_interstellar_logistics_station": "制造星际物流站",
+    "factory.building.grid_dsp_orbital_collector": "轨道采集器",
+    "factory.recipe.manufacture_grid_dsp_orbital_collector": "制造轨道采集器",
+    "factory.building.grid_dsp_storage_mk1": "小型储物仓",
+    "factory.recipe.manufacture_grid_dsp_storage_mk1": "制造小型储物仓",
+    "factory.building.grid_dsp_material_delivery_hub": "物资配送枢纽",
+    "factory.recipe.manufacture_grid_dsp_material_delivery_hub": "制造物资配送枢纽",
+    "factory.building.grid_dsp_orbital_cargo_terminal": "轨道货运终端",
+    "factory.recipe.manufacture_grid_dsp_orbital_cargo_terminal": "制造轨道货运终端",
+    "factory.building.grid_dsp_storage_tank": "储液罐",
+    "factory.recipe.manufacture_grid_dsp_storage_tank": "制造储液罐",
+    "factory.building.grid_dsp_splitter_4way": "四向分流器",
+    "factory.recipe.manufacture_grid_dsp_splitter_4way": "制造四向分流器",
+    "factory.building.grid_dsp_construction_center": "建筑制造中心",
+    "factory.recipe.manufacture_grid_dsp_construction_center": "制造建筑制造中心",
+    "factory.building.grid_dsp_galactic_material_exporter": "超大型物资出口",
+    "factory.recipe.manufacture_grid_dsp_galactic_material_exporter": "制造超大型物资出口",
+    "factory.building.grid_dsp_micro_black_hole_connector": "微型黑洞连接装置",
+    "factory.recipe.manufacture_grid_dsp_micro_black_hole_connector": "制造微型黑洞连接装置",
+    "factory.building.grid_dsp_time_warp_device": "时间扭曲装置",
+    "factory.recipe.manufacture_grid_dsp_time_warp_device": "制造时间扭曲装置",
+    "factory.building.grid_dsp_space_station_construction_launcher": "空间站施工发射平台",
+    "factory.recipe.manufacture_grid_dsp_space_station_construction_launcher": "制造空间站施工发射平台",
+    "factory.recipe.dsp_iron_ingot": "铁块",
+    "factory.recipe.dsp_copper_ingot": "铜块",
+    "factory.recipe.dsp_magnet": "磁铁",
+    "factory.recipe.dsp_stone_brick": "石材",
+    "factory.recipe.dsp_glass": "玻璃",
+    "factory.recipe.dsp_steel": "钢材",
+    "factory.recipe.dsp_energetic_graphite": "高能石墨",
+    "factory.recipe.dsp_gear": "齿轮",
+    "factory.recipe.dsp_magnetic_coil": "磁线圈",
+    "factory.recipe.dsp_circuit_board": "电路板",
+    "factory.recipe.dsp_prism": "棱镜",
+    "factory.recipe.dsp_plasma_exciter": "电浆激发器",
+    "factory.recipe.dsp_plasma_refining": "等离子精炼",
+    "factory.recipe.dsp_xray_cracking": "X 射线裂解",
+    "factory.recipe.dsp_reforming_refine": "重整精炼",
+    "factory.recipe.dsp_high_purity_silicon": "高纯硅块",
+    "factory.recipe.dsp_silicon_ore_from_stone": "石矿提炼硅石",
+    "factory.recipe.dsp_titanium_ingot": "钛块",
+    "factory.recipe.dsp_sulfuric_acid": "硫酸",
+    "factory.recipe.dsp_titanium_alloy": "钛合金",
+    "factory.recipe.dsp_microcrystalline_component": "微晶元件",
+    "factory.recipe.dsp_processor": "处理器",
+    "factory.recipe.dsp_logistics_drone": "物流运输机",
+    "factory.recipe.dsp_logistics_vessel": "物流运输船",
+    "factory.recipe.dsp_space_warper": "空间翘曲器",
+    "factory.recipe.dsp_space_warper_from_gravity_matrix": "引力矩阵制空间翘曲器",
+    "factory.recipe.dsp_accumulator": "蓄电器",
+    "factory.recipe.dsp_accumulator_charge": "蓄电器充电",
+    "factory.recipe.dsp_accumulator_discharge": "蓄电器放电",
+    "factory.recipe.dsp_hydrogen_fuel_rod": "氢燃料棒",
+    "factory.recipe.dsp_deuterium_fractionation": "氢分馏",
+    "factory.recipe.dsp_graphene": "石墨烯",
+    "factory.recipe.dsp_graphene_from_fire_ice": "可燃冰裂解",
+    "factory.recipe.dsp_carbon_nanotube": "碳纳米管",
+    "factory.recipe.dsp_carbon_nanotube_from_spiniform": "刺笋结晶制碳纳米管",
+    "factory.recipe.dsp_proliferator_mk1": "增产剂 Mk.I",
+    "factory.recipe.dsp_proliferator_mk2": "增产剂 Mk.II",
+    "factory.recipe.dsp_proliferator_mk3": "增产剂 Mk.III",
+    "factory.recipe.dsp_crystal_silicon": "晶格硅",
+    "factory.recipe.dsp_crystal_silicon_from_fractal": "分形硅晶格化",
+    "factory.recipe.dsp_particle_broadband": "粒子宽带",
+    "factory.recipe.dsp_electric_motor": "电动机",
+    "factory.recipe.dsp_electromagnetic_turbine": "电磁涡轮",
+    "factory.recipe.dsp_super_magnetic_ring": "超级磁场环",
+    "factory.recipe.dsp_particle_container": "粒子容器",
+    "factory.recipe.dsp_particle_container_from_unipolar": "单极磁石粒子容器",
+    "factory.recipe.dsp_deuterium": "氘富集",
+    "factory.recipe.dsp_deuteron_fuel_rod": "氘核燃料棒",
+    "factory.recipe.dsp_titanium_glass": "钛化玻璃",
+    "factory.recipe.dsp_casimir_crystal": "卡西米尔晶体",
+    "factory.recipe.dsp_casimir_crystal_advanced": "高效卡西米尔晶体",
+    "factory.recipe.dsp_plane_filter": "位面过滤器",
+    "factory.recipe.dsp_quantum_chip": "量子芯片",
+    "factory.recipe.dsp_strange_matter": "奇异物质",
+    "factory.recipe.dsp_graviton_lens": "引力透镜",
+    "factory.recipe.dsp_photon_combiner": "光子合并器",
+    "factory.recipe.dsp_photon_combiner_from_grating": "光栅石光子合并器",
+    "factory.recipe.dsp_solar_sail": "太阳帆",
+    "factory.recipe.dsp_solar_sail_launch": "太阳帆发射",
+    "factory.recipe.dsp_ray_power": "电力接收",
+    "factory.recipe.dsp_critical_photon": "临界光子",
+    "factory.recipe.dsp_antimatter": "质能转换",
+    "factory.recipe.dsp_annihilation_constraint_sphere": "湮灭约束球",
+    "factory.recipe.dsp_antimatter_fuel_rod": "反物质燃料棒",
+    "factory.recipe.dsp_frame_material": "框架材料",
+    "factory.recipe.dsp_dyson_sphere_component": "戴森球组件",
+    "factory.recipe.dsp_small_carrier_rocket": "小型运载火箭",
+    "factory.recipe.dsp_carrier_rocket_launch": "运载火箭发射",
+    "factory.recipe.dsp_diamond": "金刚石",
+    "factory.recipe.dsp_diamond_from_kimberlite": "金伯利矿提炼",
+    "factory.recipe.dsp_plastic": "塑料",
+    "factory.recipe.dsp_organic_crystal": "有机晶体",
+    "factory.recipe.dsp_titanium_crystal": "钛晶石",
+    "factory.recipe.dsp_electromagnetic_matrix": "电磁矩阵",
+    "factory.recipe.dsp_energy_matrix": "能量矩阵",
+    "factory.recipe.dsp_structure_matrix": "结构矩阵",
+    "factory.recipe.dsp_information_matrix": "信息矩阵",
+    "factory.recipe.dsp_gravity_matrix": "引力矩阵",
+    "factory.recipe.dsp_universe_matrix": "宇宙矩阵",
+    "factory.recipe.dsp_matrix_research": "科研模式",
+   "factory.road.build_tier_one": "基础道路",
+    "factory.road.build_tier_one_tooltip": "铺设本地道路，连通运输和电力。基础道路免费。",
+    "factory.road.build_tier_two": "强化道路",
+    "factory.road.build_tier_two_tooltip": "铺设或升级运输速度更快的道路。每格消耗 1 个铁锭。",
+    "factory.road.remove": "拆除道路",
+    "factory.road.remove_tooltip": "拆除道路格。",
+    "factory.road.cost_hint": "基础道路免费；强化道路每格消耗 1 个铁锭。",
+    "factory.road.cost_tier_one": "基础道路 · 免费",
+    "factory.road.cost_tier_two": "1 铁锭 / 格",
+    "factory.road.connection": "道路接入",
+    "factory.road.connected": "已接入",
+    "factory.road.disconnected": "未接入——修建道路后可自动收取物资。",
+    "factory.road.component": "道路网络",
+    "factory.road.power_notice": "电力",
+    "factory.road.roads_carry_power": "电力沿已建道路传输；道路网络断开会使该建筑断电。",
+    "factory.road.shared_inventory": "星球共享库存",
+    "factory.road.shared_inventory_hint": "所有仓库接入同一份星球库存；接通道路的机器会自动取送货。",
+    "factory.road.shipments": "道路配送",
+    "factory.road.shipments_count": "%d 个本地道路配送任务",
+    "factory.road.shipments_tooltip": "此建筑的计时道路配送。货物抵达目的地前始终处于在途状态。",
+    "factory.road.shipments_empty": "此建筑当前没有本地道路配送任务。",
+    "factory.road.shipment.sending": "发货至",
+    "factory.road.shipment.receiving": "收货自",
+    "factory.road.shipment.transfer": "本地转运",
+    "factory.road.shipment.travel": "运输中",
+    "factory.road.shipment.loading": "装货中",
+    "factory.road.shipment.unloading": "卸货中",
+    "factory.road.shipment.blocked": "已阻塞",
+    "factory.road.shipment.blocked_path": "已阻塞：道路路径不可用",
+    "factory.road.shipment.blocked_target_full": "已阻塞：目标仓储已满",
+    "factory.road.shipment.blocked_target": "已阻塞：目标不可用",
+    "factory.road.shipment.blocked_manifest": "已阻塞：货物清单异常",
+    "factory.road.shipment.no_eta": "暂无预计到达时间",
+    "factory.road.shipment.eta": "剩余至少 %s",
+    "factory.road.shipment.eta_tooltip": "剩余时间为下界，不包括仓库装卸排队时间。",
+    "factory.road.shipment.unknown_endpoint": "未知端点",
+    "factory.road.network_metrics": "%d 个节点 · %d 格道路 · %d/%d 运力",
+    "factory.road.network_tooltip": "%d 个在途任务 · %d%% 利用率",
+    "factory.road.path_too_long": "道路路径过长。",
+    "factory.road.order_funding_hint": "建设材料从星球共享库存中补齐。",
+    "category.Waste": "废料",
     "freight_class.BULK": "大宗货物",
     "freight_class.STANDARD": "标准货物",
     "freight_class.PRECISION": "精密货物",
@@ -1453,7 +1782,7 @@
     "factory.tab.overview": "总览",
     "factory.tab.canvas": "建设画布",
     "factory.tab.production": "生产管理",
-    "factory.tab.construction": "建设中心",
+    "factory.tab.construction": "部署幽灵",
     "factory.tooltip.open_overview": "打开工厂作业总览。",
     "factory.tooltip.open_canvas": "打开工厂建设画布。",
     "factory.tooltip.open_production": "打开生产管理。",
@@ -1533,7 +1862,6 @@
     "factory.operations.alert_material": "%s 缺少 %d",
     "factory.operations.status.material_shortage": "物资储备不足",
     "factory.operations.production_board_hint": "实时速率、利用率与相连路线",
-    "factory.operations.construction_board_hint": "订单、已备物料与自动补给",
     "factory.operations.world_telemetry": "本地工业网 · %s",
     "factory.operations.live_world": "工厂实时遥测 · %s",
     "factory.operations.network_metrics": "%d 节点 · %d 路线 · %d 订单",
@@ -1586,6 +1914,10 @@
     "factory.success.remove_link": "工厂连接已移除。",
     "factory.success.cancel_construction": "工厂建设已取消，已交付材料已退回地点库存。",
     "factory.success.remove_entity": "工厂实体已移除。",
+    "factory.success.build_road": "道路已修建，运输与供电连接已更新。",
+    "factory.success.remove_road": "道路已拆除，断路运输暂停并保留货物。",
+    "factory.reason.legacy_links_retired": "请使用道路和星球共享库存；工厂手动连线及仓库导入导出已停用。",
+    "factory.reason.road_materials": "强化道路每格需要 1 个铁锭。",
     "factory.success.import_from_location": "货物已转入工厂仓储。",
     "factory.success.export_to_location": "货物已转入地点库存。",
     "factory.reason.unsupported_protocol": "当前版本不支持此工厂工作区协议。",
@@ -1664,7 +1996,7 @@
     "factory.action.paste_machine_configuration": "粘贴设备配置",
     "factory.action.remove_link": "移除连接",
     "factory.action.remove_entity": "移除实体",
-    "factory.action.cancel_construction": "取消建设",
+    "factory.action.cancel_construction": "取消幽灵",
     "factory.action.configure_link": "应用线路优先级",
     "factory.action.focus": "定位",
     "factory.action.focus_named": "定位%s",
@@ -1675,7 +2007,7 @@
     "factory.tooltip.reset_view": "把画布镜头移回世界原点（Home）。",
     "factory.tooltip.refresh": "向宿主请求新的工厂快照。",
     "factory.tooltip.reduced_motion": "关闭流动数据包动画。",
-    "factory.tooltip.building_palette": "选择建筑，然后点击空闲格子来提交建造。",
+    "factory.tooltip.building_palette": "选择建筑成品并部署；没有库存时生成幽灵，到货后自动部署。",
     "factory.tooltip.recipe_palette": "为当前选中的生产设备选择配方。",
     "factory.tooltip.cargo": "选择货物来源、目标和物品。",
     "factory.tooltip.power": "选择供电设施和用电设施。",
@@ -1694,7 +2026,7 @@
     "factory.tooltip.center_resource": "把镜头聚焦到该资源田。",
     "factory.tooltip.remove_link": "发送带版本号的移除连接意图。",
     "factory.tooltip.remove_entity": "移除空的工厂实体及其关联线路。",
-    "factory.tooltip.cancel_construction": "取消订单并把已交付材料退回同地点库存。",
+    "factory.tooltip.cancel_construction": "取消此部署幽灵，不消耗建筑成品。",
     "factory.tooltip.configure_link": "配置线路优先级。",
     "factory.tooltip.route_capacity": "每秒吞吐量；线路数和等级描述实体线路。",
     "factory.tooltip.focus_production": "在画布中定位该生产设施。",
@@ -1741,10 +2073,10 @@
     "factory.select.storage": "选择工厂仓库……",
     "factory.select.item": "选择物品……",
     "factory.inspector.title": "检查器",
-    "factory.inspector.empty": "请选择工厂实体、资源田、连接或建造订单。",
+    "factory.inspector.empty": "请选择建筑、资源田或建设订单；在底部选择道路工具铺路。",
     "factory.inspector.tile": "格子 %s",
     "factory.inspector.link": "%s连接",
-    "factory.inspector.order": "建造订单",
+    "factory.inspector.order": "部署幽灵",
     "factory.resource_field": "资源田",
     "factory.transfer.title": "地点转移",
     "factory.field.id": "编号",
@@ -1796,6 +2128,8 @@
     "factory.build.ready": "可以开始放置",
     "factory.command.initialize": "初始化工厂网格",
     "factory.command.queue_construction": "提交建造",
+    "factory.command.build_road": "铺设道路",
+    "factory.command.remove_road": "拆除道路",
     "factory.command.connect_entities": "连接实体",
     "factory.command.configure_link": "配置线路",
     "factory.command.remove_link": "移除连接",
@@ -1810,7 +2144,7 @@
     "factory.building.grid_surface_mine": "地表采矿场",
     "factory.building.grid_cryogenic_extractor": "低温资源采集器",
     "factory.building.grid_exotic_extractor": "异质物质采集器",
-    "factory.building.grid_engineering_works": "网格工程工坊",
+    "factory.building.grid_engineering_works": "自动制造机",
     "factory.building.grid_arc_smelter": "大型电弧冶炼厂",
     "factory.building.grid_electronics_works": "高能电子工厂",
     "factory.building.grid_assembly_array": "微结构装配阵列",
@@ -1843,6 +2177,92 @@
     "factory.building.grid_starport_expansion_iii": "轨道星港扩建 III",
     "factory.building.grid_starport_expansion_iv": "轨道星港扩建 IV",
     "factory.building.grid_starport_expansion_v": "轨道星港扩建 V",
+    "factory.item.building_grid_solar_array": "地表太阳能阵列 成品",
+    "factory.recipe.manufacture_grid_solar_array": "制造：地表太阳能阵列",
+    "factory.item.building_grid_surface_mine": "地表采矿场 成品",
+    "factory.recipe.manufacture_grid_surface_mine": "制造：地表采矿场",
+    "factory.item.building_grid_cryogenic_extractor": "低温资源采集器 成品",
+    "factory.recipe.manufacture_grid_cryogenic_extractor": "制造：低温资源采集器",
+    "factory.item.building_grid_exotic_extractor": "异质物质采集器 成品",
+    "factory.recipe.manufacture_grid_exotic_extractor": "制造：异质物质采集器",
+    "factory.item.building_grid_engineering_works": "自动制造机成品",
+    "factory.recipe.manufacture_grid_engineering_works": "制造：自动制造机",
+    "factory.item.building_grid_arc_smelter": "大型电弧冶炼厂 成品",
+    "factory.recipe.manufacture_grid_arc_smelter": "制造：大型电弧冶炼厂",
+    "factory.item.building_grid_electronics_works": "高能电子工厂 成品",
+    "factory.recipe.manufacture_grid_electronics_works": "制造：高能电子工厂",
+    "factory.item.building_grid_assembly_array": "微结构装配阵列 成品",
+    "factory.recipe.manufacture_grid_assembly_array": "制造：微结构装配阵列",
+    "factory.item.building_grid_bulk_depot": "散装仓储站 成品",
+    "factory.recipe.manufacture_grid_bulk_depot": "制造：散装仓储站",
+    "factory.item.building_grid_component_depot": "组件仓储库 成品",
+    "factory.recipe.manufacture_grid_component_depot": "制造：组件仓储库",
+    "factory.item.building_grid_fluid_tank": "低温流体储罐 成品",
+    "factory.recipe.manufacture_grid_fluid_tank": "制造：低温流体储罐",
+    "factory.item.building_grid_special_vault": "特种材料库 成品",
+    "factory.recipe.manufacture_grid_special_vault": "制造：特种材料库",
+    "factory.item.building_grid_construction_yard": "地表施工场 成品",
+    "factory.recipe.manufacture_grid_construction_yard": "制造：地表施工场",
+    "factory.item.building_grid_research_complex": "网格科研中心 成品",
+    "factory.recipe.manufacture_grid_research_complex": "制造：网格科研中心",
+    "factory.item.building_grid_research_complex_ii": "科研中心扩建 II 成品",
+    "factory.recipe.manufacture_grid_research_complex_ii": "制造：科研中心扩建 II",
+    "factory.item.building_grid_cooling_service": "热控服务站 成品",
+    "factory.recipe.manufacture_grid_cooling_service": "制造：热控服务站",
+    "factory.item.building_grid_repair_dock": "网格维修坞 成品",
+    "factory.recipe.manufacture_grid_repair_dock": "制造：网格维修坞",
+    "factory.item.building_grid_energy_array": "聚变能源阵列 成品",
+    "factory.recipe.manufacture_grid_energy_array": "制造：聚变能源阵列",
+    "factory.item.building_grid_fusion_test_rig": "聚变组件试验台 成品",
+    "factory.recipe.manufacture_grid_fusion_test_rig": "制造：聚变组件试验台",
+    "factory.item.building_grid_precision_mechanics_cell": "网格精密机械单元 成品",
+    "factory.recipe.manufacture_grid_precision_mechanics_cell": "制造：网格精密机械单元",
+    "factory.item.building_grid_cryogenic_process_unit": "网格低温工艺单元 成品",
+    "factory.recipe.manufacture_grid_cryogenic_process_unit": "制造：网格低温工艺单元",
+    "factory.item.building_grid_radiation_electronics_cell": "网格抗辐射电子单元 成品",
+    "factory.recipe.manufacture_grid_radiation_electronics_cell": "制造：网格抗辐射电子单元",
+    "factory.item.building_grid_advanced_alloy_cell": "网格先进合金单元 成品",
+    "factory.recipe.manufacture_grid_advanced_alloy_cell": "制造：网格先进合金单元",
+    "factory.item.building_grid_photonic_integration_line": "网格光子集成线 成品",
+    "factory.recipe.manufacture_grid_photonic_integration_line": "制造：网格光子集成线",
+    "factory.item.building_grid_field_engineering_complex": "现场工程中心 成品",
+    "factory.recipe.manufacture_grid_field_engineering_complex": "制造：现场工程中心",
+    "factory.item.building_grid_frontier_matterworks": "前沿物质工厂 成品",
+    "factory.recipe.manufacture_grid_frontier_matterworks": "制造：前沿物质工厂",
+    "factory.item.building_grid_command_array": "深空指挥阵列 成品",
+    "factory.recipe.manufacture_grid_command_array": "制造：深空指挥阵列",
+    "factory.item.building_grid_power_substation_ii": "电网扩建 II 成品",
+    "factory.recipe.manufacture_grid_power_substation_ii": "制造：电网扩建 II",
+    "factory.item.building_grid_power_substation_iii": "电网扩建 III 成品",
+    "factory.recipe.manufacture_grid_power_substation_iii": "制造：电网扩建 III",
+    "factory.item.building_grid_construction_yard_ii": "施工场扩建 II 成品",
+    "factory.recipe.manufacture_grid_construction_yard_ii": "制造：施工场扩建 II",
+    "factory.item.building_grid_construction_yard_iii": "施工场扩建 III 成品",
+    "factory.recipe.manufacture_grid_construction_yard_iii": "制造：施工场扩建 III",
+    "factory.item.building_grid_starport_expansion_ii": "轨道星港扩建 II 成品",
+    "factory.recipe.manufacture_grid_starport_expansion_ii": "制造：轨道星港扩建 II",
+    "factory.item.building_grid_starport_expansion_iii": "轨道星港扩建 III 成品",
+    "factory.recipe.manufacture_grid_starport_expansion_iii": "制造：轨道星港扩建 III",
+    "factory.item.building_grid_starport_expansion_iv": "轨道星港扩建 IV 成品",
+    "factory.recipe.manufacture_grid_starport_expansion_iv": "制造：轨道星港扩建 IV",
+    "factory.item.building_grid_starport_expansion_v": "轨道星港扩建 V 成品",
+    "factory.recipe.manufacture_grid_starport_expansion_v": "制造：轨道星港扩建 V",
+    "factory.building.available": "可用：%d",
+    "factory.building.deploy_available_hint": "从星球库存部署 1 个成品建筑。",
+    "factory.building.deploy_missing_hint": "暂无成品建筑；放置幽灵，成品到达后自动部署。",
+    "factory.construction.waiting_building": "等待成品建筑",
+    "factory.construction.waiting_building_hint": "当 %s 进入本地可用库存后，此幽灵将自动部署。",
+    "factory.machine.recipe_building": "制造建筑：%s",
+    "factory.building.grid_planetary_core": "星球开发核心基地",
+    "factory.item.building_grid_planetary_core": "星球开发核心基地成品",
+    "factory.recipe.manufacture_grid_planetary_core": "制造：星球开发核心基地",
+    "factory.canvas.waiting_building": "等待成品建筑",
+    "factory.reason.missing_building": "需要对应的成品建筑才能部署此幽灵。",
+    "factory.landing.title": "星球着陆",
+    "factory.landing.instruction": "选择地块部署核心：共享仓储、道路运输、400 kW 电力，并一次性获得 2 矿机、2 锻炉、1 自动制造机。",
+    "factory.reason.landing_required": "必须先部署星球开发核心基地，才能放置其它建筑。",
+    "factory.success.deploy_building": "已部署成品建筑；库存暂缺时会创建部署幽灵。",
+    "factory.reason.construction_retired": "建筑材料施工已废除。请先制造成品建筑，再部署。",
     "notice.aggregate_industry_removed": "地点级采矿、生产线和通用建造运行时已移除，请使用工厂网格。",
     "notice.formation_name_invalid": "编队名称必须包含 1–32 个字符",
     "notice.formation_created": "战术编队已创建：%s",
@@ -2814,8 +3234,344 @@
     "demo.complete_title": "地月 Demo 已完成",
     "demo.complete_detail": "近地轨道已经通过自动化基础设施持续生产；组织则在月球空间建立了第一片新前沿。"
   },
-  "content": {
-    "mobile_surface_extraction": {
+ "content": {
+    "dsp_coal": {
+      "name": "煤矿"
+    },
+    "dsp_stone": {
+      "name": "石矿"
+    },
+    "dsp_crude_oil": {
+      "name": "原油"
+    },
+    "dsp_silicon_ore": {
+      "name": "硅石"
+    },
+    "dsp_fire_ice": {
+      "name": "可燃冰"
+    },
+    "dsp_kimberlite_ore": {
+      "name": "金伯利矿石"
+    },
+    "dsp_fractal_silicon": {
+      "name": "分形硅石"
+    },
+    "dsp_optical_grating_crystal": {
+      "name": "光栅石"
+    },
+    "dsp_spiniform_stalagmite_crystal": {
+      "name": "刺笋结晶"
+    },
+    "dsp_unipolar_magnet": {
+      "name": "单极磁石"
+    },
+    "dsp_water": {
+      "name": "水"
+    },
+    "dsp_sulfuric_acid": {
+      "name": "硫酸"
+    },
+    "copper_ingot": {
+      "name": "铜块"
+    },
+    "dsp_magnet": {
+      "name": "磁铁"
+    },
+    "dsp_stone_brick": {
+      "name": "石材"
+    },
+    "dsp_glass": {
+      "name": "玻璃"
+    },
+    "dsp_steel": {
+      "name": "钢材"
+    },
+    "dsp_gear": {
+      "name": "齿轮"
+    },
+    "dsp_magnetic_coil": {
+      "name": "磁线圈"
+    },
+    "dsp_circuit_board": {
+      "name": "电路板"
+    },
+    "dsp_prism": {
+      "name": "棱镜"
+    },
+    "dsp_plasma_exciter": {
+      "name": "电浆激发器"
+    },
+    "dsp_energetic_graphite": {
+      "name": "高能石墨"
+    },
+    "dsp_refined_oil": {
+      "name": "精炼油"
+    },
+    "dsp_hydrogen": {
+      "name": "氢"
+    },
+    "dsp_high_purity_silicon": {
+      "name": "高纯硅块"
+    },
+    "dsp_titanium_ingot": {
+      "name": "钛块"
+    },
+    "dsp_microcrystalline_component": {
+      "name": "微晶元件"
+    },
+    "dsp_processor": {
+      "name": "处理器"
+    },
+    "dsp_logistics_drone": {
+      "name": "物流运输机"
+    },
+    "dsp_logistics_vessel": {
+      "name": "物流运输船"
+    },
+    "dsp_space_warper": {
+      "name": "空间翘曲器"
+    },
+    "dsp_accumulator": {
+      "name": "蓄电器"
+    },
+    "dsp_charged_accumulator": {
+      "name": "蓄电器（满）"
+    },
+    "dsp_graphene": {
+      "name": "石墨烯"
+    },
+    "dsp_carbon_nanotube": {
+      "name": "碳纳米管"
+    },
+    "dsp_proliferator_mk1": {
+      "name": "增产剂 Mk.I"
+    },
+    "dsp_proliferator_mk2": {
+      "name": "增产剂 Mk.II"
+    },
+    "dsp_proliferator_mk3": {
+      "name": "增产剂 Mk.III"
+    },
+    "dsp_crystal_silicon": {
+      "name": "晶格硅"
+    },
+    "dsp_particle_broadband": {
+      "name": "粒子宽带"
+    },
+    "dsp_electric_motor": {
+      "name": "电动机"
+    },
+    "dsp_electromagnetic_turbine": {
+      "name": "电磁涡轮"
+    },
+    "dsp_super_magnetic_ring": {
+      "name": "超级磁场环"
+    },
+    "dsp_particle_container": {
+      "name": "粒子容器"
+    },
+    "dsp_deuterium": {
+      "name": "氘"
+    },
+    "dsp_hydrogen_fuel_rod": {
+      "name": "氢燃料棒"
+    },
+    "dsp_deuteron_fuel_rod": {
+      "name": "氘核燃料棒"
+    },
+    "dsp_titanium_glass": {
+      "name": "钛化玻璃"
+    },
+    "dsp_casimir_crystal": {
+      "name": "卡西米尔晶体"
+    },
+    "dsp_plane_filter": {
+      "name": "位面过滤器"
+    },
+    "dsp_quantum_chip": {
+      "name": "量子芯片"
+    },
+    "dsp_strange_matter": {
+      "name": "奇异物质"
+    },
+    "dsp_graviton_lens": {
+      "name": "引力透镜"
+    },
+    "dsp_photon_combiner": {
+      "name": "光子合并器"
+    },
+    "dsp_solar_sail": {
+      "name": "太阳帆"
+    },
+    "dsp_critical_photon": {
+      "name": "临界光子"
+    },
+    "dsp_antimatter": {
+      "name": "反物质"
+    },
+    "dsp_annihilation_constraint_sphere": {
+      "name": "湮灭约束球"
+    },
+    "dsp_antimatter_fuel_rod": {
+      "name": "反物质燃料棒"
+    },
+    "dsp_frame_material": {
+      "name": "框架材料"
+    },
+    "dsp_dyson_sphere_component": {
+      "name": "戴森球组件"
+    },
+    "dsp_small_carrier_rocket": {
+      "name": "小型运载火箭"
+    },
+    "dsp_diamond": {
+      "name": "金刚石"
+    },
+    "dsp_plastic": {
+      "name": "塑料"
+    },
+    "dsp_organic_crystal": {
+      "name": "有机晶体"
+    },
+    "dsp_titanium_crystal": {
+      "name": "钛晶石"
+    },
+    "dsp_electromagnetic_matrix": {
+      "name": "电磁矩阵"
+    },
+    "dsp_energy_matrix": {
+      "name": "能量矩阵"
+    },
+    "dsp_structure_matrix": {
+      "name": "结构矩阵"
+    },
+    "dsp_information_matrix": {
+      "name": "信息矩阵"
+    },
+    "dsp_gravity_matrix": {
+      "name": "引力矩阵"
+    },
+    "dsp_universe_matrix": {
+      "name": "宇宙矩阵"
+    },
+    "building_grid_dsp_wind_turbine": {
+      "name": "风力涡轮机套件"
+    },
+    "building_grid_dsp_solar_panel": {
+      "name": "太阳能板套件"
+    },
+    "building_grid_dsp_geothermal_power_station": {
+      "name": "地热发电站套件"
+    },
+    "building_grid_dsp_thermal_power_plant": {
+      "name": "火力发电厂套件"
+    },
+    "building_grid_dsp_mini_fusion_power_plant": {
+      "name": "微型聚变发电站套件"
+    },
+    "building_grid_dsp_artificial_star": {
+      "name": "人造恒星套件"
+    },
+    "building_grid_dsp_accumulator": {
+      "name": "蓄电器套件"
+    },
+    "building_grid_dsp_energy_exchanger": {
+      "name": "能量枢纽套件"
+    },
+    "building_grid_dsp_mining_machine": {
+      "name": "采矿机套件"
+    },
+    "building_grid_dsp_arc_smelter": {
+      "name": "电弧熔炉套件"
+    },
+    "building_grid_dsp_plane_smelter": {
+      "name": "位面熔炉套件"
+    },
+    "building_grid_dsp_assembling_machine_mk1": {
+      "name": "制造台 Mk.I套件"
+    },
+    "building_grid_dsp_assembling_machine_mk2": {
+      "name": "制造台 Mk.II套件"
+    },
+    "building_grid_dsp_assembling_machine_mk3": {
+      "name": "制造台 Mk.III套件"
+    },
+    "building_grid_dsp_spray_coater": {
+      "name": "喷涂机套件"
+    },
+    "building_grid_dsp_matrix_lab": {
+      "name": "矩阵研究站套件"
+    },
+    "building_grid_dsp_oil_extractor": {
+      "name": "原油萃取站套件"
+    },
+    "building_grid_dsp_oil_refinery": {
+      "name": "原油精炼厂套件"
+    },
+    "building_grid_dsp_water_pump": {
+      "name": "抽水站套件"
+    },
+    "building_grid_dsp_chemical_plant": {
+      "name": "化工厂套件"
+    },
+    "building_grid_dsp_quantum_chemical_plant": {
+      "name": "量子化工厂套件"
+    },
+    "building_grid_dsp_fractionator": {
+      "name": "分馏塔套件"
+    },
+    "building_grid_dsp_miniature_particle_collider": {
+      "name": "微型粒子对撞机套件"
+    },
+    "building_grid_dsp_em_rail_ejector": {
+      "name": "电磁轨道弹射器套件"
+    },
+    "building_grid_dsp_ray_receiver": {
+      "name": "射线接收站套件"
+    },
+    "building_grid_dsp_vertical_launching_silo": {
+      "name": "垂直发射井套件"
+    },
+    "building_grid_dsp_planetary_logistics_station": {
+      "name": "行星物流站套件"
+    },
+    "building_grid_dsp_interstellar_logistics_station": {
+      "name": "星际物流站套件"
+    },
+    "building_grid_dsp_orbital_collector": {
+      "name": "轨道采集器套件"
+    },
+    "building_grid_dsp_storage_mk1": {
+      "name": "小型储物仓套件"
+    },
+    "building_grid_dsp_material_delivery_hub": {
+      "name": "物资配送枢纽套件"
+    },
+    "building_grid_dsp_orbital_cargo_terminal": {
+      "name": "轨道货运终端套件"
+    },
+    "building_grid_dsp_storage_tank": {
+      "name": "储液罐套件"
+    },
+    "building_grid_dsp_splitter_4way": {
+      "name": "四向分流器套件"
+    },
+    "building_grid_dsp_construction_center": {
+      "name": "建筑制造中心套件"
+    },
+    "building_grid_dsp_galactic_material_exporter": {
+      "name": "超大型物资出口套件"
+    },
+    "building_grid_dsp_micro_black_hole_connector": {
+      "name": "微型黑洞连接装置套件"
+    },
+    "building_grid_dsp_time_warp_device": {
+      "name": "时间扭曲装置套件"
+    },
+    "building_grid_dsp_space_station_construction_launcher": {
+      "name": "空间站施工发射平台套件"
+    },
+   "mobile_surface_extraction": {
       "name": "移动式地表开采",
       "description": "使用可部署采掘设备执行灵活的地表资源开采。"
     },
@@ -4539,7 +5295,45 @@
     "research_megastructures": {
       "name": "恒星能源巨构计划",
       "description": "解决区位、材料、热能路由和集热原型工程，形成可建设的恒星系规模方案。"
-    }
+    },
+    "building_grid_solar_array": {"name":"地表太阳能阵列 成品"},
+    "building_grid_surface_mine": {"name":"地表采矿场 成品"},
+    "building_grid_cryogenic_extractor": {"name":"低温资源采集器 成品"},
+    "building_grid_exotic_extractor": {"name":"异质物质采集器 成品"},
+    "building_grid_engineering_works": {"name":"自动制造机成品"},
+    "building_grid_arc_smelter": {"name":"大型电弧冶炼厂 成品"},
+    "building_grid_electronics_works": {"name":"高能电子工厂 成品"},
+    "building_grid_assembly_array": {"name":"微结构装配阵列 成品"},
+    "building_grid_bulk_depot": {"name":"散装仓储站 成品"},
+    "building_grid_component_depot": {"name":"组件仓储库 成品"},
+    "building_grid_fluid_tank": {"name":"低温流体储罐 成品"},
+    "building_grid_special_vault": {"name":"特种材料库 成品"},
+    "building_grid_construction_yard": {"name":"地表施工场 成品"},
+    "building_grid_research_complex": {"name":"网格科研中心 成品"},
+    "building_grid_research_complex_ii": {"name":"科研中心扩建 II 成品"},
+    "building_grid_cooling_service": {"name":"热控服务站 成品"},
+    "building_grid_repair_dock": {"name":"网格维修坞 成品"},
+    "building_grid_energy_array": {"name":"聚变能源阵列 成品"},
+    "building_grid_fusion_test_rig": {"name":"聚变组件试验台 成品"},
+    "building_grid_precision_mechanics_cell": {"name":"网格精密机械单元 成品"},
+    "building_grid_cryogenic_process_unit": {"name":"网格低温工艺单元 成品"},
+    "building_grid_radiation_electronics_cell": {"name":"网格抗辐射电子单元 成品"},
+    "building_grid_advanced_alloy_cell": {"name":"网格先进合金单元 成品"},
+    "building_grid_photonic_integration_line": {"name":"网格光子集成线 成品"},
+    "building_grid_field_engineering_complex": {"name":"现场工程中心 成品"},
+    "building_grid_frontier_matterworks": {"name":"前沿物质工厂 成品"},
+    "building_grid_command_array": {"name":"深空指挥阵列 成品"},
+    "building_grid_power_substation_ii": {"name":"电网扩建 II 成品"},
+    "building_grid_power_substation_iii": {"name":"电网扩建 III 成品"},
+    "building_grid_construction_yard_ii": {"name":"施工场扩建 II 成品"},
+    "building_grid_construction_yard_iii": {"name":"施工场扩建 III 成品"},
+    "building_grid_starport_expansion_ii": {"name":"轨道星港扩建 II 成品"},
+    "building_grid_starport_expansion_iii": {"name":"轨道星港扩建 III 成品"},
+    "building_grid_starport_expansion_iv": {"name":"轨道星港扩建 IV 成品"},
+    "building_grid_starport_expansion_v": {"name":"轨道星港扩建 V 成品"},
+    "building_grid_planetary_core": {"name":"星球开发核心基地成品"},
+    "grid_engineering_works": {"name":"自动制造机"},
+    "grid_planetary_core": {"name":"星球开发核心基地"}
   },
   "goal_steps": {
     "extract_mixed_ore": "开采第一批混合粗矿",

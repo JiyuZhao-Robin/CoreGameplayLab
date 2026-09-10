@@ -10,7 +10,8 @@ const DETECTED := "DETECTED"
 const SURVEYED := "SURVEYED"
 const DEEP_SURVEYED := "DEEP_SURVEYED"
 const SURVEY_STATE_ORDER := [UNKNOWN, DETECTED, SURVEYED, DEEP_SURVEYED]
-const DEFAULT_STORAGE_CAPACITIES := {"BULK":400000, "COMPONENT":300000, "FLUID":200000, "SPECIAL":100000}
+## Each value is an independent limit for EVERY item in that class, not a pool.
+const DEFAULT_STORAGE_CAPACITIES := {"BULK":200, "COMPONENT":200, "FLUID":200, "SPECIAL":200}
 const EMPTY_STORAGE_CAPACITIES := {"BULK":0, "COMPONENT":0, "FLUID":0, "SPECIAL":0}
 
 
@@ -93,11 +94,11 @@ static func normalize(source: Dictionary, location_id: String, location_type: St
 	result["automation"]["target_industry_level"] = maxi(1, int(result["automation"].get("target_industry_level", 1)))
 	result["automation"]["expansion_progress_ms"] = maxf(0.0, float(result["automation"].get("expansion_progress_ms", 0.0)))
 	result["logistics"] = result.get("logistics", {}).duplicate(true)
-	result["logistics"].merge({"policies":{}, "storage_capacity":1000000 if is_founding_base else 0, "storage_capacities":DEFAULT_STORAGE_CAPACITIES.duplicate(true) if is_founding_base else EMPTY_STORAGE_CAPACITIES.duplicate(true), "hub_throughput":100 if is_founding_base else 0, "local_throughput_capacity":100.0 if is_founding_base else 0.0}, false)
+	result["logistics"].merge({"policies":{}, "storage_capacity":_total_storage_capacity(DEFAULT_STORAGE_CAPACITIES) if is_founding_base else 0, "storage_capacities":DEFAULT_STORAGE_CAPACITIES.duplicate(true) if is_founding_base else EMPTY_STORAGE_CAPACITIES.duplicate(true), "hub_throughput":100 if is_founding_base else 0, "local_throughput_capacity":100.0 if is_founding_base else 0.0}, false)
 	result["logistics"]["policies"] = result["logistics"].get("policies", {}).duplicate(true)
 	var storage_capacities: Dictionary = result["logistics"].get("storage_capacities", {}).duplicate(true)
 	if storage_capacities.is_empty():
-		storage_capacities = _split_legacy_storage_capacity(int(result["logistics"].get("storage_capacity", 1000000 if is_founding_base else 0)))
+		storage_capacities = _split_legacy_storage_capacity(int(result["logistics"].get("storage_capacity", _total_storage_capacity(DEFAULT_STORAGE_CAPACITIES) if is_founding_base else 0)))
 	for storage_class in DEFAULT_STORAGE_CAPACITIES:
 		storage_capacities[storage_class] = maxi(0, int(storage_capacities.get(storage_class, 0)))
 	result["logistics"]["storage_capacities"] = storage_capacities

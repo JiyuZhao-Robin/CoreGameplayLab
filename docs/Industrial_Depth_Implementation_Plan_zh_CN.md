@@ -1,6 +1,6 @@
 # 《Helios / Space Idle》工业深化逻辑实施方案
 
-> 状态：Core Complete；第一至八阶段、单恒星系完整流程与唯一巨构终局已落地并进入发布回归
+> 历史基线：下文描述 2026-08-27 的旧聚合工业方案，不代表当前道路工业重构已完整验收。当前成品建筑、开发核心开局、DSP 内容与地形的实现/验证以[星球共享库存与道路工业](./Planetary_Industry_Roads_Design_zh_CN.md)为准；不恢复旧现场建材施工和端口物流。
 > 日期：2026-08-27
 > 范围：只讨论逻辑、规则、数据、内容和验证；不讨论美术制作  
 > 上位设计：[正式设计方向](./Design_Direction_zh_CN.md)  
@@ -1183,8 +1183,10 @@ UNKNOWN → DETECTED → SURVEYED → DEEP_SURVEYED
 
 * `UNKNOWN`：只公开地点身份。
 * `DETECTED`：只公开资源类别、潜力区间、显著辐射、距离和建设难度区间。
-* `SURVEYED`：公开品位范围、可持续潜力、副产物、允许工法和完整环境，允许永久开发。
-* `DEEP_SURVEYED`：公开精确品位和当前技术可达到的高级潜力；不是强制步骤。
+* `SURVEYED`：当前物理 Factory 实现公开基础品位、映射潜力和完整环境，允许永久开发。
+* `DEEP_SURVEYED`：额外公开精确资源区位置和尺寸；不是强制步骤。
+
+当前实现与环境系数见 [地点运营与环境规则](Location_Operations_and_Environment_zh_CN.md)。早期“普通勘测品位范围/深勘测高级潜力”设想不作为当前已实现能力宣称。
 
 UI 与领域接口均调用 `location_intelligence()`，低勘测状态不会读取并显示内容数据库中的隐藏精确值。
 

@@ -193,9 +193,9 @@ func _test_full_storage_retains_recovered_fleet_cargo() -> void:
 	var item_id := "dark_matter"
 	var quantity := 2
 	state.add_recovered_cargo(item_id, quantity, SpaceGameState.DEFAULT_FORMATION_ID)
-	var storage_class := simulation.storage_class_for_item(item_id)
-	var used: Dictionary = simulation.location_storage_used(state, MAIN_LOCATION)
-	state.location_state(MAIN_LOCATION)["logistics"]["storage_capacities"][storage_class] = int(ceil(float(used.get(storage_class, 0.0))))
+	# Fill this item's planetary slot, including installed warehouse capacity.
+	# Filling a class-wide weighted pool is no longer a full-storage fixture.
+	state.location_inventory(MAIN_LOCATION)[item_id] = simulation.location_item_storage_capacity(state, MAIN_LOCATION, item_id)
 	var inventory_before := state.item_quantity(item_id, MAIN_LOCATION)
 	_check(simulation.has_method("unload_fleet_cargo"), "Fleet unloading uses the capacity-aware Simulation transaction")
 	if not simulation.has_method("unload_fleet_cargo"):
@@ -204,7 +204,7 @@ func _test_full_storage_retains_recovered_fleet_cargo() -> void:
 	_check(not unloaded, "Fleet unload reports a blocked transfer when destination storage is full")
 	_check(state.item_quantity(item_id, MAIN_LOCATION) == inventory_before, "full storage does not accept recovered Fleet cargo")
 	_check(int(state.fleet_logistics_runtime(SpaceGameState.DEFAULT_FORMATION_ID).get("recovered", {}).get(item_id, 0)) == quantity, "blocked Fleet unload retains cargo under Fleet ownership")
-	_check(_storage_within_capacity(state, simulation, MAIN_LOCATION), "Fleet unloading never drives a storage class beyond capacity")
+	_check(state.item_quantity(item_id, MAIN_LOCATION) <= simulation.location_item_storage_capacity(state, MAIN_LOCATION, item_id), "Fleet unloading never exceeds the independent item capacity")
 
 
 func _new_state(simulation: SimulationEngine) -> SpaceGameState:

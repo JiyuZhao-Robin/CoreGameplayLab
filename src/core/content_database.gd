@@ -1,5 +1,6 @@
 class_name ContentDatabase
 extends RefCounted
+const DspProjects = preload("res://src/core/factory_dsp_projects.gd")
 
 var version := ""
 var pack_metadata := {}
@@ -39,6 +40,7 @@ var activities_by_domain := {}
 var progression_edges: Array[Dictionary] = []
 var graph_validation_errors: Array[String] = []
 var errors: Array[String] = []
+var dsp_industry := {}
 
 
 func load_from_file(path: String) -> bool:
@@ -50,6 +52,12 @@ func load_from_file(path: String) -> bool:
 	if typeof(parsed) != TYPE_DICTIONARY:
 		errors.append("Content root must be a JSON object")
 		return false
+	for shard_path in parsed.get("content_shards", []):
+		var shard = JSON.parse_string(FileAccess.get_file_as_string(str(shard_path))) if FileAccess.file_exists(str(shard_path)) else null
+		if not shard is Dictionary:
+			errors.append("Invalid content shard: %s" % shard_path)
+			return false
+		_merge_industry_shard(parsed, shard)
 	version = str(parsed.get("version", "unknown"))
 	if version != GameVersion.PRODUCT_VERSION:
 		errors.append("Content version %s does not match product version %s" % [version, GameVersion.PRODUCT_VERSION])
@@ -87,6 +95,28 @@ func load_from_file(path: String) -> bool:
 	_index_definitions(parsed.get("planet_visual_profiles", []), planet_visual_profiles, "planet_visual_profile")
 	_index_definitions(parsed.get("factory_buildings", []), factory_buildings, "factory_building")
 	_index_definitions(parsed.get("factory_recipes", []), factory_recipes, "factory_recipe")
+	var original_recipe_ids := factory_recipes.keys()
+	DspProjects.extend_catalog(items, factory_buildings, factory_recipes)
+	for recipe_id in factory_recipes:
+		if not original_recipe_ids.has(recipe_id):
+			_index_definitions([factory_recipes[recipe_id]], {}, "factory_recipe")
+	for recipe in factory_recipes.values():
+		for output in recipe.get("outputs", []):
+			var item: Dictionary = items.get(str(output.get("item", "")), {})
+			if item.has("building_definition_id"):
+				recipe["building_definition_id"] = str(item["building_definition_id"])
+	for building in factory_buildings.values():
+		for recipe_id in building.get("recipe_ids", []):
+			var recipe: Dictionary = factory_recipes.get(str(recipe_id), {})
+			var required_inputs := 0
+			var required_outputs := 0
+			for entry in recipe.get("inputs", []):
+				required_inputs += int(entry.get("quantity", 0))
+			for entry in recipe.get("outputs", []):
+				required_outputs += int(entry.get("quantity", 0))
+			# A manufacturing batch must fit, even for large finished structures.
+			building["input_capacity"] = maxi(int(building.get("input_capacity", 0)), required_inputs)
+			building["output_capacity"] = maxi(int(building.get("output_capacity", 0)), required_outputs)
 	for domain_id in domains:
 		activities_by_domain[domain_id] = []
 	for activity in activities.values():
@@ -100,6 +130,7 @@ func load_from_file(path: String) -> bool:
 
 
 func clear() -> void:
+	dsp_industry.clear()
 	version = ""
 	domains.clear()
 	items.clear()
@@ -140,6 +171,41 @@ func clear() -> void:
 	errors.clear()
 
 
+func _merge_industry_shard(parsed: Dictionary, shard: Dictionary) -> void:
+	dsp_industry = shard.duplicate(true)
+	for collection in ["items", "factory_buildings", "factory_recipes"]:
+		var rows: Array = parsed.get(collection, [])
+		var existing := {}
+		for row in rows:
+			existing[str(row.get("id", ""))] = row
+		for row in shard.get(collection, []):
+			var id := str(row.get("id", ""))
+			if existing.has(id):
+				# The six semantically identical source materials retain canonical
+				# economic IDs; source presentation/provenance can extend them.
+				if collection == "items" and not str(row.get("source_id", "")).is_empty():
+					for key in ["source_id", "source_family", "art_index", "source_metadata"]:
+						if row.has(key):
+							existing[id][key] = row[key]
+				else:
+					errors.append("Duplicate shard definition: %s" % id)
+			else:
+				rows.append(row.duplicate(true))
+		parsed[collection] = rows
+	# All finished buildings can be manufactured by the starting assembler.
+	# Base DSP material recipes keep this imported chain bootstrappable too.
+	for building in parsed.get("factory_buildings", []):
+		var id := str(building.get("id", ""))
+		if id not in ["grid_engineering_works", "grid_arc_smelter"]:
+			continue
+		for recipe in shard.get("factory_recipes", []):
+			var recipe_id := str(recipe.get("id", ""))
+			var family := str(recipe.get("source_building_id", ""))
+			if (id == "grid_engineering_works" and (recipe_id.begins_with("manufacture_") or family == "grid_dsp_assembling_machine_mk1")) or (id == "grid_arc_smelter" and family == "grid_dsp_arc_smelter"):
+				if not building.get("recipe_ids", []).has(recipe_id):
+					building["recipe_ids"].append(recipe_id)
+
+
 func validate() -> void:
 	var produced_items := {}
 	var consumed_items := {}
@@ -154,6 +220,7 @@ func validate() -> void:
 				errors.append("The single-system core cannot expose interstellar content: %s" % definition_id_value)
 	_validate_simulation_profiles()
 	_validate_factory_grid_content()
+	_validate_factory_bootstrap_content_contract()
 	_validate_ship_role_contract()
 	if float(industry_rules.get("economy_of_scale_per_level", 0.0)) < 0.0 or float(industry_rules.get("economy_of_scale_cap", 0.0)) < 0.0:
 		errors.append("industry_rules must define non-negative Economy of Scale values")
@@ -848,9 +915,10 @@ func _validate_factory_grid_content() -> void:
 		var footprint: Dictionary = definition.get("footprint", {})
 		if int(footprint.get("width", 0)) <= 0 or int(footprint.get("height", 0)) <= 0:
 			errors.append("factory building '%s' must define a positive footprint" % definition_id)
-		if float(definition.get("construction_work", 0.0)) <= 0.0:
-			errors.append("factory building '%s' must define positive construction work" % definition_id)
-		_validate_item_entries(definition.get("construction_cost", []), "factory building '%s'" % definition_id)
+		if kind != "ROUTER":
+			var deployment_item_id := str(definition.get("deployment_item_id", ""))
+			if not items.has(deployment_item_id) or str(items.get(deployment_item_id, {}).get("building_definition_id", "")) != definition_id:
+				errors.append("factory building '%s' must reference its finished building item" % definition_id)
 		for requirement_value in definition.get("requirements", []):
 			_validate_requirement(requirement_value as Dictionary, "factory building '%s'" % definition_id)
 		for requirement_value in definition.get("reveal_requirements", []):
@@ -871,7 +939,7 @@ func _validate_factory_grid_content() -> void:
 				if coverage_loss < 0.0 or coverage_loss > 1.0:
 					errors.append("factory extractor '%s' must define resource coverage loss in [0, 1]" % definition_id)
 			"MACHINE":
-				if definition.get("recipe_ids", []).is_empty() or float(definition.get("speed", 0.0)) <= 0.0 or int(definition.get("input_capacity", 0)) <= 0 or int(definition.get("output_capacity", 0)) <= 0:
+				if (definition.get("recipe_ids", []).is_empty() and definition.get("runtime_metadata", {}).is_empty()) or float(definition.get("speed", 0.0)) <= 0.0 or int(definition.get("input_capacity", 0)) <= 0 or int(definition.get("output_capacity", 0)) <= 0:
 					errors.append("factory machine '%s' has incomplete production rules" % definition_id)
 				for recipe_id_value in definition.get("recipe_ids", []):
 					if not factory_recipes.has(str(recipe_id_value)):
@@ -885,7 +953,7 @@ func _validate_factory_grid_content() -> void:
 				if int(definition.get("inventory_capacity", 0)) <= 0:
 					errors.append("factory storage '%s' must define positive capacity" % definition_id)
 			"POWER":
-				if float(definition.get("power_generation_kw", 0.0)) <= 0.0:
+				if float(definition.get("power_generation_kw", 0.0)) <= 0.0 and str(definition.get("runtime_metadata", {}).get("power_mode", "")) not in ["BATTERY", "ENERGY_EXCHANGER"]:
 					errors.append("factory power building '%s' must generate power" % definition_id)
 			"CONSTRUCTION":
 				if float(definition.get("construction_capacity_per_second", 0.0)) <= 0.0:
@@ -898,7 +966,8 @@ func _validate_factory_grid_content() -> void:
 		var recipe_id := str(recipe.get("id", "?"))
 		if float(recipe.get("duration_seconds", 0.0)) <= 0.0:
 			errors.append("factory recipe '%s' must define positive duration" % recipe_id)
-		if recipe.get("inputs", []).is_empty() or recipe.get("outputs", []).is_empty():
+		var special_mode := str(recipe.get("runtime_metadata", {}).get("recipe_mode", ""))
+		if (recipe.get("inputs", []).is_empty() and special_mode not in ["CRITICAL_PHOTON", "RAY_POWER"]) or (recipe.get("outputs", []).is_empty() and special_mode not in ["LAUNCH", "MATRIX", "RAY_POWER", "GLOBAL_PROJECT", "BLACK_HOLE"]):
 			errors.append("factory recipe '%s' must define inputs and outputs" % recipe_id)
 		_validate_item_entries(recipe.get("inputs", []), "factory recipe '%s' inputs" % recipe_id)
 		_validate_item_entries(recipe.get("outputs", []), "factory recipe '%s' outputs" % recipe_id)
@@ -1302,6 +1371,10 @@ func _entries_contain_item(entries: Array, item_id: String) -> bool:
 	return entries.any(func(entry): return str((entry as Dictionary).get("item", "")) == item_id and int((entry as Dictionary).get("quantity", 0)) > 0)
 
 
+## Legacy aggregate-economy reachability projection retained for planner and
+## historical-content callers.  It deliberately models the old activity/facility
+## contract, not the live finished-building Factory opening.  New Factory checks
+## must use factory_bootstrap_reachability_snapshot() below.
 func bootstrap_reachability_snapshot(mode: String = "BOOTSTRAP") -> Dictionary:
 	var normalized_mode := mode.to_upper()
 	var contract: Dictionary = industry_rules.get("bootstrap_contract", {})
@@ -1411,6 +1484,287 @@ func _bootstrap_requirements_reachable(requirements: Array, allowed_technologies
 	return true
 
 
+## Static opening-gate audit for the live Factory model:
+## core item -> deploy landing core -> receive deployment package -> harvest
+## starter fields -> select zero-technology recipes -> manufacture replacement
+## starter extractors.  This is deliberately qualitative: it proves only ID,
+## requirement and recipe closure.  Terrain placement, roads, inventory counts,
+## production rates, power-network topology and elapsed-time simulation remain
+## runtime responsibilities.
+func factory_bootstrap_reachability_snapshot() -> Dictionary:
+	var starter_value: Variant = factory_grid_rules.get("starter_world", {})
+	var starter: Dictionary = starter_value as Dictionary if starter_value is Dictionary else {}
+	var issues: Array[Dictionary] = []
+	var reachable_items := {}
+	var reachable_buildings := {}
+	var reachable_recipes := {}
+	var reachable_resources := {}
+	var manufacture_recipe_ids := {}
+	var starter_extractor_definition_ids := {}
+	var starter_location_id := str(starter.get("location_id", ""))
+	var landing_definition_id := str(starter.get("landing_definition_id", ""))
+	var starter_inventory_value: Variant = starter.get("inventory", {})
+	var starter_inventory: Dictionary = starter_inventory_value as Dictionary if starter_inventory_value is Dictionary else {}
+	var package_value: Variant = starter.get("deployment_package", {})
+	var deployment_package: Dictionary = package_value as Dictionary if package_value is Dictionary else {}
+	var starter_power_generation_kw := 0.0
+	var starter_power_demand_kw := 0.0
+
+	if starter.is_empty():
+		_factory_bootstrap_issue(issues, "STARTER_WORLD_MISSING")
+	else:
+		if landing_definition_id.is_empty() or not factory_buildings.has(landing_definition_id):
+			_factory_bootstrap_issue(issues, "LANDING_DEFINITION_MISSING", {"definition_id":landing_definition_id})
+		else:
+			var landing_definition: Dictionary = factory_buildings.get(landing_definition_id, {})
+			var landing_item_id := str(landing_definition.get("deployment_item_id", ""))
+			if landing_item_id.is_empty() or not items.has(landing_item_id) or str(items.get(landing_item_id, {}).get("building_definition_id", "")) != landing_definition_id:
+				_factory_bootstrap_issue(issues, "LANDING_DEPLOYMENT_ITEM_INVALID", {"definition_id":landing_definition_id, "item_id":landing_item_id})
+			elif int(starter_inventory.get(landing_item_id, 0)) <= 0:
+				_factory_bootstrap_issue(issues, "LANDING_CORE_ITEM_MISSING", {"definition_id":landing_definition_id, "item_id":landing_item_id})
+			else:
+				reachable_buildings[landing_definition_id] = true
+				starter_power_generation_kw += maxf(0.0, float(landing_definition.get("power_generation_kw", 0.0)))
+
+		if deployment_package.is_empty():
+			_factory_bootstrap_issue(issues, "STARTER_DEPLOYMENT_PACKAGE_MISSING")
+		for item_id_value in deployment_package.keys():
+			var item_id := str(item_id_value)
+			var quantity := int(deployment_package.get(item_id_value, 0))
+			if quantity <= 0:
+				_factory_bootstrap_issue(issues, "STARTER_PACKAGE_ITEM_NONPOSITIVE", {"item_id":item_id})
+				continue
+			var item: Dictionary = items.get(item_id, {})
+			var definition_id := str(item.get("building_definition_id", ""))
+			if item.is_empty() or definition_id.is_empty() or not factory_buildings.has(definition_id) or str(factory_buildings.get(definition_id, {}).get("deployment_item_id", "")) != item_id:
+				_factory_bootstrap_issue(issues, "STARTER_PACKAGE_ITEM_INVALID", {"item_id":item_id, "definition_id":definition_id})
+				continue
+			var package_definition: Dictionary = factory_buildings.get(definition_id, {})
+			reachable_buildings[definition_id] = true
+			starter_power_generation_kw += maxf(0.0, float(package_definition.get("power_generation_kw", 0.0))) * quantity
+			starter_power_demand_kw += maxf(0.0, float(package_definition.get("power_demand_kw", 0.0))) * quantity
+
+	var reachable_facilities := _factory_bootstrap_facilities(reachable_buildings)
+	for definition_id_value in reachable_buildings.keys():
+		var definition_id := str(definition_id_value)
+		var starter_definition: Dictionary = factory_buildings.get(definition_id, {})
+		if starter_definition.is_empty():
+			continue
+		if not _factory_bootstrap_requirements_met(starter_definition.get("requirements", []), starter_location_id, reachable_facilities) or not _factory_bootstrap_requirements_met(starter_definition.get("reveal_requirements", []), starter_location_id, reachable_facilities):
+			_factory_bootstrap_issue(issues, "STARTER_PACKAGE_BUILDING_LOCKED", {"definition_id":definition_id})
+
+	if not landing_definition_id.is_empty() and starter_power_generation_kw <= 0.0:
+		_factory_bootstrap_issue(issues, "LANDING_CORE_HAS_NO_STARTER_POWER", {"definition_id":landing_definition_id})
+	elif starter_power_generation_kw + 0.000001 < starter_power_demand_kw:
+		_factory_bootstrap_issue(issues, "STARTER_POWER_INSUFFICIENT", {"generation_kw":starter_power_generation_kw, "demand_kw":starter_power_demand_kw})
+
+	if starter.get("resource_fields", []).is_empty():
+		_factory_bootstrap_issue(issues, "STARTER_RESOURCES_MISSING")
+	for field_value in starter.get("resource_fields", []):
+		var field: Dictionary = field_value as Dictionary
+		var resource_id := str(field.get("resource_id", ""))
+		var resource_category := str(field.get("resource_category", "solid"))
+		if resource_id.is_empty() or not items.has(resource_id):
+			_factory_bootstrap_issue(issues, "STARTER_RESOURCE_INVALID", {"resource_id":resource_id, "resource_field_id":str(field.get("resource_field_id", ""))})
+			continue
+		var compatible_extractors := _factory_bootstrap_extractors_for_resource(reachable_buildings, resource_id, resource_category)
+		if compatible_extractors.is_empty():
+			_factory_bootstrap_issue(issues, "STARTER_RESOURCE_UNHARVESTABLE", {"resource_id":resource_id, "resource_category":resource_category})
+			continue
+		reachable_resources[resource_id] = true
+		reachable_items[resource_id] = true
+		for extractor_id_value in compatible_extractors:
+			starter_extractor_definition_ids[str(extractor_id_value)] = true
+
+	# Every deployable Factory definition must remain an item made by one
+	# selectable Factory recipe.  This is content-shape validation; only the
+	# starter extractor recipes below are required to be available at game start.
+	for definition_value in factory_buildings.values():
+		var catalog_definition := definition_value as Dictionary
+		var definition_id := str(catalog_definition.get("id", ""))
+		if definition_id.is_empty() or str(catalog_definition.get("kind", "")) == "ROUTER":
+			continue
+		var deployment_item_id := str(catalog_definition.get("deployment_item_id", ""))
+		var manufacture_recipe_id := "manufacture_%s" % definition_id
+		var manufacture_recipe: Dictionary = factory_recipes.get(manufacture_recipe_id, {})
+		if manufacture_recipe.is_empty() or not _factory_bootstrap_recipe_makes_item(manufacture_recipe, deployment_item_id):
+			_factory_bootstrap_issue(issues, "FINISHED_BUILDING_RECIPE_MISSING", {"definition_id":definition_id, "item_id":deployment_item_id, "recipe_id":manufacture_recipe_id})
+			continue
+		manufacture_recipe_ids[definition_id] = manufacture_recipe_id
+		if _factory_bootstrap_recipe_machine_ids(manufacture_recipe_id).is_empty():
+			_factory_bootstrap_issue(issues, "FINISHED_BUILDING_MANUFACTURER_MISSING", {"definition_id":definition_id, "recipe_id":manufacture_recipe_id})
+
+	var changed := true
+	var passes := 0
+	var pass_limit := maxi(1, factory_recipes.size() + reachable_buildings.size())
+	while changed and passes < pass_limit:
+		changed = false
+		passes += 1
+		var active_definition_ids: Array = reachable_buildings.keys()
+		active_definition_ids.sort()
+		for definition_id_value in active_definition_ids:
+			var machine_definition: Dictionary = factory_buildings.get(str(definition_id_value), {})
+			if str(machine_definition.get("kind", "")) != "MACHINE":
+				continue
+			var recipe_ids: Array = machine_definition.get("recipe_ids", []).duplicate()
+			recipe_ids.sort()
+			for recipe_id_value in recipe_ids:
+				var recipe_id := str(recipe_id_value)
+				var recipe: Dictionary = factory_recipes.get(recipe_id, {})
+				if recipe.is_empty() or not _factory_bootstrap_requirements_met(recipe.get("requirements", []), starter_location_id, reachable_facilities) or not _factory_bootstrap_requirements_met(recipe.get("reveal_requirements", []), starter_location_id, reachable_facilities) or not _factory_bootstrap_entries_reachable(recipe.get("inputs", []), reachable_items):
+					continue
+				reachable_recipes[recipe_id] = true
+				for output_value in recipe.get("outputs", []):
+					var output := output_value as Dictionary
+					var output_item_id := str(output.get("item", ""))
+					if output_item_id.is_empty() or int(output.get("quantity", 0)) <= 0 or reachable_items.has(output_item_id):
+						continue
+					reachable_items[output_item_id] = true
+					changed = true
+
+	for extractor_id_value in starter_extractor_definition_ids.keys():
+		var extractor_id := str(extractor_id_value)
+		var recipe_id := str(manufacture_recipe_ids.get(extractor_id, "manufacture_%s" % extractor_id))
+		if not reachable_recipes.has(recipe_id):
+			_factory_bootstrap_issue(issues, "STARTER_EXTRACTOR_MANUFACTURE_UNREACHABLE", {"definition_id":extractor_id, "recipe_id":recipe_id})
+
+	var sorted_issues: Array[Dictionary] = issues.duplicate()
+	sorted_issues.sort_custom(func(left, right): return _factory_bootstrap_issue_sort_key(left as Dictionary) < _factory_bootstrap_issue_sort_key(right as Dictionary))
+	var manufacture_recipe_id_values: Array = manufacture_recipe_ids.values()
+	manufacture_recipe_id_values.sort()
+	return {
+		"mode":"FACTORY_STARTER_QUALITATIVE",
+		"qualitative":true,
+		"valid":sorted_issues.is_empty(),
+		"landing_definition_id":landing_definition_id,
+		"starter_location_id":starter_location_id,
+		"starter_power_generation_kw":starter_power_generation_kw,
+		"starter_power_demand_kw":starter_power_demand_kw,
+		"reachable_resource_ids":_factory_bootstrap_sorted_keys(reachable_resources),
+		"reachable_item_ids":_factory_bootstrap_sorted_keys(reachable_items),
+		"reachable_building_ids":_factory_bootstrap_sorted_keys(reachable_buildings),
+		"reachable_recipe_ids":_factory_bootstrap_sorted_keys(reachable_recipes),
+		"manufacturable_building_ids":_factory_bootstrap_sorted_keys(manufacture_recipe_ids),
+		"manufacture_recipe_ids":manufacture_recipe_id_values,
+		"passes":passes,
+		"issues":sorted_issues,
+		"not_simulated":["terrain_placement", "roads_and_power_topology", "inventory_quantities", "production_rates", "elapsed_time", "interstellar_logistics"]
+	}
+
+
+func _validate_factory_bootstrap_content_contract() -> void:
+	var snapshot := factory_bootstrap_reachability_snapshot()
+	for issue_value in snapshot.get("issues", []):
+		var issue := issue_value as Dictionary
+		var code := str(issue.get("code", "UNKNOWN"))
+		var subject := str(issue.get("definition_id", issue.get("item_id", issue.get("resource_id", ""))))
+		errors.append("Factory starter qualitative reachability [%s]%s" % [code, " for '%s'" % subject if not subject.is_empty() else ""])
+
+
+func _factory_bootstrap_issue(issues: Array[Dictionary], code: String, details: Dictionary = {}) -> void:
+	var issue := {"code":code}
+	issue.merge(details, true)
+	issues.append(issue)
+
+
+func _factory_bootstrap_issue_sort_key(issue: Dictionary) -> String:
+	return "%s:%s:%s:%s" % [issue.get("code", ""), issue.get("definition_id", ""), issue.get("item_id", ""), issue.get("resource_id", "")]
+
+
+func _factory_bootstrap_sorted_keys(values: Dictionary) -> Array:
+	var keys: Array = values.keys()
+	keys.sort()
+	return keys
+
+
+func _factory_bootstrap_facilities(reachable_buildings: Dictionary) -> Dictionary:
+	var facilities_by_id := {}
+	for definition_id_value in reachable_buildings.keys():
+		var definition: Dictionary = factory_buildings.get(str(definition_id_value), {})
+		for effect_value in definition.get("completion_effects", []):
+			var effect := effect_value as Dictionary
+			var effect_type := str(effect.get("type", ""))
+			if effect_type not in ["unlock_facility", "set_facility_minimum_level"]:
+				continue
+			var facility_id := str(effect.get("facility", effect.get("id", "")))
+			if facility_id.is_empty():
+				continue
+			facilities_by_id[facility_id] = maxi(int(facilities_by_id.get(facility_id, 0)), maxi(1, int(effect.get("level", 1))))
+	return facilities_by_id
+
+
+func _factory_bootstrap_requirements_met(requirements: Array, starter_location_id: String, reachable_facilities: Dictionary) -> bool:
+	for requirement_value in requirements:
+		if not requirement_value is Dictionary or not _factory_bootstrap_requirement_met(requirement_value as Dictionary, starter_location_id, reachable_facilities):
+			return false
+	return true
+
+
+func _factory_bootstrap_requirement_met(requirement: Dictionary, starter_location_id: String, reachable_facilities: Dictionary) -> bool:
+	var operator := str(requirement.get("op", "")).to_upper()
+	if operator in ["AND", "OR"]:
+		var children: Array = requirement.get("children", [])
+		if children.is_empty():
+			return false
+		if operator == "AND":
+			return children.all(func(child): return child is Dictionary and _factory_bootstrap_requirement_met(child as Dictionary, starter_location_id, reachable_facilities))
+		return children.any(func(child): return child is Dictionary and _factory_bootstrap_requirement_met(child as Dictionary, starter_location_id, reachable_facilities))
+	match str(requirement.get("type", "")):
+		"":
+			return true
+		"region":
+			return str(requirement.get("id", "")) == starter_location_id
+		"own_facility":
+			return int(reachable_facilities.get(str(requirement.get("id", "")), 0)) >= 1
+		"facility_level":
+			return int(reachable_facilities.get(str(requirement.get("id", "")), 0)) >= maxi(1, int(requirement.get("level", 1)))
+		_:
+			# A fresh Factory starter owns no technology, project, spillover or
+			# activity completion.  Treat unknown conditions as unavailable rather
+			# than manufacturing a false opening path.
+			return false
+
+
+func _factory_bootstrap_extractors_for_resource(reachable_buildings: Dictionary, resource_id: String, resource_category: String) -> Array:
+	var result: Array = []
+	for definition_id_value in reachable_buildings.keys():
+		var definition_id := str(definition_id_value)
+		var definition: Dictionary = factory_buildings.get(definition_id, {})
+		if str(definition.get("kind", "")) != "EXTRACTOR" or not definition.get("resource_categories", []).has(resource_category):
+			continue
+		var allowed_resource_ids: Array = definition.get("allowed_resource_ids", [])
+		if not allowed_resource_ids.is_empty() and not allowed_resource_ids.has(resource_id):
+			continue
+		result.append(definition_id)
+	result.sort()
+	return result
+
+
+func _factory_bootstrap_recipe_makes_item(recipe: Dictionary, item_id: String) -> bool:
+	if item_id.is_empty():
+		return false
+	var outputs: Array = recipe.get("outputs", [])
+	return outputs.size() == 1 and str((outputs[0] as Dictionary).get("item", "")) == item_id and int((outputs[0] as Dictionary).get("quantity", 0)) == 1
+
+
+func _factory_bootstrap_recipe_machine_ids(recipe_id: String) -> Array:
+	var result: Array = []
+	for building_value in factory_buildings.values():
+		var building := building_value as Dictionary
+		if str(building.get("kind", "")) == "MACHINE" and building.get("recipe_ids", []).has(recipe_id):
+			result.append(str(building.get("id", "")))
+	result.sort()
+	return result
+
+
+func _factory_bootstrap_entries_reachable(entries: Array, reachable_items: Dictionary) -> bool:
+	for entry_value in entries:
+		var entry := entry_value as Dictionary
+		if int(entry.get("quantity", 0)) <= 0 or not reachable_items.has(str(entry.get("item", ""))):
+			return false
+	return true
+
+
 func _validate_core_content_contract() -> void:
 	if str(pack_metadata.get("version", "")) != "1.32.0":
 		errors.append("Core content pack version must be 1.32.0")
@@ -1428,6 +1782,9 @@ func _validate_core_content_contract() -> void:
 		for capability_id_value in facility.get("capabilities", {}).keys():
 			if str(capability_id_value).begins_with("background_"):
 				errors.append("Core facility '%s' exposes forbidden background production capability" % facility.get("id", "?"))
+	# Kept only for aggregate-economy planner and historical-content callers.
+	# The live Factory opening is validated separately by
+	# _validate_factory_bootstrap_content_contract().
 	var contract: Dictionary = industry_rules.get("bootstrap_contract", {})
 	for item_field in ["starting_item_ids", "bootstrap_extractable_item_ids", "progression_extractable_item_ids", "required_bootstrap_items", "required_progression_items"]:
 		for item_id_value in contract.get(item_field, []):
@@ -1456,21 +1813,21 @@ func _validate_core_content_contract() -> void:
 		var technology_id := str(technology_id_value)
 		var granting_projects: Array = research_projects.values().filter(func(value): return str((value as Dictionary).get("grants_technology", "")) == technology_id)
 		if granting_projects.is_empty():
-			errors.append("Bootstrap milestone Technology '%s' has no R&D Program source" % technology_id)
+			errors.append("Legacy aggregate bootstrap milestone Technology '%s' has no R&D Program source" % technology_id)
 			continue
 		var project_reachable := granting_projects.any(func(value):
 			var project := value as Dictionary
 			return _bootstrap_costs_reachable(project.get("costs", []), bootstrap_items) and _bootstrap_requirements_reachable(project.get("requirements", []), bootstrap_technologies, bootstrap_regions, bootstrap_facilities)
 		)
 		if not project_reachable:
-			errors.append("New-save bootstrap cannot fund or host the R&D Program for Technology '%s'" % technology_id)
+			errors.append("Legacy aggregate bootstrap cannot fund or host the R&D Program for Technology '%s'" % technology_id)
 	for item_id_value in contract.get("required_bootstrap_items", []):
 		if not bootstrap_snapshot.get("reachable_items", []).has(str(item_id_value)):
-			errors.append("New-save bootstrap cannot reach required product '%s'" % item_id_value)
+			errors.append("Legacy aggregate bootstrap cannot reach required product '%s'" % item_id_value)
 	var progression_snapshot := bootstrap_reachability_snapshot("PROGRESSION")
 	for item_id_value in contract.get("required_progression_items", []):
 		if not progression_snapshot.get("reachable_items", []).has(str(item_id_value)):
-			errors.append("Core production graph cannot reach capital good '%s' from new-save sources" % item_id_value)
+			errors.append("Legacy aggregate progression cannot reach capital good '%s'" % item_id_value)
 
 
 func _validate_closed_economy() -> void:

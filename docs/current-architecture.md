@@ -1,66 +1,65 @@
 # 当前架构
 
-更新时间：2026-09-01
+> 更新：2026-09-10。本文描述当前运行权威；道路前的端口、实体仓储、现场施工与 Port Transfer 方案不再是架构要求。Factory 细则见[道路工业设计](./Planetary_Industry_Roads_Design_zh_CN.md)，范围标签见[内容同步状态](./Content_Synchronization_zh_CN.md)。
 
-## 运行边界
-
-当前产品只模拟一个恒星系。schema 36 已开始把采矿、生产和建设从地点级按钮操作迁移到 Factorio 式方格工厂；schema 37 移除了按工作类型划分舰队的模型；schema 38 则彻底删除舰船采矿/施工插件和对应内容、命令与能力字段；schema 39 为旧存档中已调查的远端地点补记有限调查前哨包。舰船只加入通用编队，承担战斗、探索和真实运输。`ContentDatabase` 是内容定义入口，`SpaceGameState` 是唯一可持久化状态，`SimulationEngine` 与 `FactoryGridSimulation` 共同承担规则权威。UI 和只读规划器只能查询这些规则或通过 `Game` 的事务命令改变状态，不允许直接改库存数字。
-
-## 分层
+## 权威边界
 
 ```text
-data/content.json + localization
-                ↓
-       ContentDatabase（校验、索引、依赖图）
-                ↓
- Game（事务、玩家命令、存档生命周期）
-                ↓
+data/content.json + data/dsponline_industry.json + localization
+                         ↓
+                  ContentDatabase
+                         ↓
+      Game（事务、命令、存档生命周期、离线推进）
+                         ↓
  SpaceGameState ← SimulationEngine → LogisticsEngine
-       ↑              ↕             WreckSiteSystem
- factory_worlds ← FactoryGridSimulation
-       ↑              ↓
-     EconomyPlanner / Diagnostics（只读）
-                ↑
-          Godot UI（命令与展示）
+       ↑                    ↑
+ factory_worlds      Location inventory / research / fleets
+       ↑
+ FactoryGridSimulation + FactoryRoadNetwork + FactoryRoadTransport
+       ↑
+    Factory Workspace snapshots and command intents
 ```
 
-- 内容层：产品、方格规则、宏观建筑、工厂配方、生产方式、舰船、科研、地点、勘测、路线、目标和终局工程均由内容数据定义。
-- 应用层：`src/application/game.gd` 对外提供带校验的事务命令，并负责存档加载、离线推进和事件转发。
-- 领域层：`src/core/factory_grid_simulation.gd` 结算地形/资源格、矿机覆盖率、实体占地、电网、货运、配方、反压和方格建设；资源田不是实体，也不存在 RESOURCE 连接。`src/core/simulation_engine.gd` 协调舰船、科研、跨地点物流与维护，但不再推进地点级采矿、Production Line、Extraction Network 或普通 Construction。
-- 状态层：`src/core/game_state.gd` 的 `factory_worlds` 保存方格世界、实体、线路、建设订单和实体缓存；地点库存、运输中资产、舰船、研究、勘测、有限残骸点和终局状态继续保留。各保管域不得同时拥有同一批物资。
-- 查询层：`src/core/economy_planner.gd` 从 `factory_recipes`、方格建筑、实体缓存、Tile Resource Field 与实际物流路线建立只读 DAG 和瓶颈链；舰船/月、研发阶段和巨构阶段只提供 BOM 目标，不再借用旧 Production Line 估算虚构产能。
-- 展示层：`src/ui/main.gd` 和组件只调用应用命令；所有核心流程必须能在 UI 中完成。`Game.guidance_snapshot()` 提供页面、子区域、地点、聚焦实体、阻塞原因和获取链。
+- `ContentDatabase` 是内容定义入口；`SpaceGameState` 是唯一持久化状态。
+- `Game` 是玩家命令唯一入口。UI 只能读取快照、发送 intent，不能直接变更 `Game.state`、库存或 Factory 实体。
+- `FactoryGridSimulation` 结算每个 `factory_world` 的边界、地形、资源田、建筑占地、道路连通、电力、本地在途货物、缓存、配方和部署幽灵。
+- `SimulationEngine` 推进 Factory、地点环境、研究、舰船、勘测、项目与跨地点物流；`LogisticsEngine` 专属跨地点航运。道路不会修改航线、ETA、推进剂或舰船资格。
 
-舰船装配遵循独立的编辑提交边界：`ShipAssemblyMapView` 只维护当前未保存草稿，Palette 拖拽只创建舰体/零件节点，GraphEdit 连接只表达玩家意图；船体节点根据内容定义的 `slot_layout` 形成不同规模的装配背板，并把能源核心作为中央必需插槽。装配线直接采用 DSPONLINE 画布的短引线/共享横轨/短接入正交路径与节点避让逻辑，未连接插槽为空心灰色，连接后才按类型填色。画布使用页面剩余高度并支持按全部节点边界动态适配全图，舰船 Palette 仅投影 `unlocked_ship_plans` 中当前可用的舰体方案。`Game.ship_design_validation/save_ship_design/enqueue_saved_ship_design` 负责领域校验、事务持久化和进入船厂。`SimulationEngine.shipyard_runtime_plan` 将已保存设计的真实模块清单用于 BOM 与完工舰船，不从 UI 草稿或模板默认连线推断结果。
-
-## 资产状态
+## Factory 的资产与物流
 
 ```text
-Inventory.Available
-↔ Inventory.Reserved / ProjectStaging
-↔ InTransit
-↔ Installed / Assigned
-→ Consumed / Defined Loss
-
-FactoryWorld.EntityBuffers
-↔ FactoryWorld.ConstructionStaging
-↔ (future explicit Port Transfer) ↔ InTransit
-→ FactoryWorld.Consumed
+Location inventory（每个物品独立容量，唯一星球库存）
+       ↕ 道路可达仓库的装卸/接入
+机器输入缓存 ← 道路在途货物 → 机器输出缓存
+       ↓
+建筑成品 → 已部署实体 / 缺货幽灵
 ```
 
-普通生产只能通过 `Resource Tiles ⊂ Extractor Footprint → Cargo Link → Machine + Recipe → Storage` 发生。矿机覆盖 9 格时全覆盖为 100%，每少一个同类资源格降低 10%；异种资源田的生成排斥保证一个矿机不能同时触及两种矿。线路有真实吞吐，电网欠压按比例降速，输出满仓逐级反压。旧 Factory/Production Method、舰船点选采矿、Extraction Network 和普通 Construction 已退出运行态，不存在兼容产出路径。
+- 仓库实体不保存第二份经济库存；同地点不同道路分量的仓库仍接入同一 Location 库存。
+- 机器缓存、道路在途货物、舰队货舱、星际 Shipment 与项目暂存各自是独立保管域。转移必须先扣除原保管域；同一批物资不能镜像。
+- 普通建筑通过“成品建筑 → 部署”完成。`construction_orders` 仅表达缺货幽灵和部署等待，不能成为普通现场 BOM、工时或施工暂存的第二套经济。
+- 已建道路同时是本地货运和电力拓扑。未连接道路的建筑没有电；玩家不再创建本地 CARGO/POWER link、端口过滤或手动仓库进出口。
 
-战斗掉落回收与远征产品继续进入编队的 `recovered` 货舱，随后通过容量受控的卸货事务进入地点仓库；它们不是采矿。未来入侵事件结束后可调用 `WreckSiteSystem.create_after_invasion()` 生成有限残骸点，`SALVAGE` 与 `ANALYSIS` 消耗同一份 `remaining_work`，归零后活动点立即消失。该接口不接受舰船或编队参数，当前也不提前结算奖励表，避免形成常驻“打捞职业”。
+## Factory 状态与快照
 
-`SpaceGameState.asset_ledger_snapshot()` 按物品汇总 Available、Reserved、InTransit、ProjectStaging、InstalledAssigned、Consumed 与 Lost，并在独立的 `FactoryWorld` 域列出实体缓存、施工暂存、生产和消费。仓储向施工订单拨料只改变保管域；设施完成时才消费材料。物流事务同时记录质量、体积和路线占用，移动所有权不计为生产或消费。
+- `factory_worlds` 保存世界边界/seed、稀疏资源田、地形差量、实体、道路、道路在途任务、部署幽灵、统计与 `dsp_effects`。
+- 资源田不是实体或道路端点。地形和资源均可由 seed、版本和稀疏描述重建；不建立整颗星球的 Tile 数组。
+- Factory Workspace 读取版本化快照，包含道路、道路物流摘要、共享库存投影、建筑供电/道路状态、资源/地形视图和调色板。命令使用事务、命令 ID 幂等和拓扑版本校验。
+- `FactoryRoadTransport` 只调度单一星球内道路任务；`LogisticsEngine` 只调度地点间 Shipment。二者通过 Location 库存接续，不互相复制状态。
 
-## 扩展原则
+## 其它领域
 
-- 普通地表建设只使用方格 Construction Order；地点开发和终局空间工程必须另接方格建设或专用空间工程实体，不能复用已退役的普通 Construction Project。
-- 复用正常 Demand Registry 表达维护、建设、研发和造船需求。
-- 地点差异来自环境条件、资源潜力、运输周期和维护品消耗，不使用地区职业或无条件百分比 Buff。
-- 单恒星系边界是当前产品约束；不保留跨恒星运行入口。
-- schema 35 以前的 `background_economy`、槽位 `automation_rules`、抽象 Facility/Industry Level、矿点状态、采掘指挥容量和聚合工业运行态仅为迁移取证数据；schema 36 起 `factory_worlds` 是普通工业唯一权威。旧 `mining_operations`、`mining_site_states`、`extraction_command`、`industrial_operations`、`construction_operations`、`extraction_network_states`、`automation_rules`、`background_economy` 与制造模块库存不再序列化、推进、查询或结算。
-- schema 37 的 `fleet_formations` 是舰船编队唯一权威；编队不带工作类型。旧 `extraction_assets` / `expedition_fleet` 不再序列化，旧远征成员迁入默认特遣队。
-- schema 38 删除采矿与施工支援插件、舰船采集活动和旧矿舰内容；迁移会剥离旧插件，把 `ultimate_miner` 映射为 `ultimate_transport`，并把旧 `mobile_constructor` 保留身份地转为 `heavy_lift_transport`。`wreck_sites` 只保存入侵战后有限残骸点，不是舰队工作槽。
-- 性能优化使用内容依赖图缓存、状态修订号和事件驱动 UI 刷新，避免每帧全图递归。
+- **研究**：项目阶段、材料、设施条件和原型由 `SimulationEngine` 推进。矩阵实验室通过 Factory 事件增加研究工作积分，不另建科技树。
+- **舰船**：装配画布维护未保存草稿，提交后由 `Game` 校验和持久化；船厂根据已保存 BOM 制造舰船。舰船用于战斗、探索和跨地点运输，不承担采矿、施工或常驻打捞。
+- **勘测与环境**：地点状态按调查阶段推进；环境影响发电、需求、建设难度和维护投影。调查结果生成远端世界的地形和资源情报，不授予地球开局包。
+- **DSP 项目**：燃料、蓄能、喷涂、接收站、矩阵、发射、出口、黑洞确认、空间站与时间效果都记录在现有世界/项目权威中；没有第二套 DSP 物流或账号系统。
+
+## 已退役与不在当前范围
+
+- 旧地点级 `mining_operations`、`industrial_operations`、`construction_operations`、Extraction Network、背景工业、舰船采矿/施工职责和普通 CARGO/POWER 玩家连线不参与当前运行。
+- 当前产品只运行单一 `sol` 恒星系。完整戴森球壳、第二恒星系、跨恒星物流和本地铁路不是当前架构目标。
+- 区域蓝图、地形改造、完整车辆表现与大工厂负载基准仍是后续工作；有限矿量待产品确认。
+
+## UI 契约
+
+生产 UI 使用 1920×1080 逻辑视口，3840×2160 为主要视觉验收。窗口只做一次统一缩放和居中留白；Factory、星系图、研究和舰船装配的内容相机彼此独立。

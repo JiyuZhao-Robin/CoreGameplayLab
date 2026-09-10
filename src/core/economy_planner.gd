@@ -102,6 +102,13 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 		for entity_id_value in world.get("entities", {}).keys():
 			var entity_id := str(entity_id_value)
 			var entity: Dictionary = world.get("entities", {}).get(entity_id_value, {})
+			if str(entity.get("kind", "")) == "STORAGE" and str(entity.get("status", "")) != "UNDER_CONSTRUCTION":
+				var warehouse_capacity := maxi(0, int(content.factory_buildings.get(str(entity.get("definition_id", "")), {}).get("inventory_capacity", 0)))
+				for stored_item in rows:
+					var stored := maxi(0, int(entity.get("inventory", {}).get(stored_item, 0)))
+					rows[stored_item]["storage_capacity"] += warehouse_capacity
+					rows[stored_item]["free_storage"] += maxi(0, warehouse_capacity - stored)
+					rows[stored_item]["storage_on_hand"] += stored
 			for field in ["inventory", "inputs", "outputs"]:
 				for item_id_value in entity.get(field, {}).keys():
 					var item_id := str(item_id_value)
@@ -170,6 +177,7 @@ func current_economy_analysis(state: SpaceGameState, location_id: String) -> Dic
 	var result: Array = []
 	for item_id_value in rows.keys():
 		var row: Dictionary = rows[item_id_value]
+		row["storage_utilization"] = float(row["storage_on_hand"]) / float(row["storage_capacity"]) if float(row["storage_capacity"]) > 0.0 else (1.0 if int(row["storage_on_hand"]) > 0 else 0.0)
 		_finalize_economy_row(row)
 		if int(row.get("stock", 0)) > 0 or absf(float(row.get("net_rate", 0.0))) > 0.000001 or float(row.get("committed_demand", 0.0)) > 0.0 or not row.get("blocked_sources", []).is_empty():
 			result.append(row)
@@ -191,10 +199,14 @@ func _append_factory_blocker(row: Dictionary, world_id: String, entity: Dictiona
 
 func _empty_economy_row(state: SpaceGameState, location_id: String, item_id: String, storage: Dictionary) -> Dictionary:
 	var storage_class: String = str(simulation.storage_class_for_item(item_id))
-	var class_row: Dictionary = storage.get("classes", {}).get(storage_class, {})
+	var class_row: Dictionary = storage.get("items", {}).get(item_id, {})
 	var on_hand := state.item_quantity(item_id, location_id)
 	var available := state.available_item_quantity(item_id, location_id)
-	return {"product_id":item_id, "stock":on_hand, "on_hand":on_hand, "location_on_hand":on_hand, "factory_on_hand":0, "construction_staging":0, "reserved":maxi(0, on_hand - available), "available":available, "storage_class":storage_class, "storage_capacity":class_row.get("capacity", 0.0), "free_storage":class_row.get("free", 0.0), "storage_utilization":class_row.get("utilization", 0.0), "production_rate":0.0, "production_consumption_rate":0.0, "continuous_demand_rate":0.0, "committed_demand":0.0, "import_rate":0.0, "export_rate":0.0, "net_rate":0.0, "stock_coverage_hours":INF, "demand_sources":[], "blocked_sources":[], "status":"STABLE"}
+	# A separate custody count prevents machine buffers and construction escrow
+	# from being presented as occupying a warehouse slot.
+	var result := {"storage_on_hand":on_hand}
+	result.merge({"product_id":item_id, "stock":on_hand, "on_hand":on_hand, "location_on_hand":on_hand, "factory_on_hand":0, "construction_staging":0, "reserved":maxi(0, on_hand - available), "available":available, "storage_class":storage_class, "storage_capacity":class_row.get("capacity", 0.0), "free_storage":class_row.get("free", 0.0), "storage_utilization":class_row.get("utilization", 0.0), "production_rate":0.0, "production_consumption_rate":0.0, "continuous_demand_rate":0.0, "committed_demand":0.0, "import_rate":0.0, "export_rate":0.0, "net_rate":0.0, "stock_coverage_hours":INF, "demand_sources":[], "blocked_sources":[], "status":"STABLE"})
+	return result
 
 
 func _finalize_economy_row(row: Dictionary) -> void:
@@ -463,7 +475,9 @@ func _planned_storage(required: Dictionary) -> Dictionary:
 	for item_id_value in required.keys():
 		var item_id := str(item_id_value)
 		var storage_class: String = str(simulation.storage_class_for_item(item_id))
-		result[storage_class] = float(result.get(storage_class, 0.0)) + float(required[item_id]) * simulation.storage_units_for_item(item_id)
+		# A class rating applies independently to each material; use the largest
+		# item target, not the sum of their transport volumes.
+		result[storage_class] = maxf(float(result.get(storage_class, 0.0)), float(required[item_id]))
 	return result
 
 
