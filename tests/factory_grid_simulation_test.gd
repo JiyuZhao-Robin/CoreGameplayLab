@@ -429,7 +429,11 @@ func _test_factory_bound_force_crop() -> void:
 	undersized_state.factory_worlds["undersized-earth-grid"] = undersized_world
 	var undersized_before: Dictionary = undersized_world.duplicate(true)
 	simulation.ensure_frontier_state(undersized_state)
-	_check(undersized_state.factory_worlds.get("undersized-earth-grid", {}) == undersized_before, "worlds already below their Location profile remain byte-stable")
+	undersized_before["environment"] = simulation.location_environment(undersized_state, "earth_orbit").duplicate(true)
+	_check(undersized_state.factory_worlds.get("undersized-earth-grid", {}) == undersized_before, "undersized worlds retain their spatial state while adopting canonical Location environment")
+	var reconciled_before: Dictionary = undersized_state.factory_worlds["undersized-earth-grid"].duplicate(true)
+	simulation.ensure_frontier_state(undersized_state)
+	_check(undersized_state.factory_worlds["undersized-earth-grid"] == reconciled_before, "reconciled undersized worlds remain byte-stable")
 	var dirty_state := SpaceGameState.create_new(database.domains.keys(), database.regions)
 	var dirty_world := simulation.factory_grid.create_world("dirty-profile-grid", "earth_orbit", Vector2i(1024, 640), 730201)
 	simulation.factory_grid.place_entity_immediate(dirty_world, "grid_solar_array", Vector2i(700, 400), "", "hidden-power")

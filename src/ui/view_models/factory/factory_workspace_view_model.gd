@@ -7,6 +7,7 @@ extends RefCounted
 
 const PROTOCOL_VERSION := 1
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
+const Terrain = preload("res://src/core/factory_terrain.gd")
 
 var _buildings_by_id: Dictionary = {}
 var _recipes_by_id: Dictionary = {}
@@ -89,6 +90,10 @@ func placement_preview(snapshot: Dictionary, building: Dictionary, origin: Vecto
 	if origin.x < bounds_origin.x or origin.y < bounds_origin.y or origin.x + size.x > bounds_origin.x + bounds_size.x or origin.y + size.y > bounds_origin.y + bounds_size.y:
 		return {"valid":false, "reason_code":"OUT_OF_BOUNDS", "footprint":footprint}
 	_ensure_placement_index(snapshot)
+	for y in range(origin.y, origin.y + size.y):
+		for x in range(origin.x, origin.x + size.x):
+			if not Terrain.is_buildable(snapshot, Vector2i(x, y)):
+				return {"valid":false, "reason_code":"TERRAIN_BLOCKED", "footprint":footprint}
 	var candidates := _placement_chunk_index.query(Rect2(Vector2(origin), Vector2(size)))
 	for entity_id_value in candidates.get("entity_ids", []):
 		var entity: Dictionary = _placement_entities_by_id.get(str(entity_id_value), {})

@@ -88,11 +88,15 @@ static func _metrics(snapshot: Dictionary, entities: Array, orders: Array, mater
 
 static func _materials(snapshot: Dictionary, entities: Array, orders: Array, buildings: Array, recipes_by_id: Dictionary) -> Dictionary:
 	var totals := {}
+	var road_mode := str(snapshot.get("logistics_mode", "")) == "PLANET_SHARED_ROADS"
+	if road_mode:
+		_add_manifest(totals, snapshot.get("shared_inventory", {}), "stored")
 	for entity_value in entities:
 		var entity := entity_value as Dictionary
 		var kind := _kind(entity)
 		if _is_operational_storage(entity):
-			_add_manifest(totals, entity.get("inventory", {}), "stored")
+			if not road_mode:
+				_add_manifest(totals, entity.get("inventory", {}), "stored")
 		else:
 			# Machine/router buffers and inactive storage remain visible for
 			# diagnostics, but never enter construction-spendable stock.
@@ -122,7 +126,9 @@ static func _materials(snapshot: Dictionary, entities: Array, orders: Array, bui
 	# targets that have no stock or live order yet.
 	for building_value in buildings:
 		var building := building_value as Dictionary
-		_add_manifest(totals, _item_quantities(building.get("construction_cost", [])), "none")
+		var deployment_item_id := str(building.get("deployment_item_id", ""))
+		if not deployment_item_id.is_empty():
+			_add_manifest(totals, {deployment_item_id:1}, "none")
 
 	var rows: Array = []
 	var by_item := {}
@@ -134,7 +140,9 @@ static func _materials(snapshot: Dictionary, entities: Array, orders: Array, bui
 		var total: Dictionary = totals.get(item_id, {})
 		var stored := maxi(0, int(total.get("stored", 0)))
 		var location_available_amount := maxi(0, int(total.get("location_available", 0)))
-		var available := stored + location_available_amount
+		# In road mode these are two views of ONE pool: on-hand versus
+		# unreserved. Adding them would count each usable material twice.
+		var available := location_available_amount if road_mode else stored + location_available_amount
 		var required := maxi(0, int(total.get("required", 0)))
 		var row := {
 			"item_id":item_id,
@@ -147,9 +155,8 @@ static func _materials(snapshot: Dictionary, entities: Array, orders: Array, bui
 			"production_per_second":maxf(0.0, float(total.get("production_per_second", 0.0))),
 			"consumption_per_second":maxf(0.0, float(total.get("consumption_per_second", 0.0)))
 		}
-		# The metric is intentionally factory storage only. The material row's
-		# available field remains the construction-ready combination of storage
-		# plus unreserved same-location inventory.
+		# Road mode reports planetary on-hand stock; legacy mode retains the
+		# original physical-storage metric. Availability excludes reservations.
 		stored_items += stored
 		rows.append(row)
 		by_item[item_id] = row
@@ -173,10 +180,11 @@ static func _build_plans(buildings: Array, materials_by_item: Dictionary, produc
 		var materials: Array = []
 		var dependencies: Array = []
 		var seen_dependencies := {}
-		var costs := _item_quantities(building.get("construction_cost", []))
+		var deployment_item_id := str(building.get("deployment_item_id", ""))
+		var costs := {deployment_item_id:1} if not deployment_item_id.is_empty() else {}
 		var item_ids: Array = costs.keys()
 		item_ids.sort_custom(func(left, right): return str(left) < str(right))
-		var affordable := true
+		var affordable := not deployment_item_id.is_empty()
 		for item_id_value in item_ids:
 			var item_id := str(item_id_value)
 			var required := maxi(0, int(costs.get(item_id, 0)))
@@ -198,7 +206,8 @@ static func _build_plans(buildings: Array, materials_by_item: Dictionary, produc
 		plans.append({
 			"definition_id":definition_id,
 			"affordable":affordable,
-			"work_required":maxf(0.0, float(building.get("construction_work", 0.0))),
+			"deployment_item_id":deployment_item_id,
+			"work_required":0.0,
 			"power_demand_kw":maxf(0.0, float(building.get("power_demand_kw", 0.0))),
 			"materials":materials,
 			"dependencies":dependencies
@@ -371,8 +380,8 @@ static func _producer_candidates(buildings: Array, recipes_by_id: Dictionary, en
 					"configured":_has_configured_producer(entities, building_id, recipe_id),
 					"construction_affordable":_building_construction_affordable(building, materials_by_item),
 					"resource_backed":_recipe_is_resource_backed(recipe, resource_item_ids),
-					"requires_own_output":_item_quantities(building.get("construction_cost", [])).has(item_id),
-					"construction_work":maxf(0.0, float(building.get("construction_work", 0.0)))
+					"requires_own_output":str(building.get("deployment_item_id", "")) == item_id,
+					"construction_work":0.0
 				}
 				var candidates: Array = result.get(item_id, []) as Array
 				candidates.append(candidate)
@@ -515,13 +524,8 @@ static func _has_configured_producer(entities: Array, building_id: String, recip
 
 
 static func _building_construction_affordable(building: Dictionary, materials_by_item: Dictionary) -> bool:
-	var costs := _item_quantities(building.get("construction_cost", []))
-	for item_id_value in costs.keys():
-		var item_id := str(item_id_value)
-		var material: Dictionary = materials_by_item.get(item_id, {})
-		if int(material.get("available", 0)) < int(costs.get(item_id, 0)):
-			return false
-	return true
+	var item_id := str(building.get("deployment_item_id", ""))
+	return not item_id.is_empty() and int(materials_by_item.get(item_id, {}).get("available", 0)) >= 1
 
 
 static func _resource_item_ids(resource_fields_value) -> Dictionary:

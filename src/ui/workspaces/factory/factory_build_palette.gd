@@ -7,6 +7,7 @@ extends PanelContainer
 
 signal building_selected(building_id: String)
 signal filter_changed(filter_id: String)
+signal road_tool_selected(tool_mode: String, tier: int)
 
 const ThemeTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
@@ -59,6 +60,11 @@ var _cards: HBoxContainer
 var _empty_label: Label
 var _detail_body: VBoxContainer
 var _palette_scroll: ScrollContainer
+var _road_tools: HBoxContainer
+var _road_tier_one_button: Button
+var _road_tier_two_button: Button
+var _road_remove_button: Button
+var _road_cost_label: Label
 
 
 func _ready() -> void:
@@ -96,6 +102,22 @@ func ensure_built() -> void:
 	_title_label.clip_text = true
 	_title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	header.add_child(_title_label)
+
+	_road_tools = HBoxContainer.new()
+	_road_tools.name = "FactoryRoadTools"
+	_road_tools.add_theme_constant_override("separation", ThemeTokens.layout_px(3))
+	_road_tools.visible = false
+	header.add_child(_road_tools)
+	_road_tier_one_button = _road_button("FactoryRoadTierOne", _t("factory.road.build_tier_one", "Basic road"), _t("factory.road.build_tier_one_tooltip", "Draw a shared local road. Basic roads are free during bootstrap."), "BUILD", 1)
+	_road_tools.add_child(_road_tier_one_button)
+	_road_tier_two_button = _road_button("FactoryRoadTierTwo", _t("factory.road.build_tier_two", "Reinforced road"), _t("factory.road.build_tier_two_tooltip", "Draw or upgrade a faster shared road. Costs 1 iron ingot per tile."), "BUILD", 2)
+	_road_tools.add_child(_road_tier_two_button)
+	_road_remove_button = _road_button("FactoryRoadRemove", _t("factory.road.remove", "Remove road"), _t("factory.road.remove_tooltip", "Remove road tiles."), "REMOVE", 1)
+	_road_tools.add_child(_road_remove_button)
+	_road_cost_label = _label("", MUTED, 10)
+	_road_cost_label.name = "FactoryRoadCost"
+	_road_cost_label.tooltip_text = _t("factory.road.cost_hint", "Basic roads are free. Reinforced roads cost 1 iron ingot per tile.")
+	_road_tools.add_child(_road_cost_label)
 
 	# The category strip owns its overflow. Long localized labels therefore stay
 	# reachable without increasing the minimum width of the whole Factory page.
@@ -196,12 +218,18 @@ func set_buildings(buildings: Array, available: bool, selected_building_id: Stri
 			continue
 		var building := building_value as Dictionary
 		var footprint: Dictionary = building.get("footprint", {}) if building.get("footprint", {}) is Dictionary else {}
-		signature_parts.append("%s:%s:%s:%s:%s" % [
+		# `available_count` is an authoritative, unreserved Location-inventory
+		# projection.  Keep it in the presentation signature so a deployment or
+		# a completed manufacturing cycle updates the dock without changing its
+		# selected card or requiring an unrelated topology refresh.
+		signature_parts.append("%s:%s:%s:%s:%s:%s:%s" % [
 			str(building.get("id", "")),
 			str(building.get("name", "")),
 			str(building.get("kind", "")),
 			str(footprint.get("width", footprint.get("x", 1))),
-			str(footprint.get("height", footprint.get("y", 1)))
+			str(footprint.get("height", footprint.get("y", 1))),
+			str(building.get("deployment_item_id", "")),
+			str(maxi(0, int(building.get("available_count", 0))))
 		])
 	var next_signature := "|".join(signature_parts)
 	if next_signature != _building_signature:
@@ -225,6 +253,25 @@ func set_selected_building(building_id: String) -> void:
 	_selected_building_id = building_id
 	_sync_selection_state()
 	_refresh_header()
+
+
+func set_road_tools_enabled(enabled: bool, active_tool: String = "", tier: int = 1, available: bool = true) -> void:
+	ensure_built()
+	if not is_instance_valid(_road_tools):
+		return
+	_road_tools.visible = enabled
+	var normalized := active_tool.to_upper()
+	var selected_tier := clampi(tier, 1, 2)
+	_road_tier_one_button.disabled = not available
+	_road_tier_two_button.disabled = not available
+	_road_remove_button.disabled = not available
+	_road_tier_one_button.set_pressed_no_signal(normalized == "BUILD" and selected_tier == 1)
+	_road_tier_two_button.set_pressed_no_signal(normalized == "BUILD" and selected_tier == 2)
+	_road_remove_button.set_pressed_no_signal(normalized == "REMOVE")
+	if normalized == "BUILD" and selected_tier == 2:
+		_road_cost_label.text = _t("factory.road.cost_tier_two", "1 iron ingot / tile")
+	else:
+		_road_cost_label.text = _t("factory.road.cost_tier_one", "Basic road · free")
 
 
 func show_building(building_id: String, isolate: bool = false) -> void:
@@ -339,6 +386,8 @@ func _rebuild_cards() -> void:
 		button.tooltip_text = _building_tooltip(building)
 		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.set_meta("building_id", building_id)
+		button.set_meta("deployment_item_id", _deployment_item_id(building))
+		button.set_meta("available_count", _available_count(building))
 		var icon := _building_icon(building)
 		if icon != null:
 			button.icon = icon
@@ -458,7 +507,12 @@ func _building_card_text(building: Dictionary) -> String:
 	var footprint: Dictionary = building.get("footprint", {}) if building.get("footprint", {}) is Dictionary else {}
 	var width := int(footprint.get("width", footprint.get("x", 1)))
 	var height := int(footprint.get("height", footprint.get("y", 1)))
-	return "%s\n%d × %d" % [str(building.get("name", building.get("id", ""))), width, height]
+	return "%s\n%d × %d · ×%d" % [
+		str(building.get("name", building.get("id", ""))),
+		width,
+		height,
+		_available_count(building)
+	]
 
 
 func _building_tooltip(building: Dictionary) -> String:
@@ -466,12 +520,25 @@ func _building_tooltip(building: Dictionary) -> String:
 	var power_generation := float(building.get("power_generation_kw", 0.0))
 	var power_demand := float(building.get("power_demand_kw", 0.0))
 	var power_text := "+%.0f kW" % power_generation if power_generation > 0.0 else "-%.0f kW" % power_demand
-	return "%s · %s\n%s · %s" % [
+	var available_count := _available_count(building)
+	var deployment_hint := _t("factory.building.deploy_available_hint", "Deploys one finished building from planet inventory.") if available_count > 0 else _t("factory.building.deploy_missing_hint", "No finished building available. Placement creates a ghost that deploys automatically when one arrives.")
+	return "%s · %s\n%s · %s\n%s\n%s" % [
 		str(building.get("name", building.get("id", ""))),
 		_t("factory.kind.%s" % kind.to_lower(), kind.capitalize()),
 		power_text,
+		_t("factory.building.available", "Available: %d") % available_count,
+		deployment_hint,
 		_t("factory.palette.card_action", "Select for continuous placement")
 	]
+
+
+func _deployment_item_id(building: Dictionary) -> String:
+	var item_id := str(building.get("deployment_item_id", ""))
+	return item_id if not item_id.is_empty() else "building_" + str(building.get("id", ""))
+
+
+func _available_count(building: Dictionary) -> int:
+	return maxi(0, int(building.get("available_count", 0)))
 
 
 func _building_icon(building: Dictionary) -> Texture2D:
@@ -493,6 +560,18 @@ func _select_quick_filter_metadata(value: String) -> void:
 			_quick_filter.select(index)
 			return
 	_quick_filter.select(0)
+
+
+func _road_button(node_name: String, label: String, tooltip: String, tool_mode: String, tier: int) -> Button:
+	var button := Button.new()
+	button.name = node_name
+	button.text = label
+	button.tooltip_text = tooltip
+	button.toggle_mode = true
+	button.focus_mode = Control.FOCUS_ALL
+	button.add_theme_font_size_override("font_size", ThemeTokens.font_size(10))
+	button.pressed.connect(func() -> void: road_tool_selected.emit(tool_mode, tier))
+	return button
 
 
 func _label(text_value: String, color: Color, font_size: int) -> Label:

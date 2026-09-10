@@ -11,6 +11,7 @@ var _resource_ids_by_chunk: Dictionary = {}
 var _entity_ids_by_chunk: Dictionary = {}
 var _order_ids_by_chunk: Dictionary = {}
 var _link_ids_by_chunk: Dictionary = {}
+var _road_ids_by_chunk: Dictionary = {}
 var _entities_by_id: Dictionary = {}
 var _rebuild_count := 0
 
@@ -27,6 +28,7 @@ func rebuild(snapshot: Dictionary) -> void:
 	_entity_ids_by_chunk.clear()
 	_order_ids_by_chunk.clear()
 	_link_ids_by_chunk.clear()
+	_road_ids_by_chunk.clear()
 	_entities_by_id.clear()
 
 	for resource_value in snapshot.get("resource_fields", []):
@@ -69,6 +71,13 @@ func rebuild(snapshot: Dictionary) -> void:
 			# Legacy snapshots have no authored route. Retain the previous conservative
 			# endpoint union until the authoritative domain normalizes them.
 			_add_record(_link_ids_by_chunk, link_id, source_bounds.merge(target_bounds).grow(0.001))
+	for road_value in snapshot.get("roads", []):
+		if not road_value is Dictionary:
+			continue
+		var road := road_value as Dictionary
+		var position := _point(road)
+		var road_id := "%d:%d" % [position.x, position.y]
+		_add_record(_road_ids_by_chunk, road_id, Rect2(Vector2(position), Vector2.ONE))
 
 
 func query(world_rect: Rect2) -> Dictionary:
@@ -78,7 +87,8 @@ func query(world_rect: Rect2) -> Dictionary:
 		"resource_ids":_collect_ids(_resource_ids_by_chunk, chunk_keys),
 		"entity_ids":_collect_ids(_entity_ids_by_chunk, chunk_keys),
 		"order_ids":_collect_ids(_order_ids_by_chunk, chunk_keys),
-		"link_ids":_collect_ids(_link_ids_by_chunk, chunk_keys)
+		"link_ids":_collect_ids(_link_ids_by_chunk, chunk_keys),
+		"road_ids":_collect_ids(_road_ids_by_chunk, chunk_keys)
 	}
 
 
@@ -101,7 +111,7 @@ func chunk_size_tiles() -> int:
 
 func indexed_chunk_count() -> int:
 	var keys := {}
-	for index in [_resource_ids_by_chunk, _entity_ids_by_chunk, _order_ids_by_chunk, _link_ids_by_chunk]:
+	for index in [_resource_ids_by_chunk, _entity_ids_by_chunk, _order_ids_by_chunk, _link_ids_by_chunk, _road_ids_by_chunk]:
 		for key_value in (index as Dictionary).keys():
 			keys[str(key_value)] = true
 	return keys.size()

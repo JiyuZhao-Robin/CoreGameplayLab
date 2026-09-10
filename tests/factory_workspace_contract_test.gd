@@ -422,11 +422,8 @@ func _test_versioned_application_intents() -> void:
 	_check(game.state.to_dictionary() == state_before_short_export and not game.state.factory_worlds["intent-grid"].get("command_receipts", {}).has("contract-export-short-source"), "source-limited export rejection leaves both custody domains and durable receipts unchanged")
 	var depot_inventory: Dictionary = game.state.factory_worlds["intent-grid"].get("entities", {}).get("depot", {}).get("inventory", {})
 	var depot_inventory_before_capacity_test: Dictionary = depot_inventory.duplicate(true)
-	var depot_non_iron_total := 0
-	for item_id_value in depot_inventory.keys():
-		if str(item_id_value) != "iron_ore":
-			depot_non_iron_total += int(depot_inventory.get(item_id_value, 0))
-	depot_inventory["iron_ore"] = maxi(0, 999 - depot_non_iron_total)
+	# Capacity is independent for the imported material, not the sum of cargo.
+	depot_inventory["scrap_metal"] = 999
 	var state_before_partial_factory_capacity: Dictionary = game.state.to_dictionary()
 	var partial_factory_capacity: Dictionary = game.execute_factory_command({
 		"protocol_version":1,
@@ -440,7 +437,7 @@ func _test_versioned_application_intents() -> void:
 	_check(game.state.to_dictionary() == state_before_partial_factory_capacity and not game.state.factory_worlds["intent-grid"].get("command_receipts", {}).has("contract-import-partial-destination"), "capacity-limited import rejection leaves Location, Factory and durable receipts unchanged")
 	game.state.factory_worlds["intent-grid"]["entities"]["depot"]["inventory"] = depot_inventory_before_capacity_test
 	var earth_storage: Dictionary = game.state.location_state("earth_orbit").get("logistics", {}).get("storage_capacities", {})
-	var bulk_used := float(game.simulation.location_storage_snapshot(game.state, "earth_orbit").get("classes", {}).get("BULK", {}).get("used", 0.0))
+	var bulk_used := float(game.state.item_quantity("scrap_metal", "earth_orbit"))
 	var export_depot_inventory: Dictionary = game.state.factory_worlds["intent-grid"].get("entities", {}).get("depot", {}).get("inventory", {})
 	var export_depot_inventory_before_capacity_test: Dictionary = export_depot_inventory.duplicate(true)
 	export_depot_inventory["scrap_metal"] = maxi(2, int(export_depot_inventory.get("scrap_metal", 0)))
@@ -1155,7 +1152,7 @@ func _test_factory_site_storage_capability() -> void:
 	var profile: Dictionary = simulation.location_industry_constraint_profile(state, "earth_orbit")
 	var capacities: Dictionary = profile.get("storage_capacities", {})
 	_check(float(capacities.get("FLUID", 0.0)) == 1200.0, "typed Factory fluid storage contributes its installed site-storage capability")
-	_check(float(capacities.get("BULK", 0.0)) == 0.0, "non-storage Factory work buffers do not create phantom site-storage capability")
+	_check(float(capacities.get("BULK", 0.0)) == 1200.0, "warehouse supplies every independent material slot without adding the construction yard's work buffer")
 
 
 func _test_facility_providers_are_location_bound() -> void:

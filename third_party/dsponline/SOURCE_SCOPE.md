@@ -42,6 +42,21 @@ layout, canvas rendering, vector/geometric treatment, colors, and UI behavior.
 
 ## Exclusions
 
+### 2026-09-10 user-authorized scope addition
+
+The project user additionally requested the complete source building, mineral,
+and production catalog. The adaptation now includes `src/game/content.ts`
+(78 items, 39 buildings, 80 recipes, 42 construction references), its fuel and
+proliferation constants, and factory-facing project behavior from `engine.ts`,
+`endgame.ts`, and `systemSpaceStation.ts`. A reproducible importer and source
+SHA-256 are recorded in `data/dsponline_industry.json`.
+
+This is an adaptation to Location-owned inventory, roads, finished-building
+deployment, and the existing research/stellar-logistics authorities, not a copy
+of upstream account, online activity, branding, or full world/research systems.
+New bitmap art was generated independently and its prompts are retained beside
+the project assets. This addition records user direction, not a new license grant.
+
 - Do not use upstream logos, official names, domains, similar branding,
   signatures, update channels, or account entry points as this game's branding.
 - `public/icon.svg` and other official-logo/brand assets are explicitly outside

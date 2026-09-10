@@ -7,6 +7,8 @@ extends RefCounted
 ## silhouette before a bespoke cell is added to the atlas.
 
 const ATLAS_PATH := "res://assets/ui/factory/generated/factory_building_icon_atlas_v1.png"
+const CORE_PATH := "res://assets/ui/factory/core/generated/planetary_core_v1.png"
+const DspArt = preload("res://src/ui/workspaces/factory/factory_dsp_art.gd")
 const COLUMNS := 4
 const ROWS := 3
 
@@ -63,6 +65,16 @@ static func atlas_region(texture: Texture2D, definition_id: String, kind: String
 
 
 static func icon_texture(texture: Texture2D, definition_id: String, kind: String) -> AtlasTexture:
+	if definition_id.begins_with("grid_dsp_"):
+		var imported := DspArt.texture(definition_id)
+		if imported != null:
+			return imported
+	if definition_id == "grid_planetary_core" and ResourceLoader.exists(CORE_PATH):
+		var core_texture := load(CORE_PATH) as Texture2D
+		var core_atlas := AtlasTexture.new()
+		core_atlas.atlas = core_texture
+		core_atlas.region = Rect2(Vector2.ZERO,core_texture.get_size())
+		return core_atlas
 	var region := atlas_region(texture, definition_id, kind)
 	if texture == null or region.size.x <= 0.0 or region.size.y <= 0.0:
 		return null

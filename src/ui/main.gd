@@ -15,6 +15,7 @@ const ShipRegistryQueryScript = preload("res://src/ui/view_models/ship_registry_
 const ShipRegistrySelectionScript = preload("res://src/ui/view_models/ship_registry_selection.gd")
 const ShipRegistrySelectionCheckboxScript = preload("res://src/ui/components/ship_registry_selection_checkbox.gd")
 const FactoryWorkspaceScript = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
+const LocationOperationsScript = preload("res://src/ui/workspaces/location/location_operations_workspace.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const ResponsivePolicy = preload("res://src/ui/responsive_ui_policy.gd")
 
@@ -112,6 +113,7 @@ var _speed_buttons: Dictionary = {}
 var _nav_buttons: Dictionary = {}
 var _selected_location_id := SpaceGameState.MAIN_BASE_LOCATION_ID
 var _location_section := "overview"
+var _location_operations: Control
 var _fleet_section := "roster"
 var _fleet_roster_filter := "ALL"
 var _fleet_roster_search_query := ""
@@ -720,7 +722,7 @@ func _rebuild_resource_rail() -> void:
 	var storage := Game.simulation.location_storage_snapshot(Game.state, _selected_location_id)
 	var storage_tone := COLOR_BAD if float(storage.get("utilization", 0.0)) >= 0.98 else (COLOR_WARN if float(storage.get("utilization", 0.0)) >= 0.85 else COLOR_TEXT)
 	box.add_child(_label(I18n.core("resource_rail.storage", "STORAGE"), 10, COLOR_MUTED))
-	box.add_child(_label(I18n.core("resource_rail.storage_value", "%d / %d units · %d%%") % [int(storage.get("used", 0.0)), int(storage.get("capacity", 0.0)), int(float(storage.get("utilization", 0.0)) * 100.0)], 13, storage_tone))
+	box.add_child(_label(I18n.core("resource_rail.storage_value") % [int(storage.get("full_item_count", 0)), int(storage.get("item_count", 0)), int(float(storage.get("max_utilization", 0.0)) * 100.0)], 13, storage_tone))
 	var storage_bar := ProgressBar.new()
 	storage_bar.max_value = 1.0
 	storage_bar.value = float(storage.get("utilization", 0.0))
@@ -813,7 +815,7 @@ func _rebuild_sidebar() -> void:
 			_location_name(_selected_location_id),
 			_status_text(String(selected.get("type", "UNKNOWN"))), _status_text(String(selected.get("survey_state", "UNKNOWN"))),
 			I18n.core("header.power", "Power"), float(power.get("current_demand", 0.0)), float(power.get("generation_capacity", power.get("available_capacity", 0.0))),
-			I18n.core("inventory.storage", "Storage"), float(storage.get("used", 0.0)), float(storage.get("capacity", 0.0)),
+			I18n.core("location.operations.full_slots"), float(storage.get("full_item_count", 0)), float(storage.get("item_count", 0)),
 			I18n.core("page.logistics", "Logistics"), _status_text(String(logistics.get("status", "NOT_CONNECTED")))
 		], COLOR_TEXT))
 		var open_location := _button(I18n.core("sidebar.open_location", "Open Location"), _open_location.bind(_selected_location_id), false, COLOR_ACCENT)
@@ -930,6 +932,7 @@ func _rebuild_system_map() -> void:
 			"id":location_id,
 			"name":_location_name(location_id),
 			"discovered":discovered,
+			"inspectable":discovered or Game.simulation.survey_target_accessible(Game.state, location_id),
 			"survey_state":String(location.get("survey_state", LocationState.UNKNOWN)),
 			"fleet_task_count":fleet_task_count,
 			"megastructure":mega_here
@@ -989,160 +992,74 @@ func _open_location_section(location_id: String, section: String) -> void:
 	if not Game.state.has_location(location_id):
 		return
 	_selected_location_id = location_id
-	_location_section = "industry" if section == "projects" else section
+	_location_section = "tasks" if section == "projects" else section
 	_save_ui_preferences()
 	_switch_page("logistics" if section == "logistics" else "location")
 
 
-func _select_location_section(section: String) -> void:
-	if section == "logistics":
-		_switch_page("logistics")
-		return
-	_location_section = "industry" if section == "projects" else section
-	_save_ui_preferences()
-	_request_active_page_refresh(true)
-
-
 func _rebuild_location() -> void:
 	var box: VBoxContainer = _pages["location"]
-	_clear(box)
 	var location: Dictionary = Game.state.location_state(_selected_location_id)
 	if location.is_empty():
+		_clear(box)
 		box.add_child(_page_title(I18n.core("location.title"), I18n.core("location.select_known")))
 		return
-	box.add_child(_page_title(_location_name(_selected_location_id), I18n.core("location.subtitle") % [_status_text(String(location.get("type", "UNKNOWN"))), _system_name(String(location.get("system_id", "UNKNOWN")))]))
-	var nav := HBoxContainer.new()
-	nav.add_theme_constant_override("separation", 6)
-	for section in ["overview", "resources", "industry"]:
-		var captions := {"overview":I18n.core("location.tab.overview"), "resources":I18n.core("location.tab.resources"), "industry":I18n.core("location.tab.industry"), "logistics":I18n.core("location.tab.logistics"), "projects":I18n.core("location.tab.projects")}
-		var tab_button := _button(String(captions[section]), _select_location_section.bind(section), section == _location_section, COLOR_ACCENT)
-		_style_section_button(tab_button, section == _location_section)
-		tab_button.name = "LocationTab_%s" % section
-		nav.add_child(tab_button)
-	box.add_child(nav)
-	match _location_section:
-		"resources":
-			_build_location_resources(box, location)
-		"industry":
-			_build_location_industry(box, location)
-			_build_location_projects(box, location)
-		"logistics":
-			_build_location_logistics(box, location)
-		"projects":
-			_build_location_projects(box, location)
-		_:
-			_build_location_overview(box, location)
+	if not is_instance_valid(_location_operations) or _location_operations.get_parent() != box or str(_location_operations.get_meta("locale", "")) != I18n.current_locale:
+		_clear(box)
+		_location_operations = LocationOperationsScript.new()
+		_location_operations.set_meta("locale", I18n.current_locale)
+		_location_operations.action_requested.connect(_on_location_operations_action)
+		box.add_child(_location_operations)
+	var snapshot := Game.location_operations_snapshot(_selected_location_id)
+	snapshot["system_name"] = _system_name(str(location.get("system_id", "")))
+	_location_operations.configure(snapshot)
+	if _location_section != "overview":
+		_location_operations.focus_section(_location_section)
+		_location_section = "overview"
 
 
-func _build_location_overview(box: VBoxContainer, location: Dictionary) -> void:
-	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
-	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
-	box.add_child(_section_title(I18n.core("location.info")))
-	box.add_child(_card_text(I18n.core("location.identity_summary") % [_status_text(String(location.get("type", "UNKNOWN"))), _system_name(String(location.get("system_id", "UNKNOWN"))), _status_text(survey_state)], COLOR_TEXT))
-	var next_states := {LocationState.UNKNOWN:LocationState.DETECTED, LocationState.DETECTED:LocationState.SURVEYED, LocationState.SURVEYED:LocationState.DEEP_SURVEYED}
-	if next_states.has(survey_state):
-		var next_state := String(next_states[survey_state])
-		var costs: Dictionary = Game.simulation.survey_mission_costs(next_state)
-		box.add_child(_label(I18n.core("survey.select_vessel", "Select a Survey Vessel") + " · " + _resource_dictionary(costs), 13, COLOR_ACCENT))
-		var eligible_found := false
-		for ship_value in Game.state.ships:
-			var ship := ship_value as Dictionary
-			var ship_id := String(ship.get("instance_id", ""))
-			var availability: Dictionary = Game.survey_mission_availability(_selected_location_id, next_state, [ship_id])
-			if (availability.get("blockers", []) as Array).any(func(blocker): return String((blocker as Dictionary).get("code", "")) in ["SURVEY_VESSEL_UNAVAILABLE", "SURVEY_VESSEL_REQUIRED"]):
-				continue
-			eligible_found = true
-			var survey_button := _button(I18n.core("location.survey_action") % [String(ship.get("name", ship_id)), I18n.core("survey.start", "Start %s mission") % _status_text(next_state)], _command.bind(I18n.core("command.start_survey"), Game.start_survey_mission.bind(_selected_location_id, next_state, [ship_id])), not bool(availability.get("allowed", false)), COLOR_ACCENT)
-			survey_button.name = "StartSurvey_%s_%s_%s" % [_selected_location_id, next_state, ship_id]
-			survey_button.tooltip_text = _availability_reason(availability)
-			box.add_child(survey_button)
-		if not eligible_found:
-			var availability: Dictionary = Game.survey_mission_availability(_selected_location_id, next_state)
-			var missing_button := _button(I18n.core("survey.no_vessel", "No eligible Survey Vessel"), Callable(), true, COLOR_WARN)
-			missing_button.tooltip_text = _availability_reason(availability)
-			box.add_child(missing_button)
-		if String(Game.state.survey_mission.get("status", "IDLE")) == "RUNNING":
-			var mission: Dictionary = Game.state.survey_mission
-			box.add_child(_label(I18n.core("location.survey_progress") % [mission.get("target", ""), _status_text(String(mission.get("target_state", ""))), 100.0 * float(mission.get("progress_ms", 0.0)) / maxf(1.0, float(mission.get("duration_ms", 1.0)))], 13, COLOR_WARN))
-	var environment: Dictionary = intelligence.get("environment", {})
-	if survey_state == LocationState.DETECTED:
-		box.add_child(_section_title(I18n.core("location.environment.preliminary")))
-		box.add_child(_card_text(I18n.core("location.environment.detected") % [_status_text(String(environment.get("radiation", "UNKNOWN"))), _status_text(String(environment.get("transport_distance_band", "UNKNOWN"))), _status_text(String(environment.get("construction_difficulty_band", "UNKNOWN")))], COLOR_MUTED))
-	elif survey_state in [LocationState.SURVEYED, LocationState.DEEP_SURVEYED]:
-		box.add_child(_section_title(I18n.core("location.environment.conditions")))
-		box.add_child(_card_text(I18n.core("location.environment.surveyed") % [float(environment.get("gravity", 0.0)), I18n.core("location.environment.vacuum") if bool(environment.get("vacuum", false)) else I18n.core("location.environment.non_vacuum"), _status_text(String(environment.get("atmosphere", "UNKNOWN"))), float(environment.get("solar_flux", 0.0)), _status_text(String(environment.get("thermal_environment", "UNKNOWN"))), _status_text(String(environment.get("radiation", "UNKNOWN"))), float(environment.get("construction_difficulty", 1.0)), float(environment.get("transport_distance", 0.0))], COLOR_MUTED))
-	if survey_state == LocationState.UNKNOWN:
-		box.add_child(_card_text(I18n.core("location.intelligence_unknown"), COLOR_MUTED))
+func _on_location_operations_action(action: Dictionary) -> void:
+	match str(action.get("kind", "")):
+		"START_SURVEY":
+			_command(I18n.core("command.start_survey"), Game.start_survey_mission.bind(_selected_location_id, str(action.get("next_state", "")), [str(action.get("ship_id", ""))]))
+		"ASSIGN_SURVEY_SHIP":
+			_command(I18n.core("nav.ships"), Game.set_ship_formation_assignment.bind(str(action.get("ship_id", "")), SpaceGameState.DEFAULT_FORMATION_ID))
+		"INITIALIZE_FACTORY":
+			_initialize_factory_for_location(_selected_location_id)
+		"OPEN_FACTORY":
+			var world_id := str(action.get("world_id", ""))
+			if world_id.is_empty():
+				var world_ids := Game.factory_world_ids_for_location(_selected_location_id)
+				if not world_ids.is_empty():
+					world_id = world_ids[0]
+			if str(Game.state.factory_worlds.get(world_id, {}).get("location_id", "")) != _selected_location_id:
+				return
+			_open_factory_world(world_id)
+			call_deferred("_activate_location_factory_target", action.duplicate(true))
+		"OPEN_LOGISTICS": _switch_page("logistics")
+		"OPEN_INVENTORY": _switch_page("inventory")
+		"OPEN_FLEET": _open_fleet_section("roster")
+		"OPEN_SURVEY_SHIPYARD": _open_fleet_section("shipyard")
+		"OPEN_ENGINEERING": _switch_page("megastructure")
+		"OPEN_SURVEY":
+			var target := str(action.get("location_id", _selected_location_id))
+			_open_location_section(target, "survey")
+
+
+func _activate_location_factory_target(action: Dictionary) -> void:
+	if _active_page_key != "industry":
 		return
-	box.add_child(_section_title(I18n.core("location.local_inventory")))
-	var lines: Array[String] = []
-	for item_value in Game.state.location_inventory(_selected_location_id).keys():
-		var item_id := String(item_value)
-		var quantity := Game.state.item_quantity(item_id, _selected_location_id)
-		if quantity > 0:
-			lines.append(I18n.core("format.item_quantity") % [_content_name(Game.content.items.get(item_id, {}), item_id), quantity])
-	lines.sort()
-	box.add_child(_card_text("\n".join(lines) if not lines.is_empty() else I18n.core("location.inventory_empty"), COLOR_TEXT))
-	var power: Dictionary = location.get("power", {})
-	var power_text := _status_text(String(power.get("status", "UNKNOWN")))
-	if power.has("generation_capacity"):
-		power_text = I18n.core("location.power_summary") % [float(power.get("generation_capacity", 0.0)), float(power.get("current_demand", 0.0)), float(power.get("available_capacity", 0.0))]
-	box.add_child(_section_title(I18n.core("location.energy")))
-	box.add_child(_card_text(power_text, COLOR_TEXT))
-	var industry: Dictionary = location.get("industry_summary", {})
-	box.add_child(_section_title(I18n.core("location.industry")))
-	box.add_child(_card_text(I18n.core("location.industry_summary") % [_status_text(String(industry.get("status", "UNKNOWN"))), industry.get("active_facilities", 0), industry.get("active_operations", 0)], COLOR_TEXT))
-	box.add_child(_section_title(I18n.core("location.operations")))
-	box.add_child(_card_text(I18n.core("location.operations_summary") % [_status_text(String(location.get("logistics_summary", {}).get("status", "NOT_CONNECTED"))), int(location.get("projects_summary", {}).get("active_count", 0)), location.get("fleet_presence", []).size()], COLOR_TEXT))
-
-
-func _build_location_resources(box: VBoxContainer, _location: Dictionary) -> void:
-	box.add_child(_section_title(I18n.core("location.resources.known_sites", "Mapped tile resource fields")))
-	var open_grid := _button(I18n.t("factory.location.open", "Open Factory workspace"), _open_location_section.bind(_selected_location_id, "industry"), false, COLOR_ACCENT)
-	open_grid.name = "ResourcesOpenFactory"
-	box.add_child(open_grid)
-	var intelligence: Dictionary = Game.simulation.location_intelligence(Game.state, _selected_location_id)
-	var survey_state := String(intelligence.get("survey_state", LocationState.UNKNOWN))
-	var resources: Array = intelligence.get("resources", [])
-	if resources.is_empty():
-		box.add_child(_card_text(I18n.core("location.resources.none_visible"), COLOR_MUTED))
+	_rebuild_active_page()
+	if not is_instance_valid(_factory_workspace):
 		return
-	for profile_value in resources:
-		var profile := profile_value as Dictionary
-		var card := _card()
-		var resource_field_id := String(profile.get("resource_field_id", ""))
-		var resource_id := String(profile.get("resource_type", ""))
-		var title := I18n.category(String(profile.get("resource_category", "UNKNOWN"))) if resource_id.is_empty() else _content_name(Game.content.items.get(resource_id, {}), resource_id)
-		card.add_child(_label(title, 16, COLOR_TEXT))
-		if survey_state == LocationState.DETECTED:
-			card.add_child(_label(I18n.core("location.resources.grid_detected", "Tile resource signal · %s · potential %s") % [I18n.category(String(profile.get("resource_category", "UNKNOWN"))), _status_text(String(profile.get("potential_band", "UNKNOWN")))], 13, COLOR_MUTED))
-		else:
-			card.add_child(_label(I18n.core("location.resources.grid_surveyed", "Resource field %s · grade %.2f · mapped potential %.1f/h") % [resource_field_id, float(profile.get("grade", 0.0)), float(profile.get("mapped_potential_per_hour", 0.0))], 13, COLOR_MUTED))
-			if survey_state == LocationState.DEEP_SURVEYED:
-				var footprint: Dictionary = profile.get("footprint", {}).get("size", {})
-				card.add_child(_label(I18n.core("location.resources.grid_deep_surveyed", "Exact footprint %d × %d m · fixed world resource") % [int(footprint.get("x", 0)), int(footprint.get("y", 0))], 13, COLOR_ACCENT))
-		box.add_child(_wrap_card(card))
+	if not str(action.get("entity_id", "")).is_empty():
+		_factory_workspace.call("_on_operations_action_requested", {"kind":"FOCUS_ENTITY", "target_id":str(action["entity_id"])})
+	elif not str(action.get("order_id", "")).is_empty():
+		_factory_workspace.call("_on_operations_action_requested", {"kind":"FOCUS_ORDER", "target_id":str(action["order_id"])})
+		_factory_workspace.call("_set_active_subworkspace", str(action.get("section", "CONSTRUCTION")))
+	else:
+		_factory_workspace.call("_set_active_subworkspace", str(action.get("section", "OVERVIEW")))
 
-
-func _build_location_industry(box: VBoxContainer, location: Dictionary) -> void:
-	var world_ids := Game.factory_world_ids_for_location(_selected_location_id)
-	box.add_child(_section_title(I18n.t("factory.location.title", "Factory grid")))
-	if not world_ids.is_empty():
-		var world_id := str(world_ids[0])
-		var snapshot := Game.factory_workspace_snapshot(world_id)
-		box.add_child(_card_text(I18n.t("factory.location.summary", "Physical grid %s · %d buildings · %d links · %d construction orders") % [world_id, (snapshot.get("entities", []) as Array).size(), (snapshot.get("links", []) as Array).size(), (snapshot.get("construction_orders", []) as Array).size()], COLOR_TEXT))
-		var open_button := _button(I18n.t("factory.location.open", "Open Factory workspace"), _open_factory_world.bind(world_id), false, COLOR_ACCENT)
-		open_button.name = "OpenFactoryWorkspace_%s" % _selected_location_id
-		box.add_child(open_button)
-		return
-	var survey_state := str(location.get("survey_state", LocationState.UNKNOWN))
-	var can_initialize := _selected_location_id == SpaceGameState.MAIN_BASE_LOCATION_ID or Game.simulation.survey_state_rank(survey_state) >= Game.simulation.survey_state_rank(LocationState.SURVEYED)
-	box.add_child(_card_text(I18n.t("factory.location.empty", "This location has no Factory grid. Surveyed resource regions become non-depleting tile fields; extraction remains limited by field grade, machine throughput, power and logistics."), COLOR_MUTED))
-	var initialize_button := _button(I18n.t("factory.location.initialize", "Initialize Factory grid"), _initialize_factory_for_location.bind(_selected_location_id), not can_initialize, COLOR_GOOD)
-	initialize_button.name = "InitializeFactoryWorld_%s" % _selected_location_id
-	initialize_button.tooltip_text = I18n.t("factory.location.requires_survey", "Complete a survey before initializing this location's Factory grid.") if not can_initialize else I18n.core("availability.ready", "Requirements met")
-	box.add_child(initialize_button)
-	return
 
 func _open_factory_world(world_id: String) -> void:
 	if not Game.state.factory_worlds.has(world_id):
@@ -1176,8 +1093,8 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 		int(summary.get("route_count", 0)),
 		int(summary.get("inbound_shipments", 0)),
 		int(summary.get("outbound_shipments", 0)),
-		float(storage_snapshot.get("used", 0.0)),
-		float(storage_snapshot.get("capacity", 0.0)),
+		float(storage_snapshot.get("full_item_count", 0)),
+		float(storage_snapshot.get("item_count", 0)),
 		int(logistics.get("hub_throughput", 0)),
 		_status_text(String(logistics_technology.get("name", "CHEMICAL_CARGO"))),
 		float(logistics_technology.get("freight_capacity_multiplier", 1.0)),
@@ -1188,7 +1105,7 @@ func _build_location_logistics(box: VBoxContainer, location: Dictionary) -> void
 	], COLOR_TEXT))
 	for storage_class in ["BULK", "COMPONENT", "FLUID", "SPECIAL"]:
 		var class_row: Dictionary = storage_snapshot.get("classes", {}).get(storage_class, {})
-		box.add_child(_label(I18n.core("location.logistics.storage_class") % [_status_text(storage_class), float(class_row.get("used", 0.0)), float(class_row.get("capacity", 0.0)), float(class_row.get("utilization", 0.0)) * 100.0], 12, COLOR_WARN if float(class_row.get("utilization", 0.0)) >= 0.9 else COLOR_MUTED))
+		box.add_child(_label(I18n.core("location.logistics.storage_class") % [_status_text(storage_class), float(class_row.get("per_item_capacity", 0.0)), float(class_row.get("item_count", 0)), float(class_row.get("utilization", 0.0)) * 100.0], 12, COLOR_WARN if float(class_row.get("utilization", 0.0)) >= 0.9 else COLOR_MUTED))
 	box.add_child(_card_text(I18n.core("location.logistics.capacity_help"), COLOR_MUTED))
 
 	box.add_child(_section_title(I18n.core("location.logistics.route_services")))
@@ -1514,29 +1431,6 @@ func _toggle_logistics_service_ship(route_id: String, ship_id: String) -> void:
 	else:
 		ship_ids.append(ship_id)
 	_command(I18n.core("command.change_logistics_ship_assignment"), Game.configure_logistics_service.bind(route_id, String(service.get("transport_mode_id", "general_cargo")), ship_ids, String(service.get("priority_strategy", "DEMAND_PRIORITY"))))
-
-
-func _build_location_projects(box: VBoxContainer, _location: Dictionary) -> void:
-	var found := false
-	for operation_value in Game.state.construction_operations:
-		var operation := operation_value as Dictionary
-		if String(operation.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id or String(operation.get("activity_id", "")).is_empty():
-			continue
-		found = true
-		var activity: Dictionary = Game.simulation.construction_activity_for_runtime(operation)
-		var project: Dictionary = Game.state.megastructure_projects.get(String(operation.get("megastructure_id", "")), {})
-		var stage_line := I18n.core("construction.megastructure_stage_suffix") % [int(project.get("progress_percent", 0)), _status_text(String(project.get("stage_name", "PLANNED"))), _status_text(String(project.get("material_flow_status", "RECEIVING")))] if not project.is_empty() else ""
-		box.add_child(_card_text(I18n.core("construction.location_project") % [_construction_project_name(operation, activity), _status_text(String(operation.get("status", "UNKNOWN"))), stage_line], COLOR_TEXT))
-	for order_value in Game.state.shipyard_queue:
-		var order := order_value as Dictionary
-		if String(order.get("location_id", SpaceGameState.MAIN_BASE_LOCATION_ID)) != _selected_location_id:
-			continue
-		found = true
-		var plan_id := String(order.get("plan_id", ""))
-		var plan_name := _content_name(Game.content.ship_plans.get(plan_id, {}), plan_id) if not plan_id.is_empty() else I18n.core("ships.unknown_plan")
-		box.add_child(_card_text(I18n.core("construction.location_shipyard") % [plan_name, _status_text(String(order.get("status", "UNKNOWN")))], COLOR_TEXT))
-	if not found:
-		box.add_child(_card_text(I18n.core("construction.location_empty"), COLOR_MUTED))
 
 
 func _location_name(location_id: String) -> String:
@@ -2042,6 +1936,18 @@ func _rebuild_frontier() -> void:
 	box.add_child(_page_title(I18n.core("survey.title"), I18n.core("survey.subtitle")))
 	_add_unlock_banner(box, "frontier")
 	box.add_child(_card_text(I18n.core("survey.factory_authority", "Survey fleets reveal resource intelligence. All extraction and processing is built on the factory grid; ships do not mine or provide production labor."), COLOR_ACCENT))
+	var location_ids: Array = Game.state.locations.keys()
+	location_ids.sort()
+	for target_value in location_ids:
+		var target_id := str(target_value)
+		if not Game.simulation.survey_target_accessible(Game.state, target_id):
+			continue
+		var target_state := str(Game.state.location_state(target_id).get("survey_state", LocationState.UNKNOWN))
+		if target_state == LocationState.DEEP_SURVEYED:
+			continue
+		var target_button := _button(_location_name(target_id) + " · " + I18n.status(target_state) + " →", _open_location_section.bind(target_id, "survey"), false, COLOR_ACCENT)
+		target_button.name = "FrontierSurveyTarget_%s" % target_id
+		box.add_child(target_button)
 	box.add_child(_section_title(I18n.core("survey.resource_intelligence", "Resource Intelligence")))
 	var visible_resource_field := false
 	for location_id_value in Game.state.locations.keys():
@@ -2115,7 +2021,7 @@ func _rebuild_inventory() -> void:
 		identity.clip_text = true
 		identity.tooltip_text = I18n.core("inventory.demand_sources") + " · %d\n+%.2f/h · -%.2f/h" % [(product.get("demand_sources", []) as Array).size(), float(product.get("production_rate", 0.0)) + float(product.get("import_rate", 0.0)), float(product.get("consumption_rate", 0.0)) + float(product.get("export_rate", 0.0))]
 		row.add_child(identity)
-		for entry in [[str(int(product.get("available", 0))), 1.0], [str(int(product.get("reserved", 0))), 1.0], ["%d / %.0f" % [int(product.get("on_hand", 0)), float(product.get("storage_capacity", 0.0))], 1.5], ["%+.2f/h" % float(product.get("net_rate", 0.0)), 1.2]]:
+		for entry in [[str(int(product.get("available", 0))), 1.0], [str(int(product.get("reserved", 0))), 1.0], ["%d / %.0f" % [int(product.get("storage_on_hand", product.get("on_hand", 0))), float(product.get("storage_capacity", 0.0))], 1.5], ["%+.2f/h" % float(product.get("net_rate", 0.0)), 1.2]]:
 			var cell := _label(String(entry[0]), 15, COLOR_TEXT)
 			cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			cell.size_flags_stretch_ratio = float(entry[1])
@@ -2150,7 +2056,7 @@ func _show_inventory_product(product_id: String) -> void:
 		details.add_child(_label(_content_name(Game.content.items.get(product_id, {}), product_id), 23, COLOR_TEXT))
 		details.add_child(_label(_status_text(String(product.get("status", "STABLE"))), 14, COLOR_ACCENT))
 		details.add_child(_separator())
-		details.add_child(_label(I18n.core("ui4k.stock_capacity") + " · %d / %.0f" % [int(product.get("on_hand", 0)), float(product.get("storage_capacity", 0))], 16, COLOR_TEXT))
+		details.add_child(_label(I18n.core("ui4k.stock_capacity") + " · %d / %.0f" % [int(product.get("storage_on_hand", product.get("on_hand", 0))), float(product.get("storage_capacity", 0))], 16, COLOR_TEXT))
 		details.add_child(_label(I18n.core("inventory.available") + " · %d\n" % int(product.get("available", 0)) + I18n.core("inventory.reserved") + " · %d" % int(product.get("reserved", 0)), 14, COLOR_TEXT_SECONDARY))
 		details.add_child(_label(I18n.core("ui4k.net_flow") + " · %+.2f/h" % float(product.get("net_rate", 0)), 18, COLOR_ACCENT))
 		details.add_child(_label("+%.2f/h  /  −%.2f/h" % [float(product.get("production_rate", 0)) + float(product.get("import_rate", 0)), float(product.get("consumption_rate", 0)) + float(product.get("export_rate", 0))], 14, COLOR_MUTED))
@@ -5738,22 +5644,6 @@ func _resource_dictionary(values: Dictionary) -> String:
 	return _resource_list(entries)
 
 
-func _construction_project_type_name(project_type: String) -> String:
-	var key := "construction.type.%s" % project_type
-	var translated := I18n.core(key)
-	return project_type.replace("_", " ").capitalize() if translated == key else translated
-
-
-func _construction_project_name(operation: Dictionary, definition: Dictionary) -> String:
-	if operation.get("project_definition", {}).is_empty():
-		return _content_name(definition, String(operation.get("activity_id", I18n.core("construction.project_fallback"))))
-	var project_type := String(operation.get("project_type", ""))
-	var target_id := String(operation.get("target_id", ""))
-	if project_type == "FACILITY_EXPANSION":
-		return I18n.core("construction.facility_expansion_name") % [_content_name(Game.content.facilities.get(target_id, {}), target_id), int(operation.get("target_level", 0))]
-	return I18n.core("construction.target_level_name") % [_construction_project_type_name(project_type), int(operation.get("target_level", 0))]
-
-
 func _operation_progress(operation: Dictionary, caption: String) -> Control:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
@@ -5882,21 +5772,6 @@ func _blocker_text(blocker: Dictionary) -> String:
 		"MISSING_TECH", "MISSING_FACILITY", "PRODUCTION_DEVICE_UNAVAILABLE", "ROUTE_UNAVAILABLE", "TRANSPORT_MODE_UNAVAILABLE", "ROUTE_CONGESTED", "HANDLING_CONGESTED", "POWER_SHORTAGE", "COOLING_SHORTAGE", "STORAGE_FULL", "MAINTENANCE_SHORTAGE", "CONSTRUCTION_CAPACITY_FULL", "PROJECT_SLOT_FULL", "MANUALLY_PAUSED":
 			return I18n.core("blocker.%s" % reason)
 		_: return reason.replace("_", " ").capitalize()
-
-
-func _availability_reason(availability: Dictionary) -> String:
-	if bool(availability.get("allowed", false)):
-		return I18n.core("availability.ready", "Requirements met")
-	var reasons: Array[String] = []
-	for blocker_value in availability.get("blockers", []):
-		var blocker := blocker_value as Dictionary
-		var code := String(blocker.get("code", "UNKNOWN"))
-		if code == "INPUT_SHORTAGE":
-			var item_id := String(blocker.get("item_id", ""))
-			reasons.append(I18n.core("blocker.INPUT_SHORTAGE") % [_content_name(Game.content.items.get(item_id, {}), item_id), blocker.get("available", 0), blocker.get("required", 0)])
-		else:
-			reasons.append(I18n.core("availability.%s" % code, code.replace("_", " ").capitalize()))
-	return "\n".join(reasons)
 
 
 func _command(label_text: String, callable: Callable) -> void:
@@ -6483,7 +6358,7 @@ func _compose_workspace(key: String) -> void:
 	var outer: ScrollContainer = _page_controls[key]
 	outer.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	outer.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	if key in ["industry", "research", "inventory", "construction"] or (key == "fleet" and _fleet_section in ["roster", "shipyard"]):
+	if key in ["location", "industry", "research", "inventory", "construction"] or (key == "fleet" and _fleet_section in ["roster", "shipyard"]):
 		return
 	var pinned := 2 if key == "location" else 1
 	var children := box.get_children()

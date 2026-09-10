@@ -1,5 +1,28 @@
 # Agent instructions
 
+## Current planetary industry design authority
+
+Read `docs/Planetary_Industry_Roads_Design_zh_CN.md` for Factory changes.
+Use `docs/Content_Synchronization_zh_CN.md` and `docs/remaining-work.md`
+to distinguish current contracts, unfinished requirements, and historical plans.
+Do not reactivate archived port/onsite-construction rules or report a historical
+test result as verification of the current checkout.
+Planetary inventory has one Location-owned authority with per-item capacity;
+warehouses are access/loading points, not additional inventory copies. Built
+roads carry local goods and power. Do not introduce local railways or revive
+manual Factory cargo/power port wiring. Interstellar logistics stays separate.
+Distinguish approved design, implemented behavior, and verified behavior.
+Generated art must be real checked-in project assets with generation provenance;
+debug geometry and LOD proxies do not constitute completed art.
+
+Building construction means manufacturing a finished building item and then
+deploying it; missing items create ghosts, not on-site BOM funding or timers.
+New games start by player-selected Planetary Development Core deployment. The
+core supplies startup power and grants two miners, two furnaces, and one
+assembler once; there are no starter solar arrays or preplaced depots. Treat
+follow-up user requirements as cumulative unless they explicitly replace an
+earlier decision; never silently drop an unfinished independent work track.
+
 ## Multi-agent collaboration
 
 This repository uses a primary-agent integration model. For every non-trivial

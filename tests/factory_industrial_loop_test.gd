@@ -29,7 +29,11 @@ func _run() -> void:
 	var frame := _build("grid_engineering_works", Vector2i(92, 70), "grid_assemble_frame")
 	var electronics := _build("grid_engineering_works", Vector2i(124, 70), "grid_fabricate_electronics")
 	var stock := _build("grid_engineering_works", Vector2i(156, 70), "grid_reclaim_metal_stock")
-	game.advance_game_time(200_000.0)
+	var bootstrap_work := 0.0
+	for order in _world().get("construction_orders", {}).values():
+		bootstrap_work += float(order.get("work_required", 0.0)) - float(order.get("work_done", 0.0))
+	var capacity: float = game.simulation.factory_grid.construction_capacity_per_second(_world())
+	game.advance_game_time(bootstrap_work / capacity * 1000.0 + 1.0)
 	_check(_world().get("construction_orders", {}).is_empty(), "starter materials commission a complete player-authored production chain")
 	for index in range(1, powers.size()):
 		_link("POWER", powers[index], mine_iron)

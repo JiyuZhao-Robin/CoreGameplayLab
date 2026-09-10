@@ -50,8 +50,8 @@ func configure(locations: Array[Dictionary], routes: Array[Dictionary], selected
 		if bool(location.get("megastructure", false)):
 			markers.append(I18n.core("map.marker.megastructure", "Megastructure"))
 		button.text = "%s\n%s%s" % [String(location.get("name", location_id)), I18n.status(String(location.get("survey_state", "UNKNOWN"))), (" · " + " / ".join(markers)) if not markers.is_empty() else ""]
-		button.disabled = not discovered
-		if not discovered:
+		button.disabled = not bool(location.get("inspectable", discovered))
+		if not discovered and button.disabled:
 			button.tooltip_text = I18n.core("map.location_locked_tooltip", "Complete the preceding survey route to inspect this Location")
 		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.custom_minimum_size = NODE_SIZE

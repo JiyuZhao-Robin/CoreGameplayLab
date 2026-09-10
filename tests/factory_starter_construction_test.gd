@@ -77,7 +77,9 @@ func _test_starter_auto_funding_and_replay(database: ContentDatabase) -> void:
 		"command replay neither duplicates the order nor charges starter materials twice"
 	)
 
-	var report: Dictionary = game.simulation.factory_grid.advance_world(world, 10_000.0)
+	var capacity: float = game.simulation.factory_grid.construction_capacity_per_second(world)
+	var construction_ms := float(order.get("work_required", 1.0)) / capacity * 1000.0
+	var report: Dictionary = game.simulation.factory_grid.advance_world(world, construction_ms)
 	var completion_count := 0
 	for event_value in report.get("events", []):
 		if str((event_value as Dictionary).get("type", "")) == "FactoryConstructionCompleted":
@@ -115,7 +117,8 @@ func _test_starter_auto_funding_and_replay(database: ContentDatabase) -> void:
 		and str(world.get("construction_orders", {}).get(machine_order_id, {}).get("status", "")) == "READY",
 		"starter construction accepts and funds a machine before its production recipe is configured"
 	)
-	game.simulation.factory_grid.advance_world(world, 20_000.0)
+	var machine_work := float(world.get("construction_orders", {}).get(machine_order_id, {}).get("work_required", 1.0))
+	game.simulation.factory_grid.advance_world(world, machine_work / capacity * 1000.0)
 	_check(
 		str(world.get("entities", {}).get(machine_entity_id, {}).get("recipe_id", "not-empty")) == ""
 		and str(world.get("entities", {}).get(machine_entity_id, {}).get("status", "")) == "NO_RECIPE",

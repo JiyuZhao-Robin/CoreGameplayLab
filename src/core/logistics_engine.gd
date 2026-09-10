@@ -5,7 +5,7 @@ const MODE_SUPPLY := "SUPPLY"
 const MODE_DEMAND := "DEMAND"
 const MODE_STORAGE := "STORAGE"
 const DISPATCH_INTERVAL_MS := 5000.0
-const DEFAULT_STORAGE_CAPACITY := 1000000
+const DEFAULT_STORAGE_CAPACITY := LocationState.DEFAULT_STORAGE_CAPACITIES.BULK + LocationState.DEFAULT_STORAGE_CAPACITIES.COMPONENT + LocationState.DEFAULT_STORAGE_CAPACITIES.FLUID + LocationState.DEFAULT_STORAGE_CAPACITIES.SPECIAL
 const DEFAULT_HUB_THROUGHPUT := 100
 const DEFAULT_LOCAL_THROUGHPUT := 100.0
 const BASE_LOGISTICS_TECH := {
@@ -313,12 +313,16 @@ func clear_policy(state: SpaceGameState, location_id: String, item_id: String) -
 	return true
 
 
+## Internal configuration helper: storage_capacity is the limit PER MATERIAL.
+## Player expansion continues through funded capacity projects, not this helper.
 func set_hub_limits(state: SpaceGameState, location_id: String, storage_capacity: int, hub_throughput: int) -> bool:
 	ensure_state(state)
 	if not state.has_location(location_id):
 		return false
 	var runtime: Dictionary = state.locations[location_id]["logistics"]
-	runtime["storage_capacity"] = maxi(0, storage_capacity)
+	for storage_class in runtime.get("storage_capacities", {}):
+		runtime["storage_capacities"][storage_class] = maxi(0, storage_capacity)
+	runtime["storage_capacity"] = maxi(0, storage_capacity) * runtime.get("storage_capacities", {}).size()
 	runtime["hub_throughput"] = maxi(0, hub_throughput)
 	return true
 
@@ -615,28 +619,52 @@ func _supply_available(state: SpaceGameState, location_id: String, item_id: Stri
 
 
 func destination_free_capacity(state: SpaceGameState, location_id: String, item_id: String) -> int:
-	if not state.has_location(location_id):
+	return _destination_free_capacity_excluding_shipment(state, location_id, item_id, "")
+
+
+## The class selects a capacity rating, never a shared inventory pool. Transport
+## mass/volume still use item_storage_profile independently of warehouse slots.
+func item_storage_capacity(state: SpaceGameState, location_id: String, item_id: String) -> int:
+	if not state.has_location(location_id) or not content.items.has(item_id):
 		return 0
-	var profile := content.item_storage_profile(item_id)
-	var storage_class := str(profile.get("storage_class", "SPECIAL"))
-	var units_per_item := maxf(0.001, float(profile.get("storage_units", 1.0)))
-	var capacities: Dictionary = state.locations[location_id].get("logistics", {}).get("storage_capacities", {})
-	var used := 0.0
-	for stored_item_value in state.location_inventory(location_id).keys():
-		var stored_item := str(stored_item_value)
-		var stored_profile := content.item_storage_profile(stored_item)
-		if str(stored_profile.get("storage_class", "SPECIAL")) == storage_class:
-			used += float(state.item_quantity(stored_item, location_id)) * float(stored_profile.get("storage_units", 1.0))
+	var storage_class := str(content.item_storage_profile(item_id).get("storage_class", "SPECIAL"))
+	return maxi(0, int(state.locations[location_id].get("logistics", {}).get("storage_capacities", {}).get(storage_class, 0))) + warehouse_storage_capacity(state, location_id)
+
+
+func warehouse_storage_capacity(state: SpaceGameState, location_id: String) -> int:
+	var capacity := 0
+	# Physical warehouses expand each item's planetary slot, never create a
+	# second item pool. Road disconnection affects access, not retained capacity.
+	for world_value in state.factory_worlds.values():
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		for entity_value in world.get("entities", {}).values():
+			var entity := entity_value as Dictionary
+			if str(entity.get("kind", "")) == "STORAGE" and str(entity.get("status", "")) != "UNDER_CONSTRUCTION":
+				var definition: Dictionary = content.factory_buildings.get(str(entity.get("definition_id", "")), {})
+				capacity += maxi(0, int(definition.get("inventory_capacity", 0)))
+	return capacity
+
+
+func incoming_storage_reservation(state: SpaceGameState, location_id: String, item_id: String, excluded_shipment_id: String = "") -> int:
+	var reserved := 0
 	for shipment_value in state.logistics_network.get("shipments", []):
 		var shipment := shipment_value as Dictionary
 		if str(shipment.get("destination", "")) != location_id:
 			continue
-		for cargo_item_value in shipment.get("cargo", {}).keys():
-			var cargo_item := str(cargo_item_value)
-			var cargo_profile := content.item_storage_profile(cargo_item)
-			if str(cargo_profile.get("storage_class", "SPECIAL")) == storage_class:
-				used += float(shipment.get("cargo", {}).get(cargo_item, 0)) * float(cargo_profile.get("storage_units", 1.0))
-	return maxi(0, int(floor((float(capacities.get(storage_class, 0)) - used) / units_per_item)))
+		if not excluded_shipment_id.is_empty() and str(shipment.get("id", "")) == excluded_shipment_id:
+			continue
+		reserved += maxi(0, int(shipment.get("cargo", {}).get(item_id, 0)))
+	for world_value in state.factory_worlds.values():
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) != location_id:
+			continue
+		for job_value in world.get("road_shipments", {}).values():
+			var job := job_value as Dictionary
+			if str(job.get("destination_kind", "")) == "WAREHOUSE":
+				reserved += maxi(0, int(job.get("cargo", {}).get(item_id, 0)))
+	return reserved
 
 
 func _destination_free_capacity(state: SpaceGameState, location_id: String, item_id: String) -> int:
@@ -720,26 +748,10 @@ func _deliver_shipment(state: SpaceGameState, shipment: Dictionary) -> bool:
 
 
 func _destination_free_capacity_excluding_shipment(state: SpaceGameState, location_id: String, item_id: String, excluded_shipment_id: String) -> int:
-	var profile := content.item_storage_profile(item_id)
-	var storage_class := str(profile.get("storage_class", "SPECIAL"))
-	var units_per_item := maxf(0.001, float(profile.get("storage_units", 1.0)))
-	var capacity := float(state.locations[location_id].get("logistics", {}).get("storage_capacities", {}).get(storage_class, 0))
-	var used := 0.0
-	for stored_item_value in state.location_inventory(location_id).keys():
-		var stored_item := str(stored_item_value)
-		var stored_profile := content.item_storage_profile(stored_item)
-		if str(stored_profile.get("storage_class", "SPECIAL")) == storage_class:
-			used += float(state.item_quantity(stored_item, location_id)) * float(stored_profile.get("storage_units", 1.0))
-	for shipment_value in state.logistics_network.get("shipments", []):
-		var other := shipment_value as Dictionary
-		if str(other.get("id", "")) == excluded_shipment_id or str(other.get("destination", "")) != location_id:
-			continue
-		for cargo_item_value in other.get("cargo", {}).keys():
-			var cargo_item := str(cargo_item_value)
-			var cargo_profile := content.item_storage_profile(cargo_item)
-			if str(cargo_profile.get("storage_class", "SPECIAL")) == storage_class:
-				used += float(other.get("cargo", {}).get(cargo_item, 0)) * float(cargo_profile.get("storage_units", 1.0))
-	return maxi(0, int(floor((capacity - used) / units_per_item)))
+	if not state.has_location(location_id):
+		return 0
+	var used := state.item_quantity(item_id, location_id) + incoming_storage_reservation(state, location_id, item_id, excluded_shipment_id)
+	return maxi(0, item_storage_capacity(state, location_id, item_id) - used)
 
 
 func _path_dispatch_capacity(path: Dictionary, route_budget: Dictionary, hub_budget: Dictionary, energy_budget: Dictionary = {}) -> int:

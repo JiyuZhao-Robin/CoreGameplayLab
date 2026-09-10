@@ -129,7 +129,7 @@ The primary agent integrates in dependency order:
 3. isolated domain modules;
 4. UI workspace mounting;
 5. focused tests;
-6. the release gate and a diff review.
+6. a final diff review; aggregate release gates only when explicitly requested.
 
 ## Worktree protocol
 
@@ -165,7 +165,7 @@ worktrees may run them concurrently only with isolated logs and artifact roots.
 Canonical Unix-like commands from the repository root:
 
 ```bash
-# Current release umbrella; legacy exhaustive UI/Golden Path suites remain separate.
+# Optional release umbrella: run only when the user explicitly requests it.
 ./tests/run_core_complete.sh
 
 # Factory domain.
@@ -208,9 +208,11 @@ currently untracked files enter an authorized committed baseline.
 | Content | Both Content-contract commands above |
 | Fleet | Its focused scene test plus both Fleet/UI commands above |
 | State or migration | Core-integrity and asset-conservation commands above |
-| Cross-domain integration | Focused commands, then the current core-domain umbrella |
+| Cross-domain integration | Focused tests covering the changed contracts and player path; umbrella is opt-in |
 
-The current umbrella runs JSON validation, focused Factory and core-domain
+Do not automatically run the umbrella or the J1–J10 runtime chain for feature
+work. Select focused tests for affected behavior, report what actually ran,
+and identify uncovered paths. The optional umbrella runs JSON validation, focused Factory and core-domain
 tests, localization/UI smoke tests, Player Action/Journey registries, UI-domain
 guards, accessibility coverage, and the ten-Journey application-boundary
 runtime gate. It still does not run the retired legacy headless/Golden Path

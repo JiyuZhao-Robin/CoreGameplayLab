@@ -74,7 +74,7 @@ func _test_content_contract(database: ContentDatabase) -> void:
 	var expected_research_expansion_bom := {"steel_composite":5, "quantum_component":4, "data_core":4}
 	for item_id_value in expected_research_expansion_bom.keys():
 		var item_id := str(item_id_value)
-		_check(_entry_quantity(research_expansion.get("construction_cost", []), item_id) == int(expected_research_expansion_bom[item_id]), "Research Complex II has the canonical %s construction cost" % item_id)
+		_check(_entry_quantity(database.factory_recipes.get("manufacture_grid_research_complex_ii", {}).get("inputs", []), item_id) == int(expected_research_expansion_bom[item_id]), "Research Complex II has the canonical %s manufacturing input" % item_id)
 		var producing_recipes: Array = database.factory_recipes.values().filter(func(recipe_value): return _entry_quantity((recipe_value as Dictionary).get("outputs", []), item_id) > 0)
 		var has_pre_mega_machine_provider := producing_recipes.any(func(recipe_value):
 			var recipe := recipe_value as Dictionary
@@ -112,7 +112,7 @@ func _test_content_contract(database: ContentDatabase) -> void:
 	_check(str(fluid_tank.get("kind", "")) == "STORAGE" and str(fluid_tank.get("storage_class", "")) == "FLUID" and int(fluid_tank.get("inventory_capacity", 0)) >= 1000, "Jovian Factory progression has a canonical physical FLUID custody provider")
 	_check((fluid_tank.get("requirements", []) as Array).any(func(requirement): return str((requirement as Dictionary).get("type", "")) == "technology" and str((requirement as Dictionary).get("id", "")) == "advanced_propulsion"), "the canonical FLUID tank becomes buildable on the pre-Jovian Advanced Propulsion path")
 	var tank_bom_storage := {}
-	for cost_value in fluid_tank.get("construction_cost", []):
+	for cost_value in [{"item":str(fluid_tank.get("deployment_item_id", "")), "quantity":1}]:
 		var cost := cost_value as Dictionary
 		var profile := database.item_storage_profile(str(cost.get("item", "")))
 		var storage_class := str(profile.get("storage_class", ""))
@@ -127,7 +127,7 @@ func _test_content_contract(database: ContentDatabase) -> void:
 	var debris_nodes: Array = (asteroid_route.get("nodes", []) as Array).filter(func(node_value): return str((node_value as Dictionary).get("id", "")) == "debris_corridor")
 	var debris_node: Dictionary = debris_nodes[0] if not debris_nodes.is_empty() else {}
 	var surface_mine: Dictionary = database.factory_buildings.get("grid_surface_mine", {})
-	_check(_entry_quantity(debris_node.get("rewards", []), "scrap_metal") == _entry_quantity(surface_mine.get("construction_cost", []), "scrap_metal"), "the mandatory Asteroid debris recovery exactly funds the post-bootstrap Lunar rare-earth mine")
+	_check(_entry_quantity(debris_node.get("rewards", []), "scrap_metal") == _entry_quantity(database.factory_recipes.get("manufacture_grid_surface_mine", {}).get("inputs", []), "scrap_metal"), "debris recovery supplies mine manufacturing before transporting the finished mine")
 	var outer_route: Dictionary = database.expedition_routes.get("outer_route", {})
 	var outer_boss_nodes: Array = (outer_route.get("nodes", []) as Array).filter(func(node_value): return str((node_value as Dictionary).get("enemy", "")) == "outer_dreadnought")
 	var outer_boss: Dictionary = outer_boss_nodes[0] if not outer_boss_nodes.is_empty() else {}
@@ -151,7 +151,7 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	var economy: Dictionary = planner.current_economy_analysis(state, "earth_orbit")
 	var scrap_rows: Array = economy.get("products", []).filter(func(value): return str((value as Dictionary).get("product_id", "")) == "scrap_metal")
 	var scrap_row: Dictionary = scrap_rows[0] if not scrap_rows.is_empty() else {}
-	_check(int(scrap_row.get("factory_on_hand", 0)) == 44 and int(scrap_row.get("location_on_hand", -1)) == 0 and int(scrap_row.get("on_hand", 0)) == 44, "economy analysis reports physical factory buffers without duplicating them into Location Inventory")
+	_check(int(scrap_row.get("factory_on_hand", 0)) == 0 and int(scrap_row.get("location_on_hand", -1)) == 44 and int(scrap_row.get("on_hand", 0)) == 44, "founding stock belongs to Location, not a preplaced warehouse copy")
 	var ship_plan: Dictionary = database.ship_construction_projects["construct_bulk_freighter"]
 	var expected_ship_bom: Dictionary = simulation.ship_construction_material_totals(ship_plan)
 	for fixed_value in ship_plan.get("fixed_costs", []):
@@ -177,7 +177,9 @@ func _test_planner_contract(database: ContentDatabase) -> void:
 	var resource_before: Dictionary = state.to_dictionary()
 	var production_plan: Dictionary = planner.plan_targets(state, {"iron_ingot":1800.0}, "earth_orbit")
 	var factory_requirement: Dictionary = production_plan.get("factory_requirements", [])[0] if not production_plan.get("factory_requirements", []).is_empty() else {}
-	_check(str(production_plan.get("method_selections", {}).get("iron_ingot", "")) == "grid_refine_iron" and str(factory_requirement.get("building_definition_id", "")) == "grid_arc_smelter" and int(factory_requirement.get("recommended", 0)) == 1, "throughput planning selects the physical grid recipe and recommends a concrete machine entity")
+	var selected_method := str(production_plan.get("method_selections", {}).get("iron_ingot", ""))
+	var selected_building: Dictionary = database.factory_buildings.get(str(factory_requirement.get("building_definition_id", "")), {})
+	_check(database.factory_recipes.has(selected_method) and selected_building.get("recipe_ids", []).has(selected_method) and int(factory_requirement.get("recommended", 0)) > 0, "throughput planning selects a compatible physical recipe and concrete machine across both catalogs")
 	var resource_plan: Dictionary = planner.plan_targets(state, {"iron_ore":500.0}, "earth_orbit")
 	var geography: Dictionary = resource_plan.get("industrial_geography", {}).get("products", {}).get("iron_ore", {})
 	_check(float(geography.get("shortfall", 0.0)) > 0.0 and geography.get("potential_solutions", []).has("PLACE_EXTRACTOR") and str(geography.get("resource_fields", [])[0].get("resource_field_id", "")) == "starter-iron-field", "planner reads tile resource fields and recommends a physical extractor when installed capacity is absent")
