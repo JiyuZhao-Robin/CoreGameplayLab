@@ -12,6 +12,7 @@ func _run() -> void:
 	_test_live_factory_starter_snapshot()
 	_test_missing_landing_core_is_rejected()
 	_test_missing_starter_miner_is_rejected()
+	_test_missing_starter_resources_is_rejected()
 	_test_unselectable_starter_miner_recipe_is_rejected()
 	_finish()
 
@@ -68,6 +69,12 @@ func _test_unselectable_starter_miner_recipe_is_rejected() -> void:
 	var snapshot := database.factory_bootstrap_reachability_snapshot()
 	_check(_has_issue(snapshot, "FINISHED_BUILDING_MANUFACTURER_MISSING"), "starter audit rejects a finished building recipe that no Factory machine can select")
 	_check(_has_issue(snapshot, "STARTER_EXTRACTOR_MANUFACTURE_UNREACHABLE"), "starter audit rejects a mine replacement recipe outside the starter machine closure")
+
+
+func _test_missing_starter_resources_is_rejected() -> void:
+	var database := _database()
+	database.factory_grid_rules["starter_world"]["resource_fields"] = []
+	_check(_has_issue(database.factory_bootstrap_reachability_snapshot(), "STARTER_RESOURCES_MISSING"), "empty starter resource fields cannot produce a vacuous reachability PASS")
 
 
 func _has_issue(snapshot: Dictionary, code: String) -> bool:

@@ -1,5 +1,9 @@
 {
   "core_ui": {
+    "location.operations.prepare_surface": "准备星球地表",
+    "location.operations.prepare_surface_hint": "初始化已勘测的星球地表，随后部署运达的开发核心。",
+    "location.operations.surface_preparation_required": "先准备已勘测的星球地表，再部署工业建筑。",
+    "status.DEPLOYMENT": "成品建筑部署",
     "location.operations.deploy_core": "部署星球开发核心基地",
     "location.operations.deploy_core_hint": "为星球开发核心基地选择合法地块。",
     "location.operations.core_required": "运行工业前请先部署星球开发核心基地。",
@@ -135,7 +139,7 @@
     "guidance.start.deploy_core": "选择可建设地块部署星球开发核心。核心提供共享仓储接入、道路运输和 400 kW 电力，并一次性发放 2 台矿机、2 台锻炉、1 台自动制造机。",
     "guidance.start.deploy_building": "从初始库存部署%s。矿机放在兼容矿区上，通过道路连接建筑与核心；缺货时先制造对应建筑成品。",
     "guidance.start.connect_roads": "用基础道路连接核心、矿机、锻炉和自动制造机，道路同时输送物资与电力；在锻炉选择铁/铜冶炼配方，矿物会自动运输。",
-    "guidance.start.prepare_frame": "在锻炉冶炼结构框架所需材料。当前实际库存：%s。道路负责机器与星球共享库存之间的物资运输。",
+    "guidance.start.prepare_frame": "在锻炉冶炼结构框架所需材料。星球可用库存：%s。道路负责机器与星球共享库存之间的物资运输。",
     "guidance.start.assemble_frame": "框架所需材料已具备：%s。在接路的自动制造机上选择结构框架，随后制造建筑成品用于扩张。",
     "guidance.start.commission_research": "在自动制造机中制造电子工坊与科研综合体成品，部署并接入道路、电力和共享库存，开启工业研发。",
     "guidance.research_blocker": "%s · %s\n下一步：%s",

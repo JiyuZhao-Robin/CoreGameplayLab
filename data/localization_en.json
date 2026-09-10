@@ -1,5 +1,9 @@
 {
   "core_ui": {
+    "location.operations.prepare_surface": "Prepare Planet Surface",
+    "location.operations.prepare_surface_hint": "Initialize this surveyed planet surface before deploying a delivered Development Core.",
+    "location.operations.surface_preparation_required": "Prepare the surveyed planetary surface before deploying industry.",
+    "status.DEPLOYMENT": "Finished-building deployment",
     "location.operations.deploy_core": "Deploy Development Core",
     "location.operations.deploy_core_hint": "Choose a legal site for the Planetary Development Core.",
     "location.operations.core_required": "Deploy the Planetary Development Core before operating industry.",
@@ -135,7 +139,7 @@
     "guidance.start.deploy_core": "Choose a clear site and deploy your Planetary Development Core. It provides shared storage, road transport and 400 kW, then grants two miners, two furnaces and one assembler.",
     "guidance.start.deploy_building": "Deploy %s from the starter inventory. Miners belong on compatible deposits; connect buildings and the core by roads. Missing stock requires manufacturing its finished building item.",
     "guidance.start.connect_roads": "Join the core, miners, furnaces and assembler with basic roads. Roads carry goods and power. Configure iron/copper smelting on the furnaces; mined products are transported automatically.",
-    "guidance.start.prepare_frame": "Smelt the inputs for Structural Frame in the furnaces. Current physical stock: %s. Roads move materials between machines and the shared planetary inventory.",
+    "guidance.start.prepare_frame": "Smelt the inputs for Structural Frame in the furnaces. Available planetary stock: %s. Roads move materials between machines and the shared planetary inventory.",
     "guidance.start.assemble_frame": "Frame inputs are available: %s. Select Structural Frame on the connected automatic assembler; then manufacture finished buildings there to expand.",
     "guidance.start.commission_research": "Manufacture the Electronics Works and Research Complex as finished buildings in the assembler. Deploy them and connect their roads to power and shared storage to start industrial research.",
     "guidance.research_blocker": "%s · %s\nNext step: %s",

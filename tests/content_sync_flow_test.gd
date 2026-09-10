@@ -33,16 +33,40 @@ func _run() -> void:
 	dashboard = game.location_operations_snapshot("earth_orbit")
 	_check(not dashboard.get("landing_required", true) and dashboard.get("hero_definition_id") == "grid_planetary_core", "deployed core remains the real dashboard facility")
 	var world: Dictionary = game.state.factory_worlds[WORLD]
+	var remote := world.duplicate(true)
+	remote["location_id"] = "lunar_space"
+	remote["statistics"] = {"produced":{"iron_ore":10, "structural_frame":1}}
+	game.state.factory_worlds["remote-guidance-fixture"] = remote
+	_check(game.guidance_snapshot().get("step_id") == "deploy_starter_grid_surface_mine", "remote production cannot skip Earth's starter guidance")
+	game.state.factory_worlds.erase("remote-guidance-fixture")
 	# Legacy custody is migrated once by the application, never counted twice.
 	var core: Dictionary = world["entities"].values()[0]
 	core["inventory"] = {"iron_ore":99}
 	game.state.location_inventory("earth_orbit")["iron_ore"] = 7
+	_check(game._guidance_factory_item_quantity("iron_ore") == 7, "guidance never adds retired warehouse custody to available Location stock")
 	dashboard = game.location_operations_snapshot("earth_orbit")
 	var rows: Array = dashboard["inventory"].filter(func(row): return row.get("id") == "iron_ore")
 	_check(rows.size() == 1 and int(rows[0].get("quantity", -1)) == 106 and int(rows[0].get("warehouse_quantity", -1)) == 0, "migrated stock is displayed once, solely in Location inventory: %s" % [rows])
 	dashboard = game.location_operations_snapshot("earth_orbit")
 	rows = dashboard["inventory"].filter(func(row): return row.get("id") == "iron_ore")
 	_check(int(rows[0].get("quantity", -1)) == 106, "subsequent reads do not repeat the legacy custody transfer")
+	var ghost: Dictionary = game.execute_factory_command({
+		"protocol_version":1, "command_id":"sync-ghost", "kind":"DEPLOY_BUILDING",
+		"world_id":WORLD, "base_topology_revision":world.get("topology_revision", 0),
+		"payload":{"definition_id":"grid_solar_array", "origin":{"x":8, "y":8}}
+	})
+	_check(ghost.get("accepted", false), "missing finished solar building creates a deployment ghost")
+	dashboard = game.location_operations_snapshot("earth_orbit")
+	var ghosts: Array = dashboard["tasks"].filter(func(task): return task.get("kind") == "DEPLOYMENT")
+	_check(ghosts.size() == 1 and not ghosts[0].has("progress") and not ghosts[0].has("remaining_ms"), "Location deployment task carries no fictitious onsite progress or ETA")
+	# Regional intelligence is authoritative; Location is its normalized view.
+	game.state.region_states["lunar_space"]["survey_state"] = "SURVEYED"
+	var lunar: Dictionary = game.location_operations_snapshot("lunar_space")
+	_check(lunar.get("can_initialize_factory", false) and not lunar.get("landing_required", true) and lunar["industry_empty_action"].get("kind") == "INITIALIZE_FACTORY", "surveyed remote surface preparation is distinct from core deployment: %s/%s/%s" % [lunar.get("survey_state"), lunar.get("world_id"), lunar.get("industry_empty_action")])
+	_check(game.initialize_surveyed_factory_world("lunar_space"), "surveyed remote surface initializes through the application")
+	lunar = game.location_operations_snapshot("lunar_space")
+	_check(lunar.get("landing_required", false) and lunar["industry_empty_action"].get("definition_id") == "grid_planetary_core", "initialized remote surface requests a transported core")
+	_check(game.state.item_quantity("building_grid_planetary_core", "lunar_space") == 0, "remote initialization does not grant another starter core")
 	var solar: Dictionary = game.content.factory_buildings["grid_dsp_solar_panel"]
 	var nominal := float(solar.get("power_generation_kw", 0.0))
 	var grid: FactoryGridSimulation = game.simulation.factory_grid

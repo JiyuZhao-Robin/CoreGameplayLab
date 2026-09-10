@@ -82,8 +82,10 @@ static func build(game: Node, location_id: String) -> Dictionary:
 			result["facilities"].back()["kind"] = kind
 		for order_value in factory.get("construction_orders", []):
 			var order := order_value as Dictionary
+			if str(order.get("status", "")) != "WAITING_BUILDING":
+				continue
 			result["industry"]["construction_count"] += 1
-			result["tasks"].append({"id":order.get("id", ""), "kind":"CONSTRUCTION", "definition_id":order.get("definition_id", ""), "name":order.get("building_name", ""), "status":order.get("status", ""), "blocker":order.get("blocker_code", ""), "progress":order.get("progress", 0.0), "remaining_ms":order.get("remaining_ms", -1.0), "action":{"kind":"OPEN_FACTORY", "world_id":world_id, "section":"CONSTRUCTION", "order_id":order.get("id", "")}})
+			result["tasks"].append({"id":order.get("id", ""), "kind":"DEPLOYMENT", "definition_id":order.get("definition_id", ""), "item_id":order.get("deployment_item_id", ""), "name":order.get("building_name", ""), "status":"WAITING_BUILDING", "action":{"kind":"OPEN_FACTORY", "world_id":world_id, "section":"CONSTRUCTION", "order_id":order.get("id", "")}})
 	for resource_value in intelligence.get("resources", []):
 		var resource := resource_value as Dictionary
 		var item_id := str(resource.get("resource_type", ""))

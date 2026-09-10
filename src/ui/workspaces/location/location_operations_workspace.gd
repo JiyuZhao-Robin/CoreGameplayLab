@@ -86,9 +86,16 @@ func configure(snapshot: Dictionary) -> void:
 			var row := _task_rows.get_node_or_null(NodePath("TaskRow_%s" % str(task.get("id", "")).validate_node_name())) as Panel
 			if row == null:
 				continue
-			(row.get_meta("progress") as ProgressBar).value = clampf(float(task.get("progress", 0.0)) * 100.0, 0.0, 100.0)
-			(row.get_meta("remaining") as Label).text = _remaining_text(task)
-			(row.get_meta("percent") as Label).text = "%d%%" % int(round(clampf(float(task.get("progress", 0.0)) * 100.0, 0.0, 100.0)))
+			var waiting_building := _is_waiting_building_deployment(task)
+			var progress := row.get_meta("progress") as ProgressBar
+			progress.value = clampf(float(task.get("progress", 0.0)) * 100.0, 0.0, 100.0)
+			progress.visible = not waiting_building
+			var remaining := row.get_meta("remaining") as Label
+			remaining.text = "" if waiting_building else _remaining_text(task)
+			remaining.visible = not waiting_building
+			var percent := row.get_meta("percent") as Label
+			percent.text = "" if waiting_building else "%d%%" % int(round(clampf(float(task.get("progress", 0.0)) * 100.0, 0.0, 100.0)))
+			percent.visible = not waiting_building
 			_update_status_badge(row.get_meta("status_badge") as PanelContainer, row.get_meta("status") as Label, str(task.get("status", "")))
 		# Hovering a warehouse tile must not freeze the live stock height or its
 		# surplus/consumption marker. Structural row changes still wait until the
@@ -618,6 +625,7 @@ func _update_static_values() -> void:
 		return
 	var valid := bool(_snapshot.get("valid", false))
 	var landing_required := _landing_required()
+	var surface_preparation_required := _surface_preparation_required()
 	_update_hero_art(landing_required)
 	var location_name := str(_snapshot.get("name", ""))
 	_title_label.text = location_name if valid and not location_name.is_empty() else _t("location.select_known", "Select a known Location from the System map.")
@@ -650,16 +658,16 @@ func _update_static_values() -> void:
 	var task_count := (_snapshot.get("tasks", []) as Array).size()
 	_tasks_value.text = "%d %s  ·  %d %s" % [task_count, _t("location.operations.active", "active"), int(_snapshot.get("fleet_count", 0)), _t("location.operations.fleet_short", "fleet")] if valid else "—"
 	_factory_button.disabled = not valid or (str(_snapshot.get("world_id", "")).is_empty() and not bool(_snapshot.get("can_initialize_factory", false)))
-	_factory_button.text = _t("location.operations.deploy_core", "Deploy Development Core") if landing_required else _t("location.operations.open_factory", "Open Factory")
-	_factory_button.tooltip_text = _t("location.operations.deploy_core_hint", "Choose a legal site for the Planetary Development Core.") if landing_required else _t("location.operations.open_factory", "Open Factory")
+	_factory_button.text = _stage_action_text(landing_required, surface_preparation_required, _t("location.operations.open_factory", "Open Factory"))
+	_factory_button.tooltip_text = _stage_action_tooltip(landing_required, surface_preparation_required)
 	if _resources_open_button != null:
-		_resources_open_button.text = _t("location.operations.deploy_core", "Deploy Development Core") if landing_required else _t("location.operations.view_factory", "View Factory →")
+		_resources_open_button.text = _stage_action_text(landing_required, surface_preparation_required, _t("location.operations.view_factory", "View Factory →"))
 		_resources_open_button.disabled = _factory_button.disabled
 	if _industry_open_button != null:
-		_industry_open_button.text = _t("location.operations.deploy_core", "Deploy Development Core") if landing_required else _t("location.operations.open_production", "Open Production →")
+		_industry_open_button.text = _stage_action_text(landing_required, surface_preparation_required, _t("location.operations.open_production", "Open Production →"))
 		_industry_open_button.disabled = _factory_button.disabled
 	if _tasks_open_button != null:
-		_tasks_open_button.text = _t("location.operations.deploy_core", "Deploy Development Core") if landing_required else _t("location.operations.open_factory", "Open Factory")
+		_tasks_open_button.text = _stage_action_text(landing_required, surface_preparation_required, _t("location.operations.open_factory", "Open Factory"))
 		_tasks_open_button.disabled = _factory_button.disabled
 	_logistics_button.disabled = not valid
 	_fleet_summary.text = "%d %s" % [int(_snapshot.get("fleet_count", 0)), _t("location.operations.vessels", "vessels")] if valid else "—"
@@ -670,13 +678,29 @@ func _update_static_values() -> void:
 
 
 func _landing_required() -> bool:
-	# A location without a Factory world is still at the same player-facing
-	# landing stage when the host can initialize one. The action contract remains
-	# authoritative; this helper only selects truthful copy and art.
-	return bool(_snapshot.get("landing_required", false)) or (
-		str(_snapshot.get("world_id", "")).is_empty()
-		and bool(_snapshot.get("can_initialize_factory", false))
-	)
+	# Only the Factory snapshot may state that a Development Core can be placed.
+	# Surveyed ground preparation is a separate, earlier action.
+	return bool(_snapshot.get("landing_required", false))
+
+
+func _surface_preparation_required() -> bool:
+	return not _landing_required() and str(_snapshot.get("world_id", "")).is_empty() and bool(_snapshot.get("can_initialize_factory", false))
+
+
+func _stage_action_text(landing_required: bool, surface_preparation_required: bool, fallback: String) -> String:
+	if landing_required:
+		return _t("location.operations.deploy_core", "Deploy Development Core")
+	if surface_preparation_required:
+		return _t("location.operations.prepare_surface", "Prepare Planet Surface")
+	return fallback
+
+
+func _stage_action_tooltip(landing_required: bool, surface_preparation_required: bool) -> String:
+	if landing_required:
+		return _t("location.operations.deploy_core_hint", "Choose a legal site for the Planetary Development Core.")
+	if surface_preparation_required:
+		return _t("location.operations.prepare_surface_hint", "Initialize this surveyed planet surface before deploying a delivered Development Core.")
+	return _t("location.operations.open_factory", "Open Factory")
 
 
 func _update_hero_art(landing_required: bool) -> void:
@@ -688,9 +712,17 @@ func _update_hero_art(landing_required: bool) -> void:
 			if facility_value is Dictionary and not str((facility_value as Dictionary).get("definition_id", "")).is_empty():
 				definition_id = str((facility_value as Dictionary).get("definition_id", ""))
 				break
-	if definition_id.is_empty():
+	if definition_id.is_empty() and landing_required:
 		definition_id = "grid_planetary_core"
+	if definition_id.is_empty():
+		# An unsurveyed or merely initialized Location has no deployed facility.
+		# Keep the existing frame as a neutral background rather than inventing a
+		# core the player has not yet delivered.
+		_hero_art.texture = null
+		_hero_art.visible = false
+		return
 	_hero_art.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), definition_id, "STORAGE" if definition_id == "grid_planetary_core" else "MACHINE")
+	_hero_art.visible = _hero_art.texture != null
 
 
 func _refresh_dynamic_values() -> void:
@@ -911,9 +943,11 @@ func _sync_facility_rows(facilities: Array) -> void:
 		action.disabled = str(facility.get("world_id", _snapshot.get("world_id", ""))).is_empty()
 	_cleanup_rows(_industry_rows, active)
 	var landing_required := _landing_required()
-	var empty_copy := _t("location.operations.core_required", "Deploy the Planetary Development Core before operating industry.") if landing_required else _t("location.operations.facilities_empty", "No deployed production buildings.")
-	var empty_action_copy := _t("location.operations.deploy_core", "Deploy Development Core") if landing_required else _t("location.operations.manufacture_or_deploy", "Manufacture / deploy a building")
-	_ensure_empty_action_card(_industry_rows, active.is_empty(), empty_copy, empty_action_copy, "LocationFacilityEmptyAction", func() -> void: _open_industry_empty_action(), "grid_planetary_core")
+	var surface_preparation_required := _surface_preparation_required()
+	var empty_copy := _t("location.operations.core_required", "Deploy the Planetary Development Core before operating industry.") if landing_required else (_t("location.operations.surface_preparation_required", "Prepare the surveyed planetary surface before deploying industry.") if surface_preparation_required else _t("location.operations.facilities_empty", "No deployed production buildings."))
+	var empty_action_copy := _stage_action_text(landing_required, surface_preparation_required, _t("location.operations.manufacture_or_deploy", "Manufacture / deploy a building"))
+	var empty_art_id := "grid_planetary_core" if landing_required else ""
+	_ensure_empty_action_card(_industry_rows, active.is_empty(), empty_copy, empty_action_copy, "LocationFacilityEmptyAction", func() -> void: _open_industry_empty_action(), empty_art_id)
 
 
 func _sync_alert_rows(alerts: Array) -> void:
@@ -952,24 +986,34 @@ func _sync_task_rows(tasks: Array) -> void:
 		if row == null:
 			row = _task_row(row_name, id)
 			_task_rows.add_child(row)
+		var waiting_building := _is_waiting_building_deployment(task)
 		(row.get_meta("name") as Label).text = str(task.get("name", task.get("kind", id)))
 		(row.get_meta("kind") as Label).text = _display_value(task.get("kind", ""))
-		(row.get_meta("remaining") as Label).text = _remaining_text(task)
-		(row.get_meta("percent") as Label).text = "%d%%" % int(round(clampf(float(task.get("progress", 0.0)) * 100.0, 0.0, 100.0)))
+		var remaining := row.get_meta("remaining") as Label
+		var percent := row.get_meta("percent") as Label
+		var progress := row.get_meta("progress") as ProgressBar
+		remaining.text = "" if waiting_building else _remaining_text(task)
+		remaining.visible = not waiting_building
+		percent.text = "" if waiting_building else "%d%%" % int(round(clampf(float(task.get("progress", 0.0)) * 100.0, 0.0, 100.0)))
+		percent.visible = not waiting_building
 		_update_status_badge(row.get_meta("status_badge") as PanelContainer, row.get_meta("status") as Label, str(task.get("status", "")))
 		var blocker := str(task.get("blocker", ""))
 		var blocker_label := row.get_meta("blocker") as Label
 		blocker_label.text = _display_value(blocker)
 		blocker_label.visible = not blocker.is_empty()
 		_update_task_art(row.get_meta("art") as TextureRect, task)
-		var progress := row.get_meta("progress") as ProgressBar
 		progress.value = clampf(100.0 * float(task.get("progress", 0.0)), 0.0, 100.0)
+		progress.visible = not waiting_building
 		var action := row.get_meta("action") as Button
 		action.disabled = not (task.get("action") is Dictionary) or (task.get("action") as Dictionary).is_empty()
 		action.tooltip_text = _task_card_tooltip(task)
 	_cleanup_rows(_task_rows, active)
-	var task_action_copy := _t("location.operations.deploy_core", "Deploy Development Core") if _landing_required() else _t("location.operations.open_factory", "Open Factory")
-	_ensure_empty_action_card(_task_rows, active.is_empty(), _t("location.operations.tasks_empty", "No active local tasks."), task_action_copy, "LocationTaskEmptyAction", func() -> void: _open_task_empty_action(), "grid_planetary_core")
+	var landing_required := _landing_required()
+	var surface_preparation_required := _surface_preparation_required()
+	var task_empty_copy := _t("location.operations.core_required", "Deploy the Planetary Development Core before operating industry.") if landing_required else (_t("location.operations.surface_preparation_required", "Prepare the surveyed planetary surface before deploying industry.") if surface_preparation_required else _t("location.operations.tasks_empty", "No active local tasks."))
+	var task_action_copy := _stage_action_text(landing_required, surface_preparation_required, _t("location.operations.open_factory", "Open Factory"))
+	var task_empty_art_id := "grid_planetary_core" if landing_required else ""
+	_ensure_empty_action_card(_task_rows, active.is_empty(), task_empty_copy, task_action_copy, "LocationTaskEmptyAction", func() -> void: _open_task_empty_action(), task_empty_art_id)
 
 
 func _sync_environment_rows() -> void:
@@ -1396,6 +1440,12 @@ func _update_building_art(art: TextureRect, definition_id: String, kind: String)
 
 
 func _update_task_art(art: TextureRect, task: Dictionary) -> void:
+	if _is_waiting_building_deployment(task):
+		# Deployment ghosts name both their building and its finished item. Prefer
+		# the authoritative building art so a missing finished building is not
+		# visually reduced to a generic material crate.
+		_update_building_art(art, str(task.get("definition_id", "")), "CONSTRUCTION")
+		return
 	var item_id := str(task.get("item_id", ""))
 	if not item_id.is_empty():
 		# Survey and transport snapshots provide the actual sensor/cargo item. Do
@@ -1418,11 +1468,17 @@ func _update_task_art(art: TextureRect, task: Dictionary) -> void:
 
 
 func _task_card_tooltip(task: Dictionary) -> String:
-	var details: Array[String] = [str(task.get("name", task.get("kind", _unknown()))), _display_value(task.get("status", "")), _remaining_text(task)]
+	var details: Array[String] = [str(task.get("name", task.get("kind", _unknown()))), _display_value(task.get("status", ""))]
+	if not _is_waiting_building_deployment(task):
+		details.append(_remaining_text(task))
 	var blocker := str(task.get("blocker", ""))
 	if not blocker.is_empty():
 		details.append(blocker)
 	return "\n".join(details)
+
+
+func _is_waiting_building_deployment(task: Dictionary) -> bool:
+	return str(task.get("kind", "")).to_upper() == "DEPLOYMENT" and str(task.get("status", "")).to_upper() == "WAITING_BUILDING"
 
 
 func _cleanup_rows(container: Container, active: Dictionary) -> void:
@@ -1484,7 +1540,8 @@ func _ensure_empty_action_card(container: Container, empty: bool, text: String, 
 	art.custom_minimum_size = UiTokens.layout_vector(Vector2(44, 44))
 	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	art.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), art_definition_id, "STORAGE")
+	art.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), art_definition_id, "STORAGE") if not art_definition_id.is_empty() else null
+	art.visible = art.texture != null
 	body.add_child(art)
 	var label := _label(text, 9, MUTED)
 	label.name = "EmptyStateDescription"

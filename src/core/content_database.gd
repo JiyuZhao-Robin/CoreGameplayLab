@@ -1558,6 +1558,8 @@ func factory_bootstrap_reachability_snapshot() -> Dictionary:
 	elif starter_power_generation_kw + 0.000001 < starter_power_demand_kw:
 		_factory_bootstrap_issue(issues, "STARTER_POWER_INSUFFICIENT", {"generation_kw":starter_power_generation_kw, "demand_kw":starter_power_demand_kw})
 
+	if starter.get("resource_fields", []).is_empty():
+		_factory_bootstrap_issue(issues, "STARTER_RESOURCES_MISSING")
 	for field_value in starter.get("resource_fields", []):
 		var field: Dictionary = field_value as Dictionary
 		var resource_id := str(field.get("resource_id", ""))

@@ -2694,7 +2694,7 @@ func _bootstrap_guidance_snapshot() -> Dictionary:
 		var frame_inputs: Array = content.factory_recipes.get("grid_assemble_frame", {}).get("inputs", [])
 		var frame_progress := _guidance_factory_material_progress(frame_inputs)
 		if not _guidance_factory_materials_available(frame_inputs):
-			return _guidance_result(base, "prepare_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.start.prepare_frame", "Smelt the inputs for Structural Frame in the furnaces. Current physical stock: %s. Roads move materials between machines and the shared planetary inventory.") % frame_progress)
+			return _guidance_result(base, "prepare_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.start.prepare_frame", "Smelt the inputs for Structural Frame in the furnaces. Available planetary stock: %s. Roads move materials between machines and the shared planetary inventory.") % frame_progress)
 		return _guidance_result(base, "assemble_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.start.assemble_frame", "Frame inputs are available: %s. Select Structural Frame on the connected automatic assembler; then manufacture finished buildings there to expand.") % frame_progress)
 	var has_blocked_research := not str(state.research.get("project_id", "")).is_empty() and str(state.research.get("status", "")) == "BLOCKED"
 	if (not _factory_has_completed_definition("grid_electronics_works") or not _factory_has_completed_definition("grid_research_complex")) and not has_blocked_research:
@@ -2734,16 +2734,10 @@ func _guidance_result(base: Dictionary, step_id: String, page: String, section: 
 	return result
 
 
-func _guidance_ship_has_module(module_id: String) -> bool:
-	for ship_value in state.ships:
-		if module_id in state.ship_module_definition_ids(ship_value as Dictionary):
-			return true
-	return false
-
-
-func _factory_grid_has_produced(item_id: String) -> bool:
+func _factory_grid_has_produced(item_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> bool:
 	for world_value in state.factory_worlds.values():
-		if int((world_value as Dictionary).get("statistics", {}).get("produced", {}).get(item_id, 0)) > 0:
+		var world := world_value as Dictionary
+		if str(world.get("location_id", "")) == location_id and int(world.get("statistics", {}).get("produced", {}).get(item_id, 0)) > 0:
 			return true
 	return false
 
@@ -2760,33 +2754,10 @@ func _factory_has_completed_definition(definition_id: String, location_id: Strin
 	return false
 
 
-func _factory_construction_order(definition_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> Dictionary:
-	var world_ids: Array = state.factory_worlds.keys()
-	world_ids.sort()
-	for world_id_value in world_ids:
-		var world: Dictionary = state.factory_worlds.get(world_id_value, {})
-		if str(world.get("location_id", "")) != location_id:
-			continue
-		var order_ids: Array = world.get("construction_orders", {}).keys()
-		order_ids.sort()
-		for order_id_value in order_ids:
-			var order: Dictionary = world.get("construction_orders", {}).get(order_id_value, {})
-			if str(order.get("definition_id", "")) == definition_id and str(order.get("status", "")) not in ["COMPLETE", "CANCELLED", "FAILED"]:
-				return order.duplicate(true)
-	return {}
-
-
 func _guidance_factory_item_quantity(item_id: String, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> int:
-	var result := state.available_item_quantity(item_id, location_id)
-	for world_value in state.factory_worlds.values():
-		var world := world_value as Dictionary
-		if str(world.get("location_id", "")) != location_id:
-			continue
-		for entity_value in world.get("entities", {}).values():
-			var entity := entity_value as Dictionary
-			if str(entity.get("kind", "")) == "STORAGE" and str(entity.get("status", "")) != "UNDER_CONSTRUCTION":
-				result += maxi(0, int(entity.get("inventory", {}).get(item_id, 0)))
-	return result
+	# Location is the sole planetary stock authority. Reconciliation owns any
+	# legacy custody transfer; guidance must never invent a second balance.
+	return state.available_item_quantity(item_id, location_id)
 
 
 func _guidance_factory_materials_available(costs: Array, location_id: String = SpaceGameState.MAIN_BASE_LOCATION_ID) -> bool:

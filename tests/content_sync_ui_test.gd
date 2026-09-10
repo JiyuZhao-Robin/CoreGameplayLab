@@ -42,10 +42,14 @@ func _run() -> void:
 	host.add_child(location)
 	var location_intents: Array[Dictionary] = []
 	location.action_requested.connect(func(action: Dictionary) -> void: location_intents.append(action.duplicate(true)))
+	location.configure(_surface_preparation_fixture())
+	await _settle()
+	await _test_surface_preparation_location(location, location_intents)
 	location.configure(_location_fixture(true))
 	await _settle()
 	await _test_pre_landing_location(location, location_intents)
 	await _test_post_landing_location(location, location_intents)
+	await _test_location_deployment_ghost(location)
 
 	var factory := FactoryWorkspaceScript.new()
 	factory.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -86,6 +90,25 @@ func _test_pre_landing_location(workspace: Control, intents: Array[Dictionary]) 
 	_check(_factory_canvas_action(industry_action) and _factory_canvas_action(task_action), "pre-landing empty actions preserve their authoritative Factory canvas intent shape")
 
 
+func _test_surface_preparation_location(workspace: Control, intents: Array[Dictionary]) -> void:
+	var hero := workspace.find_child("LocationOperationsFactoryArt", true, false) as TextureRect
+	var industry_empty := workspace.find_child("LocationFacilityEmptyAction", true, false) as Button
+	var tasks_empty := workspace.find_child("LocationTaskEmptyAction", true, false) as Button
+	var empty_art := workspace.find_child("EmptyStateBuildingArt", true, false) as TextureRect
+	_check(hero != null and not hero.visible and hero.texture == null, "surveyed Locations without a Factory world do not imply that a Development Core is already present")
+	_check(empty_art != null and not empty_art.visible and empty_art.texture == null, "surface preparation does not reuse Development Core art before a Factory snapshot requires it")
+	_check(industry_empty != null and industry_empty.text.contains("Prepare Planet Surface") and tasks_empty != null and tasks_empty.text.contains("Prepare Planet Surface"), "a surveyed Location without a Factory world explicitly asks the player to prepare its planetary surface")
+	var before := intents.size()
+	if industry_empty != null:
+		industry_empty.pressed.emit()
+	var industry_action: Dictionary = intents.back() if intents.size() > before else {}
+	before = intents.size()
+	if tasks_empty != null:
+		tasks_empty.pressed.emit()
+	var task_action: Dictionary = intents.back() if intents.size() > before else {}
+	_check(str(industry_action.get("kind", "")) == "INITIALIZE_FACTORY" and str(task_action.get("kind", "")) == "INITIALIZE_FACTORY", "surface-preparation CTA preserves the snapshot initialization intent instead of falsely emitting a core deployment")
+
+
 func _test_post_landing_location(workspace: Control, intents: Array[Dictionary]) -> void:
 	var fixture := _location_fixture(false)
 	fixture["tasks"] = [
@@ -113,6 +136,33 @@ func _test_post_landing_location(workspace: Control, intents: Array[Dictionary])
 		task_heading.pressed.emit()
 	var task_action: Dictionary = intents.back() if intents.size() > before else {}
 	_check(str(task_action.get("kind", "")) == "OPEN_FACTORY" and str(task_action.get("section", "")) == "CANVAS", "local task heading follows the snapshot Factory route instead of emitting OPEN_ENGINEERING")
+
+
+func _test_location_deployment_ghost(workspace: Control) -> void:
+	var fixture := _location_fixture(false)
+	fixture["tasks"] = [{
+		"id":"ghost-delivery",
+		"name":"Bulk Depot",
+		"kind":"DEPLOYMENT",
+		"definition_id":"grid_bulk_depot",
+		"item_id":"building_grid_bulk_depot",
+		"status":"WAITING_BUILDING",
+		"action":{"kind":"OPEN_FACTORY", "world_id":"earth-grid", "section":"CONSTRUCTION"}
+	}]
+	workspace.configure(fixture)
+	await _settle()
+	var row := workspace.find_child("TaskRow_" + "ghost-delivery".validate_node_name(), true, false) as Panel
+	var art := row.find_child("TaskArt", true, false) as TextureRect if row != null else null
+	var status := row.get_meta("status") as Label if row != null else null
+	var progress := row.get_meta("progress") as ProgressBar if row != null else null
+	var percent := row.get_meta("percent") as Label if row != null else null
+	var remaining := row.get_meta("remaining") as Label if row != null else null
+	var action := row.get_meta("action") as Button if row != null else null
+	var expected_art := BuildingArt.icon_texture(BuildingArt.atlas_texture(), "grid_bulk_depot", "CONSTRUCTION")
+	_check(row != null and status != null and status.text.contains("Awaiting finished building"), "a deployment ghost states that it is waiting for its finished building")
+	_check(progress != null and not progress.visible and percent != null and not percent.visible and remaining != null and not remaining.visible, "a deployment ghost shows no construction progress, percentage, or ETA")
+	_check(art != null and _same_atlas_region(art.texture, expected_art), "a deployment ghost uses the real building illustration rather than a generic finished-item material icon")
+	_check(action != null and not action.tooltip_text.contains("—"), "a deployment ghost tooltip does not invent an ETA")
 
 
 func _test_deployment_ghost_board(workspace: Control) -> void:
@@ -162,6 +212,15 @@ func _location_fixture(landing_required: bool) -> Dictionary:
 	}
 
 
+func _surface_preparation_fixture() -> Dictionary:
+	var fixture := _location_fixture(false)
+	fixture["world_id"] = ""
+	fixture["hero_definition_id"] = ""
+	fixture["industry_empty_action"] = {"kind":"INITIALIZE_FACTORY"}
+	fixture["task_empty_action"] = {"kind":"INITIALIZE_FACTORY"}
+	return fixture
+
+
 func _factory_fixture() -> Dictionary:
 	return {
 		"valid":true,
@@ -198,7 +257,12 @@ func _factory_canvas_action(action: Dictionary) -> bool:
 
 func _is_core_art(texture: Variant) -> bool:
 	var expected := BuildingArt.icon_texture(BuildingArt.atlas_texture(), "grid_planetary_core", "STORAGE")
-	var actual := texture as AtlasTexture
+	return _same_atlas_region(texture, expected)
+
+
+func _same_atlas_region(actual_value: Variant, expected_value: Variant) -> bool:
+	var actual := actual_value as AtlasTexture
+	var expected := expected_value as AtlasTexture
 	return actual != null and expected != null and actual.atlas == expected.atlas and actual.region == expected.region
 
 

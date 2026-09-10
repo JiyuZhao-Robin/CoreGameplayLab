@@ -45,6 +45,17 @@ Factory 的详细规则、数据契约和已记录的定向验证见[星球共�
 - 每次功能变更运行受影响的标准聚焦测试；J1–J10 runtime 旅程链和完整发布脚本均为显式 opt-in，不能冒充日常功能验收。
 - `tests/run_core_complete.sh` 目前不运行已退役的 Golden Path/J1–J10 runtime；README 不应再声称它验证该路径。
 
+## 本次代码同步（2026-09-10）
+
+- 中英开局引导统一为核心选址、库存建筑部署、道路连接、机器配方和建筑成品制造。引导只认本地点生产与可用 Location 库存，不叠加旧仓库私库存，也不被远端产出跳过。
+- 地点库存、任务与工业面板复用已生成的核心、建筑和物品美术。未初始化地表与待部署核心是不同阶段；部署幽灵只显示缺少成品，不显示现场施工进度或 ETA。
+- DSP 太阳能板加入与原生阵列相同的日照规则；退休路由器标记 `legacy_only`，移除其旧建造 BOM/工时。
+- `factory_bootstrap_reachability_snapshot()` 检查真实开局核心成品、初始设备、兼容矿区、名义功率与初级配方闭包，并检查成品建筑有制造机器。它是定性检查，不能替代摆放、道路、数量与时间推进测试。旧 `bootstrap_contract` 和旧快照明确标注为历史聚合经济兼容接口，不再冒称当前开局验证。
+
+主代理已串行运行：`factory_bootstrap_content`、`content_sync_flow`、`content_sync_ui`、`location_stock_projection`、`location_operations_workspace`、`factory_dsp_integration`、`factory_building_deployment`、`factory_building_deployment_ui`、`factory_environment_effects`、`content_planner_contract`，以及 UI policy、scale、window-matrix 和双语 catalog 检查，均通过。另核对导入器输出与 DSP shard 逐字一致。
+
+普通脚本运行形式为 `godot --headless --path <project> --script res://tests/<name>_test.gd -- --no-persistence`；UI policy/scale/matrix/catalog 使用对应 `.tscn`。实际日志和真实 3840×2160 地点截图位于 `/tmp/helios-*`，不纳入提交。本轮未运行完整发布脚本、J1–J10 或满负载性能基准。
+
 ## 历史资料
 
 - [1.29 Core Complete Ledger](./archive/remaining-work-1.29.md) 保留原样，记录旧聚合工业的证据，不是当前待办。

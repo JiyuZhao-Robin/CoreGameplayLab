@@ -22,6 +22,8 @@
 
 道路设计文档记录过 2026-09-10 的聚焦 Factory、DSP、道路、地形、UI 与资产守恒检查。那是历史运行证据，不代表本次工作树自动通过。
 
+本次内容同步由主代理重跑的检查和边界见[本次代码同步](./Content_Synchronization_zh_CN.md#本次代码同步2026-09-10)。新开局与成品制造的定性内容检查已与旧聚合经济 bootstrap 分离。
+
 - 本次或未来规则变更必须重跑受影响测试并记录实际命令和结果。
 - `factory_grid_simulation_test.gd` 仍存在道路前的画布尺寸断言，未同步前不能标记当前 1024×640 至 4096×2560 profile 为已验证。
 - `tests/run_core_complete.sh` 是显式 opt-in 聚合检查，且不运行退役 Golden Path/J1–J10 runtime；它不能替代功能聚焦测试。

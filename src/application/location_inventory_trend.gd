@@ -2,8 +2,8 @@ class_name LocationInventoryTrend
 extends RefCounted
 
 ## Presentation-only samples of actual stored goods, measured in simulation time.
-## Transfers between same-Location warehouses cancel because callers aggregate
-## custody first. No production is inferred from recipe selection or stock size.
+## Callers supply the single Location-owned balance, excluding machine and
+## transit custody. No production is inferred from recipe selection or stock size.
 const WINDOW_MS := 30_000.0
 const MIN_SAMPLE_MS := 1_000.0
 var _locations: Dictionary = {}
