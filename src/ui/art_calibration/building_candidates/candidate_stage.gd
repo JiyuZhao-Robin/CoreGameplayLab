@@ -1,5 +1,12 @@
 extends Control
 
+# Preview calibration is separate from the pinned source-art manifest.
+# Thermal Plant's tall chimney sits above the ground footprint; its base
+# reaches below the sprite origin. Keep artwork scale independent of this box.
+const FOOTPRINT_CALIBRATION := {
+	"thermal-plant": {"tiles": Vector2(5, 6), "center_in_base": Vector2(0.5, 0.55)},
+}
+
 var candidate: Dictionary = {}
 var textures: Dictionary = {}
 var elapsed := 0.0
@@ -62,6 +69,19 @@ func layer_rect(id: String, index: int) -> Rect2:
 	var shift := Vector2(entry.shift_tiles[0], entry.shift_tiles[1]) * factor
 	return Rect2(_center(index) + shift - extent * 0.5, extent)
 
+func footprint_tiles() -> Vector2:
+	var calibration: Dictionary = FOOTPRINT_CALIBRATION.get(str(candidate.get("id", "")), {})
+	return calibration.get("tiles", Vector2(candidate.footprint_tiles[0], candidate.footprint_tiles[1]))
+
+func footprint_rect(index: int) -> Rect2:
+	var center := _center(index)
+	var calibration: Dictionary = FOOTPRINT_CALIBRATION.get(str(candidate.get("id", "")), {})
+	if calibration.has("center_in_base"):
+		var base := layer_rect("base", index)
+		center = base.position + base.size * Vector2(calibration.center_in_base)
+	var extent := footprint_tiles() * 52.0 * zoom
+	return Rect2(center - extent * 0.5, extent)
+
 func _draw_layer(target: CanvasItem, id: String, index: int) -> void:
 	if not textures.has(id):
 		return
@@ -94,9 +114,9 @@ func _draw() -> void:
 		_draw_layer(self, "base", index)
 		_draw_layer(self, "mask", index)
 		if show_footprint or index == 2:
-			var extent := Vector2(candidate.footprint_tiles[0], candidate.footprint_tiles[1]) * 52.0 * zoom
-			draw_rect(Rect2(_center(index) - extent * 0.5, extent), Color(0.45, 0.85, 0.7, 0.45), false, 1.5)
-		var note := "%d × %d 格 · 预览占地" % [candidate.footprint_tiles[0], candidate.footprint_tiles[1]]
+			draw_rect(footprint_rect(index), Color(0.45, 0.85, 0.7, 0.45), false, 1.5)
+		var tiles := footprint_tiles()
+		var note := "%d × %d 格 · 预览占地" % [int(tiles.x), int(tiles.y)]
 		var width := font.get_string_size(note, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
 		draw_string(font, Vector2(_center(index).x - width * 0.5, size.y - 40), note, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("bdc8bb"))
 

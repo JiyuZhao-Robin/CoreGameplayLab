@@ -30,16 +30,29 @@ func _run() -> void:
 			_check(occupied > 2, "generated atlas cell %d contains real material artwork" % index)
 	for item_id in game.content.items:
 		var texture := MaterialArt.texture_for_item(str(item_id)) as AtlasTexture
-		_check(MaterialArt.icon_index(str(item_id)) != MaterialArt.UNKNOWN_INDEX and texture != null, "known content material %s has an explicit art mapping" % item_id)
-		if texture != null:
-			_check(texture.atlas == atlas and Rect2(Vector2.ZERO, atlas.get_size()).encloses(texture.region), "material sprite shares the single atlas and stays inside its bounds")
+		# Materials and buildings now use several project-local art packs;
+		# authored family aliases may intentionally share the same sprite.
+		_check(texture != null and texture != MaterialArt.texture_for_item("unrecognized_mod_item"), "known content item %s has artwork instead of the unknown fallback" % item_id)
+		if texture != null and texture.atlas != null:
+			_check(texture.region.has_area() and Rect2(Vector2.ZERO, texture.atlas.get_size()).encloses(texture.region), "item %s stays inside its own art atlas" % item_id)
+			if texture.atlas is ImageTexture:
+				# The furnace adapter may build mipmaps from its local frame.
+				_check(MaterialArt.BuildingArt.uses_arc_furnace(str(item_id).trim_prefix("building_")) and texture.atlas.get_image().has_mipmaps(), "item %s uses the approved mipmapped frame" % item_id)
+			else:
+				_check(texture.atlas.resource_path.begins_with("res://"), "item %s uses project-local artwork" % item_id)
+			_check(texture == MaterialArt.texture_for_item(str(item_id)), "item %s reuses its cached sprite" % item_id)
+		else:
+			_check(false, "item %s has a usable atlas" % item_id)
 	_check(MaterialArt.icon_index("survey_unknown") == 31 and MaterialArt.icon_index("unrecognized_mod_item") == 31, "unknown resources use only the generic scanner sprite")
 	_check(MaterialArt.texture_for_item("iron_ore") == MaterialArt.texture_for_item("iron_ore"), "repeated render refresh reuses cached sprite resources")
 	var seen := {}
-	for row in game.location_operations_snapshot("earth_orbit").get("inventory", []):
-		var index := MaterialArt.icon_index(str(row["id"]))
-		_check(not seen.has(index), "starter material %s has a distinct visible sprite" % row["id"])
-		seen[index] = true
+	for item_id in ["iron_ore", "copper_ore", "iron_ingot", "copper_ingot"]:
+		var texture := MaterialArt.texture_for_item(item_id) as AtlasTexture
+		if texture == null or texture.atlas == null:
+			continue
+		var sprite_key := "%s:%s" % [texture.atlas.resource_path, texture.region]
+		_check(not seen.has(sprite_key), "basic material %s has a distinct visible sprite" % item_id)
+		seen[sprite_key] = true
 	for failure in failures:
 		push_error(failure)
 	print("LOCATION_MATERIAL_ART_PASS" if failures.is_empty() else "LOCATION_MATERIAL_ART_FAIL")

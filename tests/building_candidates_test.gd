@@ -38,6 +38,22 @@ func _run() -> void:
 		var before := root.get_texture().get_image()
 		scene.stage.elapsed = 0.53
 		scene.stage.refresh()
+		if str(scene.candidates[index].id) == "thermal-plant":
+			for view_zoom in [0.65, 1.25, 1.0]:
+				scene.stage.zoom = view_zoom
+				scene.stage.refresh()
+				for panel in 3:
+					var body: Rect2 = scene.stage.layer_rect("base", panel)
+					# The bottom 84% contains the ground base; the chimney
+					# tip above it is deliberately outside the ground box.
+					var ground_base := Rect2(body.position + Vector2(0, body.size.y * 0.16), body.size * Vector2(1, 0.84))
+					_check(scene.stage.footprint_rect(panel).grow(0.01).encloses(ground_base), "thermal footprint encloses the base in each panel and zoom")
+					_check(is_equal_approx(body.size.x, 260.0 * view_zoom), "thermal footprint calibration preserves artwork scale")
+				await _settle()
+				if view_zoom != 1.0:
+					var zoom_preview := root.get_texture().get_image()
+					zoom_preview.resize(1920,1080,Image.INTERPOLATE_LANCZOS)
+					_check(zoom_preview.save_jpg(ProjectSettings.globalize_path(OUTPUT + "05-thermal-plant-zoom-%d.jpg" % roundi(view_zoom * 100)),0.92) == OK, "thermal zoom capture")
 		await _settle()
 		var after := root.get_texture().get_image()
 		_check(after.get_size() == Vector2i(3840,2160), "actual 4K render")
