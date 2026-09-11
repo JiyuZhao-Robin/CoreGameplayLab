@@ -16,6 +16,16 @@
 
 ## 查看方法
 
+macOS 在项目根目录运行（无需 PowerShell）：
+
+```sh
+sh tools/run_building_candidates.sh
+```
+
+直接打开制造工厂使用 `sh tools/run_building_candidates.sh manufacturer`。脚本查找 PATH 中的 `godot` / `godot4` 或 `/Applications/Godot.app/Contents/MacOS/Godot`；自定义安装位置使用 `GODOT_BIN="/你的路径/Godot" sh tools/run_building_candidates.sh`。
+
+启动脚本会先导入资源，再打开 Demo。素材原图及 `.import` 配置随 Git 上传；`.godot/imported/*.ctex` 是每台机器本地生成的缓存。首次拉取或更新素材后，直接运行场景可能报缓存缺失，请使用启动脚本或先在 Godot 编辑器中打开项目并等待导入完成。
+
 在项目根目录运行 `tools/run_building_candidates.ps1`，或在 Godot 编辑器中打开 `src/ui/art_calibration/building_candidates/` 内的 Demo 场景并按 F6。
 
 场景入口为 `src/ui/art_calibration/building_candidates/building_candidates.tscn`。启动脚本优先查找 PATH 中的 Godot，也支持 `-GodotPath '你的 Godot 路径'`；`-Capture` 运行真实渲染检查并生成截图。
