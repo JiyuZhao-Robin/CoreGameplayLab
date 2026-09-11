@@ -2,14 +2,22 @@
 
 ## Current planetary industry design authority
 
-Read `docs/Planetary_Industry_Roads_Design_zh_CN.md` for Factory changes.
+Read `docs/Planetary_Drone_Logistics_zh_CN.md` for Factory logistics changes.
+Read `docs/Factory_Building_Consolidation_zh_CN.md` for the active production
+catalog and save aliases; source shard duplicates are not active build options.
+Finished building kits are collected singly; ordinary materials batch at ten.
+The 2026-09-11 drone decision supersedes the road logistics/power sections of
+`docs/Planetary_Industry_Roads_Design_zh_CN.md`; retain its independent mining,
+flat terrain, finished-building deployment and startup contracts.
 Use `docs/Content_Synchronization_zh_CN.md` and `docs/remaining-work.md`
 to distinguish current contracts, unfinished requirements, and historical plans.
 Do not reactivate archived port/onsite-construction rules or report a historical
 test result as verification of the current checkout.
 Planetary inventory has one Location-owned authority with per-item capacity;
-warehouses are access/loading points, not additional inventory copies. Built
-roads carry local goods and power. Do not introduce local railways or revive
+warehouses add capacity, not additional inventory copies. The core and drone
+towers collect/ship within circular coverage, prioritizing ten recipe batches
+of inputs at pickup. Roads are retired; old layouts remain inert save archives.
+World power no longer depends on roads. Do not introduce local railways or revive
 manual Factory cargo/power port wiring. Interstellar logistics stays separate.
 Distinguish approved design, implemented behavior, and verified behavior.
 Generated art must be real checked-in project assets with generation provenance;

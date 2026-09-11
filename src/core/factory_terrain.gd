@@ -5,9 +5,8 @@ extends RefCounted
 ## Factory world. The authoritative world stores only generator inputs and
 ## player-made deltas; this module never materializes a planet-sized tile map.
 ##
-## `terrain_enabled` deliberately defaults to false. That keeps old saves and
-## small isolated fixtures buildable until their world profile opts into the
-## Factorio-style terrain contract.
+## Current runtime is flat. Saved terrain inputs still reproduce the historical
+## resource-placement geography; they do not enable mountains, water or trees.
 
 const PLAIN := "PLAIN"
 const FOREST := "FOREST"
@@ -18,11 +17,22 @@ const TERRAIN_TYPES := [PLAIN, FOREST, DESERT, WATER, MOUNTAIN]
 const BLOCKED_TERRAIN := [WATER, MOUNTAIN]
 const NOISE_MODULUS := 2_147_483_647
 const SOLID_FIELD_CORE_RADIUS := 0.60
+const EarthTerrain = preload("res://src/core/earth_terrain.gd")
+## Current product scope: plain ground everywhere, retaining saved generation
+## inputs and resource geography so this temporary policy never rewrites saves.
+const FLAT_GROUND_ONLY := true
 
 
-## Returns the semantic terrain at one tile. Tile deltas have first priority so
-## surveying/terraforming can override both the safe region and generated data.
+## Shared runtime classification for construction, inspection and rendering.
 static func terrain_type(world: Dictionary, tile: Vector2i) -> String:
+	if FLAT_GROUND_ONLY:
+		return PLAIN
+	return resource_geography_type(world, tile)
+
+
+## Historical geography is used only to preserve resource placement and its RNG
+## sequence. Rendering and construction must use terrain_type/surface_sample.
+static func resource_geography_type(world: Dictionary, tile: Vector2i) -> String:
 	var override := _terrain_override(world, tile)
 	if not override.is_empty():
 		return override
@@ -30,6 +40,8 @@ static func terrain_type(world: Dictionary, tile: Vector2i) -> String:
 		return PLAIN
 	if _rect_contains(world.get("terrain_safe_rect", {}), tile):
 		return PLAIN
+	if str(world.get("terrain_profile", "")) == "earth_v2":
+		return str(EarthTerrain.sample(world, tile, _world_seed(world), _earth_scale(world))["terrain"])
 
 	var seed := _world_seed(world)
 	var scale := maxf(8.0, _finite_number(world.get("terrain_scale_tiles", 48.0), 48.0))
@@ -48,6 +60,35 @@ static func terrain_type(world: Dictionary, tile: Vector2i) -> String:
 	if moisture > 0.67:
 		return FOREST
 	return PLAIN
+
+
+## Continuous runtime surface, flattened before historical overrides can apply.
+static func surface_sample(world: Dictionary, tile: Vector2i) -> Dictionary:
+	if FLAT_GROUND_ONLY:
+		return _uniform_sample(PLAIN)
+	var override := _terrain_override(world, tile)
+	if not override.is_empty():
+		return _uniform_sample(override)
+	if not bool(world.get("terrain_enabled", false)):
+		return _uniform_sample(PLAIN)
+	if str(world.get("terrain_profile", "")) == "earth_v2":
+		return EarthTerrain.sample(world, tile, _world_seed(world), _earth_scale(world))
+	return _uniform_sample(terrain_type(world, tile))
+
+
+static func _earth_scale(world: Dictionary) -> float:
+	return clampf(_finite_number(world.get("terrain_scale_tiles", 48.0), 48.0), 8.0, 256.0)
+
+
+static func _uniform_sample(terrain: String) -> Dictionary:
+	return {
+		"terrain":terrain,
+		"elevation":0.16 if terrain == WATER else (0.86 if terrain == MOUNTAIN else 0.38),
+		"moisture":0.95 if terrain == WATER else (0.78 if terrain == FOREST else (0.25 if terrain == DESERT else 0.5)),
+		"forest_density":0.85 if terrain == FOREST else 0.0,
+		"water_depth":0.7 if terrain == WATER else 0.0,
+		"rock":0.9 if terrain == MOUNTAIN else 0.0,
+	}
 
 
 ## Buildability is geographic only; entity, road and resource-placement rules

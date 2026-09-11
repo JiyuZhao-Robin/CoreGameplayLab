@@ -58,6 +58,7 @@ func load_from_file(path: String) -> bool:
 			errors.append("Invalid content shard: %s" % shard_path)
 			return false
 		_merge_industry_shard(parsed, shard)
+	preload("res://src/core/factory_building_catalog.gd").apply(parsed)
 	version = str(parsed.get("version", "unknown"))
 	if version != GameVersion.PRODUCT_VERSION:
 		errors.append("Content version %s does not match product version %s" % [version, GameVersion.PRODUCT_VERSION])
@@ -106,7 +107,14 @@ func load_from_file(path: String) -> bool:
 			if item.has("building_definition_id"):
 				recipe["building_definition_id"] = str(item["building_definition_id"])
 	for building in factory_buildings.values():
-		for recipe_id in building.get("recipe_ids", []):
+		# The basic assembler can manufacture the new local logistics building.
+		if str(building.get("id", "")) == "grid_engineering_works" and not building.get("recipe_ids", []).has("manufacture_grid_drone_tower"):
+			building["recipe_ids"].append("manufacture_grid_drone_tower")
+		# Only change new production capacity limits, never existing saved stock.
+		# Recipes with larger individual output batches must still fit below.
+		if str(building.get("kind", "")) in ["MACHINE", "EXTRACTOR"]:
+			building["output_capacity"] = int(factory_grid_rules.get("drone_output_capacity", 20))
+		for recipe_id in building.get("recipe_ids", []) + building.get("legacy_recipe_ids", []):
 			var recipe: Dictionary = factory_recipes.get(str(recipe_id), {})
 			var required_inputs := 0
 			var required_outputs := 0
@@ -115,7 +123,8 @@ func load_from_file(path: String) -> bool:
 			for entry in recipe.get("outputs", []):
 				required_outputs += int(entry.get("quantity", 0))
 			# A manufacturing batch must fit, even for large finished structures.
-			building["input_capacity"] = maxi(int(building.get("input_capacity", 0)), required_inputs)
+			# Ten batches may contain multiple ingredients (e.g. 10 copper + 20 iron).
+			building["input_capacity"] = maxi(int(building.get("input_capacity", 0)), required_inputs * int(factory_grid_rules.get("drone_input_batches", 10)))
 			building["output_capacity"] = maxi(int(building.get("output_capacity", 0)), required_outputs)
 	for domain_id in domains:
 		activities_by_domain[domain_id] = []

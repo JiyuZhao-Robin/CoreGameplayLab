@@ -308,6 +308,9 @@ func _ensure_factory_starter_world(state: SpaceGameState) -> void:
 	var world := factory_grid.create_world(world_id, location_id, Vector2i(int(size.get("x", 1)), int(size.get("y", 1))), int(starter.get("seed", 1)))
 	world["landing_definition_id"] = str(starter.get("landing_definition_id", ""))
 	world["terrain_enabled"] = true
+	# New Earth maps opt into versioned geography; saved unmarked worlds keep
+	# their original coastlines and buildability when normalized or loaded.
+	world["terrain_profile"] = str(starter.get("terrain_profile", ""))
 	world["terrain_safe_rect"] = {"origin":{"x":0,"y":0},"size":{"x":144,"y":96}}
 	for field_value in starter.get("resource_fields", []):
 		var resource_field := field_value as Dictionary
@@ -375,7 +378,8 @@ func populate_factory_geography(world: Dictionary, resource_ids: Array) -> void:
 			var origin := Vector2i(x + rng.randi_range(0, 32), y + rng.randi_range(0, 32))
 			var extent := Vector2i(rng.randi_range(22, 42), rng.randi_range(22, 42))
 			var center := origin + extent / 2
-			if not factory_grid.Terrain.is_buildable(world, center):
+			# Preserve the existing ore layout while runtime ground is flattened.
+			if factory_grid.Terrain.resource_geography_type(world, center) in factory_grid.Terrain.BLOCKED_TERRAIN:
 				continue
 			var resource_id := str(resource_ids[index % resource_ids.size()])
 			var category := "gas" if resource_id in ["methane", "helium_3", "dsp_hydrogen", "dsp_deuterium"] or (resource_id == "dsp_fire_ice" and str(world.get("location_id", "")) == "gas_giant_region") else ("exotic" if resource_id in ["exotic_crystal", "dark_matter"] else "solid")
@@ -398,7 +402,10 @@ func _reconcile_planetary_factory_inventory(state: SpaceGameState) -> void:
 		var location_id := str(world.get("location_id", ""))
 		if not state.has_location(location_id):
 			continue
-		world["logistics_mode"] = "PLANET_SHARED_ROADS"
+		world["logistics_mode"] = "PLANET_SHARED_DRONES"
+		# Keep old layouts recoverable; the drone simulation does not read roads.
+		if not world.has("legacy_roads_archive") and world.has("roads"):
+			world["legacy_roads_archive"] = world["roads"].duplicate(true)
 		world["links"] = {}
 		var inventory := state.location_inventory(location_id)
 		# Minimal conversion: keep legacy layout, return staged materials exactly
@@ -438,21 +445,16 @@ func factory_inventory_context(state: SpaceGameState, world: Dictionary) -> Dict
 		return {}
 	var available := {}
 	var free_capacity := {}
-	var own_incoming := {}
 	var capacities := location_storage_capacities(state, location_id)
-	for job_value in world.get("road_shipments", {}).values():
-		var job := job_value as Dictionary
-		if str(job.get("destination_kind", "")) != "WAREHOUSE":
-			continue
-		for item_id in job.get("cargo", {}):
-			own_incoming[item_id] = int(own_incoming.get(item_id, 0)) + maxi(0, int(job["cargo"][item_id]))
+	var world_id := str(world.get("world_id", ""))
 	for item_id_value in content.items.keys():
 		var item_id := str(item_id_value)
 		available[item_id] = state.available_item_quantity(item_id, location_id)
-		# This world's dispatcher owns its own reservations. Other road worlds
-		# and interstellar shipments are external claims on the shared pool.
+		# Exclude only this world's awarded drone slots. Subtracting its raw
+		# cargo from the aggregate would admit overbooked returns or deadlock
+		# multiple worlds against each other's impossible full-size claims.
 		var capacity := int(capacities.get(storage_class_for_item(item_id), 0))
-		var reserved: int = logistics.incoming_storage_reservation(state, location_id, item_id) - int(own_incoming.get(item_id, 0))
+		var reserved: int = logistics.incoming_storage_reservation(state, location_id, item_id, "", world_id)
 		free_capacity[item_id] = maxi(0, capacity - state.item_quantity(item_id, location_id) - reserved)
 	return {"inventory":state.location_inventory(location_id), "available":available, "free_capacity":free_capacity}
 
@@ -637,7 +639,7 @@ func _sync_factory_facility_adapters(state: SpaceGameState) -> void:
 			var definition := completed_entity.get("definition", {}) as Dictionary
 			for effect_value in definition.get("completion_effects", []):
 				var effect := effect_value as Dictionary
-				if str(effect.get("type", "")) == effect_type:
+				if str(effect.get("type", "")) == effect_type and _factory_effect_available(state, effect):
 					_apply_effect(state, effect)
 	# Adapter existence and level express physical ownership. Runtime availability
 	# is separate: at least one physical provider for the base facility must
@@ -652,7 +654,7 @@ func _sync_factory_facility_adapters(state: SpaceGameState) -> void:
 		var definition := completed_entity.get("definition", {}) as Dictionary
 		for effect_value in definition.get("completion_effects", []):
 			var effect := effect_value as Dictionary
-			if str(effect.get("type", "")) not in ["unlock_facility", "set_facility_minimum_level"]:
+			if not _factory_effect_available(state, effect) or str(effect.get("type", "")) not in ["unlock_facility", "set_facility_minimum_level"]:
 				continue
 			var facility_id := str(effect.get("facility", effect.get("id", "")))
 			if not facility_id.is_empty():
@@ -744,10 +746,21 @@ func survey_state_rank(survey_state: String) -> int:
 
 
 func _sync_factory_world_environments(state: SpaceGameState) -> void:
+	var resource_unlocks := {}
+	for definition in content.factory_buildings.values():
+		var profiles: Array = definition.get("resource_profiles", [])
+		for index in range(profiles.size()):
+			var profile: Dictionary = profiles[index]
+			var unlocked := true
+			for requirement in profile.get("requirements", []) + profile.get("reveal_requirements", []):
+				unlocked = unlocked and requirement_met(state, requirement)
+			resource_unlocks["%s:%d" % [definition.get("id", ""), index]] = unlocked
 	for world_value in state.factory_worlds.values():
 		var world := world_value as Dictionary
 		var environment := location_environment(state, str(world.get("location_id", "")))
-		if world.get("environment", {}) != environment:
+		var changed: bool = world.get("environment", {}) != environment or world.get("resource_profile_unlocks", {}) != resource_unlocks
+		world["resource_profile_unlocks"] = resource_unlocks.duplicate(true)
+		if changed:
 			world["environment"] = environment.duplicate(true)
 			factory_grid.refresh_derived_state(world)
 
@@ -1685,7 +1698,7 @@ func location_industry_constraint_profile(state: SpaceGameState, location_id: St
 			continue
 		world_count += 1
 		construction_capacity += factory_grid.construction_capacity_per_second(world)
-		logistics_capacity += maxf(0.0, float(world.get("road_logistics", {}).get("capacity", 0.0)))
+		logistics_capacity += maxf(0.0, float(world.get("drone_logistics", {}).get("capacity", 0.0)))
 		for entity_value in world.get("entities", {}).values():
 			var entity := entity_value as Dictionary
 			entity_count += 1
@@ -1748,7 +1761,7 @@ func local_logistics_profile(state: SpaceGameState, location_id: String) -> Dict
 		if str(world.get("location_id", "")) != location_id:
 			continue
 		world_count += 1
-		var road_profile: Dictionary = world.get("road_logistics", {})
+		var road_profile: Dictionary = world.get("drone_logistics", {})
 		capacity += maxf(0.0, float(road_profile.get("capacity", 0.0)))
 		required += maxf(0.0, float(road_profile.get("required", 0.0)))
 	var utilization := 0.0 if capacity <= 0.000001 else clampf(required / capacity, 0.0, 1.0)
@@ -3931,7 +3944,8 @@ func _apply_factory_grid_event(state: SpaceGameState, event: Dictionary) -> void
 			if not activity_id.is_empty():
 				state.completed_activities[activity_id] = int(state.completed_activities.get(activity_id, 0)) + 1
 			for effect_value in definition.get("completion_effects", []):
-				_apply_effect(state, effect_value as Dictionary)
+				if _factory_effect_available(state, effect_value as Dictionary):
+					_apply_effect(state, effect_value as Dictionary)
 
 
 func _progress_megastructure_projects(state: SpaceGameState, elapsed_ms: float) -> void:
@@ -5600,3 +5614,10 @@ func _requirement_met_for_ships(state: SpaceGameState, requirement: Dictionary, 
 	if requirement.get("type", "") == "capability":
 		return capability_value_for_ships(state, str(requirement.get("id", "")), ship_ids) >= float(requirement.get("value", 1))
 	return requirement_met(state, requirement)
+
+
+func _factory_effect_available(state: SpaceGameState, effect: Dictionary) -> bool:
+	for requirement in effect.get("requirements", []):
+		if not requirement_met(state, requirement):
+			return false
+	return true

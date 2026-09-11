@@ -47,7 +47,7 @@ func _test_semantic_halos() -> void:
 				_check(left.get_pixel(x, y) == Renderer.MASK_COLORS[Terrain.terrain_type(world, tile)], "every semantic texel is from the authoritative terrain sampler")
 	_check(JSON.stringify(world) == original, "mask generation never mutates world inputs")
 	var boundary := Renderer.semantic_mask(world, Vector2i(16, 0), 1)
-	_check(boundary.get_pixel(0, 8).b == 1.0 and boundary.get_pixel(1, 8).a == 1.0, "tile deltas across chunk border remain water/mountain, not blended gameplay types")
+	_check(boundary.get_pixel(0, 8) == Renderer.MASK_COLORS.PLAIN and boundary.get_pixel(1, 8) == Renderer.MASK_COLORS.PLAIN, "historical water/mountain deltas render plain across chunk borders")
 
 func _test_snapshot_authority() -> void:
 	var grid := Grid.new({})

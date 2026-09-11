@@ -1,0 +1,11 @@
+drone2:
+	idle:
+		Filename: drone2.png
+		Facings: 8
+		Length: 2
+	muzzle:
+		Filename: muzzle3.png
+		Length: 3
+		Facings: 8
+		Tick: 50
+

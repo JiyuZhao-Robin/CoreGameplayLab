@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "frame_count": 24,
+  "fps": 12,
+  "frame_size": [
+    768,
+    1024
+  ],
+  "reference_footprint_tiles": [
+    20,
+    20
+  ],
+  "body_rect_normalized": [
+    -0.19,
+    -0.78,
+    1.38,
+    1.84
+  ],
+  "frames": [
+    "res://assets/ui/factory/space_elevator/frames/000.png",
+    "res://assets/ui/factory/space_elevator/frames/001.png",
+    "res://assets/ui/factory/space_elevator/frames/002.png",
+    "res://assets/ui/factory/space_elevator/frames/003.png",
+    "res://assets/ui/factory/space_elevator/frames/004.png",
+    "res://assets/ui/factory/space_elevator/frames/005.png",
+    "res://assets/ui/factory/space_elevator/frames/006.png",
+    "res://assets/ui/factory/space_elevator/frames/007.png",
+    "res://assets/ui/factory/space_elevator/frames/008.png",
+    "res://assets/ui/factory/space_elevator/frames/009.png",
+    "res://assets/ui/factory/space_elevator/frames/010.png",
+    "res://assets/ui/factory/space_elevator/frames/011.png",
+    "res://assets/ui/factory/space_elevator/frames/012.png",
+    "res://assets/ui/factory/space_elevator/frames/013.png",
+    "res://assets/ui/factory/space_elevator/frames/014.png",
+    "res://assets/ui/factory/space_elevator/frames/015.png",
+    "res://assets/ui/factory/space_elevator/frames/016.png",
+    "res://assets/ui/factory/space_elevator/frames/017.png",
+    "res://assets/ui/factory/space_elevator/frames/018.png",
+    "res://assets/ui/factory/space_elevator/frames/019.png",
+    "res://assets/ui/factory/space_elevator/frames/020.png",
+    "res://assets/ui/factory/space_elevator/frames/021.png",
+    "res://assets/ui/factory/space_elevator/frames/022.png",
+    "res://assets/ui/factory/space_elevator/frames/023.png"
+  ],
+  "shadow": "res://assets/ui/factory/space_elevator/shadow.png",
+  "source": "FUE5BASE/FUE5; Earendel original model; Hurricane textures/materials; user-supplied DSP planetary logistics docking crown",
+  "animation": "Original antenna rotation; repeated original spire lift translation; no train or launch simulation",
+  "renderer": "Blender 4.5 Cycles, 64 samples, orthographic, transparent RGBA"
+}

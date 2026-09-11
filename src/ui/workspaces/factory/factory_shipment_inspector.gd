@@ -1,7 +1,7 @@
 class_name FactoryShipmentInspector
 extends VBoxContainer
 
-## Read-only local-road delivery panel for one Factory entity.  It deliberately
+## Read-only local drone delivery panel for one Factory entity.  It deliberately
 ## consumes only the v1 Factory snapshot: real cargo remains owned by the
 ## simulation and Location inventory is never mutated by this view.
 
@@ -27,7 +27,7 @@ var _entity: Dictionary = {}
 
 
 func _ready() -> void:
-	name = "FactoryRoadShipmentInspector"
+	name = "FactoryDroneShipmentInspector"
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	add_theme_constant_override("separation", UiTokens.layout_px(4))
@@ -46,10 +46,10 @@ func configure(snapshot: Dictionary, entity: Dictionary) -> void:
 
 func shipment_rows() -> Array:
 	var entity_id := str(_entity.get("id", ""))
-	if entity_id.is_empty() or str(_snapshot.get("logistics_mode", "")) != "PLANET_SHARED_ROADS":
+	if entity_id.is_empty() or str(_snapshot.get("logistics_mode", "")) != "PLANET_SHARED_DRONES":
 		return []
 	var rows: Array = []
-	var raw_shipments: Variant = _snapshot.get("road_shipments", [])
+	var raw_shipments: Variant = _snapshot.get("drone_shipments", [])
 	if not raw_shipments is Array:
 		return rows
 	for shipment_value in raw_shipments:
@@ -58,10 +58,11 @@ func shipment_rows() -> Array:
 		var shipment := shipment_value as Dictionary
 		var is_source := str(shipment.get("source_id", "")) == entity_id
 		var is_target := str(shipment.get("target_id", "")) == entity_id
-		if not is_source and not is_target:
+		var is_tower := str(shipment.get("tower_id", "")) == entity_id
+		if not is_source and not is_target and not is_tower:
 			continue
 		var row := shipment.duplicate(false)
-		row["direction"] = "TRANSFER" if is_source and is_target else ("SENDING" if is_source else "RECEIVING")
+		row["direction"] = "TRANSFER" if is_tower or (is_source and is_target) else ("SENDING" if is_source else "RECEIVING")
 		rows.append(row)
 	rows.sort_custom(func(left, right): return str((left as Dictionary).get("id", "")) < str((right as Dictionary).get("id", "")))
 	return rows
@@ -71,38 +72,38 @@ func _rebuild() -> void:
 	for child in get_children():
 		remove_child(child)
 		child.queue_free()
-	if str(_snapshot.get("logistics_mode", "")) != "PLANET_SHARED_ROADS":
+	if str(_snapshot.get("logistics_mode", "")) != "PLANET_SHARED_DRONES":
 		return
 	var rows := shipment_rows()
 	var heading := HBoxContainer.new()
-	heading.name = "FactoryRoadShipmentHeading"
+	heading.name = "FactoryDroneShipmentHeading"
 	heading.add_theme_constant_override("separation", UiTokens.layout_px(5))
-	var title := _label(_t("factory.road.shipments", "Road deliveries"), CYAN, 12)
+	var title := _label(_t("factory.drone.shipments", "Drone deliveries"), CYAN, 12)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	heading.add_child(title)
 	var count := _label(str(rows.size()), MUTED, 10)
-	count.name = "FactoryRoadShipmentCount"
-	count.tooltip_text = _t("factory.road.shipments_count", "%d local road deliveries") % rows.size()
+	count.name = "FactoryDroneShipmentCount"
+	count.tooltip_text = _t("factory.drone.shipments_count", "%d drone flights") % rows.size()
 	heading.add_child(count)
 	add_child(HSeparator.new())
 	add_child(heading)
 	var scroll := ScrollContainer.new()
-	scroll.name = "FactoryRoadShipmentScroll"
+	scroll.name = "FactoryDroneShipmentScroll"
 	scroll.custom_minimum_size.y = UiTokens.layout_px(80)
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.tooltip_text = _t("factory.road.shipments_tooltip", "Timed road deliveries for this building. Cargo stays in transit until it reaches its destination.")
+	scroll.tooltip_text = _t("factory.drone.shipments_tooltip", "Timed drone deliveries for this building. Cargo stays in transit until it reaches its destination.")
 	add_child(scroll)
 	var body := VBoxContainer.new()
-	body.name = "FactoryRoadShipmentRows"
+	body.name = "FactoryDroneShipmentRows"
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", UiTokens.layout_px(4))
 	scroll.add_child(body)
 	if rows.is_empty():
-		var empty := _label(_t("factory.road.shipments_empty", "No local road deliveries are active for this building."), MUTED, 10)
-		empty.name = "FactoryRoadShipmentEmpty"
+		var empty := _label(_t("factory.drone.shipments_empty", "No drone flights are active for this building."), MUTED, 10)
+		empty.name = "FactoryDroneShipmentEmpty"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty.custom_minimum_size.y = UiTokens.layout_px(42)
 		body.add_child(empty)
@@ -121,7 +122,7 @@ func _shipment_row(shipment: Dictionary) -> Control:
 	var phase := _phase(shipment)
 	var status := str(shipment.get("status", "")).to_upper()
 	var panel := PanelContainer.new()
-	panel.name = "RoadShipment%s" % shipment_id.validate_node_name()
+	panel.name = "DroneShipment%s" % shipment_id.validate_node_name()
 	panel.custom_minimum_size.y = UiTokens.layout_px(DELIVERY_ROW_HEIGHT)
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_theme_stylebox_override("panel", UiTokens.control_style(RAISED, _tone_for(status, phase), 3))
@@ -139,7 +140,7 @@ func _shipment_row(shipment: Dictionary) -> Control:
 	row.add_theme_constant_override("separation", UiTokens.layout_px(6))
 	body.add_child(row)
 	var icon := ItemIcon.new()
-	icon.name = "RoadShipmentIcon"
+	icon.name = "DroneShipmentIcon"
 	icon.custom_minimum_size = UiTokens.layout_vector(Vector2(34, 34))
 	icon.configure_item(str(shipment.get("item_id", "")))
 	icon.tooltip_text = _item_name(str(shipment.get("item_id", "")))
@@ -152,15 +153,15 @@ func _shipment_row(shipment: Dictionary) -> Control:
 	top_line.add_theme_constant_override("separation", UiTokens.layout_px(4))
 	detail.add_child(top_line)
 	var direction := _label(_direction_text(shipment), _tone_for(status, phase), 10)
-	direction.name = "RoadShipmentDirection"
+	direction.name = "DroneShipmentDirection"
 	direction.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	direction.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	top_line.add_child(direction)
 	var amount := _label("×%d" % maxi(0, int(shipment.get("quantity", _cargo_quantity(shipment)))), OFFWHITE, 11)
-	amount.name = "RoadShipmentQuantity"
+	amount.name = "DroneShipmentQuantity"
 	top_line.add_child(amount)
 	var progress := ProgressBar.new()
-	progress.name = "RoadShipmentProgress"
+	progress.name = "DroneShipmentProgress"
 	progress.min_value = 0.0
 	progress.max_value = 100.0
 	progress.value = _progress_for(shipment, phase) * 100.0
@@ -174,12 +175,12 @@ func _shipment_row(shipment: Dictionary) -> Control:
 	bottom_line.add_theme_constant_override("separation", UiTokens.layout_px(4))
 	detail.add_child(bottom_line)
 	var phase_label := _label(_phase_text(phase, status), _tone_for(status, phase), 9)
-	phase_label.name = "RoadShipmentPhase"
+	phase_label.name = "DroneShipmentPhase"
 	phase_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phase_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	bottom_line.add_child(phase_label)
 	var eta := _label(_eta_text(shipment, phase, status), MUTED if phase != "BLOCKED" else CRITICAL, 9)
-	eta.name = "RoadShipmentEta"
+	eta.name = "DroneShipmentEta"
 	eta.tooltip_text = _eta_tooltip(phase)
 	bottom_line.add_child(eta)
 	panel.tooltip_text = _shipment_tooltip(shipment, phase, status)
@@ -191,60 +192,57 @@ func _shipment_row(shipment: Dictionary) -> Control:
 
 
 func _direction_text(shipment: Dictionary) -> String:
+	if str(shipment.get("phase", "")) == "TO_PICKUP":
+		return "%s → %s" % [_t("factory.drone.shipment.to_pickup", "Flying to collect"), _entity_name(str(shipment.get("source_id", "")))]
+	if str(shipment.get("phase", "")) == "RETURNING":
+		return "%s → %s" % [_t("factory.drone.shipment.returning", "Returning to tower"), _entity_name(str(shipment.get("tower_id", "")))]
 	var direction := str(shipment.get("direction", ""))
 	var other_id := str(shipment.get("target_id", "")) if direction == "SENDING" else str(shipment.get("source_id", ""))
 	var other_name := _entity_name(other_id)
 	match direction:
-		"SENDING": return "%s → %s" % [_t("factory.road.shipment.sending", "Sending"), other_name]
-		"RECEIVING": return "%s ← %s" % [_t("factory.road.shipment.receiving", "Receiving"), other_name]
-		_: return _t("factory.road.shipment.transfer", "Local transfer")
+		"SENDING": return "%s → %s" % [_t("factory.drone.shipment.sending", "Sending"), other_name]
+		"RECEIVING": return "%s ← %s" % [_t("factory.drone.shipment.receiving", "Receiving"), other_name]
+		_: return _t("factory.drone.shipment.transfer", "Local transfer")
 
 
 func _phase(shipment: Dictionary) -> String:
-	var phase := str(shipment.get("phase", "")).to_upper()
-	if phase in ["TRAVEL", "LOADING", "UNLOADING", "BLOCKED"]:
-		return phase
-	var status := str(shipment.get("status", "")).to_upper()
-	if status.begins_with("BLOCKED_"):
+	if str(shipment.get("status", "")).begins_with("BLOCKED"):
 		return "BLOCKED"
-	if status == "WAITING_LOADING":
-		return "LOADING"
-	return "TRAVEL"
-
+	return str(shipment.get("phase", "TO_PICKUP"))
 
 func _phase_text(phase: String, status: String) -> String:
 	if phase == "BLOCKED":
 		return _blocked_reason(status)
 	match phase:
-		"LOADING": return _t("factory.road.shipment.loading", "Loading")
-		"UNLOADING": return _t("factory.road.shipment.unloading", "Unloading")
-		_: return _t("factory.road.shipment.travel", "En route")
+		"TO_PICKUP": return _t("factory.drone.shipment.to_pickup", "Flying to collect")
+		"TO_DELIVERY": return _t("factory.drone.shipment.to_delivery", "Delivering cargo")
+		"RETURNING": return _t("factory.drone.shipment.returning", "Returning to tower")
+		"LOADING": return _t("factory.drone.shipment.loading", "Loading")
+		"UNLOADING": return _t("factory.drone.shipment.unloading", "Unloading")
+		_: return _t("factory.drone.shipment.travel", "En route")
 
 
 func _blocked_reason(status: String) -> String:
 	match status:
-		"BLOCKED_PATH": return _t("factory.road.shipment.blocked_path", "Blocked: road path unavailable")
-		"BLOCKED_TARGET_FULL": return _t("factory.road.shipment.blocked_target_full", "Blocked: destination storage full")
-		"BLOCKED_TARGET": return _t("factory.road.shipment.blocked_target", "Blocked: destination unavailable")
-		"BLOCKED_MANIFEST": return _t("factory.road.shipment.blocked_manifest", "Blocked: cargo manifest needs attention")
-		_: return _t("factory.road.shipment.blocked", "Blocked")
+		"BLOCKED_PATH": return _t("factory.drone.shipment.blocked_path", "Blocked: outside tower coverage")
+		"BLOCKED_TARGET_FULL": return _t("factory.drone.shipment.blocked_target_full", "Blocked: destination storage full")
+		"BLOCKED_TARGET": return _t("factory.drone.shipment.blocked_target", "Blocked: destination unavailable")
+		"BLOCKED_MANIFEST": return _t("factory.drone.shipment.blocked_manifest", "Blocked: cargo manifest needs attention")
+		_: return _t("factory.drone.shipment.blocked", "Blocked")
 
 
-func _progress_for(shipment: Dictionary, phase: String) -> float:
-	if phase == "BLOCKED":
-		return clampf(float(shipment.get("phase_progress", shipment.get("travel_progress", 0.0))), 0.0, 1.0)
-	return clampf(float(shipment.get("travel_progress", 0.0)) if phase == "TRAVEL" else float(shipment.get("phase_progress", 0.0)), 0.0, 1.0)
-
+func _progress_for(shipment: Dictionary, _phase: String) -> float:
+	return clampf(float(shipment.get("progress", shipment.get("travel_progress", 0.0))), 0.0, 1.0)
 
 func _eta_text(shipment: Dictionary, phase: String, _status: String) -> String:
 	var eta_ms := float(shipment.get("eta_ms", -1.0))
 	if phase == "BLOCKED" or eta_ms < 0.0:
-		return _t("factory.road.shipment.no_eta", "No ETA")
-	return _t("factory.road.shipment.eta", "Remaining ≥ %s") % _duration(eta_ms)
+		return _t("factory.drone.shipment.no_eta", "No ETA")
+	return _t("factory.drone.shipment.eta", "Remaining %s") % _duration(eta_ms)
 
 
 func _eta_tooltip(phase: String) -> String:
-	return _t("factory.road.shipment.no_eta", "No ETA") if phase == "BLOCKED" else _t("factory.road.shipment.eta_tooltip", "Remaining time is a lower bound and excludes warehouse loading queues.")
+	return _t("factory.drone.shipment.no_eta", "No ETA") if phase == "BLOCKED" else _t("factory.drone.shipment.eta_tooltip", "Remaining time for the current flight leg.")
 
 
 func _shipment_tooltip(shipment: Dictionary, phase: String, status: String) -> String:
@@ -253,7 +251,7 @@ func _shipment_tooltip(shipment: Dictionary, phase: String, status: String) -> S
 	var lines: Array[String] = ["%s ×%d" % [_item_name(item_id), quantity], _direction_text(shipment), _phase_text(phase, status)]
 	var eta_ms := float(shipment.get("eta_ms", -1.0))
 	if phase != "BLOCKED" and eta_ms >= 0.0:
-		lines.append(_t("factory.road.shipment.eta", "Remaining ≥ %s") % _duration(eta_ms))
+		lines.append(_t("factory.drone.shipment.eta", "Remaining %s") % _duration(eta_ms))
 	return "\n".join(lines)
 
 
@@ -261,7 +259,7 @@ func _entity_name(entity_id: String) -> String:
 	for entity_value in _snapshot.get("entities", []):
 		if entity_value is Dictionary and str((entity_value as Dictionary).get("id", "")) == entity_id:
 			return str((entity_value as Dictionary).get("name", entity_id))
-	return entity_id if not entity_id.is_empty() else _t("factory.road.shipment.unknown_endpoint", "Unknown endpoint")
+	return entity_id if not entity_id.is_empty() else _t("factory.drone.shipment.unknown_endpoint", "Unknown endpoint")
 
 
 func _item_name(item_id: String) -> String:

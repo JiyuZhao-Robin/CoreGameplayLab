@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "asset_type": "pre-rendered 2D model sprites; no editable 3D source supplied upstream",
+  "modifications": "Tower PNGs unchanged. Drone indexed palette resolved through original colors.pal with index 255 transparent, per upstream world rule. Runtime framing and scale adapted to Factory.",
+  "tower": {
+    "author": "Linver, Krastor, raiguard (Krastorio 2 Assets)",
+    "source": "https://codeberg.org/raiguard/Krastorio2Assets",
+    "commit": "bbb0ac6a2783b5b9d86301f60a8fd874ea36c316",
+    "license": "LGPL-3.0",
+    "reference_footprint_tiles": [
+      2,
+      2
+    ],
+    "native_pixels_per_tile": 128,
+    "body": {
+      "size": [
+        240,
+        300
+      ],
+      "shift_tiles": [
+        0,
+        -0.1
+      ]
+    },
+    "shadow": {
+      "size": [
+        322,
+        166
+      ],
+      "shift_tiles": [
+        0.48,
+        0.43
+      ]
+    },
+    "animation": {
+      "size": [
+        110,
+        80
+      ],
+      "shift_tiles": [
+        0,
+        -0.92
+      ],
+      "frames": 8,
+      "fps": 6
+    }
+  },
+  "drone": {
+    "author": "Pawel Dzierzanowski",
+    "source": "https://github.com/OpenHV/OpenHV",
+    "commit": "91b39d484416562c6cb0e660632bfa0873fb0631",
+    "license": "CC-BY-SA-4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "frame_size": [
+      12,
+      12
+    ],
+    "columns": 4,
+    "directions": 8,
+    "frames_per_direction": 2,
+    "fps": 8,
+    "direction_order": "clockwise from north; 2 consecutive animation frames per direction"
+  },
+  "files": {
+    "tower.png": {
+      "sha256": "21885fd761f34d9dfdb37a98f38c8530a989eba806f6ba519115307d6acb12eb",
+      "original_sha256": "21885fd761f34d9dfdb37a98f38c8530a989eba806f6ba519115307d6acb12eb",
+      "size": [
+        240,
+        300
+      ],
+      "original_path": "buildings/small-roboport/small-roboport.png"
+    },
+    "tower-shadow.png": {
+      "sha256": "611bb3270a8d2ee7531922c865d1515fced9125f076187080f96c79e5b93140a",
+      "original_sha256": "611bb3270a8d2ee7531922c865d1515fced9125f076187080f96c79e5b93140a",
+      "size": [
+        322,
+        166
+      ],
+      "original_path": "buildings/small-roboport/small-roboport-sh.png"
+    },
+    "tower-idle.png": {
+      "sha256": "6751fe337c376b94b51ec828291a87580015268b8cd8f17af49536d8f49ad245",
+      "original_sha256": "6751fe337c376b94b51ec828291a87580015268b8cd8f17af49536d8f49ad245",
+      "size": [
+        880,
+        80
+      ],
+      "original_path": "buildings/small-roboport/small-roboport-animation.png"
+    },
+    "tower-light.png": {
+      "sha256": "63acf9ed346f318f48f230e00e3e3fb4c608531224b242e4961dd4a544015d20",
+      "original_sha256": "63acf9ed346f318f48f230e00e3e3fb4c608531224b242e4961dd4a544015d20",
+      "size": [
+        880,
+        80
+      ],
+      "original_path": "buildings/small-roboport/small-roboport-animation-light.png"
+    },
+    "drone.png": {
+      "sha256": "ab1952da5c6e32e2254c562c976f2d21b0724f49b721b88279f22902233d1987",
+      "original_sha256": "add3f34a8577f25403894dd7f8c37c63eb1e0240eac3b5e65d7b14d290c0d0d2",
+      "size": [
+        48,
+        48
+      ],
+      "original_path": "mods/hv/bits/sprites/aircraft/drone2.png"
+    }
+  },
+  "provenance_files": {
+    "CC-BY-SA-4.0.txt": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
+    "GPL-3.0.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "KRASTORIO-info.json": "f36fb0f614b075eba2ef66873f2501428c25e051adbfa0bcb9c0ff4738f76371",
+    "KRASTORIO-LGPL-3.0.txt": "9158cefb28bc1e52cea59ba7d2b9c75b1156d1bc7bc0fc144791a137f60baeeb",
+    "OPENHV-colors.pal": "e13250e7474e60b97e39285ae9ca2b6f2b7a4beff0f9dec45ef7818737fd700e",
+    "OPENHV-drone2-original.png": "add3f34a8577f25403894dd7f8c37c63eb1e0240eac3b5e65d7b14d290c0d0d2",
+    "OPENHV-drone2-sequence.yaml": "bc3331edba4d8825529bc22fa2f599101b0a17ea73c8a9a2e400e1cab56dbe20",
+    "OPENHV-drone2.yaml": "dae98612639c1d66f6f356e7435afa92678202599403cce3ef62b641f05a701b",
+    "OPENHV-palette-rule.yaml": "69db4369912d7ee315af9f9f51c63c18835fed6a64b70f6c21e4f63d22e699bc",
+    "README.md": "4e5a2ccd77ca01b1771202b6457688000816614d471b189ef8d544d9ee41a017",
+    "upstream-small-roboport.lua": "540e2920330b9d7e077c4e3ce989471ca8f9d6373fa1ee2c195fb3a5fe7bf551"
+  }
+}

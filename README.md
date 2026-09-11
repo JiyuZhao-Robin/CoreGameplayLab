@@ -1,5 +1,7 @@
 # Helios Core Gameplay Lab
 
+当前本地物流已改为[无人机塔](docs/Planetary_Drone_Logistics_zh_CN.md)：圆形覆盖、满 10 件取货、缺料优先、余货返塔。道路不再参与建造、运输或供电；下文道路描述属于历史版本。
+
 这是从主项目拆出的独立 Godot 单恒星系工业管理游戏核心版本。它保留内容数据、存档、离线模拟和纯控件操作界面；Factory 使用项目内已入库、带生成来源记录的地形、道路、建筑和物品资产。
 
 当前 Save Schema 为 39，内容版本为 `1.32.0`。schema 24–39 采用显式逐版本迁移；旧全局库存迁入 `earth_orbit`，Location、物流、在途 Shipment、舰船装配与研发继续保留。1.29 的地点级采矿、Production Line、Extraction Network 和普通 Construction 已迁入只读历史归档，schema 38 又移除了舰船采矿/常驻打捞职责，schema 39 为旧存档中已调查的远端地点补记有限调查前哨包；新的普通工业权威是方格实体工厂。旧四巨构状态只进入历史归档，不会伪装成新终局进度；逐物品消费统计从 schema 35 开始累计。

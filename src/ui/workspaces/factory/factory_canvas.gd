@@ -19,18 +19,13 @@ signal machine_configuration_paste_requested(entity: Dictionary)
 signal port_drag_started(entity_id: String, port: Dictionary, visible_candidates: Array)
 signal port_connection_requested(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary)
 signal port_drag_preview(source_id: String, source_port: Dictionary, target_id: String, target_port: Dictionary, valid: bool)
-## Road gestures remain presentation-only. The workspace emits the matching
-## versioned BUILD_ROAD / REMOVE_ROAD command without handing state authority to
-## this canvas.
-signal road_path_requested(command_kind: String, tiles: Array, tier: int)
-signal road_path_rejected(reason_code: String)
-
 const ViewModelScript = preload("res://src/ui/view_models/factory/factory_workspace_view_model.gd")
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
 const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
 const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
 const ArcFurnaceArt = preload("res://src/ui/workspaces/factory/factory_arc_furnace_art.gd")
 const IndustryArt = preload("res://src/ui/workspaces/factory/factory_approved_industry_art.gd")
+const SpaceElevatorArt = preload("res://src/ui/workspaces/factory/factory_space_elevator_art.gd")
 const TerrainRenderer = preload("res://src/ui/workspaces/factory/factory_terrain_renderer.gd")
 const Terrain = preload("res://src/core/factory_terrain.gd")
 var _terrain_renderer := TerrainRenderer.new()
@@ -61,9 +56,9 @@ const POINTER_DRAG_THRESHOLD_PIXELS := 8.0
 const PORT_START_HIT_RADIUS_PIXELS := 10.0
 const PORT_SNAP_HIT_RADIUS_PIXELS := 24.0
 const REGOLITH_TILE_PATH := "res://assets/ui/factory/operations_art/regolith_tile.png"
-const ROAD_SURFACE_PATH := "res://assets/ui/factory/roads/generated/road_surface_v1.png"
+const DroneArt = preload("res://src/ui/workspaces/factory/factory_drone_art.gd")
 const CargoArt = preload("res://src/ui/workspaces/location/location_item_icon.gd")
-const ROAD_BLEND_SECONDS := 0.25
+const DRONE_BLEND_SECONDS := 0.25
 const MAX_VISIBLE_CARGO_ICONS := 64
 ## A ground texture cell is a world-space material tile, not a backdrop scaled
 ## to the current planet. Keeping this value in tiles makes its phase stable
@@ -73,7 +68,6 @@ const REGOLITH_WORLD_TILE_TILES := 64
 ## are readable. Below it the grid deliberately switches to macro-grid LOD.
 const ACTUAL_TILE_GRID_MIN_PIXELS := 8.0
 const MACRO_GRID_MIN_PIXELS := 24.0
-const MAX_ROAD_COMMAND_TILES := 2048
 
 ## Keep the canvas independently loadable by SceneTree-based component tests.
 @onready var I18n = get_node("/root/I18n")
@@ -105,7 +99,6 @@ var _entities_by_id: Dictionary = {}
 var _links_by_id: Dictionary = {}
 var _resources_by_id: Dictionary = {}
 var _orders_by_id: Dictionary = {}
-var _roads_by_id: Dictionary = {}
 var _recipe_names_by_id: Dictionary = {}
 var _visible_records: Dictionary = {}
 var _has_active_flow_cache := false
@@ -117,16 +110,12 @@ var _port_drag: Dictionary = {}
 var _left_pointer: Dictionary = {}
 var _configuration_gestures_enabled := true
 var _port_connections_enabled := true
-var _road_logistics_mode := false
-var _road_tool_mode := ""
-var _road_tier := 1
-var _road_drag: Dictionary = {}
+var _drone_logistics_mode := false
 var _building_atlas: Texture2D
 var _regolith_tile: Texture2D
-var _road_surface: Texture2D
-var _road_shipments_by_id: Dictionary = {}
-var _shipment_from_progress: Dictionary = {}
-var _shipment_blend_elapsed := ROAD_BLEND_SECONDS
+var _drone_shipments_by_id: Dictionary = {}
+var _shipment_from_position: Dictionary = {}
+var _shipment_blend_elapsed := DRONE_BLEND_SECONDS
 var _runtime_snapshot_age := 10.0
 ## Per-entity presentation clocks only. Never advance production or write state.
 var _miner_animation_seconds: Dictionary = {}
@@ -135,8 +124,10 @@ var _furnace_animation_seconds: Dictionary = {}
 var _visible_arc_furnaces: Array[String] = []
 var _industry_animation_seconds: Dictionary = {}
 var _visible_industry_buildings: Array[String] = []
-var _shipment_ids_by_chunk: Dictionary = {}
-var _shipment_chunk_size := 64
+var _elevator_animation_seconds: Dictionary = {}
+var _visible_space_elevators: Array[String] = []
+var _space_elevator_entity_ids: Array[String] = []
+var _space_elevator_order_ids: Array[String] = []
 
 
 func _ready() -> void:
@@ -154,7 +145,6 @@ func _ready() -> void:
 	_building_atlas = BuildingArt.atlas_texture()
 	if ResourceLoader.exists(REGOLITH_TILE_PATH):
 		_regolith_tile = load(REGOLITH_TILE_PATH) as Texture2D
-	_load_road_surface()
 
 
 func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> void:
@@ -162,6 +152,8 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	var previous_topology_signature := _topology_signature()
 	var world_changed := str(snapshot.get("world_id", "")) != str(_snapshot.get("world_id", ""))
 	if world_changed:
+		_elevator_animation_seconds.clear()
+		_visible_space_elevators.clear()
 		_miner_animation_seconds.clear()
 		_visible_core_miners.clear()
 		_furnace_animation_seconds.clear()
@@ -174,6 +166,9 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	_snapshot = snapshot if already_normalized else _view_model.build(snapshot)
 	_terrain_renderer.configure(_snapshot)
 	_rebuild_snapshot_indexes()
+	for entity_id in _elevator_animation_seconds.keys():
+		if not _entities_by_id.has(entity_id):
+			_elevator_animation_seconds.erase(entity_id)
 	for miner_id in _miner_animation_seconds.keys():
 		if not _entities_by_id.has(miner_id):
 			_miner_animation_seconds.erase(miner_id)
@@ -183,7 +178,6 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	for entity_id in _industry_animation_seconds.keys():
 		if not _entities_by_id.has(entity_id):
 			_industry_animation_seconds.erase(entity_id)
-	_load_road_surface()
 	if not _port_drag.is_empty() and previous_topology_signature != _topology_signature():
 		cancel_port_drag()
 	var next_chunk_index_signature := _chunk_layout_signature()
@@ -216,16 +210,16 @@ func set_configuration_gestures_enabled(enabled: bool) -> void:
 
 
 func set_port_connections_enabled(enabled: bool) -> void:
-	_port_connections_enabled = enabled and not _road_logistics_mode
+	_port_connections_enabled = enabled and not _drone_logistics_mode
 	if not enabled:
 		cancel_port_drag()
 	queue_redraw()
 
 
-func set_road_logistics_mode(enabled: bool) -> void:
-	if _road_logistics_mode == enabled:
+func set_drone_logistics_mode(enabled: bool) -> void:
+	if _drone_logistics_mode == enabled:
 		return
-	_road_logistics_mode = enabled
+	_drone_logistics_mode = enabled
 	if enabled:
 		_port_connections_enabled = false
 		_connection_preview = {"source_id":"", "target_id":"", "kind":""}
@@ -234,26 +228,8 @@ func set_road_logistics_mode(enabled: bool) -> void:
 		_selected_link_id = ""
 	else:
 		_port_connections_enabled = true
-		_road_tool_mode = ""
-		_road_drag.clear()
 	_invalidate_hit_geometry()
 	queue_redraw()
-
-
-func set_road_tool(tool_mode: String, tier: int = 1) -> void:
-	var normalized := tool_mode.to_upper()
-	var next_tool := normalized if normalized in ["BUILD", "REMOVE"] else ""
-	var next_tier := clampi(tier, 1, 2)
-	if _road_tool_mode == next_tool and _road_tier == next_tier:
-		return
-	_road_tool_mode = next_tool
-	_road_tier = next_tier
-	_road_drag.clear()
-	queue_redraw()
-
-
-func road_tool_mode() -> String:
-	return _road_tool_mode
 
 
 func selected_node_id() -> String:
@@ -414,8 +390,9 @@ func set_connection_preview(source_id: String, target_id: String, kind: String, 
 
 
 func _process(delta: float) -> void:
-	_shipment_blend_elapsed = minf(ROAD_BLEND_SECONDS, _shipment_blend_elapsed + delta)
+	_shipment_blend_elapsed = minf(DRONE_BLEND_SECONDS, _shipment_blend_elapsed + delta)
 	_runtime_snapshot_age += delta
+	_advance_space_elevators(delta)
 	_advance_core_extractors(delta)
 	_advance_arc_furnaces(delta)
 	_advance_industry_buildings(delta)
@@ -430,6 +407,7 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
+	_visible_space_elevators.clear()
 	_terrain_renderer.begin_frame()
 	_visible_active_flow = false
 	_visible_core_miners.clear()
@@ -444,7 +422,7 @@ func _draw() -> void:
 		_draw_empty()
 		return
 	var world_rect := _world_screen_rect()
-	_visible_records = _chunk_index.query(_visible_world_query_rect())
+	_visible_records = _query_visible_records()
 	if bool(_snapshot.get("terrain_enabled", false)) and _terrain_renderer.has_art():
 		_terrain_renderer.draw_ground(self, _snapshot, _visible_world_query_rect().intersection(Rect2(Vector2(_bounds_origin()),Vector2(_bounds_size()))), _tile_scale(), _camera)
 	else:
@@ -461,21 +439,21 @@ func _draw() -> void:
 	# and interaction overlays must be submitted after their opaque textures.
 	_draw_resource_fields()
 	_draw_grid()
-	_draw_roads()
 	_draw_selected_mining_range()
-	if not _road_logistics_mode:
+	_draw_selected_drone_range()
+	if not _drone_logistics_mode:
 		_draw_links()
 	_draw_core_extractor_shadows()
 	_draw_arc_furnace_shadows()
 	_draw_industry_shadows()
+	_draw_space_elevator_shadows()
 	_draw_entities()
-	_draw_road_cargo()
+	_draw_drone_flights()
 	_draw_construction_orders()
 	draw_rect(world_rect, WORLD_BOUNDARY_COLOR, false, 2.0)
 	# Match the topmost action priority in _select_at(). Invalid previews also
 	# remain visible over occupied buildings so their rejection is legible.
 	_draw_connection_preview()
-	_draw_road_preview()
 	_draw_placement_preview()
 	_hit_geometry_dirty = false
 
@@ -496,7 +474,7 @@ func _draw_grid() -> void:
 	var is_exact_tile_grid := step_tiles == 1
 	# Macro-grid lines use lower contrast and a slightly heavier stroke so they
 	# read as a navigation LOD, never as a misleading 1:1 placement lattice.
-	var is_building := not _placement_preview.is_empty() or not _road_tool_mode.is_empty()
+	var is_building := not _placement_preview.is_empty()
 	# Idle terrain is a landscape. The construction grid appears with a tool;
 	# a very faint major lattice remains useful for distant navigation.
 	if not is_building and is_exact_tile_grid:
@@ -564,165 +542,75 @@ func _draw_regolith_ground() -> void:
 			)
 
 
-func _load_road_surface() -> void:
-	if _road_surface != null or not ResourceLoader.exists(ROAD_SURFACE_PATH):
-		return
-	_road_surface = load(ROAD_SURFACE_PATH) as Texture2D
-	if _road_surface != null:
-		queue_redraw()
-
-
-func _draw_roads() -> void:
-	# The chunk index returns only road coordinates covered by the viewport;
-	# do not walk the planet-wide road list during every draw.
-	for road_id_value in _visible_records.get("road_ids", []):
-		var road: Dictionary = _roads_by_id.get(str(road_id_value), {})
-		if road.is_empty():
-			continue
-		var tile_rect := _world_rect_to_screen(Rect2(Vector2(int(road.get("x", 0)), int(road.get("y", 0))), Vector2.ONE))
-		if not tile_rect.intersects(_visible_draw_rect()):
-			continue
-		var tier := clampi(int(road.get("tier", 1)), 1, 2)
-		var tint := Color("b8c8cf") if tier == 1 else Color("d5e7ec")
-		if _road_surface != null and _tile_scale() >= 0.75:
-			# The authored surface is pavement, not a sprite for each tile.
-			# Sample a continuous eight-tile material so panels don't repeat
-			# hundreds of times along a single road.
-			var source_cell := _road_surface.get_size() / 8.0
-			var source_origin := Vector2(posmod(int(road.get("x",0)),8),posmod(int(road.get("y",0)),8)) * source_cell
-			draw_texture_rect_region(_road_surface, tile_rect, Rect2(source_origin,source_cell), tint)
-			if _tile_scale() >= 3.0:
-				_draw_road_edges(road, tile_rect, tier)
-		else:
-			# This is only the low-detail / parallel-asset fallback. Normal detail
-			# always uses the generated overhead pavement texture above.
-			draw_rect(tile_rect, Color(tint, 0.80), true)
-
-
-func _draw_road_edges(road: Dictionary, rect: Rect2, tier: int) -> void:
-	var tile := Vector2i(int(road.get("x",0)),int(road.get("y",0)))
-	var edge := Color("849895") if tier == 1 else Color("b6b387")
-	var corners := [rect.position,Vector2(rect.end.x,rect.position.y),rect.end,Vector2(rect.position.x,rect.end.y)]
-	var directions := [Vector2i.UP,Vector2i.RIGHT,Vector2i.DOWN,Vector2i.LEFT]
-	for index in range(4):
-		var neighbour: Vector2i = tile + directions[index]
-		if not _roads_by_id.has("%d:%d" % [neighbour.x,neighbour.y]):
-			draw_line(corners[index],corners[(index + 1) % 4],edge,1.0,true)
-
-
-func _draw_road_preview() -> void:
-	if not _road_logistics_mode or _road_tool_mode.is_empty() or _road_drag.is_empty():
-		return
-	var preview_color := Color("72d5c4", 0.58) if _road_tool_mode == "BUILD" else Color("e17d70", 0.54)
-	for tile in _road_drag_tiles():
-		var tile_rect := _world_rect_to_screen(Rect2(Vector2(tile), Vector2.ONE))
-		draw_rect(tile_rect, preview_color, true)
-		draw_rect(tile_rect.grow(-0.5), Color(preview_color, 0.90), false, 1.0)
-
-
 func _update_shipment_interpolation(snapshot: Dictionary) -> void:
 	var next: Dictionary = {}
-	var from_progress: Dictionary = {}
-	_shipment_ids_by_chunk.clear()
-	_shipment_chunk_size = maxi(1, int(snapshot.get("chunk_size_tiles", 64)))
+	var from_positions: Dictionary = {}
 	var same_world := str(snapshot.get("world_id", "")) == str(_snapshot.get("world_id", ""))
-	for value in snapshot.get("road_shipments", []):
+	for value in snapshot.get("drone_shipments", []):
 		if value is not Dictionary:
 			continue
-		var row := value as Dictionary
+		var row: Dictionary = value
 		var id := str(row.get("id", ""))
-		next[id] = row
-		var previous: Dictionary = _road_shipments_by_id.get(id, {})
-		var progress := float(row.get("path_progress", row.get("travel_progress", 0.0)))
-		if same_world and not previous.is_empty() and str(row.get("phase", "")) == "TRAVEL" and str(previous.get("phase", "")) == "TRAVEL" and previous.get("path_tiles", []) == row.get("path_tiles", []):
-			from_progress[id] = minf(progress, _cargo_draw_progress(previous))
+		var previous: Dictionary = _drone_shipments_by_id.get(id, {})
+		var position: Dictionary = row.get("position", {})
+		var point := Vector2(float(position.get("x", 0.0)), float(position.get("y", 0.0)))
+		# Interpolate only observed positions within the same flight leg.
+		if same_world and not previous.is_empty() and row.get("phase", "") == previous.get("phase", "") and not str(row.get("status", "")).begins_with("BLOCKED"):
+			from_positions[id] = _cargo_world_position(previous)
 		else:
-			from_progress[id] = progress
-		var chunks := {}
-		for tile_value in row.get("path_tiles", []):
-			var parts := str(tile_value).split(",")
-			if parts.size() == 2:
-				chunks[Vector2i(floori(float(parts[0]) / _shipment_chunk_size), floori(float(parts[1]) / _shipment_chunk_size))] = true
-		for chunk in chunks:
-			if not _shipment_ids_by_chunk.has(chunk):
-				_shipment_ids_by_chunk[chunk] = []
-			_shipment_ids_by_chunk[chunk].append(id)
-	_road_shipments_by_id = next
-	_shipment_from_progress = from_progress
+			from_positions[id] = point
+		next[id] = row
+	_drone_shipments_by_id = next
+	_shipment_from_position = from_positions
 	_shipment_blend_elapsed = 0.0
 
-
 func _cargo_draw_progress(row: Dictionary) -> float:
-	var progress := clampf(float(row.get("path_progress", row.get("travel_progress", 0.0))), 0.0, 1.0)
-	if not _road_feedback_animation_allowed() or str(row.get("phase", "")) != "TRAVEL":
-		return progress
-	# Interpolate only between TWO observed authoritative positions. Never
-	# extrapolate past the latest snapshot or loop cargo around an idle road.
-	return lerpf(float(_shipment_from_progress.get(str(row.get("id", "")), progress)), progress, clampf(_shipment_blend_elapsed / ROAD_BLEND_SECONDS, 0.0, 1.0))
-
+	return clampf(float(row.get("progress", row.get("travel_progress", 0.0))), 0.0, 1.0)
 
 func _cargo_world_position(row: Dictionary) -> Vector2:
-	var path: Array = row.get("path_tiles", [])
-	if path.is_empty():
-		var position: Dictionary = row.get("position", {})
-		return Vector2(float(position.get("x", 0.0)), float(position.get("y", 0.0)))
-	var offset := _cargo_draw_progress(row) * maxi(0, path.size() - 1)
-	var index := mini(floori(offset), path.size() - 1)
-	var a := str(path[index]).split(",")
-	var b := str(path[mini(index + 1, path.size() - 1)]).split(",")
-	if a.size() != 2 or b.size() != 2:
-		return Vector2.ZERO
-	return Vector2(float(a[0]), float(a[1])).lerp(Vector2(float(b[0]), float(b[1])), offset - floorf(offset)) + Vector2.ONE * 0.5
-
+	var position: Dictionary = row.get("position", {})
+	var point := Vector2(float(position.get("x", 0.0)), float(position.get("y", 0.0)))
+	if not _drone_feedback_animation_allowed() or str(row.get("status", "")).begins_with("BLOCKED"):
+		return point
+	var previous: Vector2 = _shipment_from_position.get(str(row.get("id", "")), point)
+	return previous.lerp(point, clampf(_shipment_blend_elapsed / DRONE_BLEND_SECONDS, 0.0, 1.0))
 
 func _visible_shipment_ids() -> Array:
-	var query := _visible_world_query_rect()
-	var ids := {}
-	for y in range(floori(query.position.y / _shipment_chunk_size), floori(query.end.y / _shipment_chunk_size) + 1):
-		for x in range(floori(query.position.x / _shipment_chunk_size), floori(query.end.x / _shipment_chunk_size) + 1):
-			for id in _shipment_ids_by_chunk.get(Vector2i(x,y), []):
-				ids[id] = true
-	var result := ids.keys()
+	# Drone concurrency is bounded by the simulation; cull point positions.
+	var query := _visible_world_query_rect().grow(8.0)
+	var result: Array = []
+	for id in _drone_shipments_by_id:
+		if query.has_point(_cargo_world_position(_drone_shipments_by_id[id])):
+			result.append(id)
 	result.sort()
 	return result
 
+func _drone_feedback_animation_allowed() -> bool:
+	return not _reduced_motion and _tile_scale() >= 0.75 and _visible_record_count() + _drone_shipments_by_id.size() <= MAX_ANIMATED_SNAPSHOT_RECORDS
 
-func _road_feedback_animation_allowed() -> bool:
-	return not _reduced_motion and _tile_scale() >= 0.75 and _visible_record_count() + _road_shipments_by_id.size() <= MAX_ANIMATED_SNAPSHOT_RECORDS
 
-
-func _draw_road_cargo() -> void:
-	if not _road_logistics_mode or _tile_scale() < 0.75:
+func _draw_drone_flights() -> void:
+	if not _drone_logistics_mode or _tile_scale() < 0.75:
 		return
 	var visible_rect := _visible_draw_rect()
 	var world_rect := _world_screen_rect()
 	var drawn := 0
 	for id in _visible_shipment_ids():
-		var row: Dictionary = _road_shipments_by_id[id]
-		if row.get("path_tiles", []).is_empty() or int(row.get("quantity", 0)) <= 0:
-			continue
+		var row: Dictionary = _drone_shipments_by_id[id]
 		var point := _world_to_screen(_cargo_world_position(row))
 		if not visible_rect.has_point(point) or not world_rect.has_point(point):
 			continue
-		var texture: Texture2D = CargoArt.texture_for_item(str(row.get("item_id", "")))
-		if texture == null:
-			continue
-		var edge := clampf(_tile_scale() * 2.0, 16.0, 24.0)
-		var rect := Rect2(point - Vector2.ONE * edge * 0.5, Vector2.ONE * edge)
-		var blocked := str(row.get("phase", "")) == "BLOCKED"
-		var clipped := rect.intersection(world_rect).intersection(visible_rect)
-		var texture_size := Vector2(texture.get_size())
-		var source_rect := Rect2((clipped.position - rect.position) / rect.size * texture_size, clipped.size / rect.size * texture_size)
-		draw_style_box(_node_style(Color("ef867d") if blocked else Color("65d9d1"), false), rect.grow(2.0).intersection(world_rect).intersection(visible_rect))
-		draw_texture_rect_region(texture, clipped, source_rect)
-		if blocked and world_rect.encloses(rect) and visible_rect.encloses(rect):
-			draw_string(get_theme_default_font(), rect.position + Vector2(edge - 3.0, 8.0), "!", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Color("ef867d"))
-		if _road_feedback_animation_allowed() and not blocked and str(row.get("phase", "")) == "TRAVEL" and _shipment_blend_elapsed < ROAD_BLEND_SECONDS:
+		var blocked := str(row.get("status", "")).begins_with("BLOCKED")
+		DroneArt.draw_drone(self, point, float(row.get("heading", 0.0)), clampf(_tile_scale() / 4.0, 0.85, 1.5))
+		if int(row.get("quantity", 0)) > 0:
+			draw_circle(point + Vector2(0, 8), 2.0, CARGO_COLOR)
+		if blocked:
+			draw_string(get_theme_default_font(), point + Vector2(8, -5), "!", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Color("ef867d"))
+		if _drone_feedback_animation_allowed() and not blocked and _runtime_snapshot_age < 1.25:
 			_visible_active_flow = true
 		drawn += 1
 		if drawn >= MAX_VISIBLE_CARGO_ICONS:
 			break
-
 
 func _ground_cell_coordinate(world_coordinate: float, world_origin_coordinate: int) -> int:
 	return world_origin_coordinate + floori((world_coordinate - float(world_origin_coordinate)) / float(REGOLITH_WORLD_TILE_TILES)) * REGOLITH_WORLD_TILE_TILES
@@ -794,24 +682,24 @@ func _draw_resource_fields() -> void:
 func _draw_entities() -> void:
 	var visible_rect := _visible_draw_rect()
 	var detail_stage := _detail_stage()
-	var entity_ids: Array = _world_entity_draw_ids() if _road_logistics_mode else _visible_records.get("entity_ids", [])
+	var entity_ids: Array = _world_entity_draw_ids() if _drone_logistics_mode else _visible_records.get("entity_ids", [])
 	for entity_id_value in entity_ids:
 		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
 		if entity.is_empty():
 			continue
 		var rect := _footprint_rect(entity.get("footprint", {}))
-		if not rect.intersects(visible_rect):
+		if not _core_visual_bounds(entity, rect).intersects(visible_rect):
 			continue
 		_node_rects[str(entity.get("id", ""))] = {"rect":rect, "data":entity, "is_entity":true}
 		var status := str(entity.get("status", "IDLE"))
 		var tone := _status_color(status)
 		var selected := _selected_node_id == str(entity.get("id", ""))
-		if _road_logistics_mode:
+		if _drone_logistics_mode:
 			_draw_world_building(entity, rect, detail_stage, tone, selected)
 			continue
 		draw_style_box(_node_style(tone, selected), rect)
 		_draw_entity_silhouette(entity, rect, detail_stage)
-		if not _road_logistics_mode:
+		if not _drone_logistics_mode:
 			_draw_connection_ports(entity, rect, detail_stage)
 		if detail_stage == "COMPACT" or rect.size.x < 96.0 or rect.size.y < 72.0:
 			# At operational overview distance the silhouette and ports carry
@@ -859,7 +747,7 @@ func _draw_entities() -> void:
 
 
 func _world_entity_draw_ids() -> Array:
-	var records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
+	var records := _visible_records if not _visible_records.is_empty() else _query_visible_records()
 	var ids: Array = records.get("entity_ids", []).duplicate()
 	ids.sort_custom(func(left, right):
 		var a: Dictionary = _entities_by_id.get(str(left), {}).get("footprint", {})
@@ -886,7 +774,16 @@ func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: St
 		art_rect = _building_art_rect(str(entity.get("definition_id", "")), art, footprint, detail_stage)
 		# Use the actual transparent building sprite, with its authored colors.
 		# Operational information lives in the inspector, not across its roof.
-		if BuildingArt.uses_core_extractor(str(entity.get("definition_id", ""))):
+		if BuildingArt.uses_space_elevator(str(entity.get("definition_id", ""))):
+			var entity_id := str(entity.get("id", ""))
+			_visible_space_elevators.append(entity_id)
+			var seconds := float(_elevator_animation_seconds.get(entity_id, 0.0))
+			var texture := SpaceElevatorArt.frame_texture(SpaceElevatorArt.frame_index(seconds))
+			draw_texture_rect(texture if texture != null else art, art_rect, false)
+		elif str(entity.get("definition_id", "")) == "grid_drone_tower":
+			DroneArt.draw_tower(self, footprint)
+			_visible_active_flow = _visible_active_flow or (_drone_feedback_animation_allowed() and _runtime_snapshot_age < 1.25)
+		elif BuildingArt.uses_core_extractor(str(entity.get("definition_id", ""))):
 			var miner_id := str(entity.get("id", ""))
 			_visible_core_miners.append(miner_id)
 			if not _miner_animation_seconds.has(miner_id):
@@ -917,6 +814,8 @@ func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: St
 	else:
 		draw_rect(footprint, tone, false, 1.0)
 	var marker := Vector2(art_rect.end.x - 4.0, art_rect.end.y - 5.0)
+	if BuildingArt.uses_space_elevator(str(entity.get("definition_id", ""))):
+		marker = footprint.end - Vector2(4.0, 5.0)
 	draw_circle(marker, 4.5, Color("101c25"))
 	draw_circle(marker, 2.5, tone)
 	if selected:
@@ -924,12 +823,49 @@ func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: St
 		_draw_world_label(str(entity.get("name",entity.get("id",""))), Vector2(art_rect.position.x, art_rect.position.y - 7.0), FOCUS_COLOR)
 
 
+func _draw_space_elevator_shadows() -> void:
+	if not _drone_logistics_mode:
+		return
+	var shadow := SpaceElevatorArt.shadow_texture()
+	if shadow == null:
+		return
+	# Ground contact is painted before every building, including ghost contact,
+	# so transparent margins cannot darken another machine's roof.
+	for entity_id in _visible_records.get("entity_ids", []):
+		var entity: Dictionary = _entities_by_id.get(str(entity_id), {})
+		if BuildingArt.uses_space_elevator(str(entity.get("definition_id", ""))):
+			var rect := SpaceElevatorArt.body_rect(_footprint_rect(entity.get("footprint", {})))
+			if rect.intersects(_visible_draw_rect()):
+				draw_texture_rect(shadow, rect, false)
+	for order_id in _visible_records.get("order_ids", []):
+		var order: Dictionary = _orders_by_id.get(str(order_id), {})
+		if BuildingArt.uses_space_elevator(str(order.get("definition_id", ""))):
+			var rect := SpaceElevatorArt.body_rect(_footprint_rect(order.get("footprint", {})))
+			if rect.intersects(_visible_draw_rect()):
+				draw_texture_rect(shadow, rect, false, Color(1, 1, 1, 0.4))
+
+
+func _advance_space_elevators(delta: float) -> void:
+	if not _drone_logistics_mode or not is_visible_in_tree() or not _drone_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+		return
+	var changed := false
+	for entity_id in _visible_space_elevators:
+		if not _entities_by_id.has(entity_id):
+			continue
+		var previous := float(_elevator_animation_seconds.get(entity_id, 0.0))
+		var next := fposmod(previous + maxf(0.0, delta), SpaceElevatorArt.cycle_seconds())
+		_elevator_animation_seconds[entity_id] = next
+		changed = changed or SpaceElevatorArt.frame_index(previous) != SpaceElevatorArt.frame_index(next)
+	if changed:
+		queue_redraw()
+
+
 func _core_extractor_working(entity: Dictionary) -> bool:
 	return float(entity.get("actual_rate", 0.0)) > 0.00001 and str(entity.get("status", "")) in ["RUNNING", "POWER_LIMITED", "PARTIAL_COVERAGE"]
 
 
 func _advance_core_extractors(delta: float) -> void:
-	if not _road_logistics_mode or not is_visible_in_tree() or not _road_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+	if not _drone_logistics_mode or not is_visible_in_tree() or not _drone_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
 		return
 	var changed := false
 	for miner_id in _visible_core_miners:
@@ -945,7 +881,7 @@ func _advance_core_extractors(delta: float) -> void:
 
 
 func _draw_core_extractor_shadows() -> void:
-	if not _road_logistics_mode:
+	if not _drone_logistics_mode:
 		return
 	# Ground shadows are submitted before every building, so a rear machine's
 	# wide transparent shadow never darkens a foreground roof or its light.
@@ -960,7 +896,7 @@ func _draw_core_extractor_shadows() -> void:
 
 
 func _advance_arc_furnaces(delta: float) -> void:
-	if not _road_logistics_mode or not is_visible_in_tree() or not _road_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+	if not _drone_logistics_mode or not is_visible_in_tree() or not _drone_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
 		return
 	var changed := false
 	for furnace_id in _visible_arc_furnaces:
@@ -976,7 +912,7 @@ func _advance_arc_furnaces(delta: float) -> void:
 
 
 func _draw_arc_furnace_shadows() -> void:
-	if not _road_logistics_mode:
+	if not _drone_logistics_mode:
 		return
 	for entity_id in _visible_records.get("entity_ids", []):
 		var entity: Dictionary = _entities_by_id.get(str(entity_id), {})
@@ -996,7 +932,7 @@ func _industry_working(entity: Dictionary) -> bool:
 
 
 func _advance_industry_buildings(delta: float) -> void:
-	if not _road_logistics_mode or not is_visible_in_tree() or not _road_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+	if not _drone_logistics_mode or not is_visible_in_tree() or not _drone_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
 		return
 	var changed := false
 	for entity_id in _visible_industry_buildings:
@@ -1013,7 +949,7 @@ func _advance_industry_buildings(delta: float) -> void:
 
 
 func _draw_industry_shadows() -> void:
-	if not _road_logistics_mode:
+	if not _drone_logistics_mode:
 		return
 	for entity_id in _visible_records.get("entity_ids", []):
 		var entity: Dictionary = _entities_by_id.get(str(entity_id), {})
@@ -1027,6 +963,10 @@ func _draw_industry_shadows() -> void:
 
 
 func _building_art_rect(definition_id: String, art: Texture2D, footprint: Rect2, detail_stage: String) -> Rect2:
+	if BuildingArt.uses_space_elevator(definition_id):
+		return SpaceElevatorArt.body_rect(footprint)
+	if definition_id == "grid_drone_tower":
+		return DroneArt.body_rect(footprint)
 	var family := BuildingArt.industry_family(definition_id)
 	if not family.is_empty():
 		return IndustryArt.body_rect(family, footprint)
@@ -1049,7 +989,7 @@ func _draw_mining_range(record: Dictionary, tone: Color) -> void:
 	draw_circle(center,radius,Color(tone,0.065))
 	draw_arc(center,radius,0.0,TAU,96,Color(tone,0.8),1.6,true)
 	# One circle describes actual mining reach. It is never added to selection,
-	# collision, road adjacency or the building's physical deployment footprint.
+	# collision, logistics coverage or the building's physical deployment footprint.
 	for direction in [Vector2.LEFT,Vector2.RIGHT,Vector2.UP,Vector2.DOWN]:
 		draw_line(center+direction*(radius-4.0),center+direction*(radius+4.0),tone,1.4,true)
 
@@ -1103,10 +1043,10 @@ func _draw_entity_silhouette(entity: Dictionary, rect: Rect2, detail_stage: Stri
 
 
 func _building_activity_brightness(entity: Dictionary) -> float:
-	if not _road_feedback_animation_allowed() or not _road_logistics_mode or _runtime_snapshot_age > 1.25 or float(entity.get("actual_rate", 0.0)) <= 0.00001 or str(entity.get("status", "")) not in ["RUNNING", "POWER_LIMITED", "PARTIAL_COVERAGE"]:
+	if not _drone_feedback_animation_allowed() or not _drone_logistics_mode or _runtime_snapshot_age > 1.25 or float(entity.get("actual_rate", 0.0)) <= 0.00001 or str(entity.get("status", "")) not in ["RUNNING", "POWER_LIMITED", "PARTIAL_COVERAGE"]:
 		return 1.0
 	_visible_active_flow = true
-	var phase := float(_snapshot.get("elapsed_ms", 0.0)) / 1000.0 + minf(_runtime_snapshot_age, ROAD_BLEND_SECONDS)
+	var phase := float(_snapshot.get("elapsed_ms", 0.0)) / 1000.0 + minf(_runtime_snapshot_age, DRONE_BLEND_SECONDS)
 	return 1.06 + 0.14 * sin(phase * TAU / 1.5)
 
 
@@ -1114,7 +1054,7 @@ func _building_activity_brightness(entity: Dictionary) -> float:
 ## construction hit maps, port maps, or placement validation. This explicit
 ## separation preserves exact tiles at compact 4K-readable visual LOD.
 func _entity_visible_icon_rect(footprint_rect: Rect2, detail_stage: String) -> Rect2:
-	if _road_logistics_mode:
+	if _drone_logistics_mode:
 		var minimum := 38.0 if detail_stage == "COMPACT" else 52.0
 		var extent := footprint_rect.size.max(Vector2.ONE * minimum)
 		return Rect2(footprint_rect.get_center() - extent * 0.5, extent)
@@ -1157,11 +1097,11 @@ func _draw_construction_orders() -> void:
 		if order.is_empty():
 			continue
 		var rect := _footprint_rect(order.get("footprint", {}))
-		if not rect.intersects(visible_rect):
+		if not _core_visual_bounds(order, rect).intersects(visible_rect):
 			continue
 		_construction_order_rects[str(order.get("id", ""))] = {"rect":rect, "data":order}
 		var tone := _status_color(str(order.get("status", "WAITING_BUILDING")))
-		if _road_logistics_mode:
+		if _drone_logistics_mode:
 			var art := BuildingArt.icon_texture(_building_atlas,str(order.get("definition_id","")),"MACHINE")
 			var art_rect := _entity_visible_icon_rect(rect,_detail_stage())
 			if art != null:
@@ -1194,11 +1134,12 @@ func _draw_placement_preview() -> void:
 	if not footprint_value is Dictionary:
 		return
 	var rect := _footprint_rect(footprint_value)
-	if not rect.has_area() or not rect.grow(64.0).intersects(_visible_draw_rect()):
+	if not rect.has_area() or not _core_visual_bounds(_placement_preview, rect).grow(64.0).intersects(_visible_draw_rect()):
 		return
 	var is_valid := bool(_placement_preview.get("valid", false))
 	var tone := Color("73f1ca") if is_valid else Color("ff827b")
 	_draw_mining_range(_placement_preview,tone)
+	_draw_drone_range(_placement_preview,tone)
 	draw_rect(rect, Color(tone, 0.24), true)
 	var art_rect := _entity_visible_icon_rect(rect,_detail_stage())
 	var definition_id := str(_placement_preview.get("definition_id",""))
@@ -1206,7 +1147,11 @@ func _draw_placement_preview() -> void:
 		var art := BuildingArt.icon_texture(_building_atlas,definition_id,str(_placement_preview.get("node_kind","MACHINE")))
 		if art != null:
 			art_rect = _building_art_rect(definition_id,art,rect,_detail_stage())
-			if BuildingArt.uses_core_extractor(definition_id):
+			if BuildingArt.uses_space_elevator(definition_id):
+				var shadow := SpaceElevatorArt.shadow_texture()
+				if shadow != null:
+					draw_texture_rect(shadow, art_rect, false, Color(1, 1, 1, 0.65))
+			elif BuildingArt.uses_core_extractor(definition_id):
 				var shadow := CoreExtractorArt.frame_texture("shadow", 0)
 				if shadow != null:
 					draw_texture_rect(shadow,CoreExtractorArt.shadow_rect(art_rect),false,Color(1,1,1,0.65))
@@ -1663,6 +1608,36 @@ func _visible_draw_rect() -> Rect2:
 	return Rect2(Vector2.ZERO, size).grow(DRAW_CULL_MARGIN_PIXELS)
 
 
+func _core_visual_bounds(record: Dictionary, footprint: Rect2) -> Rect2:
+	if _drone_logistics_mode and BuildingArt.uses_space_elevator(str(record.get("definition_id", ""))):
+		return footprint.merge(SpaceElevatorArt.body_rect(footprint))
+	return footprint
+
+
+func _query_visible_records() -> Dictionary:
+	var records: Dictionary = _chunk_index.query(_visible_world_query_rect())
+	if not _drone_logistics_mode or not SpaceElevatorArt.is_available():
+		return records
+	# Ground chunks alone miss a tall tower when its base is below the screen.
+	# Only the cached core IDs need a visual-bounds check, never all buildings.
+	var visible_rect := _visible_draw_rect()
+	var entity_ids: Array = records.get("entity_ids", []).duplicate()
+	for entity_id in _space_elevator_entity_ids:
+		var entity: Dictionary = _entities_by_id.get(entity_id, {})
+		if not entity_ids.has(entity_id) and _core_visual_bounds(entity, _footprint_rect(entity.get("footprint", {}))).intersects(visible_rect):
+			entity_ids.append(entity_id)
+	var order_ids: Array = records.get("order_ids", []).duplicate()
+	for order_id in _space_elevator_order_ids:
+		var order: Dictionary = _orders_by_id.get(order_id, {})
+		if not order_ids.has(order_id) and _core_visual_bounds(order, _footprint_rect(order.get("footprint", {}))).intersects(visible_rect):
+			order_ids.append(order_id)
+	# Do not alter the chunk index's cached arrays.
+	records = records.duplicate()
+	records["entity_ids"] = entity_ids
+	records["order_ids"] = order_ids
+	return records
+
+
 func _visible_world_query_rect() -> Rect2:
 	var screen_rect := _visible_draw_rect()
 	var first := _screen_to_world(screen_rect.position)
@@ -1792,13 +1767,11 @@ func _on_gui_input(event: InputEvent) -> void:
 		accept_event()
 		return
 	var connection_active := not str(_connection_preview.get("kind", "")).is_empty()
-	var road_tool_active := _road_logistics_mode and not _road_tool_mode.is_empty()
-	if _is_placement_cancel_event(event) and (road_tool_active or not _road_drag.is_empty() or not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty() or not _left_pointer.is_empty()):
+	if _is_placement_cancel_event(event) and (not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty() or not _left_pointer.is_empty()):
 		_left_pointer.clear()
 		_dragging = false
-		_road_drag.clear()
 		cancel_port_drag()
-		if road_tool_active or not _placement_preview.is_empty() or connection_active:
+		if not _placement_preview.is_empty() or connection_active:
 			placement_cancelled.emit()
 		accept_event()
 		return
@@ -1835,20 +1808,6 @@ func _on_gui_input(event: InputEvent) -> void:
 			if _dragging:
 				accept_event()
 				return
-			if road_tool_active:
-				if mouse_event.pressed:
-					var start_tile := _screen_to_tile(mouse_event.position)
-					# A click outside the finite planet remains available for normal pan;
-					# command coordinates are never silently projected into a new world.
-					if _tile_in_bounds(start_tile):
-						_road_drag = {"start":start_tile, "end":start_tile}
-						queue_redraw()
-						accept_event()
-						return
-				elif not _road_drag.is_empty():
-					_finish_road_drag(_clamp_tile_to_bounds(_screen_to_tile(mouse_event.position)))
-					accept_event()
-					return
 			if mouse_event.pressed:
 				if not _placement_preview.is_empty():
 					var placement_tile := _screen_to_tile(mouse_event.position)
@@ -1883,11 +1842,6 @@ func _on_gui_input(event: InputEvent) -> void:
 			_last_pointer = motion.position
 			_clamp_camera_to_bounds()
 			_invalidate_hit_geometry()
-			queue_redraw()
-			accept_event()
-			return
-		if not _road_drag.is_empty():
-			_road_drag["end"] = _clamp_tile_to_bounds(_screen_to_tile(motion.position))
 			queue_redraw()
 			accept_event()
 			return
@@ -1943,38 +1897,7 @@ func _on_gui_input(event: InputEvent) -> void:
 
 
 func _configuration_gestures_allowed() -> bool:
-	return not _dragging and _configuration_gestures_enabled and _placement_preview.is_empty() and str(_connection_preview.get("kind", "")).is_empty() and _port_drag.is_empty() and _road_tool_mode.is_empty()
-
-
-func _road_drag_tiles() -> Array[Vector2i]:
-	var result: Array[Vector2i] = []
-	if _road_drag.is_empty():
-		return result
-	var start: Vector2i = _road_drag.get("start", Vector2i.ZERO)
-	var finish: Vector2i = _road_drag.get("end", start)
-	var horizontal_step := 1 if finish.x >= start.x else -1
-	for x in range(start.x, finish.x + horizontal_step, horizontal_step):
-		result.append(Vector2i(x, start.y))
-	var vertical_step := 1 if finish.y >= start.y else -1
-	for y in range(start.y + vertical_step, finish.y + vertical_step, vertical_step):
-		result.append(Vector2i(finish.x, y))
-	return result
-
-
-func _finish_road_drag(finish: Vector2i) -> void:
-	if _road_drag.is_empty():
-		return
-	_road_drag["end"] = finish
-	var road_tiles := _road_drag_tiles()
-	_road_drag.clear()
-	queue_redraw()
-	if road_tiles.is_empty() or road_tiles.size() > MAX_ROAD_COMMAND_TILES:
-		road_path_rejected.emit("ROAD_PATH_TOO_LONG")
-		return
-	var payload_tiles: Array = []
-	for tile in road_tiles:
-		payload_tiles.append({"x":tile.x, "y":tile.y})
-	road_path_requested.emit("BUILD_ROAD" if _road_tool_mode == "BUILD" else "REMOVE_ROAD", payload_tiles, _road_tier)
+	return not _dragging and _configuration_gestures_enabled and _placement_preview.is_empty() and str(_connection_preview.get("kind", "")).is_empty() and _port_drag.is_empty()
 
 
 func _machine_at(point: Vector2) -> Dictionary:
@@ -2252,7 +2175,7 @@ func _ensure_hit_geometry() -> void:
 	_construction_order_rects.clear()
 	_port_hit_rects.clear()
 	var visible_rect := _visible_draw_rect()
-	var visible_records := _chunk_index.query(_visible_world_query_rect())
+	var visible_records := _query_visible_records()
 	_visible_records = visible_records
 	var hit_detail_stage := _detail_stage()
 	for resource_id_value in visible_records.get("resource_ids", []):
@@ -2263,16 +2186,16 @@ func _ensure_hit_geometry() -> void:
 	for entity_id_value in visible_records.get("entity_ids", []):
 		var entity: Dictionary = _entities_by_id.get(str(entity_id_value), {})
 		var entity_rect := _footprint_rect(entity.get("footprint", {}))
-		if entity_rect.intersects(visible_rect):
+		if _core_visual_bounds(entity, entity_rect).intersects(visible_rect):
 			_node_rects[str(entity.get("id", ""))] = {"rect":entity_rect, "data":entity, "is_entity":true}
-			if not _road_logistics_mode and hit_detail_stage != "COMPACT":
+			if not _drone_logistics_mode and hit_detail_stage != "COMPACT":
 				_register_entity_port_hits(entity, entity_rect, 4.0 if hit_detail_stage == "FULL" else 3.0)
 	for order_id_value in visible_records.get("order_ids", []):
 		var order: Dictionary = _orders_by_id.get(str(order_id_value), {})
 		var order_rect := _footprint_rect(order.get("footprint", {}))
-		if order_rect.intersects(visible_rect):
+		if _core_visual_bounds(order, order_rect).intersects(visible_rect):
 			_construction_order_rects[str(order.get("id", ""))] = {"rect":order_rect, "data":order}
-	if not _road_logistics_mode:
+	if not _drone_logistics_mode:
 		for link_id_value in visible_records.get("link_ids", []):
 			var link: Dictionary = _links_by_id.get(str(link_id_value), {})
 			var source: Dictionary = _entities_by_id.get(str(link.get("source_id", "")), {})
@@ -2377,7 +2300,7 @@ func _point_has_interactive_hit(point: Vector2) -> bool:
 ## centre/ID tie-break. Neither path changes deployment geometry.
 func _visible_entity_icon_at(point: Vector2) -> Dictionary:
 	var detail_stage := _detail_stage()
-	if _road_logistics_mode:
+	if _drone_logistics_mode:
 		# The same painter order drives visible sprite picking. Domain
 		# footprints have already had priority in _select_at().
 		var draw_ids := _world_entity_draw_ids()
@@ -2386,12 +2309,16 @@ func _visible_entity_icon_at(point: Vector2) -> Dictionary:
 			var entity: Dictionary = _entities_by_id.get(str(entity_id),{})
 			var rect := _entity_visible_icon_rect(_footprint_rect(entity.get("footprint",{})),detail_stage)
 			var family := BuildingArt.industry_family(str(entity.get("definition_id", "")))
-			if not family.is_empty():
+			if BuildingArt.uses_space_elevator(str(entity.get("definition_id", ""))):
+				rect = SpaceElevatorArt.body_rect(_footprint_rect(entity.get("footprint", {})))
+			elif str(entity.get("definition_id", "")) == "grid_drone_tower":
+				rect = DroneArt.body_rect(_footprint_rect(entity.get("footprint", {})))
+			elif not family.is_empty():
 				rect = IndustryArt.body_rect(family, _footprint_rect(entity.get("footprint", {})))
 			if rect.has_point(point):
 				return entity
 		return {}
-	var visible_records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
+	var visible_records := _visible_records if not _visible_records.is_empty() else _query_visible_records()
 	var entity_ids: Array = visible_records.get("entity_ids", [])
 	var best: Dictionary = {}
 	var best_distance_squared := INF
@@ -2526,8 +2453,8 @@ func _flow_animation_allowed() -> bool:
 
 
 func _visible_record_count() -> int:
-	var records := _visible_records if not _visible_records.is_empty() else _chunk_index.query(_visible_world_query_rect())
-	return int(records.get("resource_ids", []).size()) + int(records.get("entity_ids", []).size()) + int(records.get("link_ids", []).size()) + int(records.get("order_ids", []).size()) + int(records.get("road_ids", []).size())
+	var records := _visible_records if not _visible_records.is_empty() else _query_visible_records()
+	return int(records.get("resource_ids", []).size()) + int(records.get("entity_ids", []).size()) + int(records.get("link_ids", []).size()) + int(records.get("order_ids", []).size())
 
 
 func _detail_stage() -> String:
@@ -2546,11 +2473,12 @@ func _detail_stage() -> String:
 
 
 func _rebuild_snapshot_indexes() -> void:
+	_space_elevator_entity_ids.clear()
+	_space_elevator_order_ids.clear()
 	_entities_by_id.clear()
 	_links_by_id.clear()
 	_resources_by_id.clear()
 	_orders_by_id.clear()
-	_roads_by_id.clear()
 	_recipe_names_by_id.clear()
 	_visible_records.clear()
 	_has_active_flow_cache = false
@@ -2559,6 +2487,8 @@ func _rebuild_snapshot_indexes() -> void:
 		if entity_value is Dictionary:
 			var entity := entity_value as Dictionary
 			_entities_by_id[str(entity.get("id", ""))] = entity
+			if str(entity.get("definition_id", "")) == "grid_planetary_core":
+				_space_elevator_entity_ids.append(str(entity.get("id", "")))
 	for link_value in _snapshot.get("links", []):
 		if link_value is Dictionary:
 			var link := link_value as Dictionary
@@ -2572,11 +2502,8 @@ func _rebuild_snapshot_indexes() -> void:
 		if order_value is Dictionary:
 			var order := order_value as Dictionary
 			_orders_by_id[str(order.get("id", ""))] = order
-	for road_value in _snapshot.get("roads", []):
-		if road_value is Dictionary:
-			var road := road_value as Dictionary
-			var road_id := "%d:%d" % [int(road.get("x", 0)), int(road.get("y", 0))]
-			_roads_by_id[road_id] = road
+			if str(order.get("definition_id", "")) == "grid_planetary_core":
+				_space_elevator_order_ids.append(str(order.get("id", "")))
 	var palette: Dictionary = _snapshot.get("palette", {}) if _snapshot.get("palette", {}) is Dictionary else {}
 	for recipe_value in palette.get("recipes", []):
 		if recipe_value is Dictionary:
@@ -2599,3 +2526,22 @@ func _item_name(item_id: String) -> String:
 		return I18n.t("factory.resource_field")
 	var names: Dictionary = _snapshot.get("item_names", {}) if _snapshot.get("item_names", {}) is Dictionary else {}
 	return str(names.get(item_id, item_id.replace("_", " ").capitalize()))
+
+
+func _draw_drone_range(record: Dictionary, tone: Color) -> void:
+	var radius := maxf(0.0, float(record.get("drone_radius_tiles", 0.0)))
+	if radius <= 0.0 or not bool(record.get("drone_tower", false)):
+		return
+	var rect := _footprint_rect(record.get("footprint", {}))
+	if not rect.has_area():
+		return
+	var pixels := radius * _tile_scale()
+	draw_circle(rect.get_center(), pixels, Color(tone, 0.055))
+	draw_arc(rect.get_center(), pixels, 0.0, TAU, 128, Color(tone, 0.8), 1.8, true)
+
+
+func _draw_selected_drone_range() -> void:
+	if not _placement_preview.is_empty():
+		return
+	var entity: Dictionary = _entities_by_id.get(_selected_node_id, {})
+	_draw_drone_range(entity, FOCUS_COLOR)

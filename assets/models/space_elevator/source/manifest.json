@@ -1,0 +1,91 @@
+﻿{
+    "revision":  "f2cbd3dc34a38b33905a50c8a3bdd321f26d3620",
+    "files":  [
+                  {
+                      "name":  "animated1.fbx",
+                      "bytes":  183680,
+                      "sha256":  "4FA3329AB969E3CA088D6D51478D50526697E85FAEFCC9D1DD25709D26EEDE83",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/animated1.fbx"
+                  },
+                  {
+                      "name":  "space-elevator_mat1_diffuse1.jpg",
+                      "bytes":  306268,
+                      "sha256":  "728CBFEE2BFF1280011E529AFB6AECDCE766E74FDAFF4686E4DC7BDF26A594FF",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat1_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat2_diffuse1.jpg",
+                      "bytes":  709551,
+                      "sha256":  "342060E0C00A260CB793FCD47FBAAC4FB0431C86334AEF07D689C654F4FD8698",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat2_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat2_normal1.jpg",
+                      "bytes":  368013,
+                      "sha256":  "7EF09EAD28A7CF04D745E149863F3F93E861E14500D1C0AB9E3212504F43F8FD",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat2_normal1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat3_diffuse1.jpg",
+                      "bytes":  42052,
+                      "sha256":  "840897B5F17A6619791448057F296A99E6E5E8FD17ECDC5CA64856E7DBEC4D01",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat3_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat4_diffuse1.jpg",
+                      "bytes":  89614,
+                      "sha256":  "7BBCDB6B622835A70BC8B2D712C289174356BC120FBCF34C8BBC4AC36E25FD0E",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat4_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat5_diffuse1.jpg",
+                      "bytes":  354901,
+                      "sha256":  "4D6A8A01A7394AA090CE73867306ADAFEB9B42D5B75455018825245F4C80E045",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat5_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat6_diffuse1.jpg",
+                      "bytes":  232755,
+                      "sha256":  "EE4D6B1C8EA71BFC6DF9538B9C8B96C18845A0827A3A73434710B715DE4B8074",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat6_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat7_diffuse1.jpg",
+                      "bytes":  286797,
+                      "sha256":  "E5678C4F285F10623B50304ECB0152DBB59D1E23EADCD0BC4DB473849B4312DE",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat7_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat8_diffuse1.jpg",
+                      "bytes":  92940,
+                      "sha256":  "B40121ED6849A3E0A6B3CCC100CA6BDD9B6BE63255D4F092088724AE2ACDB09A",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat8_diffuse1.jpg"
+                  },
+                  {
+                      "name":  "space-elevator_mat8_normal1.jpg",
+                      "bytes":  175655,
+                      "sha256":  "364A7392677185B4FD0170C3129701D295408B6909CBF576C23AA2B45BBCADCC",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/space-elevator_mat8_normal1.jpg"
+                  },
+                  {
+                      "name":  "static1.fbx",
+                      "bytes":  30422752,
+                      "sha256":  "AF33BCC96FD12AA66AB9C35961905034E66AEF5482D8181E24ADD74C0DC1EBED",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/static1.fbx"
+                  },
+                  {
+                      "name":  "static2.fbx",
+                      "bytes":  7953696,
+                      "sha256":  "148FBEE242026C1B4EBF0BFFB75469CC586455ED10F0FE69B2801AB8471AD0DF",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/Content/MyStuff/MODS/SPACE-EXPLORATION/ENTITIES/STRUCTURES/space-elevator/static2.fbx"
+                  },
+                  {
+                      "name":  "LICENCE.md",
+                      "bytes":  420,
+                      "sha256":  "A77ACAB199251753E7B3B0BC6B9D86302A53F2E34440854FFB822BA32029F5C4",
+                      "url":  "https://raw.githubusercontent.com/FUE5BASE/FUE5/f2cbd3dc34a38b33905a50c8a3bdd321f26d3620/LICENCE.md"
+                  }
+              ],
+    "purpose":  "Local learning prototype",
+    "source":  "https://github.com/FUE5BASE/FUE5"
+}

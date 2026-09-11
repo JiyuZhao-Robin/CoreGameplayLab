@@ -647,23 +647,50 @@ func warehouse_storage_capacity(state: SpaceGameState, location_id: String) -> i
 	return capacity
 
 
-func incoming_storage_reservation(state: SpaceGameState, location_id: String, item_id: String, excluded_shipment_id: String = "") -> int:
+func incoming_storage_reservation(state: SpaceGameState, location_id: String, item_id: String, excluded_shipment_id: String = "", excluded_factory_world_id: String = "") -> int:
 	var reserved := 0
+	var interstellar_claims := 0
 	for shipment_value in state.logistics_network.get("shipments", []):
 		var shipment := shipment_value as Dictionary
 		if str(shipment.get("destination", "")) != location_id:
 			continue
+		var quantity := maxi(0, int(shipment.get("cargo", {}).get(item_id, 0)))
+		interstellar_claims += quantity
 		if not excluded_shipment_id.is_empty() and str(shipment.get("id", "")) == excluded_shipment_id:
 			continue
-		reserved += maxi(0, int(shipment.get("cargo", {}).get(item_id, 0)))
-	for world_value in state.factory_worlds.values():
-		var world := world_value as Dictionary
+		reserved += quantity
+	# Collection decides its destination after pickup, so loaded returns can
+	# exceed the remaining warehouse space. Award that space once, oldest
+	# return first; counting every claim would let two worlds block each other
+	# forever. Unadmitted cargo remains owned by its shipment, not by storage.
+	# Even an excluded interstellar shipment keeps its room during this award,
+	# otherwise drones could reserve the very slot that ship needs to unload.
+	var drone_budget := maxi(0, item_storage_capacity(state, location_id, item_id) - state.item_quantity(item_id, location_id) - interstellar_claims)
+	var pending: Array[Dictionary] = []
+	for world_id_value in state.factory_worlds:
+		var world_id := str(world_id_value)
+		var world: Dictionary = state.factory_worlds[world_id_value]
 		if str(world.get("location_id", "")) != location_id:
 			continue
-		for job_value in world.get("road_shipments", {}).values():
-			var job := job_value as Dictionary
-			if str(job.get("destination_kind", "")) == "WAREHOUSE":
-				reserved += maxi(0, int(job.get("cargo", {}).get(item_id, 0)))
+		for job_id_value in world.get("drone_shipments", {}):
+			var job: Dictionary = world["drone_shipments"][job_id_value]
+			var quantity := maxi(0, int(job.get("cargo", {}).get(item_id, 0)))
+			if str(job.get("destination_kind", "")) == "WAREHOUSE" and quantity > 0:
+				pending.append({"world_id":world_id, "job_id":str(job_id_value), "created_at_ms":float(job.get("created_at_ms", 0.0)), "quantity":quantity})
+	pending.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		if float(left["created_at_ms"]) != float(right["created_at_ms"]):
+			return float(left["created_at_ms"]) < float(right["created_at_ms"])
+		if str(left["world_id"]) != str(right["world_id"]):
+			return str(left["world_id"]) < str(right["world_id"])
+		return str(left["job_id"]) < str(right["job_id"])
+	)
+	for claim in pending:
+		var awarded := mini(drone_budget, int(claim["quantity"]))
+		drone_budget -= awarded
+		if str(claim["world_id"]) != excluded_factory_world_id:
+			reserved += awarded
+		if drone_budget == 0:
+			break
 	return reserved
 
 

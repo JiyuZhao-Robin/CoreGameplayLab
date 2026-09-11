@@ -6,6 +6,7 @@ const Terrain = preload("res://src/core/factory_terrain.gd")
 const GroundLayer = preload("res://src/ui/workspaces/factory/factory_ground_layer.gd")
 const GroundShader = preload("res://src/ui/workspaces/factory/factory_ground.gdshader")
 const Resources = preload("res://src/ui/workspaces/factory/factory_resource_renderer.gd")
+const Foliage = preload("res://src/ui/workspaces/factory/earth_foliage_renderer.gd")
 const MAX_CACHED_CHUNKS := 96
 const MAX_VISIBLE_CELLS := 8192
 const CHUNK_CELLS := 16
@@ -17,6 +18,7 @@ var _cache: Dictionary = {}
 var _signature := ""
 var _ground_layer: Node2D
 var _resources := Resources.new()
+var _foliage := Foliage.new()
 var last_visible_chunks := 0
 var last_lod := 1
 var mesh_build_count := 0
@@ -31,26 +33,30 @@ func attach(canvas: Control) -> void:
 	_ground_layer.show_behind_parent = true
 	_ground_layer.visible = false
 	canvas.add_child(_ground_layer)
+	_foliage.attach(_ground_layer)
 
 func configure(snapshot: Dictionary) -> void:
 	# Runtime changes do not invalidate geography. Every terrain input does.
 	var inputs: Array = []
-	for key in ["world_id", "seed", "terrain_seed", "generator_version", "terrain_enabled", "terrain_scale_tiles", "terrain_safe_rect", "tile_deltas", "bounds"]:
+	for key in ["world_id", "seed", "terrain_seed", "generator_version", "terrain_profile", "terrain_enabled", "terrain_scale_tiles", "terrain_safe_rect", "tile_deltas", "bounds"]:
 		inputs.append(snapshot.get(key))
 	var signature := str(hash(inputs))
 	if signature != _signature:
 		_signature = signature
 		_clear_chunks()
 		_resources.clear()
+		_foliage.clear()
 	if _textures.is_empty():
 		for material_name in ["soil", "grass", "sand", "rock"]:
 			var path: String = ART_ROOT + "ground/" + str(material_name) + ".jpg"
 			if ResourceLoader.exists(path):
 				_textures[material_name] = load(path) as Texture2D
 	_resources.configure()
+	_foliage.configure(snapshot)
 
 func draw_ground(canvas: Control, snapshot: Dictionary, visible: Rect2, tile_scale: float, camera: Vector2) -> void:
 	last_visible_chunks = 0
+	_foliage.hide()
 	if not has_art():
 		return
 	if not is_instance_valid(_ground_layer):
@@ -87,11 +93,13 @@ func draw_ground(canvas: Control, snapshot: Dictionary, visible: Rect2, tile_sca
 				var oldest = _cache.keys()[0]
 				(_cache[oldest].node as Polygon2D).queue_free()
 				_cache.erase(oldest)
+	_foliage.draw_visible(snapshot, visible, tile_scale, camera, step)
 
 func hide_ground() -> void:
 	if is_instance_valid(_ground_layer):
 		_ground_layer.visible = false
 	last_visible_chunks = 0
+	_foliage.hide()
 
 func begin_frame() -> void:
 	_resources.begin_frame()
@@ -117,13 +125,19 @@ func _clear_chunks() -> void:
 
 func _build_chunk(snapshot: Dictionary, origin: Vector2i, step: int) -> Dictionary:
 	var span := CHUNK_CELLS * step
-	var mask_texture := ImageTexture.create_from_image(semantic_mask(snapshot, origin, step))
+	var earth := not Terrain.FLAT_GROUND_ONLY and str(snapshot.get("terrain_profile", "")) == "earth_v2"
+	var fields: Dictionary = surface_masks(snapshot, origin, step) if earth else {}
+	var mask_texture := ImageTexture.create_from_image(fields.semantic if earth else semantic_mask(snapshot, origin, step))
 	var material := ShaderMaterial.new()
 	material.shader = GroundShader
 	material.set_shader_parameter("terrain_mask", mask_texture)
 	material.set_shader_parameter("chunk_origin", Vector2(origin))
 	material.set_shader_parameter("cell_step", float(step))
 	material.set_shader_parameter("mask_edge", float(CHUNK_CELLS + 2))
+	material.set_shader_parameter("earth_surface", earth)
+	if earth:
+		material.set_shader_parameter("surface_fields", ImageTexture.create_from_image(fields.surface))
+		material.set_shader_parameter("rock_field", ImageTexture.create_from_image(fields.rock))
 	for material_name in _textures:
 		material.set_shader_parameter(material_name + "_texture", _textures[material_name])
 	var node := Polygon2D.new()
@@ -143,6 +157,22 @@ static func semantic_mask(snapshot: Dictionary, origin: Vector2i, step: int) -> 
 			var tile := origin + Vector2i(x - 1, y - 1) * step + Vector2i(step / 2, step / 2)
 			result.set_pixel(x, y, MASK_COLORS[Terrain.terrain_type(snapshot, tile)])
 	return result
+
+## Float textures retain shallow relief; both masks share the semantic halo and
+## sampling phase, so chunk edges have identical heights and surface normals.
+static func surface_masks(snapshot: Dictionary, origin: Vector2i, step: int) -> Dictionary:
+	var edge := CHUNK_CELLS + 2
+	var surface := Image.create(edge, edge, false, Image.FORMAT_RGBAF)
+	var rock := Image.create(edge, edge, false, Image.FORMAT_RF)
+	var semantic := Image.create(edge, edge, false, Image.FORMAT_RGBA8)
+	for y in range(edge):
+		for x in range(edge):
+			var tile := origin + Vector2i(x - 1, y - 1) * step + Vector2i(step / 2, step / 2)
+			var sample: Dictionary = Terrain.surface_sample(snapshot, tile)
+			semantic.set_pixel(x, y, MASK_COLORS[str(sample.get("terrain", "PLAIN"))])
+			surface.set_pixel(x, y, Color(float(sample.get("elevation", 0.5)), float(sample.get("moisture", 0.5)), float(sample.get("forest_density", 0.0)), float(sample.get("water_depth", 0.0))))
+			rock.set_pixel(x, y, Color(float(sample.get("rock", 0.0)), 0.0, 0.0, 1.0))
+	return {"surface":surface, "rock":rock, "semantic":semantic}
 
 static func _bounds_rect(snapshot: Dictionary) -> Rect2:
 	var bounds: Dictionary = snapshot.get("bounds", {})

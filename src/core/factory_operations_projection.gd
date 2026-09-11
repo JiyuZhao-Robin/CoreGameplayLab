@@ -88,7 +88,7 @@ static func _metrics(snapshot: Dictionary, entities: Array, orders: Array, mater
 
 static func _materials(snapshot: Dictionary, entities: Array, orders: Array, buildings: Array, recipes_by_id: Dictionary) -> Dictionary:
 	var totals := {}
-	var road_mode := str(snapshot.get("logistics_mode", "")) == "PLANET_SHARED_ROADS"
+	var road_mode := str(snapshot.get("logistics_mode", "")) == "PLANET_SHARED_DRONES"
 	if road_mode:
 		_add_manifest(totals, snapshot.get("shared_inventory", {}), "stored")
 	for entity_value in entities:

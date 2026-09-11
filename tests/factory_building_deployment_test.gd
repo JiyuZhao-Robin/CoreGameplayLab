@@ -32,7 +32,7 @@ func _fresh(land: bool = true) -> void:
 	game.simulation = SimulationEngine.new(game.content)
 	game.simulation.ensure_frontier_state(game.state)
 	if land:
-		_check(_deploy("grid_planetary_core", Vector2i(110,32)).get("accepted", false), "player chooses and deploys the starting core")
+		_check(_deploy("grid_planetary_core", Vector2i(60,8)).get("accepted", false), "player chooses and deploys the starting core")
 
 
 func _command(kind: String, payload: Dictionary) -> Dictionary:
@@ -64,7 +64,7 @@ func _test_content_and_start() -> void:
 	game.simulation.ensure_frontier_state(restored)
 	for item_id in expected:
 		_check(restored.item_quantity(item_id, LOCATION) == expected[item_id], "roundtrip does not duplicate %s" % item_id)
-	_check(_deploy("grid_planetary_core",Vector2i(110,32)).get("accepted",false), "core deploys immediately at the chosen site")
+	_check(_deploy("grid_planetary_core",Vector2i(60,8)).get("accepted",false), "core deploys immediately at the chosen site")
 	for item_id in {"building_grid_surface_mine":2,"building_grid_arc_smelter":2,"building_grid_engineering_works":1}:
 		_check(game.state.item_quantity(item_id,LOCATION) == {"building_grid_surface_mine":2,"building_grid_arc_smelter":2,"building_grid_engineering_works":1}[item_id], "landing releases the specified starter equipment: %s" % item_id)
 	_check(game.state.item_quantity("building_grid_solar_array",LOCATION) == 0, "base generation replaces starter solar equipment")
@@ -146,23 +146,14 @@ func _test_ore_to_new_building() -> void:
 			inventory[item_id] = 0
 	for entry in [
 		["grid_surface_mine",Vector2i(42,42),""],["grid_surface_mine",Vector2i(82,42),""],
-		["grid_arc_smelter",Vector2i(8,61),"grid_refine_iron"],
-		["grid_arc_smelter",Vector2i(28,61),"grid_refine_copper"],
-		["grid_engineering_works",Vector2i(52,61),"grid_fabricate_electronics"]
+		["grid_arc_smelter",Vector2i(26,61),"grid_refine_iron"],
+		["grid_arc_smelter",Vector2i(46,61),"grid_refine_copper"],
+		["grid_engineering_works",Vector2i(66,61),"grid_fabricate_electronics"]
 	]:
 		var placed := _deploy(str(entry[0]), entry[1], str(entry[2]))
 		_check(placed.get("accepted", false), "starter deploy: %s at %s" % [entry[0],entry[1]])
 	var world: Dictionary = game.state.factory_worlds[WORLD]
 	_check(world["construction_orders"].is_empty() and world["entities"].size() == 6, "complete starter kit deploys without raw inventory")
-	var tiles: Array = []
-	for x in range(8,110):
-		tiles.append({"x":x,"y":60})
-	for x in [42,82]:
-		for y in range(53,60):
-			tiles.append({"x":x,"y":y})
-	for y in range(32,60):
-		tiles.append({"x":109,"y":y})
-	_check(_command("BUILD_ROAD", {"tiles":tiles,"tier":1}).get("accepted", false), "free starter roads connect the full production chain")
 	world = game.state.factory_worlds[WORLD]
 	var manufacturer := ""
 	for entity_value in world["entities"].values():
@@ -174,7 +165,7 @@ func _test_ore_to_new_building() -> void:
 	var configured := false
 	var making_scrap := false
 	for tick in range(1800):
-		game.simulation.advance(game.state, 1000.0)
+		game.simulation._progress_runtime(game.state, 1000.0)
 		if not making_scrap and game.state.item_quantity("electronics", LOCATION) >= 2:
 			_check(_command("SET_RECIPE", {"entity_id":manufacturer,"recipe_id":"grid_reclaim_metal_stock"}).get("accepted",false), "single assembler switches from electronics to manufacturing material")
 			making_scrap = true

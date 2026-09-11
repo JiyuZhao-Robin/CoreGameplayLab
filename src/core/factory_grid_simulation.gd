@@ -7,7 +7,7 @@ extends RefCounted
 ## orders and modified tiles are persisted. Terrain and resources are tile
 ## attributes; they are never physical entities or network endpoints.
 
-const WORLD_SCHEMA_VERSION := 3
+const WORLD_SCHEMA_VERSION := 4
 const WORKSPACE_PROTOCOL_VERSION := 1
 const DEFAULT_CHUNK_SIZE := 64
 const DEFAULT_STEP_SECONDS := 1.0
@@ -23,7 +23,7 @@ const DspProjects = preload("res://src/core/factory_dsp_projects.gd")
 var building_definitions: Dictionary = {}
 var recipe_definitions: Dictionary = {}
 var rules: Dictionary = {}
-var _road_graph_cache: Dictionary = {}
+var _drone_context_cache: Dictionary = {}
 var _dsp_power_plan: Dictionary = {}
 var _power_allocation: Dictionary = {}
 var _power_charge: Dictionary = {}
@@ -37,19 +37,17 @@ func configure(buildings: Dictionary, recipes: Dictionary, grid_rules: Dictionar
 	building_definitions = buildings.duplicate(true)
 	recipe_definitions = recipes.duplicate(true)
 	rules = grid_rules.duplicate(true)
-	_road_graph_cache.clear()
+	_drone_context_cache.clear()
 	rules.merge({
 		"chunk_size_tiles":DEFAULT_CHUNK_SIZE,
 		"simulation_step_seconds":DEFAULT_STEP_SECONDS,
 		"base_construction_capacity_per_second":1.0,
-		"road_tier1_speed_tiles_per_second":4.0,
-		"road_tier2_speed_tiles_per_second":8.0,
-		"road_courier_capacity_per_second":1.0,
-		"road_courier_cargo_capacity":1,
-		"road_courier_bays":1,
-		"road_max_active_shipments":64,
-		"road_max_service_distance_tiles":256,
-		"road_min_travel_seconds":0.25
+		"drone_radius_tiles":64.0,
+		"drone_count":4,
+		"drone_cargo_capacity":10,
+		"drone_speed_tiles_per_second":12.0,
+		"drone_input_batches":10,
+		"drone_max_active_shipments":256
 	}, false)
 
 
@@ -66,6 +64,8 @@ func effective_generation_kw(world: Dictionary, definition: Dictionary) -> float
 
 
 func effective_demand_kw(world: Dictionary, definition: Dictionary, entity: Dictionary = {}) -> float:
+	if str(definition.get("kind", "")) == "EXTRACTOR" and not entity.is_empty():
+		definition = _resource_definition(definition, entity)
 	return FactoryEnvironmentEffects.effective_demand_kw(_world_environment(world), definition) * DspProduction.proliferation_power_multiplier(entity, recipe_definitions.get(str(entity.get("recipe_id", "")), {}))
 
 
@@ -95,9 +95,8 @@ func create_world(world_id: String, location_id: String, size_tiles: Vector2i, s
 		"runtime_revision":0,
 		"environment":{},
 		"dsp_effects":{},
-		"logistics_mode":"PLANET_SHARED_ROADS",
-		"roads":{},
-		"road_shipments":{},
+		"logistics_mode":"PLANET_SHARED_DRONES",
+		"drone_shipments":{},
 		"resource_fields":{},
 		"entities":{},
 		"links":{},
@@ -113,12 +112,13 @@ func create_world(world_id: String, location_id: String, size_tiles: Vector2i, s
 		"next_entity_serial":1,
 		"next_link_serial":1,
 		"next_construction_serial":1,
-		"next_road_shipment_serial":1,
+		"next_drone_shipment_serial":1,
 		"statistics":{"produced":{}, "consumed":{}, "transferred":{}, "construction_delivered":{}, "construction_completed":0}
 	}
 
 
 func normalize_world(source: Dictionary) -> Dictionary:
+	source = preload("res://src/core/factory_building_migration.gd").migrate_save(source)
 	var bounds: Dictionary = source.get("bounds", {})
 	var origin: Dictionary = bounds.get("origin", {})
 	var size: Dictionary = bounds.get("size", {})
@@ -133,8 +133,9 @@ func normalize_world(source: Dictionary) -> Dictionary:
 	normalized["bounds"]["origin"] = {"x":int(origin.get("x", 0)), "y":int(origin.get("y", 0))}
 	normalized["chunk_size_tiles"] = maxi(1, int(source.get("chunk_size_tiles", normalized["chunk_size_tiles"])))
 	normalized["elapsed_ms"] = maxf(0.0, float(source.get("elapsed_ms", 0.0)))
-	normalized["road_dispatch_after"] = str(source.get("road_dispatch_after", ""))
+	normalized["drone_dispatch_after"] = str(source.get("drone_dispatch_after", ""))
 	normalized["terrain_enabled"] = bool(source.get("terrain_enabled", false))
+	normalized["terrain_profile"] = str(source.get("terrain_profile", ""))
 	normalized["terrain_safe_rect"] = source.get("terrain_safe_rect", {}).duplicate(true)
 	# Optional generator inputs must survive a save round trip. Leave absent
 	# terrain_seed absent so legacy worlds continue deriving it from world seed.
@@ -143,13 +144,16 @@ func normalize_world(source: Dictionary) -> Dictionary:
 			normalized[terrain_input] = source[terrain_input]
 	normalized["landing_definition_id"] = str(source.get("landing_definition_id", ""))
 	normalized["starter_package_delivered"] = bool(source.get("starter_package_delivered", false))
+	normalized["resource_profile_unlocks"] = source.get("resource_profile_unlocks", {}).duplicate(true)
 	normalized["topology_revision"] = maxi(0, int(source.get("topology_revision", 0)))
 	normalized["runtime_revision"] = maxi(0, int(source.get("runtime_revision", 0)))
-	# Factory worlds now use road reachability for local logistics and power.
+	# Factory worlds now use circular drone logistics and world-level power.
 	# Legacy links are intentionally discarded: they contain no authoritative
 	# cargo after migration and must not remain as an active parallel network.
-	normalized["logistics_mode"] = "PLANET_SHARED_ROADS"
-	normalized["roads"] = FactoryRoadNetwork.normalize_roads(source.get("roads", {}), normalized)
+	normalized["logistics_mode"] = "PLANET_SHARED_DRONES"
+	# Preserve the old road layout as inert save history. It no longer blocks
+	# placement, renders, conducts power or schedules transportation.
+	normalized["legacy_roads_archive"] = source.get("legacy_roads_archive", source.get("roads", {})).duplicate(true)
 	# Preserve the Location-owned environment record verbatim. Runtime effects
 	# sanitize reads independently, while the application layer remains the sole
 	# authority that reprojects canonical Location data into this copy.
@@ -173,16 +177,21 @@ func normalize_world(source: Dictionary) -> Dictionary:
 				receipt["message_key"] = "factory.success.%s" % command_kind
 	if source.get("command_receipt_order", null) is Array:
 		normalized["command_receipt_order"] = source.get("command_receipt_order", []).duplicate(true)
-	for field in ["next_entity_serial", "next_link_serial", "next_construction_serial", "next_road_shipment_serial"]:
+	for field in ["next_entity_serial", "next_link_serial", "next_construction_serial", "next_drone_shipment_serial"]:
 		normalized[field] = maxi(1, int(source.get(field, 1)))
-	normalized["road_shipments"] = FactoryRoadTransport.normalize_shipments(source.get("road_shipments", {}), normalized)
-	for shipment_value in normalized.get("road_shipments", {}).values():
+	var shipments: Dictionary = source.get("drone_shipments", {}).duplicate(true)
+	# Legacy transit cargo already left its source; move custody exactly once.
+	for legacy_id in source.get("road_shipments", {}):
+		if not shipments.has(legacy_id):
+			shipments[legacy_id] = source["road_shipments"][legacy_id].duplicate(true)
+	normalized["drone_shipments"] = FactoryDroneTransport.normalize_shipments(shipments, normalized)
+	for shipment_value in normalized.get("drone_shipments", {}).values():
 		var shipment := shipment_value as Dictionary
 		var shipment_id := str(shipment.get("id", ""))
-		var serial_text := shipment_id.trim_prefix("ROAD-SHIP-")
+		var serial_text := shipment_id.trim_prefix("DRONE-SHIP-")
 		if serial_text.is_valid_int():
-			normalized["next_road_shipment_serial"] = maxi(int(normalized.get("next_road_shipment_serial", 1)), int(serial_text) + 1)
-	# A road-mode world has no live manual CARGO or POWER wires.
+			normalized["next_drone_shipment_serial"] = maxi(int(normalized.get("next_drone_shipment_serial", 1)), int(serial_text) + 1)
+	# Drone worlds have no live manual CARGO or POWER wires.
 	normalized["links"] = {}
 	_normalize_runtime_records(normalized)
 	return normalized
@@ -204,6 +213,10 @@ func _normalize_runtime_records(world: Dictionary) -> void:
 					"potential_density":maxf(EPSILON, float(entity.get("potential_density", 1.0)))
 				}
 			continue
+		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
+		if not definition.is_empty():
+			for field in ["drone_tower", "drone_radius_tiles", "drone_count"]:
+				entity[field] = definition.get(field, false if field == "drone_tower" else 0)
 		entity["inputs"] = entity.get("inputs", {}).duplicate(true)
 		entity["outputs"] = entity.get("outputs", {}).duplicate(true)
 		entity["inventory"] = entity.get("inventory", {}).duplicate(true)
@@ -319,7 +332,7 @@ func tile_snapshot(world: Dictionary, tile: Vector2i, candidate_field_ids: Varia
 	var tile_key := _tile_key(tile)
 	if world.get("tile_deltas", {}).has(tile_key):
 		var delta: Dictionary = world.get("tile_deltas", {}).get(tile_key, {})
-		if delta.has("terrain_override"):
+		if delta.has("terrain_override") and not Terrain.FLAT_GROUND_ONLY:
 			var override_type := str(delta.get("terrain_override", terrain_type))
 			var override_definition: Dictionary = rules.get("terrain_types", {}).get(override_type, {})
 			snapshot["terrain_type"] = override_type
@@ -464,17 +477,8 @@ func add_resource_field(world: Dictionary, resource_field_id: String, resource_i
 ## Atomically adds/upgrades/removes sparse cardinal road tiles. Costs are
 ## returned for the application transaction: tier-one starter roads are free,
 ## while creating or upgrading tier two costs one iron ingot per tile.
-func edit_roads(world: Dictionary, tiles: Array, tier: int = 1, remove: bool = false) -> Dictionary:
-	if str(world.get("logistics_mode", "PLANET_SHARED_ROADS")) != "PLANET_SHARED_ROADS":
-		return _failure("LEGACY_LINKS_RETIRED", "This Factory world uses planet road logistics")
-	if not remove:
-		for tile_value in tiles:
-			if tile_value is Dictionary and _tile_in_world(world, _point(tile_value)) and not Terrain.is_buildable(world, _point(tile_value)):
-				return _failure("TERRAIN_BLOCKED", "Roads cannot cross water or mountains")
-	var result := FactoryRoadNetwork.edit_roads(world, tiles, tier, remove)
-	if bool(result.get("ok", false)) and not (result.get("changed_tiles", []) as Array).is_empty():
-		_bump_topology_revision(world)
-	return result
+func edit_roads(_world: Dictionary, _tiles: Array, _tier: int = 1, _remove: bool = false) -> Dictionary:
+	return _failure("ROADS_RETIRED", "Roads have been replaced by drone towers")
 
 
 func place_entity_immediate(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", requested_id: String = "") -> Dictionary:
@@ -520,8 +524,6 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 		for x in range(origin.x, origin.x + footprint_size.x):
 			if not Terrain.is_buildable(world, Vector2i(x, y)):
 				return _failure("TERRAIN_BLOCKED", "Building footprint contains water or mountains")
-	if str(world.get("logistics_mode", "PLANET_SHARED_ROADS")) == "PLANET_SHARED_ROADS" and FactoryRoadNetwork.footprint_overlaps_road(world, footprint):
-		return _failure("ROAD_OCCUPIED", "Building footprints cannot overlap a road tile")
 	for entity_value in world.get("entities", {}).values():
 		var entity := entity_value as Dictionary
 		if not _footprints_overlap(footprint, entity.get("footprint", {})):
@@ -547,6 +549,8 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 			return _failure("RESOURCE_INCOMPATIBLE", "Extractor is incompatible with the covered tile resource")
 		if not definition.get("allowed_resource_ids", []).is_empty() and not definition["allowed_resource_ids"].has(str(resource_profile.get("resource_id", ""))):
 			return _failure("RESOURCE_INCOMPATIBLE", "Extractor cannot harvest this material")
+		if not _resource_unlocked(world, definition, resource_profile):
+			return _failure("BUILDING_LOCKED", "Research the technology required to extract this resource")
 		result["resource_profile"] = resource_profile
 	return result
 
@@ -651,11 +655,14 @@ func set_entity_recipe(world: Dictionary, entity_id: String, recipe_id: String) 
 		return {"ok":true, "entity_id":entity_id, "previous_recipe_id":previous_recipe_id, "recipe_id":recipe_id, "removed_link_ids":[]}
 	if float(entity.get("energy_debt_mj", 0.0)) > EPSILON or float(entity.get("energy_credit_mj", 0.0)) > EPSILON:
 		return _failure("ENERGY_SETTLEMENT_PENDING", "Finish discharging the current cell before changing mode")
-	if _is_road_mode(world):
+	if _is_drone_mode(world):
 		# Retool without deleting material or stranding the previous ingredients
-		# in a buffer the new recipe cannot consume. Normal road delivery drains
+		# in a buffer the new recipe cannot consume. Drone return delivery drains
 		# these returned goods; temporary output over-cap blocks new production.
+		if not entity.has("drone_return_items"):
+			entity["drone_return_items"] = {}
 		for item_id in entity.get("inputs", {}):
+			entity["drone_return_items"][item_id] = int(entity["drone_return_items"].get(item_id, 0)) + int(entity["inputs"][item_id])
 			entity["outputs"][item_id] = int(entity.get("outputs", {}).get(item_id, 0)) + int(entity["inputs"][item_id])
 		entity["inputs"] = {}
 	entity["recipe_id"] = recipe_id
@@ -689,7 +696,7 @@ func set_entity_recipe(world: Dictionary, entity_id: String, recipe_id: String) 
 
 func connect_entities(world: Dictionary, kind: String, source_id: String, target_id: String, item_id: String = "", capacity_per_second: float = 1.0, priority: int = 1, source_port_id: String = "", target_port_id: String = "", lane_count: int = 1, tier: String = DEFAULT_CARGO_LINK_TIER, path_tiles: Array = []) -> Dictionary:
 	kind = kind.to_upper()
-	if str(world.get("logistics_mode", "PLANET_SHARED_ROADS")) == "PLANET_SHARED_ROADS":
+	if str(world.get("logistics_mode", "PLANET_SHARED_DRONES")) == "PLANET_SHARED_DRONES":
 		return _failure("LEGACY_LINKS_RETIRED", "Road logistics replaces manual Cargo and Power wires")
 	if kind not in LINK_KINDS or source_id == target_id:
 		return _failure("INVALID_LINK", "Link kind and endpoints must be valid")
@@ -848,16 +855,16 @@ func remove_entity(world: Dictionary, entity_id: String) -> Dictionary:
 	if entity.is_empty():
 		return _failure("UNKNOWN_ENTITY", "The selected Factory entity does not exist")
 	var road_shipment_ids: Array = []
-	for shipment_id_value in world.get("road_shipments", {}).keys():
-		var shipment: Dictionary = world.get("road_shipments", {}).get(shipment_id_value, {})
-		if str(shipment.get("source_id", "")) == entity_id or str(shipment.get("target_id", "")) == entity_id:
+	for shipment_id_value in world.get("drone_shipments", {}).keys():
+		var shipment: Dictionary = world.get("drone_shipments", {}).get(shipment_id_value, {})
+		if str(shipment.get("source_id", "")) == entity_id or str(shipment.get("target_id", "")) == entity_id or str(shipment.get("tower_id", "")) == entity_id:
 			road_shipment_ids.append(str(shipment_id_value))
 	if not road_shipment_ids.is_empty():
 		road_shipment_ids.sort()
 		return {
 			"ok":false,
-			"reason_code":"ROAD_SHIPMENT_REFERENCES_ENTITY",
-			"reason":"Factory entities referenced by active road shipments cannot be removed",
+			"reason_code":"DRONE_SHIPMENT_REFERENCES_ENTITY",
+			"reason":"Factory entities referenced by active drone flights cannot be removed",
 			"entity_id":entity_id,
 			"road_shipment_ids":road_shipment_ids
 		}
@@ -909,8 +916,8 @@ func refresh_derived_state(world: Dictionary) -> Dictionary:
 	_dsp_power_plan = DspProduction.prepare_power(world, building_definitions, recipe_definitions, 1.0)
 	var power_factors := _calculate_power_factors(world)
 	_refresh_operational_status(world, power_factors)
-	if _is_road_mode(world):
-		world["road_logistics"] = FactoryRoadTransport.logistics_snapshot(world, rules, _road_graph(world))
+	if _is_drone_mode(world):
+		world["drone_logistics"] = FactoryDroneTransport.logistics_snapshot(world, rules, _drone_context(world))
 	return power_factors
 
 
@@ -934,9 +941,9 @@ func synchronization_boundary_ms(world: Dictionary) -> float:
 func _step(world: Dictionary, seconds: float, events: Array[Dictionary], inventory_context: Dictionary = {}) -> void:
 	_advance_dyson(world, seconds)
 	_refresh_spray_services(world, inventory_context)
-	if _is_road_mode(world):
-		var road_graph := _road_graph(world)
-		FactoryRoadTransport.advance(world, seconds, building_definitions, recipe_definitions, rules, inventory_context, road_graph)
+	if _is_drone_mode(world):
+		var road_graph := _drone_context(world)
+		FactoryDroneTransport.advance(world, seconds, building_definitions, recipe_definitions, rules, inventory_context, road_graph)
 	else:
 		for link_value in world.get("links", {}).values():
 			var link := link_value as Dictionary
@@ -955,22 +962,22 @@ func _step(world: Dictionary, seconds: float, events: Array[Dictionary], invento
 			_add_statistic(world, "consumed", str(item_id), int(manifest[item_id]))
 	_run_extractors(world, seconds, power_factors, events)
 	_run_machines(world, seconds, power_factors, events)
-	if _is_road_mode(world):
-		FactoryRoadTransport.queue(world, building_definitions, recipe_definitions, rules, inventory_context, _road_graph(world))
-		world["road_logistics"] = FactoryRoadTransport.logistics_snapshot(world, rules, _road_graph(world))
+	if _is_drone_mode(world):
+		FactoryDroneTransport.queue(world, building_definitions, recipe_definitions, rules, inventory_context, _drone_context(world))
+		world["drone_logistics"] = FactoryDroneTransport.logistics_snapshot(world, rules, _drone_context(world))
 	else:
 		_transfer_cargo(world, seconds)
 	# Unused whole-unit throughput expires at the end of this simulation step.
 	# Only sub-unit progress crosses a boundary, so a blocked belt cannot bank
 	# hours of capacity and burst it after downstream space becomes available.
-	if not _is_road_mode(world):
+	if not _is_drone_mode(world):
 		for link_value in world.get("links", {}).values():
 			var link := link_value as Dictionary
 			if str(link.get("kind", "")) == "CARGO":
 				var progress := maxf(0.0, float(link.get("capacity_progress", 0.0)))
 				link["capacity_progress"] = progress - floorf(progress)
 	events.append_array(deploy_pending_buildings(world, inventory_context))
-	if not _is_road_mode(world):
+	if not _is_drone_mode(world):
 		_update_cargo_link_diagnostics(world)
 	_refresh_router_operational_status(world)
 
@@ -1012,12 +1019,12 @@ func _refresh_spray_services(world: Dictionary, inventory_context: Dictionary, a
 				_disable_spray_service(entity)
 			continue
 		var best := {}
-		var distance := int(rules.get("road_max_service_distance_tiles", 256)) + 1
+		var distance := float(rules.get("drone_radius_tiles", 64.0)) + 1.0
 		for coater in coaters:
-			var path := FactoryRoadNetwork.path_between(world, coater, entity, _road_graph(world))
-			if bool(path.get("ok", false)) and int(path.get("distance_tiles", 0)) < distance:
+			var separation := FactoryDroneTransport.center(coater).distance_to(FactoryDroneTransport.center(entity))
+			if separation < distance:
 				best = coater
-				distance = int(path.get("distance_tiles", 0))
+				distance = separation
 		if best.is_empty():
 			if entity.has("proliferator"):
 				_disable_spray_service(entity)
@@ -1051,8 +1058,8 @@ func _disable_spray_service(entity: Dictionary) -> void:
 
 
 func _calculate_power_factors(world: Dictionary) -> Dictionary:
-	if _is_road_mode(world):
-		return _calculate_road_power_factors(world)
+	if _is_drone_mode(world):
+		return _calculate_wireless_power_factors(world)
 	var parent := {}
 	for entity_id_value in world.get("entities", {}).keys():
 		var entity_id := str(entity_id_value)
@@ -1085,10 +1092,9 @@ func _calculate_power_factors(world: Dictionary) -> Dictionary:
 	return factors
 
 
-func _calculate_road_power_factors(world: Dictionary) -> Dictionary:
+func _calculate_wireless_power_factors(world: Dictionary) -> Dictionary:
 	_power_allocation.clear()
 	_power_charge.clear()
-	var graph := _road_graph(world)
 	var supply := {}
 	var demand := {}
 	var components := {}
@@ -1097,7 +1103,9 @@ func _calculate_road_power_factors(world: Dictionary) -> Dictionary:
 	for entity_id_value in _sorted_keys(world.get("entities", {})):
 		var entity_id := str(entity_id_value)
 		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
-		var access := FactoryRoadNetwork.entity_access(world, entity, graph)
+		# Roads no longer constrain the planet's power network. Keep the existing
+		# allocation/energy settlement below, so fuel and batteries still settle.
+		var access := {"road_connected":true, "road_component_id":"PLANET_POWER"}
 		entity["road_connected"] = bool(access.get("road_connected", false))
 		entity["road_component_id"] = str(access.get("road_component_id", ""))
 		entity["available_generation_kw"] = 0.0
@@ -1171,20 +1179,12 @@ func _calculate_road_power_factors(world: Dictionary) -> Dictionary:
 	return factors
 
 
-func _is_road_mode(world: Dictionary) -> bool:
-	return str(world.get("logistics_mode", "PLANET_SHARED_ROADS")) == "PLANET_SHARED_ROADS"
+func _is_drone_mode(world: Dictionary) -> bool:
+	return str(world.get("logistics_mode", "PLANET_SHARED_DRONES")) == "PLANET_SHARED_DRONES"
 
 
-func _road_graph(world: Dictionary) -> Dictionary:
-	var world_key := "%s|%s" % [str(world.get("world_id", "")), str(world.get("location_id", ""))]
-	var bounds: Dictionary = world.get("bounds", {})
-	var roads: Dictionary = world.get("roads", {})
-	var fingerprint := "%s|%s|%s|%s|%s" % [str(bounds.get("origin", {})), str(bounds.get("size", {})), str(world.get("topology_revision", 0)), str(roads.size()), str(hash(roads))]
-	var cached: Dictionary = _road_graph_cache.get(world_key, {})
-	if str(cached.get("fingerprint", "")) != fingerprint:
-		cached = {"fingerprint":fingerprint, "graph":FactoryRoadNetwork.build_graph(world)}
-		_road_graph_cache[world_key] = cached
-	return cached.get("graph", FactoryRoadNetwork.empty_graph())
+func _drone_context(_world: Dictionary) -> Dictionary:
+	return {"building_definitions":building_definitions}
 
 
 func _refresh_operational_status(world: Dictionary, power_factors: Dictionary) -> void:
@@ -1268,7 +1268,14 @@ func _extractor_operational_projection(world: Dictionary, entity_id: String, ent
 	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
 	var resource_profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)), float(definition.get("mining_radius_tiles", 0.0)))
 	_apply_extractor_resource_profile(entity, resource_profile)
+	var resource_unlocked := _resource_unlocked(world, definition, resource_profile)
+	definition = _resource_definition(definition, resource_profile)
+	resource_profile = resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)), float(definition.get("mining_radius_tiles", 0.0)))
+	_apply_extractor_resource_profile(entity, resource_profile)
 	var projection := {"status":"NO_RESOURCE", "actual_rate":0.0, "resource_profile":resource_profile, "resource_id":str(resource_profile.get("resource_id", "")), "free":0}
+	if not resource_unlocked:
+		projection["status"] = "BUILDING_LOCKED"
+		return projection
 	if int(resource_profile.get("covered_resource_tiles", 0)) <= 0 or bool(resource_profile.get("mixed_resource_types", false)):
 		return projection
 	var factor := float(power_factors.get(entity_id, 0.0))
@@ -1291,7 +1298,8 @@ func _machine_operational_projection(entity_id: String, entity: Dictionary, powe
 	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
 	var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
 	var projection := {"status":"NO_RECIPE", "actual_rate":0.0, "recipe":recipe, "available_cycles":0, "output_cycles":0}
-	if recipe.is_empty() or bool(recipe.get("legacy_only", false)):
+	var continuing_legacy := bool(entity.get("legacy_recipe_continuation", false)) and not str(recipe.get("replacement_building_id", "")).is_empty()
+	if recipe.is_empty() or (bool(recipe.get("legacy_only", false)) and not continuing_legacy):
 		return projection
 	var factor := float(power_factors.get(entity_id, 0.0))
 	if factor <= EPSILON:
@@ -1705,7 +1713,7 @@ func world_summary(world: Dictionary) -> Dictionary:
 ## Resource fields intentionally have is_entity=false and expose no ports.
 func workspace_snapshot(world: Dictionary) -> Dictionary:
 	var effects := environment_effects(world)
-	var road_graph := _road_graph(world)
+	var road_graph := _drone_context(world)
 	var resource_fields: Array = []
 	for field_id_value in _sorted_keys(world.get("resource_fields", {})):
 		var field_id := str(field_id_value)
@@ -1736,7 +1744,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		var entity: Dictionary = world.get("entities", {}).get(entity_id, {})
 		var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
 		var status := str(entity.get("status", "IDLE"))
-		var road_access := FactoryRoadNetwork.entity_access(world, entity, road_graph)
+		var tower_ids := FactoryDroneTransport.covering_towers(world, entity, building_definitions, rules)
 		var nominal_generation_kw := FactoryEnvironmentEffects.nominal_generation_kw(definition)
 		var nominal_demand_kw := FactoryEnvironmentEffects.nominal_demand_kw(definition)
 		var nominal_construction_capacity := FactoryEnvironmentEffects.nominal_construction_capacity_per_second(definition)
@@ -1760,7 +1768,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"blocker_code":_entity_blocker_code(status),
 			"inputs":entity.get("inputs", {}).duplicate(true),
 			"outputs":entity.get("outputs", {}).duplicate(true),
-			"inventory":{} if _is_road_mode(world) and str(entity.get("kind", "")) == "STORAGE" else entity.get("inventory", {}).duplicate(true),
+			"inventory":{} if _is_drone_mode(world) and str(entity.get("kind", "")) == "STORAGE" else entity.get("inventory", {}).duplicate(true),
 			"progress":maxf(0.0, float(entity.get("progress", 0.0))),
 			"power_factor":clampf(float(entity.get("power_factor", 1.0)), 0.0, 1.0),
 			"actual_rate":maxf(0.0, float(entity.get("actual_rate", 0.0))),
@@ -1786,12 +1794,16 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 			"mining_area_tiles":maxi(0, int(entity.get("mining_area_tiles", 0))),
 			"missing_resource_tiles":maxi(0, int(entity.get("missing_resource_tiles", 0))),
 			"ports":_entity_port_snapshot(entity_id, entity, port_connections),
-			"road_connected":bool(road_access.get("road_connected", false)),
-			"road_component_id":str(road_access.get("road_component_id", ""))
+			"drone_covered":not tower_ids.is_empty(),
+			"drone_tower":bool(definition.get("drone_tower", false)),
+			"drone_radius_tiles":float(definition.get("drone_radius_tiles", 0.0)),
+			"drone_count":int(definition.get("drone_count", 0)),
+			"drone_tower_ids":tower_ids,
+			"input_targets":_drone_input_targets(entity)
 		})
 
 	var links: Array = []
-	if not _is_road_mode(world):
+	if not _is_drone_mode(world):
 		for link_id_value in _sorted_keys(world.get("links", {})):
 			var link_id := str(link_id_value)
 			var link: Dictionary = world.get("links", {}).get(link_id, {})
@@ -1851,7 +1863,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 
 	var production_rows := _production_rows(world, _production_route_index(world))
 	var production_summary := _production_summary(production_rows)
-	var road_logistics := FactoryRoadTransport.logistics_snapshot(world, rules, road_graph)
+	var drone_logistics := FactoryDroneTransport.logistics_snapshot(world, rules, road_graph)
 	return {
 		"protocol_version":WORKSPACE_PROTOCOL_VERSION,
 		"terrain_enabled":bool(world.get("terrain_enabled", false)),
@@ -1860,6 +1872,7 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		"terrain_seed":Terrain._integer(world.get("terrain_seed", world.get("seed", 1)), 1),
 		"generator_version":Terrain._integer(world.get("generator_version", 1), 1),
 		"terrain_scale_tiles":Terrain._finite_number(world.get("terrain_scale_tiles", 48.0), 48.0),
+		"terrain_profile":str(world.get("terrain_profile", "")),
 		"tile_deltas":world.get("tile_deltas", {}).duplicate(true),
 		"landing_definition_id":str(world.get("landing_definition_id", "")),
 		"landing_required":not str(world.get("landing_definition_id", "")).is_empty() and not bool(world.get("starter_package_delivered", false)),
@@ -1869,11 +1882,11 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		"topology_revision":maxi(0, int(world.get("topology_revision", 0))),
 		"runtime_revision":maxi(0, int(world.get("runtime_revision", 0))),
 		"elapsed_ms":maxf(0.0, float(world.get("elapsed_ms", 0.0))),
-		"logistics_mode":str(world.get("logistics_mode", "PLANET_SHARED_ROADS")),
-		"roads":FactoryRoadNetwork.road_tiles_snapshot(world),
-		"road_logistics":road_logistics,
+		"logistics_mode":str(world.get("logistics_mode", "PLANET_SHARED_DRONES")),
+		"roads":[],
+		"drone_logistics":drone_logistics,
 		"dsp_effects":world.get("dsp_effects", {}).duplicate(true),
-		"road_shipments":FactoryRoadTransport.workspace_shipments(world, rules),
+		"drone_shipments":FactoryDroneTransport.workspace_shipments(world, rules),
 		"environment":_world_environment(world).duplicate(true),
 		"environment_effects":effects,
 		"construction_capacity_per_second":construction_capacity_per_second(world),
@@ -1909,6 +1922,9 @@ func _workspace_palette_snapshot(world: Dictionary) -> Dictionary:
 			"id":definition_id,
 			"name":str(definition.get("name", definition_id)),
 			"kind":str(definition.get("kind", "")),
+			"drone_tower":bool(definition.get("drone_tower", false)),
+			"drone_radius_tiles":float(definition.get("drone_radius_tiles", 0.0)),
+			"drone_count":int(definition.get("drone_count", 0)),
 			"footprint":definition.get("footprint", {}).duplicate(true),
 			"recipe_ids":definition.get("recipe_ids", []).duplicate(true),
 			"resource_categories":definition.get("resource_categories", []).duplicate(true),
@@ -2151,6 +2167,7 @@ func _production_summary(rows: Array) -> Dictionary:
 
 func _theoretical_entity_rate(world: Dictionary, entity_id: String, entity: Dictionary, definition: Dictionary) -> float:
 	if str(entity.get("kind", "")) == "EXTRACTOR":
+		definition = _resource_definition(definition, entity)
 		var profile := resource_coverage_for_footprint(world, entity.get("footprint", {}), float(definition.get("resource_coverage_loss_per_missing_tile", 0.1)), float(definition.get("mining_radius_tiles", 0.0)))
 		return minf(
 			maxf(0.0, float(definition.get("mining_rate_per_second", 0.0))) * maxf(EPSILON, float(profile.get("average_grade", 1.0))) * clampf(float(profile.get("coverage_efficiency", 0.0)), 0.0, 1.0),
@@ -2252,6 +2269,9 @@ func _create_entity(entity_id: String, definition_id: String, origin: Vector2i, 
 		"id":entity_id,
 		"kind":kind,
 		"definition_id":definition_id,
+		"drone_tower":bool(definition.get("drone_tower", false)),
+		"drone_radius_tiles":float(definition.get("drone_radius_tiles", 0.0)),
+		"drone_count":int(definition.get("drone_count", 0)),
 		"recipe_id":recipe_id,
 		"energy_mode":"DISCHARGE" if recipe_id == "dsp_accumulator_discharge" else "CHARGE",
 		"footprint":_footprint(origin, Vector2i(maxi(1, int(size_data.get("width", 1))), maxi(1, int(size_data.get("height", 1))))),
@@ -2637,3 +2657,47 @@ func _union(parent: Dictionary, a: String, b: String) -> void:
 
 func _failure(code: String, message: String) -> Dictionary:
 	return {"ok":false, "reason_code":code, "reason":message}
+
+
+func _drone_input_targets(entity: Dictionary) -> Dictionary:
+	var targets := {}
+	for entry in recipe_definitions.get(str(entity.get("recipe_id", "")), {}).get("inputs", []):
+		targets[str(entry.get("item", ""))] = int(entry.get("quantity", 0)) * int(rules.get("drone_input_batches", 10))
+	return targets
+
+
+func _resource_profile_index(definition: Dictionary, resource: Dictionary) -> int:
+	var profiles: Array = definition.get("resource_profiles", [])
+	var category := str(resource.get("resource_category", "solid"))
+	if str(resource.get("resource_id", "")) in ["dsp_crude_oil", "dsp_water", "dsp_sulfuric_acid"]:
+		category = "liquid"
+	for index in range(profiles.size()):
+		var profile: Dictionary = profiles[index]
+		if not profile.get("resource_categories", []).has(category):
+			continue
+		var ids: Array = profile.get("allowed_resource_ids", [])
+		if ids.is_empty() or ids.has(str(resource.get("resource_id", ""))):
+			return index
+	return -1
+
+func _resource_definition(definition: Dictionary, resource: Dictionary) -> Dictionary:
+	var index := _resource_profile_index(definition, resource)
+	if index < 0:
+		return definition
+	var result := definition.duplicate(true)
+	var profile: Dictionary = definition["resource_profiles"][index]
+	for field in ["mining_rate_per_second", "resource_coverage_loss_per_missing_tile", "power_demand_kw"]:
+		if profile.has(field):
+			result[field] = profile[field]
+	return result
+
+func _resource_unlocked(world: Dictionary, definition: Dictionary, resource: Dictionary) -> bool:
+	if definition.get("resource_profiles", []).is_empty():
+		return true
+	var index := _resource_profile_index(definition, resource)
+	if index < 0:
+		return false
+	var profile: Dictionary = definition["resource_profiles"][index]
+	if profile.get("requirements", []).is_empty() and profile.get("reveal_requirements", []).is_empty():
+		return true
+	return bool(world.get("resource_profile_unlocks", {}).get("%s:%d" % [definition.get("id", ""), index], false))

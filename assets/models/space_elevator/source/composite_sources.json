@@ -1,0 +1,107 @@
+﻿{
+    "files":  [
+                  {
+                      "path":  "animated1.fbx",
+                      "bytes":  183680,
+                      "sha256":  "4FA3329AB969E3CA088D6D51478D50526697E85FAEFCC9D1DD25709D26EEDE83"
+                  },
+                  {
+                      "path":  "space-elevator_mat1_diffuse1.jpg",
+                      "bytes":  306268,
+                      "sha256":  "728CBFEE2BFF1280011E529AFB6AECDCE766E74FDAFF4686E4DC7BDF26A594FF"
+                  },
+                  {
+                      "path":  "space-elevator_mat2_diffuse1.jpg",
+                      "bytes":  709551,
+                      "sha256":  "342060E0C00A260CB793FCD47FBAAC4FB0431C86334AEF07D689C654F4FD8698"
+                  },
+                  {
+                      "path":  "space-elevator_mat2_normal1.jpg",
+                      "bytes":  368013,
+                      "sha256":  "7EF09EAD28A7CF04D745E149863F3F93E861E14500D1C0AB9E3212504F43F8FD"
+                  },
+                  {
+                      "path":  "space-elevator_mat3_diffuse1.jpg",
+                      "bytes":  42052,
+                      "sha256":  "840897B5F17A6619791448057F296A99E6E5E8FD17ECDC5CA64856E7DBEC4D01"
+                  },
+                  {
+                      "path":  "space-elevator_mat4_diffuse1.jpg",
+                      "bytes":  89614,
+                      "sha256":  "7BBCDB6B622835A70BC8B2D712C289174356BC120FBCF34C8BBC4AC36E25FD0E"
+                  },
+                  {
+                      "path":  "space-elevator_mat5_diffuse1.jpg",
+                      "bytes":  354901,
+                      "sha256":  "4D6A8A01A7394AA090CE73867306ADAFEB9B42D5B75455018825245F4C80E045"
+                  },
+                  {
+                      "path":  "space-elevator_mat6_diffuse1.jpg",
+                      "bytes":  232755,
+                      "sha256":  "EE4D6B1C8EA71BFC6DF9538B9C8B96C18845A0827A3A73434710B715DE4B8074"
+                  },
+                  {
+                      "path":  "space-elevator_mat7_diffuse1.jpg",
+                      "bytes":  286797,
+                      "sha256":  "E5678C4F285F10623B50304ECB0152DBB59D1E23EADCD0BC4DB473849B4312DE"
+                  },
+                  {
+                      "path":  "space-elevator_mat8_diffuse1.jpg",
+                      "bytes":  92940,
+                      "sha256":  "B40121ED6849A3E0A6B3CCC100CA6BDD9B6BE63255D4F092088724AE2ACDB09A"
+                  },
+                  {
+                      "path":  "space-elevator_mat8_normal1.jpg",
+                      "bytes":  175655,
+                      "sha256":  "364A7392677185B4FD0170C3129701D295408B6909CBF576C23AA2B45BBCADCC"
+                  },
+                  {
+                      "path":  "static1.fbx",
+                      "bytes":  30422752,
+                      "sha256":  "AF33BCC96FD12AA66AB9C35961905034E66AEF5482D8181E24ADD74C0DC1EBED"
+                  },
+                  {
+                      "path":  "static2.fbx",
+                      "bytes":  7953696,
+                      "sha256":  "148FBEE242026C1B4EBF0BFFB75469CC586455ED10F0FE69B2801AB8471AD0DF"
+                  },
+                  {
+                      "path":  "dsp/logistic-station-1__resources.assets__7418.obj",
+                      "bytes":  623539,
+                      "sha256":  "766E9A29DD4948CEDFF29A8C615F85F8C123F5FD989838AFF1C83802D574A7FE"
+                  },
+                  {
+                      "path":  "dsp/logistic-station-2__resources.assets__7648.obj",
+                      "bytes":  118196,
+                      "sha256":  "AF23E8A3F2C268BF0B5CA70D5CAE6519AC1300AAF7BD0D078F04C3460A38347E"
+                  },
+                  {
+                      "path":  "dsp/logistic-station-a__sharedassets0.assets__1024.png",
+                      "bytes":  2395664,
+                      "sha256":  "96EAEB09FD218DC78C7B12D3AF5D3E8A2CD638C47398FDFC51F3820B93CAB0E8"
+                  },
+                  {
+                      "path":  "dsp/logistic-station-e__sharedassets0.assets__1115.png",
+                      "bytes":  70043,
+                      "sha256":  "09EC7ABC27D7BA2EF2959B32D8F7D39B49A76C8E99F3008BFFFE27DECDF7581C"
+                  },
+                  {
+                      "path":  "dsp/logistic-station-n__sharedassets0.assets__422.png",
+                      "bytes":  10759173,
+                      "sha256":  "B7F96201EFCE8E1C5E353038BC1253C6DE20C85890AE56BBC8379C01B82CF9F5"
+                  },
+                  {
+                      "path":  "dsp/logistic-station-s__sharedassets0.assets__729.png",
+                      "bytes":  6703445,
+                      "sha256":  "05045AC893EC788E868CA9091A388D756E624952BF792C94C680305FDF1CDA39"
+                  },
+                  {
+                      "path":  "dsp/logistic-station__resources.assets__3041.png",
+                      "bytes":  8027,
+                      "sha256":  "529ED746434CE522F22BB4501433ABBC8BE0BE1F5D38DCA7AEF7EDAD0A9B5582"
+                  }
+              ],
+    "fue5_source":  "https://github.com/FUE5BASE/FUE5",
+    "purpose":  "Local learning composite",
+    "dsp_source":  "User-supplied local DSP extraction, see dsp/SOURCE_README.md"
+}

@@ -1,0 +1,303 @@
+{
+  "source_page": "https://kenney.nl/assets/nature-kit",
+  "download_url": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+  "download_date": "2026-09-11",
+  "archive_sha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+  "archive_bytes": 10537521,
+  "pack_version_from_license": "2.1",
+  "license": "CC0-1.0",
+  "retained_files": {
+    "License.txt": {
+      "archive_path": "License.txt",
+      "sha256": "cb96b75e3560ac78d7a53ce6f083f4cdb5c53faea6141b62d63458dcfe1e4b9d"
+    },
+    "source/models/log.glb": {
+      "archive_path": "Models/GLTF format/log.glb",
+      "sha256": "8c8fe8f6adfc03a3c0cd6cb24961ff74be96c2da284d70322f05797d049972d6"
+    },
+    "source/models/log_large.glb": {
+      "archive_path": "Models/GLTF format/log_large.glb",
+      "sha256": "e7a92369062d491e5a31a163d390e07db04ee573605bbfa84c00660d18896b4c"
+    },
+    "source/models/log_stack.glb": {
+      "archive_path": "Models/GLTF format/log_stack.glb",
+      "sha256": "90eaae4a01ba1f25c2f0c6d83087e4a7a8fac684f2452615245333968d118d68"
+    },
+    "source/models/log_stackLarge.glb": {
+      "archive_path": "Models/GLTF format/log_stackLarge.glb",
+      "sha256": "58dc0ce3321b3b57f7b8c5aea47e1a212a5f462822af57a26f9ba5c4d48e65ab"
+    },
+    "source/models/stump_old.glb": {
+      "archive_path": "Models/GLTF format/stump_old.glb",
+      "sha256": "4c2d2da34804c1662c6a776a9d60fe4449e6f6fdd50914bfec7d5cca3e9ceddb"
+    },
+    "source/models/stump_oldTall.glb": {
+      "archive_path": "Models/GLTF format/stump_oldTall.glb",
+      "sha256": "8606cbd41c2a11143f083e796668cc413d58ab90cf5e53450fd93e6fcfde48e0"
+    },
+    "source/models/stump_round.glb": {
+      "archive_path": "Models/GLTF format/stump_round.glb",
+      "sha256": "e9b0f385f0ef98493ef716a055aa51e0b99efb8445279be7bb8bd83329a4c4af"
+    },
+    "source/models/stump_roundDetailed.glb": {
+      "archive_path": "Models/GLTF format/stump_roundDetailed.glb",
+      "sha256": "3017359bd0bdf84fa137f8aca33b31b1a54c3a3f11d36e1d0995868dedd53768"
+    },
+    "source/models/stump_square.glb": {
+      "archive_path": "Models/GLTF format/stump_square.glb",
+      "sha256": "bf46b38e2899ee4f2046be166d1cedd157f021a771c4b3ef235aa7de4f56a873"
+    },
+    "source/models/stump_squareDetailed.glb": {
+      "archive_path": "Models/GLTF format/stump_squareDetailed.glb",
+      "sha256": "d84fa1d9c2e57d07669b9e0072f61fb12f83dc8a20786caf9e75818cd4dcbfcc"
+    },
+    "source/models/stump_squareDetailedWide.glb": {
+      "archive_path": "Models/GLTF format/stump_squareDetailedWide.glb",
+      "sha256": "fee070370d60a2d6cf5868c3b994b002b2772c35602f6d6b2396b9049d6256c0"
+    },
+    "source/models/tree_blocks.glb": {
+      "archive_path": "Models/GLTF format/tree_blocks.glb",
+      "sha256": "cb74bda3024bbe396c01b3d5b381a93e6d7c73241079868c19ac420ad52e475c"
+    },
+    "source/models/tree_blocks_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_blocks_dark.glb",
+      "sha256": "fa47040f418e9985c237a670524d0b29e2c01380c76fe1204ad89665b69fa670"
+    },
+    "source/models/tree_blocks_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_blocks_fall.glb",
+      "sha256": "0f79f7f11578cfb0e3669468f09c86f0953bceb1b2ced3cb8ed2a2bb4ff2021b"
+    },
+    "source/models/tree_cone.glb": {
+      "archive_path": "Models/GLTF format/tree_cone.glb",
+      "sha256": "90be4d214ee2cbf79d317677cb87fc11dac9873b73e446b75e8c12825a374272"
+    },
+    "source/models/tree_cone_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_cone_dark.glb",
+      "sha256": "b5c22416b8b37cfa9af04b89657a95c10a1ca45ff8e84afff3a19ae5a01c1ade"
+    },
+    "source/models/tree_cone_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_cone_fall.glb",
+      "sha256": "bd1d2833ef7a838fc27224c6f4a7cb0bb0680e1896f1c1f122814a8424e4c694"
+    },
+    "source/models/tree_default.glb": {
+      "archive_path": "Models/GLTF format/tree_default.glb",
+      "sha256": "562d29638c902de3c7bee465d3a53bb77117efbc392ae04ed894faf6b5dc691d"
+    },
+    "source/models/tree_default_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_default_dark.glb",
+      "sha256": "f2dc452b8fa98e68e3f892526b7d3f5e8d27d6acf4dd3c6f4b3795d64b879cce"
+    },
+    "source/models/tree_default_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_default_fall.glb",
+      "sha256": "f8e90ed7f7771644998a7c361302213af04350150b3ea0631e8384d26506efa2"
+    },
+    "source/models/tree_detailed.glb": {
+      "archive_path": "Models/GLTF format/tree_detailed.glb",
+      "sha256": "c041daf2f0fb1d49e4325227cbcd58667adbe51e9b55e8c1f0a94b74cc521b3b"
+    },
+    "source/models/tree_detailed_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_detailed_dark.glb",
+      "sha256": "1e2211dc6483b1d8a32130c3441afa108d4075f0d851825620fba85d2dc6e5d7"
+    },
+    "source/models/tree_detailed_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_detailed_fall.glb",
+      "sha256": "eafa885b824c1ffcf7782e9d4084403130135b6b4ed82c90881b354ae9c987a8"
+    },
+    "source/models/tree_fat.glb": {
+      "archive_path": "Models/GLTF format/tree_fat.glb",
+      "sha256": "84b262c5dda3a91ac6c95f9d8b23a0ebbb1951d678c0e1375d3e32623cc43ee2"
+    },
+    "source/models/tree_fat_darkh.glb": {
+      "archive_path": "Models/GLTF format/tree_fat_darkh.glb",
+      "sha256": "92674861d2055abeef856c7d7d69f3efcf79b10c13d1a5f780df09d7a289cf39"
+    },
+    "source/models/tree_fat_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_fat_fall.glb",
+      "sha256": "02fffc9b631a5f5834ac39b600d42ace0c9352fdcd3ed31912b0f6e8e685b660"
+    },
+    "source/models/tree_oak.glb": {
+      "archive_path": "Models/GLTF format/tree_oak.glb",
+      "sha256": "d7fd8773674928c50c11b66d12c636d49bdcc15a8b1c7fbb98e6f63a3439a3f3"
+    },
+    "source/models/tree_oak_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_oak_dark.glb",
+      "sha256": "f2c455bb433fe98522d1b9391d5b587e7324176ecaee29ceefe55350a7e3fd47"
+    },
+    "source/models/tree_oak_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_oak_fall.glb",
+      "sha256": "43a258d17b5428d8ef525a19e30e667caeeb330b6f3cb367a07da12093ff97a1"
+    },
+    "source/models/tree_palm.glb": {
+      "archive_path": "Models/GLTF format/tree_palm.glb",
+      "sha256": "27bbb23d26ed788d84de6df2f7fab0acc3fe0ff16c7d08cdcfa1fffcb11de324"
+    },
+    "source/models/tree_palmBend.glb": {
+      "archive_path": "Models/GLTF format/tree_palmBend.glb",
+      "sha256": "8af9dae16ce3c03183f9457996ebdd135167199514e8f4f944ee2bd82828d5c9"
+    },
+    "source/models/tree_palmDetailedShort.glb": {
+      "archive_path": "Models/GLTF format/tree_palmDetailedShort.glb",
+      "sha256": "bc1013aaacca3bdd116ad1cded4f9499f008fe3056e760f3238be05aa21ff9f2"
+    },
+    "source/models/tree_palmDetailedTall.glb": {
+      "archive_path": "Models/GLTF format/tree_palmDetailedTall.glb",
+      "sha256": "2cbea0f9621cde884c63a7b4ad787bda1d051fa27ef3c66b9f2b65328dc53683"
+    },
+    "source/models/tree_palmShort.glb": {
+      "archive_path": "Models/GLTF format/tree_palmShort.glb",
+      "sha256": "d2526ca31c144a238820aa5c0f6183c5b9cf37fd3cc037932e637cf7c473ba27"
+    },
+    "source/models/tree_palmTall.glb": {
+      "archive_path": "Models/GLTF format/tree_palmTall.glb",
+      "sha256": "cbd2c2ea7d0316be7514d44699527c566ce91e0542e8b6c6bf431a155e5655f6"
+    },
+    "source/models/tree_pineDefaultA.glb": {
+      "archive_path": "Models/GLTF format/tree_pineDefaultA.glb",
+      "sha256": "60d8f352fa3659ed275e06cbddfecf8f92c8effe2977c2f2d7b29b6c9b582e46"
+    },
+    "source/models/tree_pineDefaultB.glb": {
+      "archive_path": "Models/GLTF format/tree_pineDefaultB.glb",
+      "sha256": "a752ea5775c6fb17513f764d57ead534f44dfdd85188b842995ac9ba0e7065c1"
+    },
+    "source/models/tree_pineGroundA.glb": {
+      "archive_path": "Models/GLTF format/tree_pineGroundA.glb",
+      "sha256": "dfffda4e4f0796076c502561cbf9527245656b7384b67657edc2a45205bbce51"
+    },
+    "source/models/tree_pineGroundB.glb": {
+      "archive_path": "Models/GLTF format/tree_pineGroundB.glb",
+      "sha256": "7af6719bfde2236210093d915e4eceff1e36c4c997259cb3565f149b270a4bfc"
+    },
+    "source/models/tree_pineRoundA.glb": {
+      "archive_path": "Models/GLTF format/tree_pineRoundA.glb",
+      "sha256": "7dc9711f31585eafdcb965d0649c30af5e19f2def1955f7a915081d30759ef8e"
+    },
+    "source/models/tree_pineRoundB.glb": {
+      "archive_path": "Models/GLTF format/tree_pineRoundB.glb",
+      "sha256": "d4b664a2ac27ffec4125d95dffebed23471595f3a86650a55bcb9ac6b7c54637"
+    },
+    "source/models/tree_pineRoundC.glb": {
+      "archive_path": "Models/GLTF format/tree_pineRoundC.glb",
+      "sha256": "29080a4935bae6b4ab29066f22c99c58f88b23ce4e2f79b4dcbb5e76de73f69d"
+    },
+    "source/models/tree_pineRoundD.glb": {
+      "archive_path": "Models/GLTF format/tree_pineRoundD.glb",
+      "sha256": "a5051944fbfae7900cef8314c4a5d977b6b29bcd4e4ae5dea9d80980e65a411a"
+    },
+    "source/models/tree_pineRoundE.glb": {
+      "archive_path": "Models/GLTF format/tree_pineRoundE.glb",
+      "sha256": "39178f614e1b4b2340a5db89cde410e897027a67e28f39ba95359c522d114f23"
+    },
+    "source/models/tree_pineRoundF.glb": {
+      "archive_path": "Models/GLTF format/tree_pineRoundF.glb",
+      "sha256": "fbeacc85c719a9e23e0d42f3ceb1cf44cf2537389e3d2141cb0716eefc40317d"
+    },
+    "source/models/tree_pineSmallA.glb": {
+      "archive_path": "Models/GLTF format/tree_pineSmallA.glb",
+      "sha256": "be1a438bbb2e157266c1fb093b775bff8ce3e29a4c8f04aaf9d44c7a4e1f1ff0"
+    },
+    "source/models/tree_pineSmallB.glb": {
+      "archive_path": "Models/GLTF format/tree_pineSmallB.glb",
+      "sha256": "59392aa6604adb9dccd4fb76df5ed12ae8ac7d7391eb7e04bc84fffe9f9b36c8"
+    },
+    "source/models/tree_pineSmallC.glb": {
+      "archive_path": "Models/GLTF format/tree_pineSmallC.glb",
+      "sha256": "c334c78379b2968b0c198a92b4e429e433c89e1685792b5c6ed730216c8512e3"
+    },
+    "source/models/tree_pineSmallD.glb": {
+      "archive_path": "Models/GLTF format/tree_pineSmallD.glb",
+      "sha256": "5128c47e7dc954b539245968d05fa518c9afa677d740fb11db0813aafadf17ef"
+    },
+    "source/models/tree_pineTallA.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallA.glb",
+      "sha256": "e0a56eb196d8a64ba86c7304d607136e17e6f9ad748dffcf86bd53b18b91b196"
+    },
+    "source/models/tree_pineTallA_detailed.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallA_detailed.glb",
+      "sha256": "9ba6337460e718b8baf165b23c02f39455e3d5757b1911505410c46bc88a86b5"
+    },
+    "source/models/tree_pineTallB.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallB.glb",
+      "sha256": "49b54146351e1e009e97ee592f997a90a16b10c5467baf734d352df1cddec5d1"
+    },
+    "source/models/tree_pineTallB_detailed.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallB_detailed.glb",
+      "sha256": "a26b4434e1592ec1a83f364a54688bb34c48d9521bfccbe63f0cc37b381c4696"
+    },
+    "source/models/tree_pineTallC.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallC.glb",
+      "sha256": "e8b97fa086e1ac9b2a2c84eeb02382df371703c23cfa414571d06e42d4dfea3d"
+    },
+    "source/models/tree_pineTallC_detailed.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallC_detailed.glb",
+      "sha256": "b538e229a9fb8cbbb579fa2a0df784d5354c8a70faa115fa80f8190f2e6bef47"
+    },
+    "source/models/tree_pineTallD.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallD.glb",
+      "sha256": "df5ffca50fc2e39a40bf8315077f6215b0b9fca0d9761b01945bfd59cca3bdd5"
+    },
+    "source/models/tree_pineTallD_detailed.glb": {
+      "archive_path": "Models/GLTF format/tree_pineTallD_detailed.glb",
+      "sha256": "a2fac08d7cb337e7b02c7d7f0d6911aa6fcef97b721da9cffb432b8dc3949e2d"
+    },
+    "source/models/tree_plateau.glb": {
+      "archive_path": "Models/GLTF format/tree_plateau.glb",
+      "sha256": "7f19e347ff28703dd9e5fcce89b920156e291fbdb19331a57cb31a95c73e1322"
+    },
+    "source/models/tree_plateau_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_plateau_dark.glb",
+      "sha256": "c598155374b71d2edd2cb8b1b63a0ba446b6bac1d2ed430dc3741087ba42d4c3"
+    },
+    "source/models/tree_plateau_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_plateau_fall.glb",
+      "sha256": "11b2a1b09c2f90c58b1572a2245e4861d6c0d674147a17d10ccdc12abe1f13ff"
+    },
+    "source/models/tree_simple.glb": {
+      "archive_path": "Models/GLTF format/tree_simple.glb",
+      "sha256": "93891ea740447634930de19c31a7c1c9f4add94122e6db03aca9f75aea32f9d6"
+    },
+    "source/models/tree_simple_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_simple_dark.glb",
+      "sha256": "57bee138b97a1fadd34d06772513f7c3f22fd5905375eae611141e7a49d81f9e"
+    },
+    "source/models/tree_simple_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_simple_fall.glb",
+      "sha256": "00e79a1c6bb936a7fecdeeff716ebca00f3914a931d2ec9389b07b0b6f8c3a2d"
+    },
+    "source/models/tree_small.glb": {
+      "archive_path": "Models/GLTF format/tree_small.glb",
+      "sha256": "d26c0eeed65cc681667f50042ef23ec72ce47ae3b39837bfeec170b05ba6ab6a"
+    },
+    "source/models/tree_small_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_small_dark.glb",
+      "sha256": "0b29837359378543e906a7d862ace523647c16083589abc120558f187412edca"
+    },
+    "source/models/tree_small_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_small_fall.glb",
+      "sha256": "2203da5cdb52ed442760f96916a171628a70575a0a038531bfcaa12173241cb1"
+    },
+    "source/models/tree_tall.glb": {
+      "archive_path": "Models/GLTF format/tree_tall.glb",
+      "sha256": "3515a8826044d91e84e011186c86878f62024a487a079b4e32c9ac2e71994411"
+    },
+    "source/models/tree_tall_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_tall_dark.glb",
+      "sha256": "c764c0f497c752459b59df3bc637e7d595ef767c0a33614b1b2f928a4299629f"
+    },
+    "source/models/tree_tall_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_tall_fall.glb",
+      "sha256": "f6b975c90a0f7486aec70e683aa0dd180c070f94a9ccb8927066be26ea5774e0"
+    },
+    "source/models/tree_thin.glb": {
+      "archive_path": "Models/GLTF format/tree_thin.glb",
+      "sha256": "f0f1f6861fe0446963d3be216cc628324f538bb0841bc9a8e14140313f64e2f3"
+    },
+    "source/models/tree_thin_dark.glb": {
+      "archive_path": "Models/GLTF format/tree_thin_dark.glb",
+      "sha256": "8f12bf461e38c43866ddfeaa56f77fadaa56425642bcb2e71dcf3c5c74abab47"
+    },
+    "source/models/tree_thin_fall.glb": {
+      "archive_path": "Models/GLTF format/tree_thin_fall.glb",
+      "sha256": "0820f6823774030e1ea646e974ab63d532643d3cc24f70a0cfbf898f1ec3b574"
+    }
+  }
+}

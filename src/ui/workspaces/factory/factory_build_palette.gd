@@ -7,7 +7,6 @@ extends PanelContainer
 
 signal building_selected(building_id: String)
 signal filter_changed(filter_id: String)
-signal road_tool_selected(tool_mode: String, tier: int)
 signal collapsed_changed(collapsed: bool)
 
 const ThemeTokens = preload("res://src/ui/ui_theme_tokens.gd")
@@ -67,14 +66,8 @@ var _cards: HBoxContainer
 var _empty_label: Label
 var _palette_scroll: ScrollContainer
 var _content: HBoxContainer
-var _road_tools: HBoxContainer
 var _filter_scroll: ScrollContainer
 var _header_controls: Array[Control] = []
-var _road_tools_enabled := false
-var _road_tier_one_button: Button
-var _road_tier_two_button: Button
-var _road_remove_button: Button
-var _road_cost_label: Label
 
 
 func _ready() -> void:
@@ -119,21 +112,6 @@ func ensure_built() -> void:
 	_collapse_button.pressed.connect(func() -> void: set_collapsed(not _collapsed))
 	header.add_child(_collapse_button)
 
-	_road_tools = HBoxContainer.new()
-	_road_tools.name = "FactoryRoadTools"
-	_road_tools.add_theme_constant_override("separation", ThemeTokens.layout_px(3))
-	_road_tools.visible = false
-	header.add_child(_road_tools)
-	_road_tier_one_button = _road_button("FactoryRoadTierOne", _t("factory.road.build_tier_one", "Basic road"), _t("factory.road.build_tier_one_tooltip", "Draw a shared local road. Basic roads are free during bootstrap."), "BUILD", 1)
-	_road_tools.add_child(_road_tier_one_button)
-	_road_tier_two_button = _road_button("FactoryRoadTierTwo", _t("factory.road.build_tier_two", "Reinforced road"), _t("factory.road.build_tier_two_tooltip", "Draw or upgrade a faster shared road. Costs 1 iron ingot per tile."), "BUILD", 2)
-	_road_tools.add_child(_road_tier_two_button)
-	_road_remove_button = _road_button("FactoryRoadRemove", _t("factory.road.remove", "Remove road"), _t("factory.road.remove_tooltip", "Remove road tiles."), "REMOVE", 1)
-	_road_tools.add_child(_road_remove_button)
-	_road_cost_label = _label("", MUTED, 10)
-	_road_cost_label.name = "FactoryRoadCost"
-	_road_cost_label.tooltip_text = _t("factory.road.cost_hint", "Basic roads are free. Reinforced roads cost 1 iron ingot per tile.")
-	_road_tools.add_child(_road_cost_label)
 
 	# The category strip owns its overflow. Long localized labels therefore stay
 	# reachable without increasing the minimum width of the whole Factory page.
@@ -185,7 +163,7 @@ func ensure_built() -> void:
 	_quick_filter.tooltip_text = _t("factory.tooltip.building_palette", "Choose a building, then click a free tile to queue construction.")
 	_quick_filter.item_selected.connect(_on_quick_filter_selected)
 	header.add_child(_quick_filter)
-	_header_controls = [_road_tools, _filter_scroll, _count_label, _more_cards_indicator, _quick_filter]
+	_header_controls = [_filter_scroll, _count_label, _more_cards_indicator, _quick_filter]
 
 	_content = HBoxContainer.new()
 	_content.name = "BuildPaletteContent"
@@ -264,26 +242,6 @@ func set_selected_building(building_id: String) -> void:
 	_refresh_header()
 
 
-func set_road_tools_enabled(enabled: bool, active_tool: String = "", tier: int = 1, available: bool = true) -> void:
-	ensure_built()
-	if not is_instance_valid(_road_tools):
-		return
-	_road_tools_enabled = enabled
-	_road_tools.visible = enabled and not _collapsed
-	var normalized := active_tool.to_upper()
-	var selected_tier := clampi(tier, 1, 2)
-	_road_tier_one_button.disabled = not available
-	_road_tier_two_button.disabled = not available
-	_road_remove_button.disabled = not available
-	_road_tier_one_button.set_pressed_no_signal(normalized == "BUILD" and selected_tier == 1)
-	_road_tier_two_button.set_pressed_no_signal(normalized == "BUILD" and selected_tier == 2)
-	_road_remove_button.set_pressed_no_signal(normalized == "REMOVE")
-	if normalized == "BUILD" and selected_tier == 2:
-		_road_cost_label.text = _t("factory.road.cost_tier_two", "1 iron ingot / tile")
-	else:
-		_road_cost_label.text = _t("factory.road.cost_tier_one", "Basic road · free")
-
-
 func show_building(building_id: String, isolate: bool = false) -> void:
 	ensure_built()
 	_selected_building_id = building_id
@@ -339,12 +297,7 @@ func _set_collapsed_visuals() -> void:
 	if is_instance_valid(_content):
 		_content.visible = not _collapsed
 	for control in _header_controls:
-		if control == _road_tools:
-			# Road tools preserve their logical availability while the player has
-			# deliberately collapsed the dock.
-			control.visible = not _collapsed and _road_tools_enabled
-		else:
-			control.visible = not _collapsed
+		control.visible = not _collapsed
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL if _collapsed else Control.SIZE_SHRINK_BEGIN
 
 
@@ -556,9 +509,9 @@ func _building_matches_filter(building: Dictionary, filter_id: String) -> bool:
 		"ALL": return true
 		"EXTRACTION": return kind == "EXTRACTOR"
 		"PRODUCTION": return kind == "MACHINE"
-		"LOGISTICS": return kind == "ROUTER" or LOGISTICS_STORAGE_IDS.has(building_id)
+		"LOGISTICS": return bool(building.get("drone_tower", false)) or kind == "ROUTER" or LOGISTICS_STORAGE_IDS.has(building_id)
 		"POWER": return kind == "POWER"
-		"SUPPORT": return kind == "CONSTRUCTION" or (kind == "STORAGE" and not LOGISTICS_STORAGE_IDS.has(building_id))
+		"SUPPORT": return kind == "CONSTRUCTION" or (kind == "STORAGE" and not bool(building.get("drone_tower", false)) and not LOGISTICS_STORAGE_IDS.has(building_id))
 	return true
 
 
@@ -630,18 +583,6 @@ func _select_quick_filter_metadata(value: String) -> void:
 			_quick_filter.select(index)
 			return
 	_quick_filter.select(0)
-
-
-func _road_button(node_name: String, label: String, tooltip: String, tool_mode: String, tier: int) -> Button:
-	var button := Button.new()
-	button.name = node_name
-	button.text = label
-	button.tooltip_text = tooltip
-	button.toggle_mode = true
-	button.focus_mode = Control.FOCUS_ALL
-	button.add_theme_font_size_override("font_size", ThemeTokens.font_size(10))
-	button.pressed.connect(func() -> void: road_tool_selected.emit(tool_mode, tier))
-	return button
 
 
 func _label(text_value: String, color: Color, font_size: int) -> Label:

@@ -7,11 +7,12 @@ extends RefCounted
 ## silhouette before a bespoke cell is added to the atlas.
 
 const ATLAS_PATH := "res://assets/ui/factory/generated/factory_building_icon_atlas_v1.png"
-const CORE_PATH := "res://assets/ui/factory/core/generated/planetary_core_v1.png"
 const DspArt = preload("res://src/ui/workspaces/factory/factory_dsp_art.gd")
+const DroneArt = preload("res://src/ui/workspaces/factory/factory_drone_art.gd")
 const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
 const ArcFurnaceArt = preload("res://src/ui/workspaces/factory/factory_arc_furnace_art.gd")
 const IndustryArt = preload("res://src/ui/workspaces/factory/factory_approved_industry_art.gd")
+const SpaceElevatorArt = preload("res://src/ui/workspaces/factory/factory_space_elevator_art.gd")
 const INDUSTRY_FAMILIES := {
 	"grid_engineering_works": "manufacturer",
 	"grid_dsp_assembling_machine_mk1": "manufacturer",
@@ -85,6 +86,10 @@ static func atlas_region(texture: Texture2D, definition_id: String, kind: String
 
 
 static func icon_texture(texture: Texture2D, definition_id: String, kind: String) -> AtlasTexture:
+	if uses_space_elevator(definition_id):
+		return SpaceElevatorArt.icon_texture()
+	if definition_id == "grid_drone_tower":
+		return DroneArt.icon_texture()
 	var family := industry_family(definition_id)
 	if not family.is_empty():
 		return IndustryArt.icon_texture(family)
@@ -98,12 +103,6 @@ static func icon_texture(texture: Texture2D, definition_id: String, kind: String
 		var imported := DspArt.texture(definition_id)
 		if imported != null:
 			return imported
-	if definition_id == "grid_planetary_core" and ResourceLoader.exists(CORE_PATH):
-		var core_texture := load(CORE_PATH) as Texture2D
-		var core_atlas := AtlasTexture.new()
-		core_atlas.atlas = core_texture
-		core_atlas.region = Rect2(Vector2.ZERO,core_texture.get_size())
-		return core_atlas
 	var region := atlas_region(texture, definition_id, kind)
 	if texture == null or region.size.x <= 0.0 or region.size.y <= 0.0:
 		return null
@@ -111,6 +110,10 @@ static func icon_texture(texture: Texture2D, definition_id: String, kind: String
 	atlas.atlas = texture
 	atlas.region = region
 	return atlas
+
+
+static func uses_space_elevator(definition_id: String) -> bool:
+	return definition_id == "grid_planetary_core" and SpaceElevatorArt.is_available()
 
 
 static func uses_core_extractor(definition_id: String) -> bool:

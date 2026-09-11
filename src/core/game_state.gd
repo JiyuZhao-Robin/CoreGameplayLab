@@ -624,6 +624,7 @@ static func _retire_aggregate_industry_metadata_in_dictionary(source: Dictionary
 
 static func from_dictionary(data: Dictionary, domain_ids: Array, location_definitions: Dictionary = {}) -> SpaceGameState:
 	data = migrate_save_dictionary(data)
+	data = preload("res://src/core/factory_building_migration.gd").migrate_save(data)
 	# Published migration steps own the immutable archive. This final pass also
 	# normalizes current-schema saves and transaction clones, but must not turn
 	# ordinary runtime cleanup into fabricated migration evidence.
@@ -1000,7 +1001,7 @@ func factory_world_item_ledger() -> Dictionary:
 		for item_id in installed_buildings:
 			_ledger_add(world_items, str(item_id), int(installed_buildings[item_id]))
 		var road_transit := {}
-		for job_value in world.get("road_shipments", {}).values():
+		for job_value in world.get("drone_shipments", {}).values():
 			var cargo: Dictionary = (job_value as Dictionary).get("cargo", {})
 			for item_id_value in cargo.keys():
 				var quantity := maxi(0, int(cargo[item_id_value]))
@@ -1021,7 +1022,7 @@ func factory_world_item_ledger() -> Dictionary:
 			"Items":world_items,
 			"EntityBuffers":entity_buffers,
 			"ConstructionStaging":construction_staging,
-			"RoadTransit":road_transit,
+			"DroneTransit":road_transit,
 			"InstalledBuildings":installed_buildings,
 			"Entities":entities,
 			"Orders":orders,
@@ -1032,7 +1033,7 @@ func factory_world_item_ledger() -> Dictionary:
 		"Items":all_items,
 		"EntityBuffers":all_entity_buffers,
 		"ConstructionStaging":all_construction_staging,
-		"RoadTransit":all_road_transit,
+		"DroneTransit":all_road_transit,
 		"InstalledBuildings":all_installed_buildings,
 		"Produced":all_produced,
 		"Consumed":all_consumed,

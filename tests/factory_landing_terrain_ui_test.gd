@@ -27,8 +27,9 @@ func _run() -> void:
 	_check(not Terrain.field_contains(first,Vector2i(32,32)) and Terrain.field_contains(first,Vector2i(47,47)), "starter deposit has irregular corners and a usable mining core")
 	world["tile_deltas"]["8:8"] = {"terrain_override":"WATER"}
 	var before: Dictionary = game.state.to_dictionary().duplicate(true)
-	var blocked: Dictionary = game.execute_factory_command({"protocol_version":1,"command_id":"landing-water","kind":"DEPLOY_BUILDING","world_id":"earth-surface-grid","base_topology_revision":int(world["topology_revision"]),"payload":{"definition_id":"grid_planetary_core","origin":{"x":8,"y":8}}})
-	_check(not blocked.get("accepted",false) and blocked.get("reason_code") == "TERRAIN_BLOCKED" and game.state.to_dictionary() == before, "core cannot land on water and failed placement is atomic")
+	_check(Terrain.is_buildable(world, Vector2i(8,8)), "historical water is now buildable plain ground")
+	var blocked: Dictionary = game.execute_factory_command({"protocol_version":1,"command_id":"landing-outside","kind":"DEPLOY_BUILDING","world_id":"earth-surface-grid","base_topology_revision":int(world["topology_revision"]),"payload":{"definition_id":"grid_planetary_core","origin":{"x":-1,"y":8}}})
+	_check(not blocked.get("accepted",false) and blocked.get("reason_code") == "OUT_OF_BOUNDS" and game.state.to_dictionary() == before, "flat ground retains finite bounds and failed placement is atomic")
 	world["tile_deltas"].clear()
 	var host := Control.new()
 	host.size = Vector2(1920,1080)

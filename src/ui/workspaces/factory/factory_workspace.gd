@@ -19,7 +19,7 @@ const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_ar
 const ItemArt = preload("res://src/ui/workspaces/location/location_item_icon.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const PROTOCOL_VERSION := 1
-## Factory chrome uses charcoal and worn steel so the mineral/road canvas owns
+## Factory chrome uses charcoal and worn steel so the mineral canvas owns
 ## the color. Cyan is reserved for the selected construction focus; amber and
 ## red remain legible operational exceptions.
 const UI_NAVY := Color("121615")
@@ -45,7 +45,6 @@ var _view_model := ViewModelScript.new()
 var _snapshot: Dictionary = {}
 var _reduced_motion := false
 var _active_tool := ""
-var _road_tier := 1
 var _selected_building_id := ""
 var _copied_machine_config: Dictionary = {}
 var _connection_kind := "CARGO"
@@ -235,11 +234,11 @@ func selected_link_id() -> String:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
-	if event.is_action_pressed("ui_cancel") and _active_tool in ["BUILD", "CONNECT", "ROAD_BUILD", "ROAD_REMOVE"]:
+	if event.is_action_pressed("ui_cancel") and _active_tool in ["BUILD", "CONNECT"]:
 		_on_placement_cancelled()
 		get_viewport().set_input_as_handled()
 		return
-	if _active_tool in ["BUILD", "CONNECT", "ROAD_BUILD", "ROAD_REMOVE"]:
+	if _active_tool in ["BUILD", "CONNECT"]:
 		return
 	if not event is InputEventKey or _shortcut_focus_blocked():
 		return
@@ -424,13 +423,10 @@ func _build_interface() -> void:
 	_canvas.port_drag_started.connect(_on_port_drag_started)
 	_canvas.port_connection_requested.connect(_on_port_connection_requested)
 	_canvas.port_drag_preview.connect(_on_port_drag_preview)
-	_canvas.road_path_requested.connect(_on_road_path_requested)
-	_canvas.road_path_rejected.connect(_on_road_path_rejected)
 	center_column.add_child(_canvas)
 
 	_build_palette = BuildPaletteScript.new()
 	_build_palette.building_selected.connect(_select_building_id)
-	_build_palette.road_tool_selected.connect(_set_road_tool)
 	_build_palette.collapsed_changed.connect(_on_build_palette_collapsed_changed)
 	center_column.add_child(_build_palette)
 	_build_palette.ensure_built()
@@ -593,23 +589,22 @@ func _render() -> void:
 	_refresh_world_scale()
 	if _operations_overview != null:
 		_operations_overview.configure(_snapshot)
-	var road_mode := _road_logistics_mode()
-	if road_mode and _active_tool == "CONNECT":
+	var drone_mode := _drone_logistics_mode()
+	if drone_mode and _active_tool == "CONNECT":
 		_clear_connection_state()
 		_active_tool = ""
-	if road_mode and str(_selection.get("kind", "")) == "LINK":
+	if drone_mode and str(_selection.get("kind", "")) == "LINK":
 		_selection = {"kind":"", "id":"", "data":{}}
 	if _connection_panel != null:
-		_connection_panel.visible = not road_mode
+		_connection_panel.visible = not drone_mode
 	_rebuild_palette(is_valid)
-	if not road_mode:
+	if not drone_mode:
 		_rebuild_connection_selectors(is_valid)
 	_refresh_inspector()
 	_set_active_subworkspace(_active_subworkspace)
-	_canvas.set_road_logistics_mode(road_mode)
-	_canvas.set_configuration_gestures_enabled(_active_tool not in ["BUILD", "CONNECT", "ROAD_BUILD", "ROAD_REMOVE"])
-	_canvas.set_port_connections_enabled(not road_mode and _active_tool != "BUILD")
-	_canvas.set_road_tool(_road_canvas_tool(), _road_tier)
+	_canvas.set_drone_logistics_mode(drone_mode)
+	_canvas.set_configuration_gestures_enabled(_active_tool not in ["BUILD", "CONNECT"])
+	_canvas.set_port_connections_enabled(not drone_mode and _active_tool != "BUILD")
 	_update_placement_preview()
 	_update_connection_preview()
 func _apply_canvas_snapshot() -> void:
@@ -653,7 +648,6 @@ func _apply_pending_canvas_focus() -> void:
 func _rebuild_palette(is_valid: bool) -> void:
 	var palette: Dictionary = _snapshot.get("palette", {}) if _snapshot.get("palette", {}) is Dictionary else {}
 	_build_palette.set_buildings(palette.get("buildings", []) as Array, is_valid, _selected_building_id)
-	_build_palette.set_road_tools_enabled(_road_logistics_mode(), _road_canvas_tool(), _road_tier, is_valid)
 
 
 func _rebuild_connection_selectors(is_valid: bool) -> void:
@@ -723,15 +717,15 @@ func _entity_is_connection_candidate(entity: Dictionary, role: String) -> bool:
 func _refresh_world_scale() -> void:
 	if not is_instance_valid(_world_scale_label):
 		return
-	if _road_logistics_mode():
-		var logistics: Dictionary = _snapshot.get("road_logistics", {}) if _snapshot.get("road_logistics", {}) is Dictionary else {}
-		_world_scale_label.text = I18n.t("factory.road.network_metrics", "%d nodes · %d road tiles · %d/%d capacity") % [
+	if _drone_logistics_mode():
+		var logistics: Dictionary = _snapshot.get("drone_logistics", {}) if _snapshot.get("drone_logistics", {}) is Dictionary else {}
+		_world_scale_label.text = I18n.t("factory.drone.network_metrics", "%d nodes · %d towers · %d/%d drones") % [
 			(_snapshot.get("entities", []) as Array).size(),
-			(_snapshot.get("roads", []) as Array).size(),
+			int(logistics.get("tower_count", 0)),
 			int(logistics.get("required", 0)),
 			int(logistics.get("capacity", 0))
 		]
-		_world_scale_label.tooltip_text = I18n.t("factory.road.network_tooltip", "%d active shipments · %d%% utilization") % [
+		_world_scale_label.tooltip_text = I18n.t("factory.drone.network_tooltip", "%d active shipments · %d%% utilization") % [
 			int(logistics.get("active_shipments", 0)),
 			roundi(clampf(float(logistics.get("utilization", 0.0)), 0.0, 1.0) * 100.0)
 		]
@@ -760,16 +754,8 @@ func _location_telemetry_name() -> String:
 	return location_name if not location_name.is_empty() else str(_snapshot.get("world_id", I18n.t("factory.workspace.unavailable")))
 
 
-func _road_logistics_mode() -> bool:
-	return str(_snapshot.get("logistics_mode", "")).to_upper() == "PLANET_SHARED_ROADS"
-
-
-func _road_canvas_tool() -> String:
-	if _active_tool == "ROAD_BUILD":
-		return "BUILD"
-	if _active_tool == "ROAD_REMOVE":
-		return "REMOVE"
-	return ""
+func _drone_logistics_mode() -> bool:
+	return str(_snapshot.get("logistics_mode", "")).to_upper() == "PLANET_SHARED_DRONES"
 
 
 func _clear_connection_state() -> void:
@@ -1249,52 +1235,15 @@ func _select_building_id(building_id: String, render_now: bool = true) -> void:
 		_render()
 
 
-func _set_road_tool(tool_mode: String, tier: int) -> void:
-	if not _road_logistics_mode():
-		return
-	var normalized := tool_mode.to_upper()
-	if normalized not in ["BUILD", "REMOVE"]:
-		return
-	_road_tier = clampi(tier, 1, 2)
-	_active_tool = "ROAD_BUILD" if normalized == "BUILD" else "ROAD_REMOVE"
-	_selected_building_id = ""
-	_replace_selection_without_render("", "", {})
-	_clear_connection_state()
-	if _build_palette != null:
-		_build_palette.set_selected_building("")
-	if _canvas != null:
-		_canvas.clear_placement_preview()
-	_set_active_subworkspace("CANVAS")
-	_render()
-
-
 func _on_build_palette_collapsed_changed(collapsed: bool) -> void:
-	if collapsed and _active_tool in ["BUILD", "CONNECT", "ROAD_BUILD", "ROAD_REMOVE"]:
+	if collapsed and _active_tool in ["BUILD", "CONNECT"]:
 		# The collapsed dock intentionally returns to browsing.  It never leaves a
-		# road or placement tool active after hiding that tool's visual state.
+		# placement tool active after hiding that tool's visual state.
 		_on_placement_cancelled()
 
 
-func _on_road_path_requested(command_kind: String, tiles: Array, tier: int) -> void:
-	if not _road_logistics_mode() or tiles.is_empty() or tiles.size() > 2048:
-		return
-	var normalized_kind := command_kind.to_upper()
-	if normalized_kind == "BUILD_ROAD":
-		_emit_command("BUILD_ROAD", {"tiles":tiles, "tier":clampi(tier, 1, 2)})
-	elif normalized_kind == "REMOVE_ROAD":
-		_emit_command("REMOVE_ROAD", {"tiles":tiles})
-
-
-func _on_road_path_rejected(reason_code: String) -> void:
-	var key := "factory.reason.%s" % reason_code.to_lower()
-	var message := str(I18n.t(key))
-	if message == key:
-		message = I18n.t("factory.road.path_too_long", "Road path is too long.")
-	_set_feedback(reason_code, message, UI_CRITICAL)
-
-
 func _set_connection_mode(kind: String) -> void:
-	if _road_logistics_mode():
+	if _drone_logistics_mode():
 		return
 	_connection_kind = kind.to_upper()
 	_active_tool = "CONNECT"
@@ -1354,7 +1303,7 @@ func _on_tile_selected(tile: Vector2i) -> void:
 
 
 func _on_placement_cancelled() -> void:
-	if _active_tool not in ["BUILD", "CONNECT", "ROAD_BUILD", "ROAD_REMOVE"]:
+	if _active_tool not in ["BUILD", "CONNECT"]:
 		return
 	_active_tool = ""
 	_selected_building_id = ""
@@ -1365,7 +1314,6 @@ func _on_placement_cancelled() -> void:
 	_selected_cargo_item_id = ""
 	if _canvas != null:
 		_canvas.clear_placement_preview()
-		_canvas.set_road_tool("", _road_tier)
 	_render()
 
 
@@ -1435,7 +1383,7 @@ func _request_construction(tile: Vector2i) -> void:
 
 
 func _request_connection() -> void:
-	if _road_logistics_mode():
+	if _drone_logistics_mode():
 		return
 	var source := _entity_by_id(_connection_source_id)
 	var target := _entity_by_id(_connection_target_id)
@@ -1568,7 +1516,7 @@ func _request_set_recipe(entity_id: String, recipe_id: String) -> void:
 	if str(_view_model.recipe_by_id(_snapshot, recipe_id).get("runtime_metadata", {}).get("recipe_mode", "")) == "BLACK_HOLE":
 		var confirm := ConfirmationDialog.new()
 		confirm.name = "BlackHoleDestructionConfirmation"
-		confirm.dialog_text = I18n.t("factory.dsp.confirm_destroy", "This will permanently destroy the selected material delivered by road. Continue?")
+		confirm.dialog_text = I18n.t("factory.dsp.confirm_destroy", "This will permanently destroy the selected material delivered by drone. Continue?")
 		add_child(confirm)
 		confirm.confirmed.connect(func() -> void:
 			_emit_command("SET_RECIPE", {"entity_id":entity_id, "recipe_id":recipe_id, "confirm_destroy":true})
@@ -1788,13 +1736,15 @@ func _update_placement_preview() -> void:
 		return
 	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
 	var preview := _view_model.placement_preview(_snapshot, building, _preview_tile)
+	for key in ["drone_tower", "drone_radius_tiles", "drone_count"]:
+		preview[key] = building.get(key, false if key == "drone_tower" else 0)
 	_canvas.set_placement_preview(preview)
 
 
 func _update_connection_preview() -> void:
 	if _canvas == null:
 		return
-	if _road_logistics_mode() or _active_tool != "CONNECT":
+	if _drone_logistics_mode() or _active_tool != "CONNECT":
 		_canvas.set_connection_preview("", "", "")
 		return
 	var source := _entity_by_id(_connection_source_id)
@@ -1951,6 +1901,7 @@ func _render_active_building_inspector() -> void:
 	var mining_radius := maxf(0.0, float(building.get("mining_radius_tiles", 0.0)))
 	if mining_radius > 0.0:
 		_add_detail(I18n.t("factory.field.circular_range", "Circular mining range"), I18n.t("factory.field.radius_tiles", "Radius %s tiles") % str(mining_radius))
+	_add_drone_tower_details(building)
 	var available_count := maxi(0, int(building.get("available_count", 0)))
 	var availability := _make_inspector_label(I18n.t("factory.building.available", "Available: %d") % available_count, UI_CYAN if available_count > 0 else UI_AMBER)
 	availability.name = "BuildingDeploymentAvailability"
@@ -2074,14 +2025,11 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 	_add_entity_inspector_header(entity, definition_id, entity_id)
 	_add_meter("EntityPowerMeter", I18n.t("factory.field.power"), float(entity.get("power_factor", 1.0)))
 	var node_kind := str(entity.get("node_kind", ""))
-	if _road_logistics_mode():
-		var road_connected := bool(entity.get("road_connected", false))
-		var component_id := str(entity.get("road_component_id", ""))
-		_add_detail(I18n.t("factory.road.connection", "Road access"), I18n.t("factory.road.connected", "Connected") if road_connected else I18n.t("factory.road.disconnected", "Disconnected — build a road to collect goods automatically."))
-		if road_connected and not component_id.is_empty():
-			_add_detail(I18n.t("factory.road.component", "Road network"), component_id)
-		if float(entity.get("power_factor", 1.0)) < 0.999:
-			_add_detail(I18n.t("factory.road.power_notice", "Power"), I18n.t("factory.road.roads_carry_power", "Power travels along roads; a broken road network disconnects this building."))
+	if _drone_logistics_mode():
+		_add_detail(I18n.t("factory.drone.coverage", "Drone coverage"), I18n.t("factory.drone.covered", "Covered") if bool(entity.get("drone_covered", false)) else I18n.t("factory.drone.uncovered", "Outside tower range"))
+		_add_drone_tower_details(entity)
+		if node_kind in ["MACHINE", "EXTRACTOR"]:
+			_add_detail(I18n.t("factory.drone.collection", "Automatic collection"), I18n.t("factory.drone.collection_hint", "Collect 10 when output reaches 10; deliver to demand first."))
 	if node_kind == "EXTRACTOR":
 		_add_extractor_mining_context(entity)
 	var current_recipe_id := str(entity.get("recipe_id", ""))
@@ -2091,14 +2039,20 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 		_add_detail(I18n.t("factory.field.cycle", "Cycle"), "%.1fs · %d%%" % [float(active_recipe.get("duration_seconds", 0.0)), roundi(float(entity.get("progress", 0.0)) * 100.0)])
 		_add_detail(I18n.t("factory.field.recipe_inputs", "Recipe inputs"), _item_amount_rows(active_recipe.get("inputs", [])))
 		_add_detail(I18n.t("factory.field.recipe_outputs", "Recipe outputs"), _item_amount_rows(active_recipe.get("outputs", [])))
+		if _drone_logistics_mode():
+			var targets: Array = []
+			for entry in active_recipe.get("inputs", []):
+				targets.append({"item":str(entry.get("item", "")), "quantity":int(entry.get("quantity", 0)) * 10})
+			_add_detail(I18n.t("factory.drone.input_targets", "Input refill targets"), _item_amount_rows(targets))
 	if not str(entity.get("blocker_code", "")).is_empty():
 		_add_detail(I18n.t("factory.field.blocker"), _status_name(str(entity.get("blocker_code", ""))))
 	_add_item_dictionary(I18n.t("factory.field.inputs"), entity.get("inputs", {}))
 	_add_item_dictionary(I18n.t("factory.field.outputs"), entity.get("outputs", {}))
-	if not (_road_logistics_mode() and node_kind == "STORAGE"):
+	if not (_drone_logistics_mode() and node_kind == "STORAGE"):
 		_add_item_dictionary(I18n.t("factory.field.inventory"), entity.get("inventory", {}))
 	if node_kind in ["MACHINE", "POWER"]:
 		_add_capacity_detail(I18n.t("factory.field.input_buffer", "Input buffer"), entity.get("inputs", {}), int(entity.get("input_capacity", 0)))
+	if node_kind in ["MACHINE", "POWER", "EXTRACTOR"]:
 		_add_capacity_detail(I18n.t("factory.field.output_buffer", "Output buffer"), entity.get("outputs", {}), int(entity.get("output_capacity", 0)))
 	var center_button := _make_inspector_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_entity"))
 	center_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {}))))
@@ -2129,12 +2083,12 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 		for fuel_id in dsp.get("fuel_item_ids", []):
 			_add_detail(_item_name(str(fuel_id)), str(entity.get("inputs", {}).get(fuel_id, 0)))
 	if str(entity.get("node_kind", "")) == "STORAGE":
-		if _road_logistics_mode():
-			_add_shared_road_inventory(entity)
+		if _drone_logistics_mode():
+			_add_shared_drone_inventory(entity)
 		_add_storage_transfer_controls(entity)
 	# Delivery history and shipment queues can be long.  Keep them behind the
 	# operational, mining and buffer facts that determine the next player action.
-	_add_road_shipment_inspector(entity)
+	_add_drone_shipment_inspector(entity)
 	var remove_entity := _make_inspector_button(I18n.t("factory.action.remove_entity", "Remove entity"), I18n.t("factory.tooltip.remove_entity", "Remove this Factory entity through a versioned command"))
 	remove_entity.name = "RemoveFactoryEntity"
 	remove_entity.pressed.connect(_request_remove_entity.bind(entity_id))
@@ -2321,7 +2275,7 @@ func _is_waiting_for_finished_building(order: Dictionary) -> bool:
 
 
 func _add_storage_transfer_controls(storage: Dictionary) -> void:
-	if _road_logistics_mode():
+	if _drone_logistics_mode():
 		return
 	_inspector_body.add_child(HSeparator.new())
 	_inspector_body.add_child(_make_section_label(I18n.t("factory.transfer.title")))
@@ -2368,7 +2322,7 @@ func _add_storage_transfer_controls(storage: Dictionary) -> void:
 	_inspector_body.add_child(transfer_help)
 
 
-func _add_shared_road_inventory(storage: Dictionary) -> void:
+func _add_shared_drone_inventory(storage: Dictionary) -> void:
 	var shared: Variant = storage.get("shared_inventory", _snapshot.get("shared_inventory", {}))
 	if not shared is Dictionary:
 		return
@@ -2378,18 +2332,18 @@ func _add_shared_road_inventory(storage: Dictionary) -> void:
 	if inventory.is_empty():
 		return
 	_inspector_body.add_child(HSeparator.new())
-	var section := _make_section_label(I18n.t("factory.road.shared_inventory", "Planet shared inventory"))
-	section.name = "RoadSharedInventory"
+	var section := _make_section_label(I18n.t("factory.drone.shared_inventory", "Planet shared inventory"))
+	section.name = "DroneSharedInventory"
 	_inspector_body.add_child(section)
 	_add_item_dictionary(I18n.t("factory.field.inventory"), inventory)
-	var hint := _make_inspector_label(I18n.t("factory.road.shared_inventory_hint", "Road-connected storage is read-only here; local machines collect automatically."), UI_MUTED)
-	hint.name = "RoadSharedInventoryHint"
+	var hint := _make_inspector_label(I18n.t("factory.drone.shared_inventory_hint", "Towers access shared planetary storage; drones supply covered machines."), UI_MUTED)
+	hint.name = "DroneSharedInventoryHint"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_inspector_body.add_child(hint)
 
 
-func _add_road_shipment_inspector(entity: Dictionary) -> void:
-	if not _road_logistics_mode():
+func _add_drone_shipment_inspector(entity: Dictionary) -> void:
+	if not _drone_logistics_mode():
 		return
 	var node_kind := str(entity.get("node_kind", "")).to_upper()
 	if node_kind not in ["STORAGE", "MACHINE", "EXTRACTOR"]:
@@ -2630,3 +2584,11 @@ func _command_name(kind: String) -> String:
 func _localized_or(key: String, fallback: String) -> String:
 	var localized: String = str(I18n.t(key))
 	return fallback if localized == key else localized
+
+
+func _add_drone_tower_details(record: Dictionary) -> void:
+	if not bool(record.get("drone_tower", false)):
+		return
+	_add_detail(I18n.t("factory.drone.radius", "Circular coverage radius"), I18n.t("factory.field.radius_tiles", "Radius %s tiles") % str(record.get("drone_radius_tiles", 0)))
+	_add_detail(I18n.t("factory.drone.fleet", "Tower drones"), str(record.get("drone_count", 0)))
+	_add_detail(I18n.t("factory.drone.cargo_capacity", "Cargo per drone"), "10")

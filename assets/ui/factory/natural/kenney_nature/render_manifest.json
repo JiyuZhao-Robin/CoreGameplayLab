@@ -1,0 +1,65 @@
+{
+  "renderer": "4.5.9 LTS",
+  "engine": "CYCLES",
+  "samples": 64,
+  "resolution": [
+    2048,
+    2048
+  ],
+  "atlas_grid": [
+    2,
+    2
+  ],
+  "camera_elevation_degrees": 70,
+  "orthographic_scale": 8,
+  "background": "transparent",
+  "model_materials": "Derived Earth palette: leaf greens per cell, bark linear RGBA [0.19,0.085,0.035,1], metallic=0, roughness=0.88; source GLB unchanged",
+  "cells_row_major": [
+    {
+      "cell": 0,
+      "source_model": "tree_oak.glb",
+      "scale": 3.8749658277548416,
+      "leaf_base_color_linear_rgba": [
+        0.09,
+        0.2,
+        0.045,
+        1
+      ]
+    },
+    {
+      "cell": 1,
+      "source_model": "tree_detailed.glb",
+      "scale": 3.8955747978220447,
+      "leaf_base_color_linear_rgba": [
+        0.13,
+        0.26,
+        0.06,
+        1
+      ]
+    },
+    {
+      "cell": 2,
+      "source_model": "tree_default.glb",
+      "scale": 4.052130474358313,
+      "leaf_base_color_linear_rgba": [
+        0.18,
+        0.27,
+        0.07,
+        1
+      ]
+    },
+    {
+      "cell": 3,
+      "source_model": "tree_pineRoundC.glb",
+      "scale": 5.190211000684255,
+      "leaf_base_color_linear_rgba": [
+        0.055,
+        0.14,
+        0.07,
+        1
+      ]
+    }
+  ],
+  "output": "kenney_earth_canopies_v1.png",
+  "sha256": "1910766f2b18ca490e428d5a73a07a2efb1359971bea6f85b5dedc5f1f6e5686"
+}

@@ -1,0 +1,5 @@
+PaletteFromGimpOrJascFile@Player:
+		Name: player
+		Filename: colors.pal
+		TransparentIndex: 255
+		Premultiply: false

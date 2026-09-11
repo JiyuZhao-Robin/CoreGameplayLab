@@ -19,10 +19,10 @@ const FACTORY_COMMAND_COMMON_FAILURE_REASONS := [
 	"UNKNOWN_FACTORY_WORLD", "COMMAND_ID_CONFLICT", "STALE_TOPOLOGY", "LANDING_REQUIRED", "TERRAIN_BLOCKED"
 ]
 const FACTORY_COMMAND_KIND_FAILURE_REASONS := {
-	"BUILD_ROAD":["INVALID_ROAD_TILE", "INVALID_ROAD_TIER", "ROAD_BATCH_LIMIT", "ROAD_OUT_OF_BOUNDS", "ROAD_OCCUPIED", "INPUT_SHORTAGE"],
-	"REMOVE_ROAD":["INVALID_ROAD_TILE", "ROAD_BATCH_LIMIT", "ROAD_OUT_OF_BOUNDS"],
-	"DEPLOY_BUILDING":["BUILDING_LOCKED", "RECIPE_LOCKED", "INCOMPATIBLE_RECIPE", "OUT_OF_BOUNDS", "FOOTPRINT_OCCUPIED", "CONSTRUCTION_OCCUPIED", "RESOURCE_REQUIRED", "MIXED_RESOURCE_COVERAGE", "RESOURCE_INCOMPATIBLE", "ROAD_OCCUPIED", "INVALID_DEPLOYMENT_ITEM", "UNIQUE_BUILDING_EXISTS"],
-	"QUEUE_CONSTRUCTION":["BUILDING_LOCKED", "RECIPE_LOCKED", "INCOMPATIBLE_RECIPE", "OUT_OF_BOUNDS", "FOOTPRINT_OCCUPIED", "CONSTRUCTION_OCCUPIED", "RESOURCE_REQUIRED", "MIXED_RESOURCE_COVERAGE", "RESOURCE_INCOMPATIBLE", "ROAD_OCCUPIED", "INVALID_DEPLOYMENT_ITEM", "UNIQUE_BUILDING_EXISTS"],
+	"BUILD_ROAD":["ROADS_RETIRED"],
+	"REMOVE_ROAD":["ROADS_RETIRED"],
+	"DEPLOY_BUILDING":["BUILDING_LOCKED", "RECIPE_LOCKED", "INCOMPATIBLE_RECIPE", "OUT_OF_BOUNDS", "FOOTPRINT_OCCUPIED", "CONSTRUCTION_OCCUPIED", "RESOURCE_REQUIRED", "MIXED_RESOURCE_COVERAGE", "RESOURCE_INCOMPATIBLE", "INVALID_DEPLOYMENT_ITEM", "UNIQUE_BUILDING_EXISTS"],
+	"QUEUE_CONSTRUCTION":["BUILDING_LOCKED", "RECIPE_LOCKED", "INCOMPATIBLE_RECIPE", "OUT_OF_BOUNDS", "FOOTPRINT_OCCUPIED", "CONSTRUCTION_OCCUPIED", "RESOURCE_REQUIRED", "MIXED_RESOURCE_COVERAGE", "RESOURCE_INCOMPATIBLE", "INVALID_DEPLOYMENT_ITEM", "UNIQUE_BUILDING_EXISTS"],
 	"FUND_CONSTRUCTION":["CONSTRUCTION_RETIRED"],
 	"FUND_CONSTRUCTION_FROM_LOCATION":["CONSTRUCTION_RETIRED"],
 	"SET_RECIPE":["RECIPE_LOCKED", "UNKNOWN_ENTITY", "INVALID_MACHINE", "INCOMPATIBLE_RECIPE", "ENERGY_SETTLEMENT_PENDING", "DESTRUCTION_CONFIRMATION_REQUIRED"],
@@ -30,7 +30,7 @@ const FACTORY_COMMAND_KIND_FAILURE_REASONS := {
 	"CONFIGURE_LINK":["LEGACY_LINKS_RETIRED"],
 	"REMOVE_LINK":["LEGACY_LINKS_RETIRED"],
 	"CANCEL_CONSTRUCTION":["INVALID_CONSTRUCTION_ORDER", "INVALID_TRANSFER_TARGET", "STORAGE_FULL"],
-	"REMOVE_ENTITY":["UNKNOWN_ENTITY", "ENTITY_BUFFER_NOT_EMPTY", "ROAD_SHIPMENT_REFERENCES_ENTITY", "STORAGE_FULL"],
+	"REMOVE_ENTITY":["UNKNOWN_ENTITY", "ENTITY_BUFFER_NOT_EMPTY", "DRONE_SHIPMENT_REFERENCES_ENTITY", "STORAGE_FULL"],
 	"IMPORT_FROM_LOCATION":["LEGACY_LINKS_RETIRED"],
 	"EXPORT_TO_LOCATION":["LEGACY_LINKS_RETIRED"]
 }
@@ -375,7 +375,7 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 	snapshot["shared_inventory"] = snapshot["location_inventory"].duplicate(true)
 	for entity_value in snapshot.get("entities", []):
 		var entity := entity_value as Dictionary
-		if str(entity.get("node_kind", "")) == "STORAGE" and str(snapshot.get("logistics_mode", "")) == "PLANET_SHARED_ROADS":
+		if str(entity.get("node_kind", "")) == "STORAGE" and str(snapshot.get("logistics_mode", "")) == "PLANET_SHARED_DRONES":
 			entity["shared_inventory"] = snapshot["shared_inventory"].duplicate(true)
 			entity["inventory"] = {}
 	var available_inventory := {}
@@ -388,7 +388,7 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 	snapshot["location_available_inventory"] = available_inventory
 	snapshot["transfer_contract"] = {
 		"same_location_only":true,
-		"mode":"PLANET_SHARED_ROADS",
+		"mode":"PLANET_SHARED_DRONES",
 		"manual_transfer":false,
 		"inventory_authority":"LOCATION"
 	}
@@ -487,6 +487,9 @@ func execute_factory_command(intent: Dictionary) -> Dictionary:
 	if command_kind in ["CONNECT_ENTITIES", "CONFIGURE_LINK", "REMOVE_LINK", "IMPORT_FROM_LOCATION", "EXPORT_TO_LOCATION"]:
 		transaction.rollback()
 		return _factory_command_rejection(command_id, command_kind, world_id, "LEGACY_LINKS_RETIRED", I18n.t("factory.reason.legacy_links_retired", "Use roads and the shared planetary inventory; manual factory links and warehouse transfers are retired."))
+	if command_kind in ["BUILD_ROAD", "REMOVE_ROAD"]:
+		transaction.rollback()
+		return _factory_command_rejection(command_id, command_kind, world_id, "ROADS_RETIRED", I18n.t("factory.reason.roads_retired", "Roads have been replaced by drone towers."))
 	var operation_result: Dictionary
 	var event := {
 		"protocol_version":FACTORY_WORKSPACE_PROTOCOL_VERSION,
@@ -2684,7 +2687,7 @@ func _bootstrap_guidance_snapshot() -> Dictionary:
 	if not world_ids.is_empty():
 		var home_world: Dictionary = state.factory_worlds[world_ids[0]]
 		if not str(home_world.get("landing_definition_id", "")).is_empty() and not bool(home_world.get("starter_package_delivered", false)):
-			return _guidance_result(base, "deploy_planetary_core", "industry", "factory", "grid_planetary_core", I18n.core("guidance.start.deploy_core", "Choose a clear site and deploy your Planetary Development Core. It provides shared storage, road transport and 400 kW, then grants two miners, two furnaces and one assembler."))
+			return _guidance_result(base, "deploy_planetary_core", "industry", "factory", "grid_planetary_core", I18n.core("guidance.start.deploy_core", "Choose a clear site and deploy your Planetary Development Core. It provides shared storage, drone transport and 400 kW, then grants two miners, two furnaces and one assembler."))
 	if not _factory_grid_has_produced("iron_ore"):
 		for definition_id in ["grid_surface_mine", "grid_arc_smelter", "grid_engineering_works"]:
 			if not _factory_has_completed_definition(definition_id):
@@ -2697,7 +2700,7 @@ func _bootstrap_guidance_snapshot() -> Dictionary:
 			return _guidance_result(base, "prepare_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.start.prepare_frame", "Smelt the inputs for Structural Frame in the furnaces. Available planetary stock: %s. Roads move materials between machines and the shared planetary inventory.") % frame_progress)
 		return _guidance_result(base, "assemble_first_frame", "industry", "factory", "grid_assemble_frame", I18n.core("guidance.start.assemble_frame", "Frame inputs are available: %s. Select Structural Frame on the connected automatic assembler; then manufacture finished buildings there to expand.") % frame_progress)
 	var has_blocked_research := not str(state.research.get("project_id", "")).is_empty() and str(state.research.get("status", "")) == "BLOCKED"
-	if (not _factory_has_completed_definition("grid_electronics_works") or not _factory_has_completed_definition("grid_research_complex")) and not has_blocked_research:
+	if (not _factory_has_completed_definition("grid_engineering_works") or not _factory_has_completed_definition("grid_research_complex")) and not has_blocked_research:
 		return _guidance_result(base, "commission_research", "industry", "factory", "grid_research_complex", I18n.core("guidance.start.commission_research", "Manufacture the Electronics Works and Research Complex as finished buildings in the assembler. Deploy them and connect their roads to power and shared storage to start industrial research."))
 	if has_blocked_research:
 		var blocker: Dictionary = state.research.get("blocker", {})

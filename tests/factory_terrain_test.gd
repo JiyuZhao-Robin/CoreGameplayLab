@@ -25,10 +25,11 @@ func _test_determinism_and_seed_variation() -> void:
 	var samples := [Vector2i(177, 121), Vector2i(224, 181), Vector2i(305, 79), Vector2i(411, 233), Vector2i(497, 347)]
 	var changed := false
 	for tile in samples:
-		var original := FactoryTerrain.terrain_type(first, tile)
-		_check(original == FactoryTerrain.terrain_type(second, tile), "same seed and tile always return the same terrain")
-		changed = changed or original != FactoryTerrain.terrain_type(alternate, tile)
-	_check(changed, "changing the terrain seed changes at least one sampled tile")
+		var original := FactoryTerrain.resource_geography_type(first, tile)
+		_check(original == FactoryTerrain.resource_geography_type(second, tile), "ore-placement geography preserves deterministic historical sampling")
+		changed = changed or original != FactoryTerrain.resource_geography_type(alternate, tile)
+		_check(FactoryTerrain.terrain_type(first,tile) == "PLAIN" and FactoryTerrain.terrain_type(alternate,tile) == "PLAIN", "runtime ground stays flat for every seed")
+	_check(changed, "ore-placement geography still responds to the saved terrain seed")
 
 
 func _test_terrain_mix_and_safe_region() -> void:
@@ -36,8 +37,8 @@ func _test_terrain_mix_and_safe_region() -> void:
 	var seen := {}
 	for y in range(112, 480, 8):
 		for x in range(152, 704, 8):
-			seen[FactoryTerrain.terrain_type(world, Vector2i(x, y))] = true
-	_check(seen.has("WATER") and seen.has("MOUNTAIN") and seen.has("FOREST") and seen.has("DESERT") and seen.has("PLAIN"), "a sampled enabled world contains every authored terrain category")
+			seen[FactoryTerrain.resource_geography_type(world, Vector2i(x, y))] = true
+	_check(seen.has("WATER") and seen.has("MOUNTAIN") and seen.has("FOREST") and seen.has("DESERT") and seen.has("PLAIN"), "historical ore-placement geography retains all categories")
 	for tile in [Vector2i(0, 0), Vector2i(143, 95), Vector2i(72, 48)]:
 		_check(FactoryTerrain.terrain_type(world, tile) == "PLAIN" and FactoryTerrain.is_buildable(world, tile), "starter safe rectangle is always plain and buildable at %s" % tile)
 
@@ -50,9 +51,8 @@ func _test_delta_overrides_and_bounds() -> void:
 		"42:40":{"terrain_override":"DESERT"},
 		"43:40":{"terrain_override":"not-a-terrain"}
 	}
-	_check(FactoryTerrain.terrain_type(world, Vector2i(40, 40)) == "WATER" and not FactoryTerrain.is_buildable(world, Vector2i(40, 40)), "water delta overrides the generated safe terrain and blocks construction")
-	_check(FactoryTerrain.terrain_type(world, Vector2i(41, 40)) == "MOUNTAIN" and not FactoryTerrain.is_buildable(world, Vector2i(41, 40)), "mountain delta overrides the generated safe terrain and blocks construction")
-	_check(FactoryTerrain.terrain_type(world, Vector2i(42, 40)) == "DESERT" and FactoryTerrain.is_buildable(world, Vector2i(42, 40)), "valid buildable terrain delta wins over the safe terrain")
+	for x in [40,41,42]:
+		_check(FactoryTerrain.terrain_type(world,Vector2i(x,40)) == "PLAIN" and FactoryTerrain.is_buildable(world,Vector2i(x,40)), "saved terrain deltas cannot reintroduce terrain during the flat-ground phase")
 	_check(FactoryTerrain.terrain_type(world, Vector2i(43, 40)) == "PLAIN", "invalid terrain deltas do not invent a sixth terrain type")
 	_check(not FactoryTerrain.is_buildable(world, Vector2i(-1, 0)) and not FactoryTerrain.is_buildable(world, Vector2i(768, 0)), "geographic buildability respects authored finite bounds")
 
