@@ -5,6 +5,8 @@ extends SceneTree
 
 const WorkspaceScript = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
+const CanvasScript = preload("res://src/ui/workspaces/factory/factory_canvas.gd")
+const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 
 var failures: Array[String] = []
 
@@ -23,9 +25,9 @@ func _run() -> void:
 	var fixture := _fixture_snapshot()
 	var original_fixture_signature := JSON.stringify(fixture)
 	workspace.apply_snapshot(fixture)
-	# Default landing is covered by factory_operations_ui_test. This suite
-	# explicitly enters the authored canvas before testing pointer geometry.
-	workspace.call("_set_active_subworkspace", "CANVAS")
+	# The industrial workspace now opens directly on the authored canvas.  The
+	# overview remains available as an explicit tab, but must not consume the
+	# first construction interaction.
 	await _settle()
 
 	var intents: Array = []
@@ -81,10 +83,21 @@ func _test_initial_render(workspace) -> void:
 			exposes_resource_field = true
 	_check(not exposes_resource_field, "resource fields never appear as connectable Factory endpoints")
 	var scale_label := workspace.find_child("FactoryWorldScale", true, false) as Label
-	var building_card: Node = workspace.find_child("BuildingSelectionCard", true, false)
+	var revision_info := workspace.find_child("FactoryRevisionInfo", true, false) as Label
+	var command_feedback := workspace.find_child("FactoryCommandFeedback", true, false) as Label
 	var connection_status := workspace.find_child("ConnectionStatus", true, false) as Label
-	_check(scale_label != null and scale_label.tooltip_text.contains("256 × 160") and scale_label.tooltip_text.contains("4 × 3") and building_card != null and connection_status != null and not connection_status.text.is_empty(), "Factory workspace exposes detailed planet scale in its telemetry tooltip, construction card, and connection status")
+	var snapshot: Dictionary = workspace.get("_snapshot") as Dictionary
+	var expected_topology := "T%d" % int(snapshot.get("topology_revision", 0))
+	var expected_runtime := "R%d" % int(snapshot.get("runtime_revision", 0))
+	_check(
+		scale_label != null and scale_label.tooltip_text.contains("256 × 160") and scale_label.tooltip_text.contains("4 × 3")
+		and revision_info != null and revision_info.text == "ⓘ" and revision_info.tooltip_text.contains(expected_topology) and revision_info.tooltip_text.contains(expected_runtime)
+		and command_feedback != null and command_feedback.get_parent().name == "FactoryToolbar" and not command_feedback.visible
+		and connection_status != null and not connection_status.text.is_empty(),
+		"Factory opens on the canvas with compact revision/idle feedback chrome while detailed telemetry remains available by tooltip"
+	)
 	_check(canvas != null and canvas.selected_node_id().is_empty() and canvas.selected_link_id().is_empty(), "Factory canvas starts with an empty presentation-only selection")
+	_check(str(workspace.get("_active_subworkspace")) == "CANVAS" and canvas.visible, "Factory defaults to the construction canvas without hiding the other explicit workspaces")
 	var bottom_palette := workspace.find_child("FactoryBuildPalette", true, false) as Control
 	var center_column := workspace.find_child("FactoryCenterColumn", true, false) as VBoxContainer
 	_check(bottom_palette != null and center_column != null and bottom_palette.get_parent() == center_column and canvas.get_parent() == center_column, "Factory canvas and building browser share the fixed center column")
@@ -103,19 +116,27 @@ func _test_bottom_build_palette(workspace, intents: Array) -> void:
 	var all_filter := workspace.find_child("FactoryBuildFilterAll", true, false) as Button
 	if all_filter != null:
 		all_filter.pressed.emit()
+	await _settle()
 	var mine_card := workspace.find_child("FactoryBuildCardGridSurfaceMine", true, false) as Button
-	var mine_icon := mine_card.icon as AtlasTexture if mine_card != null else null
+	var mine_icon := mine_card.find_child("FactoryBuildCardIcon", true, false) as TextureRect if mine_card != null else null
+	var mine_label := mine_card.find_child("FactoryBuildCardName", true, false) as Label if mine_card != null else null
 	var core_art = load("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
-	_check(mine_icon != null and mine_icon == core_art.icon_texture() and mine_icon.region.size == Vector2(256,256), "bottom-dock mine card uses the shared transparent Core Extractor representative frame")
-	if mine_card != null:
-		mine_card.pressed.emit()
+	_check(mine_icon != null and mine_icon.texture == core_art.icon_texture() and (mine_icon.texture as AtlasTexture).region.size == Vector2(256,256), "bottom-dock mine card uses the shared transparent Core Extractor representative frame")
+	if mine_label != null:
+		var label_click := mine_label.get_viewport().get_screen_transform() * mine_label.get_global_rect().get_center()
+		Input.parse_input_event(_mouse_motion(label_click))
+		await process_frame
+		Input.parse_input_event(_left_button(label_click, true))
+		await process_frame
+		Input.parse_input_event(_left_button(label_click, false))
+		await process_frame
 	_check(
-		mine_card != null
+		mine_card != null and mine_label != null
 		and mine_card.get_theme_stylebox("normal") == palette.get("_card_selected_style")
 		and str(workspace.get("_selected_building_id")) == "grid_surface_mine"
 		and str(workspace.get("_active_tool")) == "BUILD"
 		and intents.size() == before_filter_intents,
-		"clicking a bottom-dock building card keeps a selected visual state and enters continuous placement without bypassing the canvas command boundary"
+		"a real click on a bottom-dock card label reaches its Button, keeps selection, and enters placement without bypassing the canvas command boundary"
 	)
 	workspace._on_placement_cancelled()
 	var runtime_snapshot := _fixture_snapshot()
@@ -157,20 +178,59 @@ func _test_bottom_build_palette(workspace, intents: Array) -> void:
 	await _settle()
 	var long_card := workspace.find_child("FactoryBuildCardGridElectronicsWorks", true, false) as Button
 	var second_long_card := workspace.find_child("FactoryBuildCardGridResearchComplexIi", true, false) as Button
+	var long_card_name := long_card.find_child("FactoryBuildCardName", true, false) as Label if long_card != null else null
+	var second_long_card_name := second_long_card.find_child("FactoryBuildCardName", true, false) as Label if second_long_card != null else null
 	var filter_scroll := workspace.find_child("BuildPaletteFiltersScroll", true, false) as ScrollContainer
 	var center_column := workspace.find_child("FactoryCenterColumn", true, false) as Control
+	var inspector_rail := workspace.find_child("FactoryInspectorRail", true, false) as Panel
 	var inspector_scroll := workspace.find_child("InspectorScroll", true, false) as Control
 	var workspace_rect: Rect2 = workspace.get_global_rect()
+	var expected_inspector_width := float(UiTokens.layout_px(312))
 	_check(
-		long_card != null and second_long_card != null
-		and long_card.clip_text and long_card.text_overrun_behavior == TextServer.OVERRUN_TRIM_ELLIPSIS
+		long_card != null and second_long_card != null and long_card_name != null and second_long_card_name != null
+		and long_card_name.text == "High-Energy Electronics Works" and second_long_card_name.text == "Research Complex Expansion II"
+		and long_card_name.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and not long_card_name.clip_text
 		and is_equal_approx(long_card.get_parent().size.x, second_long_card.get_parent().size.x)
-		and center_column != null and inspector_scroll != null
+		and center_column != null and inspector_rail != null and inspector_scroll != null
+		and absf(inspector_rail.size.x - expected_inspector_width) < 1.1 and inspector_scroll.size.x < inspector_rail.size.x
 		and palette.get_global_rect().end.x <= inspector_scroll.get_global_rect().position.x + 0.5
 		and inspector_scroll.get_global_rect().end.x <= workspace_rect.end.x + 0.5
 		and filter_scroll != null and filter_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO,
-		"long localized building and category names remain in equal fixed-width cards without widening the Factory page"
+		"long building names remain fully present in equal-width two-line construction cards, while the inspector keeps a fixed narrow rail"
 	)
+	var dock_toggle := workspace.find_child("FactoryBuildPaletteToggle", true, false) as Button
+	var canvas: Control = workspace.canvas()
+	var expanded_canvas_height: float = canvas.size.y
+	var collapsed_dock_height := float(UiTokens.layout_px(32))
+	if dock_toggle != null:
+		dock_toggle.pressed.emit()
+	await _settle()
+	_check(palette.is_collapsed() and palette.size.y <= collapsed_dock_height + 1.0 and canvas.size.y > expanded_canvas_height, "an explicit construction-dock toggle returns vertical area to the canvas without a window-size breakpoint")
+	if dock_toggle != null:
+		dock_toggle.pressed.emit()
+	await _settle()
+	_check(not palette.is_collapsed() and palette.size.y >= 100.0, "the same explicit control restores the authored construction dock")
+	var road_snapshot := _fixture_snapshot()
+	road_snapshot["logistics_mode"] = "PLANET_SHARED_ROADS"
+	road_snapshot["roads"] = []
+	road_snapshot["road_logistics"] = {"required":0, "capacity":0, "active_shipments":0, "utilization":0.0}
+	workspace.apply_snapshot(road_snapshot)
+	await _settle()
+	var road_build := workspace.find_child("FactoryRoadTierOne", true, false) as Button
+	if road_build != null:
+		road_build.pressed.emit()
+	_check(road_build != null and str(workspace.get("_active_tool")) == "ROAD_BUILD" and str(canvas.get("_road_tool_mode")) == "BUILD", "the visible road-build control activates the matching canvas road tool")
+	var road_intent_count := intents.size()
+	if dock_toggle != null:
+		dock_toggle.pressed.emit()
+	await _settle()
+	_check(
+		road_build != null and str(workspace.get("_active_tool")) != "ROAD_BUILD" and str(canvas.get("_road_tool_mode")) == "" and intents.size() == road_intent_count,
+		"collapsing the dock exits an active road tool, clears its canvas mode, and cannot issue a hidden road command"
+	)
+	if dock_toggle != null:
+		dock_toggle.pressed.emit()
+	await _settle()
 	workspace.apply_snapshot(_fixture_snapshot())
 	if all_filter != null:
 		all_filter.pressed.emit()
@@ -261,14 +321,31 @@ func _test_factory_information_controls(workspace) -> void:
 	_select_metadata(palette, "grid_solar_array")
 	var building_card: Node = workspace.find_child("BuildingSelectionCard", true, false)
 	var placement_status := workspace.find_child("PlacementStatus", true, false) as Label
+	var placement_hint := workspace.find_child("BuildingDeploymentHint", true, false) as Label
 	var cancel_placement := workspace.find_child("CancelPlacement", true, false) as Button
-	_check(building_card != null and placement_status != null and cancel_placement != null and cancel_placement.visible, "construction card exposes footprint/cost context and a visible placement cancel control")
+	var inspector := workspace.find_child("FactoryInspector", true, false) as VBoxContainer
+	_check(
+		building_card == null and inspector != null and placement_status != null and placement_hint != null and inspector.is_ancestor_of(placement_status)
+		and placement_status.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and not placement_status.clip_text
+		and placement_hint.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and not placement_hint.clip_text
+		and cancel_placement != null and cancel_placement.visible and cancel_placement.autowrap_mode == TextServer.AUTOWRAP_WORD_SMART and not cancel_placement.clip_text,
+		"the redundant construction card is removed; wrapped placement facts and an untruncated cancellation action live in the fixed right inspector"
+	)
 	if cancel_placement != null:
 		cancel_placement.pressed.emit()
 	_check(str(workspace.get("_active_tool")) != "BUILD", "construction-card cancellation leaves placement mode without a command")
 
 	workspace._on_entity_selected(_snapshot_entity(workspace, "mine-a"))
-	_check(workspace.find_child("EntityPowerMeter", true, false) != null and workspace.find_child("ExtractorCoverageMeter", true, false) != null, "extractor inspector renders authoritative power and resource-coverage meters")
+	var entity_header := workspace.find_child("EntityInspectorHeader", true, false) as HBoxContainer
+	var entity_status := workspace.find_child("EntityInspectorStatus", true, false) as Label
+	var entity_telemetry := workspace.find_child("EntityInspectorTelemetry", true, false) as Label
+	var mining_context := workspace.find_child("ExtractorMiningContext", true, false) as Label
+	_check(
+		entity_header != null and entity_status != null and entity_telemetry != null and entity_telemetry.text.contains("0.00/s") and entity_telemetry.text.contains("100%")
+		and workspace.find_child("EntityPowerMeter", true, false) != null and workspace.find_child("ExtractorCoverageMeter", true, false) != null
+		and mining_context != null and mining_context.get_index() > entity_header.get_index(),
+		"extractor inspector prioritizes identity, status, rate and power before the circular mining range, coverage and grade"
+	)
 	workspace._on_resource_field_selected(_snapshot_resource(workspace, "iron-field"))
 	var build_extractor := workspace.find_child("BuildExtractor", true, false) as Button
 	_check(build_extractor != null, "resource inspector offers a compatible extractor placement action")
@@ -378,7 +455,8 @@ func _test_canvas_scale_contract(workspace) -> void:
 	for _step in range(80):
 		canvas._adjust_zoom(1.14)
 	var detail_rect: Rect2 = canvas._world_screen_rect()
-	_check(canvas._tile_scale() <= 10.001 and canvas._tile_scale() >= 9.99 and maxf(detail_rect.size.x, detail_rect.size.y) > 4096.0, "large planets keep the common 10px-per-tile detail ceiling without shrinking the whole world")
+	var detail_cap := float(CanvasScript.MAX_DETAIL_TILE_PIXELS)
+	_check(canvas._tile_scale() <= detail_cap + 0.001 and canvas._tile_scale() >= detail_cap - 0.01 and maxf(detail_rect.size.x, detail_rect.size.y) > 4096.0, "large planets keep the shared player-camera detail ceiling without shrinking the whole world")
 
 	(large_snapshot["entities"] as Array).append(_entity("far-offscreen", "POWER", "Far Unit", Vector2i(700, 440), {"inputs":[], "outputs":[], "accepts_power":false, "provides_power":true}))
 	large_snapshot["topology_revision"] = int(large_snapshot.get("topology_revision", 0)) + 1
@@ -408,7 +486,7 @@ func _test_canvas_scale_contract(workspace) -> void:
 	canvas.size = Vector2(8192, 8192)
 	canvas.apply_snapshot(tiny_snapshot)
 	canvas.reset_camera()
-	_check(canvas._tile_scale() <= 10.001, "tile-detail cap remains hard even in an oversized viewport")
+	_check(canvas._tile_scale() <= detail_cap + 0.001, "tile-detail cap remains hard even in an oversized viewport")
 	canvas.size = normal_canvas_size
 
 	canvas.apply_snapshot(_fixture_snapshot())
@@ -647,7 +725,7 @@ func _test_runtime_refresh_preserves_inspector_focus(workspace) -> void:
 		inspector_child_names.append(str((child_value as Node).name))
 	_check(refreshed_selector != null and not is_instance_valid(stable_selector), "Inspector rebuilds after the focused interaction ends (selection=%s children=%s)" % [str(workspace.get("_selection")), str(inspector_child_names)])
 	_check(refreshed_selector != null and str(refreshed_selector.get_item_metadata(refreshed_selector.selected)) == "grid_refine_iron", "deferred Inspector rebuild uses the newest snapshot payload (selected=%s)" % str(refreshed_selector.get_item_metadata(refreshed_selector.selected) if refreshed_selector != null else "missing"))
-	_check(revision_label != null and revision_label.text.contains("11"), "deferred Inspector rebuild exposes the newest runtime revision")
+	_check(revision_label != null and revision_label.text == "ⓘ" and revision_label.tooltip_text.contains("R11"), "deferred Inspector rebuild exposes the newest runtime revision")
 	var focused_button := workspace.find_child("CopyMachineConfiguration", true, false) as Button
 	if focused_button != null:
 		focused_button.grab_focus()
@@ -862,7 +940,10 @@ func _test_mouse_hit_priorities(workspace, intents: Array) -> void:
 	# deliberately exercise world-space field/order rectangles at the origin.
 	canvas.reset_camera()
 	await _force_canvas_draw(canvas)
-	var extractor_tile := Vector2i(16, 16)
+	# The 11×11 Core Extractor stays inside the ore field while ending immediately
+	# before the existing ghost at (24, 24); this isolates preview-hit priority
+	# from authoritative construction-overlap rejection.
+	var extractor_tile := Vector2i(13, 13)
 	var extractor_point: Vector2 = canvas._world_to_screen(Vector2(extractor_tile)) + Vector2.ONE * canvas._tile_scale() * 0.5
 	canvas._on_gui_input(_mouse_motion(extractor_point))
 	canvas._on_gui_input(_left_click(extractor_point))
@@ -874,6 +955,7 @@ func _test_mouse_hit_priorities(workspace, intents: Array) -> void:
 		and str((workspace.get("_selection") as Dictionary).get("kind", "")) != "RESOURCE_FIELD",
 		"a real mouse click on an extractor preview over a resource field emits construction instead of selecting the field"
 	)
+	workspace._on_placement_cancelled()
 	var order_point: Vector2 = canvas._world_to_screen(Vector2(26, 26)) + Vector2.ONE * canvas._tile_scale() * 0.5
 	canvas._on_gui_input(_mouse_motion(order_point))
 	canvas._on_gui_input(_left_click(order_point))
@@ -991,7 +1073,7 @@ func _fixture_snapshot() -> Dictionary:
 		"palette":{
 			"buildings":[
 			{"id":"grid_solar_array", "name":"Surface Solar Array", "kind":"POWER", "footprint":{"width":8, "height":8}, "power_generation_kw":100.0, "construction_work":10.0, "construction_cost":[{"item":"scrap_metal", "quantity":2}], "recipe_ids":[]},
-			{"id":"grid_surface_mine", "name":"Surface Mine", "kind":"EXTRACTOR", "footprint":{"width":3, "height":3}, "power_demand_kw":50.0, "resource_categories":["solid"], "construction_work":20.0, "construction_cost":[{"item":"scrap_metal", "quantity":4}], "recipe_ids":[]},
+			{"id":"grid_surface_mine", "name":"Surface Mine", "kind":"EXTRACTOR", "footprint":{"width":11, "height":11}, "mining_radius_tiles":18.0, "power_demand_kw":50.0, "resource_categories":["solid"], "construction_work":20.0, "construction_cost":[{"item":"scrap_metal", "quantity":4}], "recipe_ids":[]},
 			{"id":"grid_arc_smelter", "name":"Arc Smelter", "kind":"MACHINE", "footprint":{"width":16, "height":12}, "power_demand_kw":60.0, "construction_work":20.0, "construction_cost":[{"item":"scrap_metal", "quantity":4}], "recipe_ids":["grid_refine_iron", "grid_refine_copper"]}
 		],
 		"recipes":[
@@ -1021,6 +1103,8 @@ func _entity(entity_id: String, kind: String, title: String, origin: Vector2i, p
 		"coverage_efficiency":1.0 if kind == "EXTRACTOR" else 0.0,
 		"average_grade":1.0 if kind == "EXTRACTOR" else 0.0,
 		"sustainable_rate_per_second":2.25 if kind == "EXTRACTOR" else 0.0,
+		"mining_radius_tiles":18.0 if kind == "EXTRACTOR" else 0.0,
+		"mining_area_tiles":1009 if kind == "EXTRACTOR" else 0,
 		"covered_resource_tiles":9 if kind == "EXTRACTOR" else 0,
 		"footprint_tiles":9 if kind == "EXTRACTOR" else 0,
 		"missing_resource_tiles":0

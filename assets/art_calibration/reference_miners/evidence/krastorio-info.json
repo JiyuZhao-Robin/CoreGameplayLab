@@ -1,0 +1,15 @@
+{
+  "name": "Krastorio2Assets",
+  "version": "2.1.1",
+  "title": "Krastorio 2 Assets",
+  "description": "Assets for Krastorio 2.",
+  "author": "Linver, Krastor, raiguard",
+  "contact": "https://codeberg.org/raiguard/Krastorio2/issues",
+  "homepage": "https://codeberg.org/raiguard/Krastorio2Assets",
+  "factorio_version": "2.1",
+  "dependencies": ["base >= 2.1.7"],
+  "package": {
+    "git_publish_branch": "trunk",
+    "ignore": ["KRASTORIO_SOURCE.zip", "__UNUSED/**"]
+  }
+}

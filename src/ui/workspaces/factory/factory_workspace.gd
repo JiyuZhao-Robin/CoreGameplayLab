@@ -19,14 +19,18 @@ const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_ar
 const ItemArt = preload("res://src/ui/workspaces/location/location_item_icon.gd")
 const UiTokens = preload("res://src/ui/ui_theme_tokens.gd")
 const PROTOCOL_VERSION := 1
-const UI_NAVY := Color("0c141c")
-const UI_RAISED := Color("15222d")
-const UI_BORDER := Color("304652")
-const UI_CYAN := Color("65d9d1")
-const UI_AMBER := Color("e5b467")
-const UI_OFFWHITE := Color("e4ecef")
-const UI_MUTED := Color("96aab7")
-const UI_CRITICAL := Color("ef867d")
+## Factory chrome uses charcoal and worn steel so the mineral/road canvas owns
+## the color. Cyan is reserved for the selected construction focus; amber and
+## red remain legible operational exceptions.
+const UI_NAVY := Color("121615")
+const UI_RAISED := Color("1b201e")
+const UI_BORDER := Color("48514d")
+const UI_CYAN := Color("64ddd0")
+const UI_AMBER := Color("e3ad5d")
+const UI_OFFWHITE := Color("e7ebe7")
+const UI_MUTED := Color("a5afaa")
+const UI_OPERATIONAL := Color("b7c9c0")
+const UI_CRITICAL := Color("df7a6d")
 
 ## Resolve the localization autoload at runtime so this standalone component
 ## also compiles when loaded by a --script SceneTree test.
@@ -50,7 +54,7 @@ var _connection_target_id := ""
 var _connection_source_port_id := ""
 var _connection_target_port_id := ""
 var _selected_cargo_item_id := ""
-var _active_subworkspace := "OVERVIEW"
+var _active_subworkspace := "CANVAS"
 var _production_filter := "ALL"
 var _selection := {"kind":"", "id":"", "data":{}}
 var _preview_tile := Vector2i.ZERO
@@ -59,7 +63,6 @@ var _pending_link_selection_id := ""
 var _pending_entity_selection_id := ""
 var _pending_order_selection_id := ""
 var _canvas_snapshot_dirty := true
-var _building_card_signature := ""
 var _canvas_startup_world_id := ""
 var _canvas_focus_pending := false
 
@@ -67,7 +70,6 @@ var _world_label: Label
 var _world_scale_label: Label
 var _revision_label: Label
 var _feedback_label: Label
-var _last_telemetry_feedback := ""
 var _reset_camera_button: Button
 var _refresh_button: Button
 var _toolbar_frame: Control
@@ -78,7 +80,6 @@ var _cargo_item_options: OptionButton
 var _connect_button: Button
 var _cargo_mode_button: Button
 var _power_mode_button: Button
-var _building_detail_body: VBoxContainer
 var _build_palette
 var _connection_status_label: Label
 var _connection_panel: Control
@@ -151,7 +152,8 @@ func apply_snapshot(snapshot: Dictionary) -> void:
 		set_process(true)
 		_world_label.text = I18n.t("factory.operations.world_telemetry", "LOCAL GRID · %s") % _location_telemetry_name()
 		_refresh_world_scale()
-		_revision_label.text = "T%d · R%d" % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+		_revision_label.text = "ⓘ"
+		_revision_label.tooltip_text = _revision_tooltip()
 		return
 	_pending_inspector_refresh = false
 	set_process(false)
@@ -287,10 +289,19 @@ func _build_interface() -> void:
 	_world_label = _make_label(I18n.t("factory.workspace.label"), UI_OFFWHITE)
 	_world_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(_world_label)
+	_feedback_label = _make_label("", UI_AMBER)
+	_feedback_label.name = "FactoryCommandFeedback"
+	_feedback_label.visible = false
+	_feedback_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_feedback_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	toolbar.add_child(_feedback_label)
 	_world_scale_label = _make_label("", UI_AMBER)
 	_world_scale_label.name = "FactoryWorldScale"
 	toolbar.add_child(_world_scale_label)
-	_revision_label = _make_label(I18n.t("factory.workspace.topology_empty"), UI_MUTED)
+	_revision_label = _make_label("ⓘ", UI_MUTED)
+	_revision_label.name = "FactoryRevisionInfo"
+	_revision_label.custom_minimum_size = UiTokens.layout_vector(Vector2(20, 0))
+	_revision_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toolbar.add_child(_revision_label)
 	_reset_camera_button = _make_button(I18n.t("factory.action.reset_view"), I18n.t("factory.tooltip.reset_view"))
 	_reset_camera_button.pressed.connect(func() -> void: _canvas.reset_camera())
@@ -420,33 +431,43 @@ func _build_interface() -> void:
 	_build_palette = BuildPaletteScript.new()
 	_build_palette.building_selected.connect(_select_building_id)
 	_build_palette.road_tool_selected.connect(_set_road_tool)
+	_build_palette.collapsed_changed.connect(_on_build_palette_collapsed_changed)
 	center_column.add_child(_build_palette)
 	_build_palette.ensure_built()
 	_building_options = _build_palette.quick_filter()
-	_building_detail_body = _build_palette.detail_body()
 
+	# A bare Panel deliberately owns the rail's minimum width.  PanelContainer
+	# would inherit its scroll child's unwrapped Label minimum, allowing a long
+	# empty-state sentence to consume the canvas.  The scroll content is clipped
+	# and wrapped inside this authored rail instead.
+	var inspector_rail := Panel.new()
+	inspector_rail.name = "FactoryInspectorRail"
+	inspector_rail.custom_minimum_size = Vector2(UiTokens.layout_px(312), 0)
+	inspector_rail.size_flags_horizontal = Control.SIZE_SHRINK_END
+	inspector_rail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inspector_rail.clip_contents = true
+	inspector_rail.add_theme_stylebox_override("panel", UiTokens.control_style(UI_NAVY, UI_BORDER, 3))
+	body.add_child(inspector_rail)
 	var inspector_scroll := ScrollContainer.new()
 	inspector_scroll.name = "InspectorScroll"
-	inspector_scroll.custom_minimum_size = Vector2(270, 0)
-	inspector_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	inspector_scroll.size_flags_stretch_ratio = 0.28
+	inspector_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var inspector_inset := UiTokens.layout_px(8)
+	inspector_scroll.offset_left = inspector_inset
+	inspector_scroll.offset_top = inspector_inset
+	inspector_scroll.offset_right = -inspector_inset
+	inspector_scroll.offset_bottom = -inspector_inset
 	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	body.add_child(inspector_scroll)
+	inspector_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	inspector_rail.add_child(inspector_scroll)
 	_inspector_body = VBoxContainer.new()
 	_inspector_body.name = "FactoryInspector"
-	_inspector_body.custom_minimum_size.x = 270
+	_inspector_body.custom_minimum_size = Vector2.ZERO
 	_inspector_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_inspector_body.add_theme_constant_override("separation", 6)
 	inspector_scroll.add_child(_inspector_body)
 
 	_build_production_workspace(root)
 	_build_construction_workspace(root)
-
-	_feedback_label = _make_label(I18n.t("factory.feedback.waiting"), UI_MUTED)
-	_feedback_label.name = "FactoryCommandFeedback"
-	_feedback_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	root.add_child(_feedback_label)
-
 
 func _build_overview_workspace(root: VBoxContainer) -> void:
 	_overview_page = VBoxContainer.new()
@@ -567,8 +588,8 @@ func _render() -> void:
 		return
 	var is_valid := bool(_snapshot.get("valid", false)) and int(_snapshot.get("protocol_version", 0)) == PROTOCOL_VERSION
 	_world_label.text = I18n.t("factory.operations.world_telemetry", "LOCAL GRID · %s") % _location_telemetry_name()
-	_revision_label.text = "T%d · R%d" % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
-	_revision_label.tooltip_text = I18n.t("factory.workspace.revisions") % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+	_revision_label.text = "ⓘ"
+	_revision_label.tooltip_text = _revision_tooltip()
 	_refresh_world_scale()
 	if _operations_overview != null:
 		_operations_overview.configure(_snapshot)
@@ -591,12 +612,6 @@ func _render() -> void:
 	_canvas.set_road_tool(_road_canvas_tool(), _road_tier)
 	_update_placement_preview()
 	_update_connection_preview()
-	if _feedback_label != null and (_feedback_label.text == I18n.t("factory.feedback.waiting") or _feedback_label.text == _last_telemetry_feedback):
-		_feedback_label.text = I18n.t("factory.operations.live_world", "Live factory telemetry · %s") % _location_telemetry_name()
-		_last_telemetry_feedback = _feedback_label.text
-		_feedback_label.add_theme_color_override("font_color", UI_MUTED)
-
-
 func _apply_canvas_snapshot() -> void:
 	if _canvas == null:
 		return
@@ -639,7 +654,6 @@ func _rebuild_palette(is_valid: bool) -> void:
 	var palette: Dictionary = _snapshot.get("palette", {}) if _snapshot.get("palette", {}) is Dictionary else {}
 	_build_palette.set_buildings(palette.get("buildings", []) as Array, is_valid, _selected_building_id)
 	_build_palette.set_road_tools_enabled(_road_logistics_mode(), _road_canvas_tool(), _road_tier, is_valid)
-	_refresh_building_card()
 
 
 func _rebuild_connection_selectors(is_valid: bool) -> void:
@@ -764,65 +778,6 @@ func _clear_connection_state() -> void:
 	_connection_source_port_id = ""
 	_connection_target_port_id = ""
 	_selected_cargo_item_id = ""
-
-
-func _refresh_building_card() -> void:
-	if not is_instance_valid(_building_detail_body):
-		return
-	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
-	var next_signature := "%s|%s|%s" % [_selected_building_id, _active_tool, JSON.stringify(building)]
-	if next_signature == _building_card_signature:
-		return
-	_building_card_signature = next_signature
-	for child in _building_detail_body.get_children():
-		_building_detail_body.remove_child(child)
-		child.queue_free()
-	if building.is_empty():
-		var empty := _make_label(I18n.t("factory.build.empty", "Choose a building to inspect its footprint, cost, power and compatible production."), Color("9aa6a1"))
-		empty.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		empty.tooltip_text = empty.text
-		_building_detail_body.add_child(empty)
-		var empty_help := _make_label(I18n.t("factory.help.placement"), Color("7f9289"))
-		empty_help.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		empty_help.tooltip_text = empty_help.text
-		_building_detail_body.add_child(empty_help)
-		return
-	_building_detail_body.add_child(_make_label(_building_name(_selected_building_id, str(building.get("name", _selected_building_id))), Color("e6eeea")))
-	var footprint := _view_model.footprint_size(building.get("footprint", {}))
-	var generation := float(building.get("power_generation_kw", 0.0))
-	var demand := float(building.get("power_demand_kw", 0.0))
-	var deployment_item_id := _deployment_item_id(building)
-	var available_count := maxi(0, int(building.get("available_count", 0)))
-	var power_text := "+%.0f kW" % generation if generation > 0.0 else "-%.0f kW" % demand
-	var compact_summary := "%s · %d × %d · %s · %s" % [
-		_kind_name(str(building.get("kind", "UNKNOWN"))), footprint.x, footprint.y, power_text,
-		I18n.t("factory.building.available", "Available: %d") % available_count
-	]
-	var summary := _make_label(compact_summary, Color("a5b2ac"))
-	summary.name = "BuildingDeploymentAvailability"
-	summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	summary.tooltip_text = compact_summary
-	_building_detail_body.add_child(summary)
-	var deployment_hint := _make_label(
-		I18n.t("factory.building.deploy_available_hint", "Deploys one finished building from planet inventory.") if available_count > 0 else I18n.t("factory.building.deploy_missing_hint", "No finished building available. Placement creates a ghost that deploys automatically when one arrives."),
-		Color("6fbf92") if available_count > 0 else UI_AMBER
-	)
-	deployment_hint.name = "BuildingDeploymentHint"
-	deployment_hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	deployment_hint.tooltip_text = "%s · %s" % [_item_name(deployment_item_id), deployment_hint.text]
-	_building_detail_body.add_child(deployment_hint)
-	var footer := HBoxContainer.new()
-	footer.add_theme_constant_override("separation", 6)
-	_building_detail_body.add_child(footer)
-	var active := _make_label(I18n.t("factory.build.placing", "Placement active · click a valid tile") if _active_tool == "BUILD" else I18n.t("factory.build.ready", "Ready to place"), Color("6fbf92"))
-	active.name = "PlacementStatus"
-	active.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	footer.add_child(active)
-	var cancel := _make_button(I18n.t("factory.action.cancel_placement", "Cancel placement"), I18n.t("factory.tooltip.cancel_placement", "Leave construction placement mode."))
-	cancel.name = "CancelPlacement"
-	cancel.visible = _active_tool == "BUILD"
-	cancel.pressed.connect(_on_placement_cancelled)
-	footer.add_child(cancel)
 
 
 func _refresh_connection_status(source: Dictionary, target: Dictionary) -> void:
@@ -1280,6 +1235,7 @@ func _select_building_id(building_id: String, render_now: bool = true) -> void:
 	_selected_building_id = building_id
 	_active_tool = "BUILD" if not _selected_building_id.is_empty() else ""
 	if _active_tool == "BUILD":
+		_replace_selection_without_render("", "", {})
 		_connection_source_id = ""
 		_connection_target_id = ""
 		_connection_source_port_id = ""
@@ -1302,6 +1258,7 @@ func _set_road_tool(tool_mode: String, tier: int) -> void:
 	_road_tier = clampi(tier, 1, 2)
 	_active_tool = "ROAD_BUILD" if normalized == "BUILD" else "ROAD_REMOVE"
 	_selected_building_id = ""
+	_replace_selection_without_render("", "", {})
 	_clear_connection_state()
 	if _build_palette != null:
 		_build_palette.set_selected_building("")
@@ -1309,6 +1266,13 @@ func _set_road_tool(tool_mode: String, tier: int) -> void:
 		_canvas.clear_placement_preview()
 	_set_active_subworkspace("CANVAS")
 	_render()
+
+
+func _on_build_palette_collapsed_changed(collapsed: bool) -> void:
+	if collapsed and _active_tool in ["BUILD", "CONNECT", "ROAD_BUILD", "ROAD_REMOVE"]:
+		# The collapsed dock intentionally returns to browsing.  It never leaves a
+		# road or placement tool active after hiding that tool's visual state.
+		_on_placement_cancelled()
 
 
 func _on_road_path_requested(command_kind: String, tiles: Array, tier: int) -> void:
@@ -1930,7 +1894,13 @@ func _refresh_inspector() -> void:
 	var selection_kind := str(_selection.get("kind", ""))
 	var data: Dictionary = _selection.get("data", {}) if _selection.get("data", {}) is Dictionary else {}
 	if selection_kind.is_empty():
-		_inspector_body.add_child(_make_label(I18n.t("factory.inspector.empty"), Color("9aa6a1")))
+		if _active_tool == "BUILD" and not _selected_building_id.is_empty():
+			_render_active_building_inspector()
+			return
+		var empty := _make_inspector_label(I18n.t("factory.inspector.empty"), UI_MUTED)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_inspector_body.add_child(empty)
 		return
 	if selection_kind == "ENTITY":
 		_render_entity_inspector(data)
@@ -1941,7 +1911,64 @@ func _refresh_inspector() -> void:
 	elif selection_kind == "CONSTRUCTION_ORDER":
 		_render_order_inspector(data)
 	else:
-		_inspector_body.add_child(_make_label(I18n.t("factory.inspector.tile") % str(_selection.get("id", "")), Color("d5ddd8")))
+		_inspector_body.add_child(_make_inspector_label(I18n.t("factory.inspector.tile") % str(_selection.get("id", "")), Color("d5ddd8")))
+
+
+func _render_active_building_inspector() -> void:
+	var building := _view_model.building_by_id(_snapshot, _selected_building_id)
+	if building.is_empty():
+		_inspector_body.add_child(_make_inspector_label(I18n.t("factory.build.empty", "Choose a building to inspect its footprint, power and availability."), UI_MUTED))
+		return
+	var definition_id := str(building.get("id", _selected_building_id))
+	var heading := HBoxContainer.new()
+	heading.name = "ActiveBuildingInspectorHeader"
+	heading.add_theme_constant_override("separation", UiTokens.layout_px(8))
+	_inspector_body.add_child(heading)
+	var icon := TextureRect.new()
+	icon.name = "ActiveBuildingInspectorIcon"
+	icon.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), definition_id, str(building.get("kind", "")))
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = UiTokens.layout_vector(Vector2(54, 54))
+	heading.add_child(icon)
+	var text_stack := VBoxContainer.new()
+	text_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading.add_child(text_stack)
+	var name_label := _make_inspector_label(_building_name(definition_id, str(building.get("name", definition_id))), UI_OFFWHITE)
+	name_label.name = "ActiveBuildingName"
+	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text_stack.add_child(name_label)
+	var placement_state := _make_inspector_label(I18n.t("factory.build.placing", "Placement active · click a valid tile") if _active_tool == "BUILD" else I18n.t("factory.build.ready", "Ready to place"), UI_CYAN if _active_tool == "BUILD" else UI_MUTED)
+	placement_state.name = "PlacementStatus"
+	placement_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text_stack.add_child(placement_state)
+	var footprint := _view_model.footprint_size(building.get("footprint", {}))
+	var generation := float(building.get("power_generation_kw", 0.0))
+	var demand := float(building.get("power_demand_kw", 0.0))
+	var power_text := "+%.0f kW" % generation if generation > 0.0 else "-%.0f kW" % demand
+	_add_detail(I18n.t("factory.field.footprint", "Footprint"), "%d × %d" % [footprint.x, footprint.y])
+	_add_detail(I18n.t("factory.field.power", "Power"), power_text)
+	var mining_radius := maxf(0.0, float(building.get("mining_radius_tiles", 0.0)))
+	if mining_radius > 0.0:
+		_add_detail(I18n.t("factory.field.circular_range", "Circular mining range"), I18n.t("factory.field.radius_tiles", "Radius %s tiles") % str(mining_radius))
+	var available_count := maxi(0, int(building.get("available_count", 0)))
+	var availability := _make_inspector_label(I18n.t("factory.building.available", "Available: %d") % available_count, UI_CYAN if available_count > 0 else UI_AMBER)
+	availability.name = "BuildingDeploymentAvailability"
+	_inspector_body.add_child(availability)
+	var deployment_item_id := _deployment_item_id(building)
+	var deployment_hint := _make_inspector_label(
+		I18n.t("factory.building.deploy_available_hint", "Deploys one finished building from planet inventory.") if available_count > 0 else I18n.t("factory.building.deploy_missing_hint", "No finished building available. Placement creates a ghost that deploys automatically when one arrives."),
+		UI_CYAN if available_count > 0 else UI_AMBER
+	)
+	deployment_hint.name = "BuildingDeploymentHint"
+	deployment_hint.tooltip_text = "%s · %s" % [_item_name(deployment_item_id), deployment_hint.text]
+	deployment_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_inspector_body.add_child(deployment_hint)
+	if _active_tool == "BUILD":
+		var cancel := _make_inspector_button(I18n.t("factory.action.cancel_placement", "Cancel placement"), I18n.t("factory.tooltip.cancel_placement", "Leave construction placement mode."))
+		cancel.name = "CancelPlacement"
+		cancel.pressed.connect(_on_placement_cancelled)
+		_inspector_body.add_child(cancel)
 
 
 func _render_landing_inspector() -> void:
@@ -1953,7 +1980,7 @@ func _render_landing_inspector() -> void:
 	portrait.custom_minimum_size = Vector2(220, 220)
 	_inspector_body.add_child(portrait)
 	_inspector_body.add_child(_make_section_label(_building_name("grid_planetary_core", "Planetary Development Core")))
-	var instruction := _make_label(I18n.t("factory.landing.instruction", "Choose a clear site and deploy the planetary core."), UI_AMBER)
+	var instruction := _make_inspector_label(I18n.t("factory.landing.instruction", "Choose a clear site and deploy the planetary core."), UI_AMBER)
 	instruction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_inspector_body.add_child(instruction)
 	_add_detail(I18n.t("factory.field.power", "Power"), "400 kW")
@@ -1965,7 +1992,7 @@ func _render_landing_inspector() -> void:
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.custom_minimum_size = Vector2(44, 44)
 		row.add_child(icon)
-		var label := _make_label("%s × %d" % [_building_name(definition_id, definition_id), 1 if definition_id == "grid_engineering_works" else 2], UI_OFFWHITE)
+		var label := _make_inspector_label("%s × %d" % [_building_name(definition_id, definition_id), 1 if definition_id == "grid_engineering_works" else 2], UI_OFFWHITE)
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(label)
@@ -1988,16 +2015,65 @@ func _inspector_interaction_active() -> bool:
 	return false
 
 
+func _add_entity_inspector_header(entity: Dictionary, definition_id: String, entity_id: String) -> void:
+	var header := HBoxContainer.new()
+	header.name = "EntityInspectorHeader"
+	header.add_theme_constant_override("separation", UiTokens.layout_px(8))
+	_inspector_body.add_child(header)
+	var icon := TextureRect.new()
+	icon.name = "EntityInspectorIcon"
+	icon.texture = BuildingArt.icon_texture(BuildingArt.atlas_texture(), definition_id, str(entity.get("node_kind", "")))
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.custom_minimum_size = UiTokens.layout_vector(Vector2(54, 54))
+	header.add_child(icon)
+	var text_stack := VBoxContainer.new()
+	text_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(text_stack)
+	var title := _make_inspector_label(_building_name(definition_id, str(entity.get("name", entity_id))), UI_OFFWHITE)
+	title.name = "EntityInspectorName"
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.tooltip_text = "%s · %s" % [_kind_name(str(entity.get("node_kind", "UNKNOWN"))), entity_id]
+	text_stack.add_child(title)
+	var status_id := str(entity.get("status", "UNKNOWN"))
+	var status := _make_inspector_label(_status_name(status_id), _status_color(status_id))
+	status.name = "EntityInspectorStatus"
+	text_stack.add_child(status)
+	var telemetry := _make_inspector_label("%s  %.2f/s    %s  %d%%" % [
+		I18n.t("factory.field.rate", "Rate"),
+		float(entity.get("actual_rate", 0.0)),
+		I18n.t("factory.field.power", "Power"),
+		roundi(float(entity.get("power_factor", 1.0)) * 100.0)
+	], UI_MUTED)
+	telemetry.name = "EntityInspectorTelemetry"
+	telemetry.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text_stack.add_child(telemetry)
+
+
+func _add_extractor_mining_context(entity: Dictionary) -> void:
+	_inspector_body.add_child(HSeparator.new())
+	var section := _make_section_label(I18n.t("factory.inspector.mining_context", "Mining envelope"))
+	section.name = "ExtractorMiningContext"
+	_inspector_body.add_child(section)
+	_add_detail(I18n.t("factory.field.resource", "Resource"), _item_name(str(entity.get("resource_id", ""))))
+	var mining_radius := maxf(0.0, float(entity.get("mining_radius_tiles", 0.0)))
+	var area_tiles := maxi(1, int(entity.get("mining_area_tiles", entity.get("footprint_tiles", 0))))
+	var coverage := float(entity.get("coverage_efficiency", 0.0)) if mining_radius <= 0.0 else clampf(float(entity.get("covered_resource_tiles", 0)) / float(area_tiles), 0.0, 1.0)
+	if mining_radius > 0.0:
+		_add_detail(I18n.t("factory.field.circular_range", "Circular mining range"), I18n.t("factory.field.radius_tiles", "Radius %s tiles") % str(mining_radius))
+	_add_detail(I18n.t("factory.field.coverage", "Resource coverage"), "%d%%" % roundi(coverage * 100.0))
+	_add_detail(I18n.t("factory.field.grade", "Grade"), "%.2f" % float(entity.get("average_grade", 0.0)))
+	_add_detail(I18n.t("factory.field.sustainable_rate", "Sustainable field rate"), "%.2f/s" % float(entity.get("sustainable_rate_per_second", 0.0)))
+	_add_detail(I18n.t("factory.field.covered_tiles", "Covered resource tiles"), "%d / %d" % [int(entity.get("covered_resource_tiles", 0)), area_tiles])
+	_add_meter("ExtractorCoverageMeter", I18n.t("factory.field.coverage", "Resource coverage"), coverage)
+
+
 func _render_entity_inspector(entity: Dictionary) -> void:
 	var entity_id := str(entity.get("id", ""))
 	var definition_id := str(entity.get("definition_id", ""))
-	_inspector_body.add_child(_make_label(_building_name(definition_id, str(entity.get("name", entity_id))), Color("d5ddd8")))
-	_add_detail(I18n.t("factory.field.id"), entity_id)
-	_add_detail(I18n.t("factory.field.kind"), _kind_name(str(entity.get("node_kind", "UNKNOWN"))))
-	_add_detail(I18n.t("factory.field.status"), _status_name(str(entity.get("status", "UNKNOWN"))))
-	_add_detail(I18n.t("factory.field.rate"), "%.2f/s" % float(entity.get("actual_rate", 0.0)))
-	_add_detail(I18n.t("factory.field.power"), "%d%%" % roundi(float(entity.get("power_factor", 1.0)) * 100.0))
+	_add_entity_inspector_header(entity, definition_id, entity_id)
 	_add_meter("EntityPowerMeter", I18n.t("factory.field.power"), float(entity.get("power_factor", 1.0)))
+	var node_kind := str(entity.get("node_kind", ""))
 	if _road_logistics_mode():
 		var road_connected := bool(entity.get("road_connected", false))
 		var component_id := str(entity.get("road_component_id", ""))
@@ -2006,6 +2082,8 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 			_add_detail(I18n.t("factory.road.component", "Road network"), component_id)
 		if float(entity.get("power_factor", 1.0)) < 0.999:
 			_add_detail(I18n.t("factory.road.power_notice", "Power"), I18n.t("factory.road.roads_carry_power", "Power travels along roads; a broken road network disconnects this building."))
+	if node_kind == "EXTRACTOR":
+		_add_extractor_mining_context(entity)
 	var current_recipe_id := str(entity.get("recipe_id", ""))
 	if not current_recipe_id.is_empty():
 		var active_recipe := _view_model.recipe_by_id(_snapshot, current_recipe_id)
@@ -2015,30 +2093,14 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 		_add_detail(I18n.t("factory.field.recipe_outputs", "Recipe outputs"), _item_amount_rows(active_recipe.get("outputs", [])))
 	if not str(entity.get("blocker_code", "")).is_empty():
 		_add_detail(I18n.t("factory.field.blocker"), _status_name(str(entity.get("blocker_code", ""))))
-	# Timed local deliveries sit before long buffer/shared-stock listings so an
-	# active or blocked courier remains visible in the bounded inspector viewport.
-	_add_road_shipment_inspector(entity)
 	_add_item_dictionary(I18n.t("factory.field.inputs"), entity.get("inputs", {}))
 	_add_item_dictionary(I18n.t("factory.field.outputs"), entity.get("outputs", {}))
-	var node_kind := str(entity.get("node_kind", ""))
 	if not (_road_logistics_mode() and node_kind == "STORAGE"):
 		_add_item_dictionary(I18n.t("factory.field.inventory"), entity.get("inventory", {}))
-	if node_kind == "EXTRACTOR":
-		_add_detail(I18n.t("factory.field.resource", "Resource"), _item_name(str(entity.get("resource_id", ""))))
-		var mining_radius := maxf(0.0,float(entity.get("mining_radius_tiles",0.0)))
-		var area_tiles := maxi(1,int(entity.get("mining_area_tiles",entity.get("footprint_tiles",0))))
-		var coverage := float(entity.get("coverage_efficiency",0.0)) if mining_radius <= 0.0 else clampf(float(entity.get("covered_resource_tiles",0))/float(area_tiles),0.0,1.0)
-		if mining_radius > 0.0:
-			_add_detail(I18n.t("factory.field.circular_range", "Circular mining range"), I18n.t("factory.field.radius_tiles", "Radius %s tiles") % str(mining_radius))
-		_add_detail(I18n.t("factory.field.coverage", "Resource coverage"), "%d%%" % roundi(coverage * 100.0))
-		_add_detail(I18n.t("factory.field.grade", "Grade"), "%.2f" % float(entity.get("average_grade", 0.0)))
-		_add_detail(I18n.t("factory.field.sustainable_rate", "Sustainable field rate"), "%.2f/s" % float(entity.get("sustainable_rate_per_second", 0.0)))
-		_add_detail(I18n.t("factory.field.covered_tiles", "Covered resource tiles"), "%d / %d" % [int(entity.get("covered_resource_tiles", 0)), area_tiles])
-		_add_meter("ExtractorCoverageMeter", I18n.t("factory.field.coverage", "Resource coverage"), coverage)
 	if node_kind in ["MACHINE", "POWER"]:
 		_add_capacity_detail(I18n.t("factory.field.input_buffer", "Input buffer"), entity.get("inputs", {}), int(entity.get("input_capacity", 0)))
 		_add_capacity_detail(I18n.t("factory.field.output_buffer", "Output buffer"), entity.get("outputs", {}), int(entity.get("output_capacity", 0)))
-	var center_button := _make_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_entity"))
+	var center_button := _make_inspector_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_entity"))
 	center_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {}))))
 	_inspector_body.add_child(center_button)
 	if not _view_model.building_by_id(_snapshot, definition_id).get("recipe_ids", []).is_empty():
@@ -2070,7 +2132,10 @@ func _render_entity_inspector(entity: Dictionary) -> void:
 		if _road_logistics_mode():
 			_add_shared_road_inventory(entity)
 		_add_storage_transfer_controls(entity)
-	var remove_entity := _make_button(I18n.t("factory.action.remove_entity", "Remove entity"), I18n.t("factory.tooltip.remove_entity", "Remove this Factory entity through a versioned command"))
+	# Delivery history and shipment queues can be long.  Keep them behind the
+	# operational, mining and buffer facts that determine the next player action.
+	_add_road_shipment_inspector(entity)
+	var remove_entity := _make_inspector_button(I18n.t("factory.action.remove_entity", "Remove entity"), I18n.t("factory.tooltip.remove_entity", "Remove this Factory entity through a versioned command"))
 	remove_entity.name = "RemoveFactoryEntity"
 	remove_entity.pressed.connect(_request_remove_entity.bind(entity_id))
 	_inspector_body.add_child(remove_entity)
@@ -2107,18 +2172,18 @@ func _add_entity_recipe_controls(entity: Dictionary) -> void:
 		_request_set_recipe(str(entity.get("id", "")), recipe_id)
 	)
 	_inspector_body.add_child(recipe_options)
-	var recipe_status := _make_label(
+	var recipe_status := _make_inspector_label(
 		I18n.t("factory.machine.unconfigured", "No recipe configured") if current_recipe_id.is_empty() else I18n.t("factory.machine.recipe_selection_hint", "Select a recipe to apply it immediately."),
 		Color("e0ae5c") if current_recipe_id.is_empty() else Color("9aa6a1")
 	)
 	recipe_status.name = "MachineRecipeStatus"
 	_inspector_body.add_child(recipe_status)
-	var copy_button := _make_button(I18n.t("factory.action.copy_machine_configuration", "Copy machine configuration"), I18n.t("factory.tooltip.copy_machine_configuration", "Copy this machine's recipe without copying inventory, progress, or connections."))
+	var copy_button := _make_inspector_button(I18n.t("factory.action.copy_machine_configuration", "Copy machine configuration"), I18n.t("factory.tooltip.copy_machine_configuration", "Copy this machine's recipe without copying inventory, progress, or connections."))
 	copy_button.name = "CopyMachineConfiguration"
 	copy_button.disabled = current_recipe_id.is_empty() or _view_model.recipe_by_id(_snapshot, current_recipe_id).is_empty()
 	copy_button.pressed.connect(_copy_selected_machine_configuration)
 	_inspector_body.add_child(copy_button)
-	var paste_button := _make_button(I18n.t("factory.action.paste_machine_configuration", "Paste machine configuration"), I18n.t("factory.tooltip.paste_machine_configuration", "Apply the copied recipe if it is compatible with this machine."))
+	var paste_button := _make_inspector_button(I18n.t("factory.action.paste_machine_configuration", "Paste machine configuration"), I18n.t("factory.tooltip.paste_machine_configuration", "Apply the copied recipe if it is compatible with this machine."))
 	paste_button.name = "PasteMachineConfiguration"
 	paste_button.disabled = not _copied_machine_configuration_compatible(entity)
 	paste_button.pressed.connect(_paste_machine_configuration)
@@ -2135,7 +2200,10 @@ func _machine_recipe_option_text(recipe: Dictionary, fallback_recipe_id: String)
 
 func _render_resource_inspector(field: Dictionary) -> void:
 	var resource_id := str(field.get("resource_id", ""))
-	_inspector_body.add_child(_make_label(str(field.get("resource_name", _item_name(resource_id))) if not resource_id.is_empty() else I18n.t("factory.resource_field"), Color("d5ddd8")))
+	var resource_title := _make_inspector_label(str(field.get("resource_name", _item_name(resource_id))) if not resource_id.is_empty() else I18n.t("factory.resource_field"), UI_OFFWHITE)
+	resource_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	resource_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_inspector_body.add_child(resource_title)
 	_add_detail(I18n.t("factory.field.field_id"), str(field.get("id", "")))
 	_add_detail(I18n.t("factory.field.category"), _category_name(str(field.get("resource_category", ""))))
 	_add_detail(I18n.t("factory.field.grade"), "%.2f" % float(field.get("grade", 0.0)))
@@ -2149,11 +2217,11 @@ func _render_resource_inspector(field: Dictionary) -> void:
 		if not allowed.is_empty() and not allowed.has(resource_id):
 			continue
 		var extractor_id := str(building.get("id", ""))
-		var build_button := _make_button(I18n.t("factory.action.build_extractor", "Place %s") % _building_name(extractor_id, str(building.get("name", extractor_id))), I18n.t("factory.tooltip.build_extractor", "Enter placement mode at this resource field."))
+		var build_button := _make_inspector_button(I18n.t("factory.action.build_extractor", "Place %s") % _building_name(extractor_id, str(building.get("name", extractor_id))), I18n.t("factory.tooltip.build_extractor", "Enter placement mode at this resource field."))
 		build_button.name = "BuildExtractor"
 		build_button.pressed.connect(_select_building_for_field.bind(extractor_id, field.duplicate(true)))
 		_inspector_body.add_child(build_button)
-	var center_button := _make_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_resource"))
+	var center_button := _make_inspector_button(I18n.t("factory.action.center"), I18n.t("factory.tooltip.center_resource"))
 	center_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(field.get("footprint", {}))))
 	_inspector_body.add_child(center_button)
 
@@ -2167,7 +2235,7 @@ func _select_building_for_field(building_id: String, field: Dictionary) -> void:
 
 func _render_link_inspector(link: Dictionary) -> void:
 	var link_id := str(link.get("id", ""))
-	_inspector_body.add_child(_make_label(I18n.t("factory.inspector.link") % _connection_name(str(link.get("kind", "CARGO"))), Color("d5ddd8")))
+	_inspector_body.add_child(_make_inspector_label(I18n.t("factory.inspector.link") % _connection_name(str(link.get("kind", "CARGO"))), Color("d5ddd8")))
 	_add_detail(I18n.t("factory.field.id"), link_id)
 	_add_detail(I18n.t("factory.field.route"), "%s -> %s" % [str(link.get("source_id", "")), str(link.get("target_id", ""))])
 	var item_id := str(link.get("item_id", ""))
@@ -2184,10 +2252,10 @@ func _render_link_inspector(link: Dictionary) -> void:
 		var entity := _entity_by_id(str(endpoint.get("id", "")))
 		if entity.is_empty():
 			continue
-		var focus_button := _make_button(I18n.t(str(endpoint.get("action", ""))), I18n.t(str(endpoint.get("tooltip", ""))))
+		var focus_button := _make_inspector_button(I18n.t(str(endpoint.get("action", ""))), I18n.t(str(endpoint.get("tooltip", ""))))
 		focus_button.pressed.connect(func() -> void: _canvas.focus_tile(_view_model.footprint_origin(entity.get("footprint", {}))))
 		_inspector_body.add_child(focus_button)
-	var remove_button := _make_button(I18n.t("factory.action.remove_link"), I18n.t("factory.tooltip.remove_link"))
+	var remove_button := _make_inspector_button(I18n.t("factory.action.remove_link"), I18n.t("factory.tooltip.remove_link"))
 	remove_button.pressed.connect(func() -> void: _request_remove_link(link_id))
 	_inspector_body.add_child(remove_button)
 	_add_link_configuration_controls(link)
@@ -2205,7 +2273,7 @@ func _add_link_configuration_controls(link: Dictionary) -> void:
 	priority.step = 1.0
 	priority.value = clampi(int(link.get("priority", 1)), 0, 2)
 	_inspector_body.add_child(priority)
-	var apply := _make_button(I18n.t("factory.action.configure_link", "Apply route controls"), I18n.t("factory.tooltip.configure_link", "Configure route priority"))
+	var apply := _make_inspector_button(I18n.t("factory.action.configure_link", "Apply route controls"), I18n.t("factory.tooltip.configure_link", "Configure route priority"))
 	apply.name = "ConfigureFactoryLink"
 	apply.pressed.connect(func() -> void:
 		_request_configure_link(str(link.get("id", "")), int(priority.value))
@@ -2215,13 +2283,13 @@ func _add_link_configuration_controls(link: Dictionary) -> void:
 
 func _render_order_inspector(order: Dictionary) -> void:
 	var order_id := str(order.get("id", ""))
-	_inspector_body.add_child(_make_label(I18n.t("factory.inspector.order"), UI_OFFWHITE))
+	_inspector_body.add_child(_make_inspector_label(I18n.t("factory.inspector.order"), UI_OFFWHITE))
 	var definition_id := str(order.get("definition_id", ""))
 	_add_detail(I18n.t("factory.field.building"), _building_name(definition_id, definition_id))
 	if not _is_waiting_for_finished_building(order):
 		# Compatibility records must not revive the retired onsite-material
 		# construction flow in a player-facing inspector.
-		var inactive := _make_label(I18n.t("factory.deployment.inactive_record", "This record is not an active deployment ghost."), UI_MUTED)
+		var inactive := _make_inspector_label(I18n.t("factory.deployment.inactive_record", "This record is not an active deployment ghost."), UI_MUTED)
 		inactive.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_inspector_body.add_child(inactive)
 		return
@@ -2230,19 +2298,19 @@ func _render_order_inspector(order: Dictionary) -> void:
 
 func _render_waiting_building_order(order: Dictionary, order_id: String) -> void:
 	var deployment_item_id := _deployment_item_id(order)
-	var waiting := _make_label(I18n.t("factory.construction.waiting_building", "Awaiting finished building"), UI_AMBER)
+	var waiting := _make_inspector_label(I18n.t("factory.construction.waiting_building", "Awaiting finished building"), UI_AMBER)
 	waiting.name = "ConstructionWaitingBuilding"
 	_inspector_body.add_child(waiting)
 	var item_name := _item_name(deployment_item_id)
-	var item := _make_label(I18n.t("factory.field.required", "Required") + " · " + item_name, Color("d5ddd8"))
+	var item := _make_inspector_label(I18n.t("factory.field.required", "Required") + " · " + item_name, Color("d5ddd8"))
 	item.name = "ConstructionDeploymentItem"
 	item.tooltip_text = deployment_item_id
 	_inspector_body.add_child(item)
-	var hint := _make_label(I18n.t("factory.construction.waiting_building_hint", "This ghost deploys automatically when %s reaches local available inventory.") % item_name, UI_MUTED)
+	var hint := _make_inspector_label(I18n.t("factory.construction.waiting_building_hint", "This ghost deploys automatically when %s reaches local available inventory.") % item_name, UI_MUTED)
 	hint.name = "ConstructionWaitingBuildingHint"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_inspector_body.add_child(hint)
-	var cancel_button := _make_button(I18n.t("factory.action.cancel_construction", "Cancel construction"), I18n.t("factory.tooltip.cancel_construction", "Cancel this construction order"))
+	var cancel_button := _make_inspector_button(I18n.t("factory.action.cancel_construction", "Cancel construction"), I18n.t("factory.tooltip.cancel_construction", "Cancel this construction order"))
 	cancel_button.name = "CancelConstructionOrder"
 	cancel_button.pressed.connect(_request_cancel_construction.bind(order_id))
 	_inspector_body.add_child(cancel_button)
@@ -2287,15 +2355,15 @@ func _add_storage_transfer_controls(storage: Dictionary) -> void:
 	quantity.value = 1.0
 	quantity.tooltip_text = I18n.t("factory.tooltip.transfer_quantity")
 	_inspector_body.add_child(quantity)
-	var export_button := _make_button(I18n.t("factory.action.export"), I18n.t("factory.tooltip.export"))
+	var export_button := _make_inspector_button(I18n.t("factory.action.export"), I18n.t("factory.tooltip.export"))
 	export_button.disabled = item_index <= 1
 	export_button.pressed.connect(func() -> void: _request_storage_transfer("EXPORT_TO_LOCATION", storage_id, str(item_options.get_item_metadata(item_options.selected)), int(quantity.value)))
 	_inspector_body.add_child(export_button)
-	var import_button := _make_button(I18n.t("factory.action.import"), I18n.t("factory.tooltip.import"))
+	var import_button := _make_inspector_button(I18n.t("factory.action.import"), I18n.t("factory.tooltip.import"))
 	import_button.disabled = location_inventory.is_empty()
 	import_button.pressed.connect(func() -> void: _request_storage_transfer("IMPORT_FROM_LOCATION", storage_id, str(item_options.get_item_metadata(item_options.selected)), int(quantity.value)))
 	_inspector_body.add_child(import_button)
-	var transfer_help := _make_label(I18n.t("factory.help.transfer"), Color("9aa6a1"))
+	var transfer_help := _make_inspector_label(I18n.t("factory.help.transfer"), Color("9aa6a1"))
 	transfer_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_inspector_body.add_child(transfer_help)
 
@@ -2314,7 +2382,7 @@ func _add_shared_road_inventory(storage: Dictionary) -> void:
 	section.name = "RoadSharedInventory"
 	_inspector_body.add_child(section)
 	_add_item_dictionary(I18n.t("factory.field.inventory"), inventory)
-	var hint := _make_label(I18n.t("factory.road.shared_inventory_hint", "Road-connected storage is read-only here; local machines collect automatically."), UI_MUTED)
+	var hint := _make_inspector_label(I18n.t("factory.road.shared_inventory_hint", "Road-connected storage is read-only here; local machines collect automatically."), UI_MUTED)
 	hint.name = "RoadSharedInventoryHint"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_inspector_body.add_child(hint)
@@ -2346,9 +2414,7 @@ func _add_detail(label_text: String, value: String) -> void:
 
 
 func _add_detail_to(container: Control, label_text: String, value: String) -> void:
-	var label := _make_label(I18n.core("diagnostics.economy.demand_entry") % [label_text, value], Color("a5b2ac"))
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var label := _make_inspector_label(I18n.core("diagnostics.economy.demand_entry") % [label_text, value], Color("a5b2ac"))
 	container.add_child(label)
 
 
@@ -2446,12 +2512,20 @@ func _set_feedback(code: String, message: String, color: Color) -> void:
 	if _feedback_label == null:
 		return
 	_feedback_label.text = "[" + code + "] " + message
+	_feedback_label.tooltip_text = _feedback_label.text
+	_feedback_label.visible = not message.is_empty()
 	_feedback_label.add_theme_color_override("font_color", color)
 
 
+func _revision_tooltip() -> String:
+	return "T%d · R%d" % [int(_snapshot.get("topology_revision", 0)), int(_snapshot.get("runtime_revision", 0))]
+
+
 func _make_section_label(text_value: String) -> Label:
-	var label := _make_label(text_value, UI_CYAN)
+	var label := _make_label(text_value, UI_OFFWHITE)
 	label.add_theme_font_size_override("font_size", UiTokens.font_size(15))
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return label
 
 
@@ -2459,6 +2533,14 @@ func _make_label(text_value: String, color: Color) -> Label:
 	var label := Label.new()
 	label.text = text_value
 	label.add_theme_color_override("font_color", color)
+	return label
+
+
+func _make_inspector_label(text_value: String, color: Color) -> Label:
+	var label := _make_label(text_value, color)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.clip_text = false
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return label
 
 
@@ -2471,10 +2553,18 @@ func _make_button(text_value: String, tooltip: String) -> Button:
 	button.add_theme_color_override("font_hover_color", UI_OFFWHITE)
 	button.add_theme_color_override("font_pressed_color", UI_CYAN)
 	button.add_theme_stylebox_override("normal", UiTokens.control_style(UI_RAISED, UI_BORDER, 3))
-	button.add_theme_stylebox_override("hover", UiTokens.control_style(Color("1b2d39"), UI_CYAN, 3))
-	button.add_theme_stylebox_override("pressed", UiTokens.control_style(Color("102c35"), UI_CYAN, 3))
+	button.add_theme_stylebox_override("hover", UiTokens.control_style(Color("242b28"), Color("75807a"), 3))
+	button.add_theme_stylebox_override("pressed", UiTokens.control_style(Color("293a34"), UI_CYAN, 3))
 	button.add_theme_stylebox_override("focus", UiTokens.control_style(UI_RAISED, UI_CYAN, 3))
-	button.add_theme_stylebox_override("disabled", UiTokens.control_style(Color("111a22"), UI_BORDER, 3))
+	button.add_theme_stylebox_override("disabled", UiTokens.control_style(Color("171a19"), UI_BORDER, 3))
+	return button
+
+
+func _make_inspector_button(text_value: String, tooltip: String) -> Button:
+	var button := _make_button(text_value, tooltip)
+	button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	button.clip_text = false
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return button
 
 
@@ -2486,7 +2576,7 @@ func _status_name(status_id: String) -> String:
 
 func _status_color(status_id: String) -> Color:
 	match status_id.to_upper():
-		"RUNNING", "FLOWING", "CONNECTED", "READY", "COMPLETED": return UI_CYAN
+		"RUNNING", "FLOWING", "CONNECTED", "READY", "COMPLETED": return UI_OPERATIONAL
 		"NO_POWER", "INPUT_SHORTAGE", "WAITING_MATERIALS", "WAITING_BUILDING", "SOURCE_EMPTY", "QUEUED": return UI_AMBER
 		"OUTPUT_FULL", "TARGET_FULL", "BLOCKED", "NO_RESOURCE": return UI_CRITICAL
 	return UI_MUTED

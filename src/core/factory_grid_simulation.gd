@@ -136,6 +136,11 @@ func normalize_world(source: Dictionary) -> Dictionary:
 	normalized["road_dispatch_after"] = str(source.get("road_dispatch_after", ""))
 	normalized["terrain_enabled"] = bool(source.get("terrain_enabled", false))
 	normalized["terrain_safe_rect"] = source.get("terrain_safe_rect", {}).duplicate(true)
+	# Optional generator inputs must survive a save round trip. Leave absent
+	# terrain_seed absent so legacy worlds continue deriving it from world seed.
+	for terrain_input in ["terrain_seed", "terrain_scale_tiles"]:
+		if source.has(terrain_input):
+			normalized[terrain_input] = source[terrain_input]
 	normalized["landing_definition_id"] = str(source.get("landing_definition_id", ""))
 	normalized["starter_package_delivered"] = bool(source.get("starter_package_delivered", false))
 	normalized["topology_revision"] = maxi(0, int(source.get("topology_revision", 0)))
@@ -1850,6 +1855,9 @@ func workspace_snapshot(world: Dictionary) -> Dictionary:
 		"terrain_enabled":bool(world.get("terrain_enabled", false)),
 		"terrain_safe_rect":world.get("terrain_safe_rect", {}).duplicate(true),
 		"seed":int(world.get("seed", 1)),
+		"terrain_seed":Terrain._integer(world.get("terrain_seed", world.get("seed", 1)), 1),
+		"generator_version":Terrain._integer(world.get("generator_version", 1), 1),
+		"terrain_scale_tiles":Terrain._finite_number(world.get("terrain_scale_tiles", 48.0), 48.0),
 		"tile_deltas":world.get("tile_deltas", {}).duplicate(true),
 		"landing_definition_id":str(world.get("landing_definition_id", "")),
 		"landing_required":not str(world.get("landing_definition_id", "")).is_empty() and not bool(world.get("starter_package_delivered", false)),

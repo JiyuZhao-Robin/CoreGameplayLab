@@ -1,0 +1,4855 @@
+{
+  "schema_version": 1,
+  "status": "independent_reference_demos",
+  "candidates": {
+    "mk2": {
+      "name": "ELECTRIC MINER MK2",
+      "subtitle": "Krastorio 2 / 四向电动矿机",
+      "credit": "Linver / Krastor / raiguard / LGPL-3.0",
+      "footprint_tiles": [
+        3,
+        3
+      ],
+      "source_pixels_per_tile": 32,
+      "fit_multiplier": 1,
+      "frame_count": 195,
+      "source_frame_count": 30,
+      "fps": 24,
+      "default_direction": "N",
+      "initial_zoom": 2,
+      "directions": {
+        "N": {
+          "layers": [
+            {
+              "id": "mk2_N_integration",
+              "role": "base",
+              "frame_size": [
+                230,
+                236
+              ],
+              "shift_tiles": [
+                0.0,
+                -0.0625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-N-integration.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_N_shadow",
+              "role": "shadow",
+              "frame_size": [
+                274,
+                206
+              ],
+              "shift_tiles": [
+                0.59375,
+                -0.09375
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-N-shadow.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_N_drill_shadow",
+              "role": "shadow",
+              "frame_size": [
+                232,
+                50
+              ],
+              "shift_tiles": [
+                1.53125,
+                0.21875
+              ],
+              "frame_count": 21,
+              "columns": 7,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-shadow.png",
+                  "frame_count": 21
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.25
+                  ],
+                  [
+                    0,
+                    -0.5
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.6
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_N_body",
+              "role": "base",
+              "frame_size": [
+                194,
+                242
+              ],
+              "shift_tiles": [
+                0.0,
+                -0.375
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-N.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_N_output",
+              "role": "base",
+              "frame_size": [
+                72,
+                66
+              ],
+              "shift_tiles": [
+                -0.03125,
+                -1.375
+              ],
+              "frame_count": 5,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-N-output.png",
+                  "frame_count": 5
+                }
+              ]
+            },
+            {
+              "id": "mk2_N_dust_back",
+              "role": "base",
+              "frame_size": [
+                48,
+                72
+              ],
+              "shift_tiles": [
+                0.0,
+                0.34375
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.25
+                  ],
+                  [
+                    0,
+                    -0.5
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.6
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_N_smoke",
+              "role": "base",
+              "frame_size": [
+                46,
+                58
+              ],
+              "shift_tiles": [
+                0.03125,
+                -1.375
+              ],
+              "frame_count": 10,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-N-smoke.png",
+                  "frame_count": 10
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ]
+            },
+            {
+              "id": "mk2_N_drill_back",
+              "role": "base",
+              "frame_size": [
+                194,
+                154
+              ],
+              "shift_tiles": [
+                0.0,
+                -0.65625
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill.png",
+                  "frame_count": 30
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.25
+                  ],
+                  [
+                    0,
+                    -0.5
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.6
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_N_dust_front",
+              "role": "base",
+              "frame_size": [
+                148,
+                132
+              ],
+              "shift_tiles": [
+                -0.09375,
+                0.53125
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke-front.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.25
+                  ],
+                  [
+                    0,
+                    -0.5
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.6
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_N_light",
+              "role": "emission",
+              "frame_size": [
+                30,
+                32
+              ],
+              "shift_tiles": [
+                0.8125,
+                -2.15625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-N-light.png",
+                  "frame_count": 1
+                }
+              ],
+              "tint": [
+                0.3,
+                1,
+                0.45,
+                0.5
+              ]
+            }
+          ]
+        },
+        "E": {
+          "layers": [
+            {
+              "id": "mk2_E_integration",
+              "role": "base",
+              "frame_size": [
+                238,
+                204
+              ],
+              "shift_tiles": [
+                0.0625,
+                0.15625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E-integration.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_E_shadow",
+              "role": "shadow",
+              "frame_size": [
+                276,
+                170
+              ],
+              "shift_tiles": [
+                0.625,
+                0.1875
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E-shadow.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_E_drill_shadow",
+              "role": "shadow",
+              "frame_size": [
+                236,
+                138
+              ],
+              "shift_tiles": [
+                1.5,
+                0.15625
+              ],
+              "frame_count": 21,
+              "columns": 7,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-horizontal-shadow.png",
+                  "frame_count": 21
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.4,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.35,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_E_body",
+              "role": "base",
+              "frame_size": [
+                194,
+                94
+              ],
+              "shift_tiles": [
+                0.0,
+                -1.03125
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_E_output",
+              "role": "base",
+              "frame_size": [
+                50,
+                56
+              ],
+              "shift_tiles": [
+                0.9375,
+                -0.34375
+              ],
+              "frame_count": 5,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E-output.png",
+                  "frame_count": 5
+                }
+              ]
+            },
+            {
+              "id": "mk2_E_dust_back",
+              "role": "base",
+              "frame_size": [
+                48,
+                72
+              ],
+              "shift_tiles": [
+                0.0,
+                0.09375
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.4,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.35,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_E_drill_back",
+              "role": "base",
+              "frame_size": [
+                104,
+                178
+              ],
+              "shift_tiles": [
+                -0.09375,
+                -0.84375
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-horizontal.png",
+                  "frame_count": 30
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.4,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.35,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_E_dust_front",
+              "role": "base",
+              "frame_size": [
+                148,
+                132
+              ],
+              "shift_tiles": [
+                -0.09375,
+                0.28125
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke-front.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.4,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.35,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_E_smoke",
+              "role": "base",
+              "frame_size": [
+                52,
+                56
+              ],
+              "shift_tiles": [
+                0.78125,
+                -0.375
+              ],
+              "frame_count": 10,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E-smoke.png",
+                  "frame_count": 10
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ]
+            },
+            {
+              "id": "mk2_E_front",
+              "role": "base",
+              "frame_size": [
+                208,
+                186
+              ],
+              "shift_tiles": [
+                0.09375,
+                0.0625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E-front.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_E_drill_front",
+              "role": "base",
+              "frame_size": [
+                54,
+                136
+              ],
+              "shift_tiles": [
+                0.4375,
+                -0.71875
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-horizontal-front.png",
+                  "frame_count": 30
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.4,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.35,
+                    0
+                  ],
+                  [
+                    -0.6,
+                    0
+                  ],
+                  [
+                    -0.2,
+                    0
+                  ],
+                  [
+                    0.1,
+                    0
+                  ],
+                  [
+                    -0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_E_light",
+              "role": "emission",
+              "frame_size": [
+                32,
+                34
+              ],
+              "shift_tiles": [
+                1.28125,
+                -1.40625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-E-light.png",
+                  "frame_count": 1
+                }
+              ],
+              "tint": [
+                0.3,
+                1,
+                0.45,
+                0.5
+              ]
+            }
+          ]
+        },
+        "S": {
+          "layers": [
+            {
+              "id": "mk2_S_integration",
+              "role": "base",
+              "frame_size": [
+                224,
+                228
+              ],
+              "shift_tiles": [
+                0.0,
+                -0.0625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S-integration.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_S_shadow",
+              "role": "shadow",
+              "frame_size": [
+                274,
+                204
+              ],
+              "shift_tiles": [
+                0.59375,
+                0.0625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S-shadow.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_S_drill_shadow",
+              "role": "shadow",
+              "frame_size": [
+                232,
+                50
+              ],
+              "shift_tiles": [
+                1.53125,
+                0.21875
+              ],
+              "frame_count": 21,
+              "columns": 7,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-shadow.png",
+                  "frame_count": 21
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.5
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    -0.6
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_S_body",
+              "role": "base",
+              "frame_size": [
+                194,
+                240
+              ],
+              "shift_tiles": [
+                0.0,
+                -0.21875
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_S_dust_back",
+              "role": "base",
+              "frame_size": [
+                48,
+                72
+              ],
+              "shift_tiles": [
+                0.0,
+                0.34375
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.5
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    -0.6
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_S_drill_back",
+              "role": "base",
+              "frame_size": [
+                194,
+                154
+              ],
+              "shift_tiles": [
+                0.0,
+                -0.65625
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill.png",
+                  "frame_count": 30
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.5
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    -0.6
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_S_dust_front",
+              "role": "base",
+              "frame_size": [
+                148,
+                132
+              ],
+              "shift_tiles": [
+                -0.09375,
+                0.53125
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke-front.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.4
+                  ],
+                  [
+                    0,
+                    -0.1
+                  ],
+                  [
+                    0,
+                    0.2
+                  ],
+                  [
+                    0,
+                    0.5
+                  ],
+                  [
+                    0,
+                    0.3
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    -0.2
+                  ],
+                  [
+                    0,
+                    -0.6
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ],
+                  [
+                    0,
+                    0.1
+                  ],
+                  [
+                    0,
+                    0.4
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    -0.3
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_S_smoke",
+              "role": "base",
+              "frame_size": [
+                48,
+                36
+              ],
+              "shift_tiles": [
+                -0.0625,
+                0.625
+              ],
+              "frame_count": 10,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S-smoke.png",
+                  "frame_count": 10
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ]
+            },
+            {
+              "id": "mk2_S_output",
+              "role": "base",
+              "frame_size": [
+                82,
+                56
+              ],
+              "shift_tiles": [
+                -0.03125,
+                1.0625
+              ],
+              "frame_count": 5,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S-output.png",
+                  "frame_count": 5
+                }
+              ]
+            },
+            {
+              "id": "mk2_S_front",
+              "role": "base",
+              "frame_size": [
+                172,
+                42
+              ],
+              "shift_tiles": [
+                0.0,
+                0.40625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S-front.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_S_light",
+              "role": "emission",
+              "frame_size": [
+                32,
+                30
+              ],
+              "shift_tiles": [
+                0.8125,
+                0.3125
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-S-light.png",
+                  "frame_count": 1
+                }
+              ],
+              "tint": [
+                0.3,
+                1,
+                0.45,
+                0.5
+              ]
+            }
+          ]
+        },
+        "W": {
+          "layers": [
+            {
+              "id": "mk2_W_integration",
+              "role": "base",
+              "frame_size": [
+                234,
+                202
+              ],
+              "shift_tiles": [
+                -0.09375,
+                0.15625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W-integration.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_W_shadow",
+              "role": "shadow",
+              "frame_size": [
+                282,
+                170
+              ],
+              "shift_tiles": [
+                0.46875,
+                0.1875
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W-shadow.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_W_drill_shadow",
+              "role": "shadow",
+              "frame_size": [
+                236,
+                138
+              ],
+              "shift_tiles": [
+                1.5,
+                0.15625
+              ],
+              "frame_count": 21,
+              "columns": 7,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-horizontal-shadow.png",
+                  "frame_count": 21
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.4,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.35,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_W_body",
+              "role": "base",
+              "frame_size": [
+                194,
+                94
+              ],
+              "shift_tiles": [
+                0.0,
+                -1.03125
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_W_output",
+              "role": "base",
+              "frame_size": [
+                50,
+                56
+              ],
+              "shift_tiles": [
+                -0.96875,
+                -0.375
+              ],
+              "frame_count": 5,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W-output.png",
+                  "frame_count": 5
+                }
+              ]
+            },
+            {
+              "id": "mk2_W_dust_back",
+              "role": "base",
+              "frame_size": [
+                48,
+                72
+              ],
+              "shift_tiles": [
+                0.0,
+                0.09375
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.4,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.35,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_W_drill_back",
+              "role": "base",
+              "frame_size": [
+                104,
+                178
+              ],
+              "shift_tiles": [
+                -0.09375,
+                -0.84375
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-horizontal.png",
+                  "frame_count": 30
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.4,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.35,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_W_dust_front",
+              "role": "base",
+              "frame_size": [
+                148,
+                132
+              ],
+              "shift_tiles": [
+                -0.09375,
+                0.28125
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-smoke-front.png",
+                  "frame_count": 30
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.4,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.35,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_W_smoke",
+              "role": "base",
+              "frame_size": [
+                46,
+                54
+              ],
+              "shift_tiles": [
+                -0.78125,
+                -0.34375
+              ],
+              "frame_count": 10,
+              "columns": 5,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W-smoke.png",
+                  "frame_count": 10
+                }
+              ],
+              "running_only": true,
+              "tint": [
+                0.7,
+                0.66,
+                0.58,
+                0.55
+              ]
+            },
+            {
+              "id": "mk2_W_front",
+              "role": "base",
+              "frame_size": [
+                210,
+                190
+              ],
+              "shift_tiles": [
+                -0.125,
+                0.03125
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W-front.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "mk2_W_drill_front",
+              "role": "base",
+              "frame_size": [
+                54,
+                136
+              ],
+              "shift_tiles": [
+                0.4375,
+                -0.71875
+              ],
+              "frame_count": 30,
+              "columns": 6,
+              "source_scale": 0.5,
+              "fps": 24,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-horizontal-front.png",
+                  "frame_count": 30
+                }
+              ],
+              "frame_sequence": [
+                0,
+                0,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                20,
+                19,
+                18,
+                17,
+                16,
+                15,
+                14,
+                13,
+                12,
+                11,
+                10,
+                9,
+                8,
+                7,
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                0,
+                0,
+                0
+              ],
+              "motion": {
+                "waypoints": [
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    -0.4,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ],
+                  [
+                    0,
+                    0
+                  ],
+                  [
+                    0.35,
+                    0
+                  ],
+                  [
+                    0.6,
+                    0
+                  ],
+                  [
+                    0.2,
+                    0
+                  ],
+                  [
+                    -0.1,
+                    0
+                  ],
+                  [
+                    0.3,
+                    0
+                  ]
+                ],
+                "stop_duration_seconds": 8.125,
+                "transition_duration_seconds": 1.25
+              }
+            },
+            {
+              "id": "mk2_W_light",
+              "role": "emission",
+              "frame_size": [
+                32,
+                34
+              ],
+              "shift_tiles": [
+                -1.3125,
+                -1.40625
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/mk2/electric-mining-drill-W-light.png",
+                  "frame_count": 1
+                }
+              ],
+              "tint": [
+                0.3,
+                1,
+                0.45,
+                0.5
+              ]
+            }
+          ]
+        }
+      },
+      "layout_source": "https://codeberg.org/raiguard/Krastorio2/src/commit/85dde34acb6b71e92e628e062548e9160e2c7e28/prototypes/buildings/electric-mining-drill-mk2.lua",
+      "notes": "Dry source geometry and 195-step drill/shadow sequence. util.by_pixel offsets become tiles by /32; .5 source scale applies to dimensions, not again to shifts. Waypoint stop/transition durations are converted from 60 ticks/s. Status LED uses local green additive display; resource dust uses a local iron tint. Stop freezes current pose immediately, disables dust/light; no original simulation or water overlay."
+    },
+    "core": {
+      "name": "CORE EXTRACTOR",
+      "subtitle": "Hurricane / 核心采掘设施",
+      "credit": "Hurricane046 / CC BY",
+      "footprint_tiles": [
+        11,
+        11
+      ],
+      "source_pixels_per_tile": 32,
+      "fit_multiplier": 1,
+      "frame_count": 120,
+      "fps": 30,
+      "default_direction": "authored",
+      "initial_zoom": 0.85,
+      "directions": {
+        "authored": {
+          "layers": [
+            {
+              "id": "core_shadow",
+              "role": "shadow",
+              "frame_size": [
+                1400,
+                1400
+              ],
+              "frame_count": 1,
+              "columns": 1,
+              "source_scale": 0.5,
+              "shift_tiles": [
+                0,
+                0
+              ],
+              "fps": 0,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/core/core-extractor-hr-shadow.png",
+                  "frame_count": 1
+                }
+              ]
+            },
+            {
+              "id": "core_base",
+              "role": "base",
+              "frame_size": [
+                704,
+                704
+              ],
+              "frame_count": 120,
+              "columns": 8,
+              "source_scale": 0.5,
+              "shift_tiles": [
+                0,
+                0
+              ],
+              "fps": 30,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/core/core-extractor-hr-animation-1.png",
+                  "frame_count": 64
+                },
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/core/core-extractor-hr-animation-2.png",
+                  "frame_count": 56
+                }
+              ]
+            },
+            {
+              "id": "core_emission",
+              "role": "emission",
+              "frame_size": [
+                704,
+                704
+              ],
+              "frame_count": 120,
+              "columns": 8,
+              "source_scale": 0.5,
+              "shift_tiles": [
+                0,
+                0
+              ],
+              "fps": 30,
+              "sheets": [
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/core/core-extractor-hr-emission-1.png",
+                  "frame_count": 64
+                },
+                {
+                  "texture": "res://assets/art_calibration/reference_miners/core/core-extractor-hr-emission-2.png",
+                  "frame_count": 56
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layout_source": "https://github.com/tburrows13/LunarLandings/blob/ed3ee60cea84dd1eca008ac9f398154b1690f11b/prototypes/core-extractor.lua",
+      "notes": "Source 11x11 selection box, 704px body at .5 scale, 120 frames at speed .5 (30fps). Second stripe declares a maximum 8x8 grid; final source sheet holds 56 valid frames. Shadow has no shift. Preview stop holds frame and immediately disables working emission."
+    }
+  },
+  "ground": {
+    "texture": "res://assets/art_calibration/ground/aerial_sand_diff_2k.jpg",
+    "span_tiles": 8,
+    "provenance_id": "polyhaven-aerial-sand"
+  },
+  "ore": {
+    "texture": "res://assets/art_calibration/ore/iron-ore.png",
+    "purpose": "item render scattered for visual occlusion calibration; not a new terrain deposit set",
+    "provenance_id": "malcolm-riley"
+  },
+  "provenance": [
+    {
+      "id": "core",
+      "author": "Hurricane046",
+      "source": "Hurricane-Factorio-Buildings/SOURCE.json",
+      "license": "CC BY; version unspecified in local source metadata",
+      "layout_revision": "ed3ee60cea84dd1eca008ac9f398154b1690f11b"
+    },
+    {
+      "id": "mk2",
+      "author": "Linver, Krastor, raiguard",
+      "repository": "https://codeberg.org/raiguard/Krastorio2Assets",
+      "revision": "bbb0ac6a2783b5b9d86301f60a8fd874ea36c316",
+      "license": "LGPL-3.0"
+    }
+  ],
+  "files": [
+    {
+      "source": "Krastorio2Assets/LICENSE",
+      "destination": "evidence/krastorio-LICENSE",
+      "sha256": "9158cefb28bc1e52cea59ba7d2b9c75b1156d1bc7bc0fc144791a137f60baeeb",
+      "dimensions": null,
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/info.json",
+      "destination": "evidence/krastorio-info.json",
+      "sha256": "f36fb0f614b075eba2ef66873f2501428c25e051adbfa0bcb9c0ff4738f76371",
+      "dimensions": null,
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/README.md",
+      "destination": "evidence/krastorio-README.md",
+      "sha256": "07cfb876746f9621b3c6e9a11acfe351166444bfcdb7940bbc2221cce72d44ad",
+      "dimensions": null,
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/SOURCE.json",
+      "destination": "evidence/hurricane-SOURCE.json",
+      "sha256": "e4f3759ed9280eec3ad56ed1adc679d50c5778f1cfd1ed35373a54bf783e7498",
+      "dimensions": null,
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/README-LOCAL.md",
+      "destination": "evidence/hurricane-README-LOCAL.md",
+      "sha256": "ab8da768edb2aa37dfb5ea7e29a01e0e155a0ee6a52a9ab4d9d73fa4323368e7",
+      "dimensions": null,
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/factorio-sprites/core-extractor/core-extractor-hr-shadow.png",
+      "destination": "core/core-extractor-hr-shadow.png",
+      "sha256": "91d06b4f6c80e27e42ac4feeb3328d1e18aadcdda2b2f14c1c2e1c24f0c3e753",
+      "dimensions": [
+        1400,
+        1400
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/factorio-sprites/core-extractor/core-extractor-hr-animation-1.png",
+      "destination": "core/core-extractor-hr-animation-1.png",
+      "sha256": "1a90ac36caf0dc4babd1f2a7fe7bf0d4a75981801986cb417fefe78d307c345a",
+      "dimensions": [
+        5632,
+        5632
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/factorio-sprites/core-extractor/core-extractor-hr-animation-2.png",
+      "destination": "core/core-extractor-hr-animation-2.png",
+      "sha256": "f9e5003c3f665ef00e360252721a271b66289acd5134e0fab0ed445449231218",
+      "dimensions": [
+        5632,
+        4928
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/factorio-sprites/core-extractor/core-extractor-hr-emission-1.png",
+      "destination": "core/core-extractor-hr-emission-1.png",
+      "sha256": "c01027bf7d86568e4fba21ca888a1c7395c36617c6a3ad049d000354a28c2ea5",
+      "dimensions": [
+        5632,
+        5632
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Hurricane-Factorio-Buildings/factorio-sprites/core-extractor/core-extractor-hr-emission-2.png",
+      "destination": "core/core-extractor-hr-emission-2.png",
+      "sha256": "ffa6a2fd53fcdf2406343f9e05fe3aaeaaf2cbe089112c3227d4edb29bd0af8c",
+      "dimensions": [
+        5632,
+        4928
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-N-integration.png",
+      "destination": "mk2/electric-mining-drill-N-integration.png",
+      "sha256": "a3273ae9f2214402dd0428c4c6e3bb30e864b6fe72aa774c708942410f9be002",
+      "dimensions": [
+        230,
+        236
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-N-shadow.png",
+      "destination": "mk2/electric-mining-drill-N-shadow.png",
+      "sha256": "64cf290ffaff595a01eaeecadabe7280d4860bbe39876a1502571af2603f7f18",
+      "dimensions": [
+        274,
+        206
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-shadow.png",
+      "destination": "mk2/electric-mining-drill-shadow.png",
+      "sha256": "6d55d012d239dacbc1bcb8402c1dbeb04e9902a857d5139390d6b6f5e21007dc",
+      "dimensions": [
+        1624,
+        150
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-N.png",
+      "destination": "mk2/electric-mining-drill-N.png",
+      "sha256": "e1907aa529ea6d9a99ac32e402a54ca920e289c7d31f61de61f2fea2921b664f",
+      "dimensions": [
+        194,
+        242
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-N-output.png",
+      "destination": "mk2/electric-mining-drill-N-output.png",
+      "sha256": "bf9f82b0de0fe4665d398a13ed7d95bb46a06666b647f72a6d35a89ee3cc8c11",
+      "dimensions": [
+        360,
+        66
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-smoke.png",
+      "destination": "mk2/electric-mining-drill-smoke.png",
+      "sha256": "06e3a5036c79186069c87feeb78a418a9214386fe0ad2a626852e39126f2892b",
+      "dimensions": [
+        288,
+        360
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-N-smoke.png",
+      "destination": "mk2/electric-mining-drill-N-smoke.png",
+      "sha256": "b7010d328f3ea94cba973de618951e42723d9b5a8848ab2dbbe2078cf03d0329",
+      "dimensions": [
+        230,
+        116
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill.png",
+      "destination": "mk2/electric-mining-drill.png",
+      "sha256": "658253a188cd68f8964098e6fb7eab4296da5152cf3f5114255c87d0794519de",
+      "dimensions": [
+        1164,
+        770
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-smoke-front.png",
+      "destination": "mk2/electric-mining-drill-smoke-front.png",
+      "sha256": "62f219750f5319dca666b963ef4540a47359af19df0acca32764f4002e49338a",
+      "dimensions": [
+        888,
+        660
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-N-light.png",
+      "destination": "mk2/electric-mining-drill-N-light.png",
+      "sha256": "163bb9353f01bf056be857477607fee75306690306e8a205c4a1f6ca14307027",
+      "dimensions": [
+        30,
+        32
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E-integration.png",
+      "destination": "mk2/electric-mining-drill-E-integration.png",
+      "sha256": "17e3906eb7c13851190f2becb10903157189d50a6307cf39f2ec0214f6584423",
+      "dimensions": [
+        238,
+        204
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E-shadow.png",
+      "destination": "mk2/electric-mining-drill-E-shadow.png",
+      "sha256": "754ace269747cd12cda3fb65b3713201c91b5f544573be9ace177b013283b601",
+      "dimensions": [
+        276,
+        170
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-horizontal-shadow.png",
+      "destination": "mk2/electric-mining-drill-horizontal-shadow.png",
+      "sha256": "1c941eddc713bebc847154ce2e0d38f056d897f53066a5ea2ecb36847ab80d50",
+      "dimensions": [
+        1652,
+        414
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E.png",
+      "destination": "mk2/electric-mining-drill-E.png",
+      "sha256": "c7900db2773133fae896615b5ec1219f53f8fd6d52acf1bd974181a614ab8434",
+      "dimensions": [
+        194,
+        94
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E-output.png",
+      "destination": "mk2/electric-mining-drill-E-output.png",
+      "sha256": "e261f560bbcc178145851a8b0eb213e786719fe16f812097fc4348d1c9244094",
+      "dimensions": [
+        250,
+        56
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-horizontal.png",
+      "destination": "mk2/electric-mining-drill-horizontal.png",
+      "sha256": "b949e15b0f7e54f6e6bcb14d04a2ffd8548e0f4860a93377d2670830dcbdf8ee",
+      "dimensions": [
+        624,
+        890
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E-smoke.png",
+      "destination": "mk2/electric-mining-drill-E-smoke.png",
+      "sha256": "f7fe3cc44d78ba21e4da03e6d39417c4710fcedaf0978c5ed2166ac35d4e32bc",
+      "dimensions": [
+        260,
+        112
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E-front.png",
+      "destination": "mk2/electric-mining-drill-E-front.png",
+      "sha256": "42c36fce9bab21caac58a627813852fd0d1ce30a059665fec277a0221b912b3d",
+      "dimensions": [
+        208,
+        186
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-horizontal-front.png",
+      "destination": "mk2/electric-mining-drill-horizontal-front.png",
+      "sha256": "cd6d3a8f73a213fd534f69a5146a2d4ee727634efa43c078fe09e57429f0f2ba",
+      "dimensions": [
+        324,
+        680
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-E-light.png",
+      "destination": "mk2/electric-mining-drill-E-light.png",
+      "sha256": "e22d73503c5987364c2eb0558d9eb1698146329b34318b8408a7db5ce2bcea56",
+      "dimensions": [
+        32,
+        34
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S-integration.png",
+      "destination": "mk2/electric-mining-drill-S-integration.png",
+      "sha256": "402de14fa6e3a93bde3c519f9e4f8f96258c6a1a865a9941ee99bbc4b5217f14",
+      "dimensions": [
+        224,
+        228
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S-shadow.png",
+      "destination": "mk2/electric-mining-drill-S-shadow.png",
+      "sha256": "418086ddf1564478538b083635fffbde9294f43ab2117a89009991c4e6813194",
+      "dimensions": [
+        274,
+        204
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S.png",
+      "destination": "mk2/electric-mining-drill-S.png",
+      "sha256": "6aabca44565c246e37f276243fc14e9f2bc53008f15d1cd70689d250a841fcde",
+      "dimensions": [
+        194,
+        240
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S-smoke.png",
+      "destination": "mk2/electric-mining-drill-S-smoke.png",
+      "sha256": "d982919c7a21cd79cd2c0838ef31848204fefd322e149fe33ca11f3c58986cf8",
+      "dimensions": [
+        240,
+        72
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S-output.png",
+      "destination": "mk2/electric-mining-drill-S-output.png",
+      "sha256": "fe9409d498abc90fab5b088c8c951e33d3cf8dce03c7926c5bcb6a2c15ed8a2a",
+      "dimensions": [
+        410,
+        56
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S-front.png",
+      "destination": "mk2/electric-mining-drill-S-front.png",
+      "sha256": "1fed823caf12baf094af5586e86b65edf3045b95423117814ad352dc25e883d8",
+      "dimensions": [
+        172,
+        42
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-S-light.png",
+      "destination": "mk2/electric-mining-drill-S-light.png",
+      "sha256": "73ba1e2fba2dae35c4f54f9b8d5e70b17557cabf2b07f271bb9316498e06ee48",
+      "dimensions": [
+        32,
+        30
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W-integration.png",
+      "destination": "mk2/electric-mining-drill-W-integration.png",
+      "sha256": "fac05c88bbc405bd51f151184aa34edca97e3b0f1629a1ff3c1810697f039d9f",
+      "dimensions": [
+        234,
+        202
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W-shadow.png",
+      "destination": "mk2/electric-mining-drill-W-shadow.png",
+      "sha256": "349b2e5a917e8a9872b01542a8a9e774a936e4187e5d239687e001794ba0b066",
+      "dimensions": [
+        282,
+        170
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W.png",
+      "destination": "mk2/electric-mining-drill-W.png",
+      "sha256": "45d5d2b119d5bb3c409f96ffa3c6c115475b3095baa1e890311232bb4497a512",
+      "dimensions": [
+        194,
+        94
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W-output.png",
+      "destination": "mk2/electric-mining-drill-W-output.png",
+      "sha256": "200a99b66861bb4f145d10691495d04ece170d276f070e36d88253d9ce5a4b88",
+      "dimensions": [
+        250,
+        56
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W-smoke.png",
+      "destination": "mk2/electric-mining-drill-W-smoke.png",
+      "sha256": "75e43ec0f14dea5b41b6ff07ce2657920110abb104b51c5f2980f77adc2ea7da",
+      "dimensions": [
+        230,
+        108
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W-front.png",
+      "destination": "mk2/electric-mining-drill-W-front.png",
+      "sha256": "98c5148c628a088d1318befcc0d36f1c59f7c9548bd51b303b0d29b6c4cb4e02",
+      "dimensions": [
+        210,
+        190
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    },
+    {
+      "source": "Krastorio2Assets/buildings/electric-mining-drill-mk2/electric-mining-drill-W-light.png",
+      "destination": "mk2/electric-mining-drill-W-light.png",
+      "sha256": "6a92aaffd79a4c236a3419ce7adc1429530de0d260cee56cbc2c28124e726672",
+      "dimensions": [
+        32,
+        34
+      ],
+      "modifications": "None; byte-for-byte source copy."
+    }
+  ],
+  "local_evidence": [
+    {
+      "path": "ATTRIBUTION.md",
+      "sha256": "1b1dc529a4b2d7b8125bcea2eb29830b7ed501b9aaccce5d00d50b39ffcf4509"
+    },
+    {
+      "path": "evidence/core-layout-source.json",
+      "sha256": "6d0143d63e18e44ba4fb70f4b34aac740c2a54b3ec001a4238a10143240a9f36"
+    },
+    {
+      "path": "evidence/mk2-layout-source.json",
+      "sha256": "0ff3a87f555bb264af2438827d21ba45779ff092de6ee8186eebf1fe4f275fee"
+    }
+  ],
+  "selection_sha256": "590b7053c269363b1dbeb93babf8315b411d2b05ea566b9f59b07da77b23892f"
+}

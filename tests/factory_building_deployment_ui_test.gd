@@ -37,7 +37,8 @@ func _run() -> void:
 
 func _test_deployment_palette_and_intent(workspace, intents: Array) -> void:
 	var card := workspace.find_child("FactoryBuildCardGridBulkDepot", true, false) as Button
-	_check(card != null and int(card.get_meta("available_count", -1)) == 2 and card.text.contains("×2"), "the build palette exposes the unreserved finished-building count on its existing card")
+	var count_label := card.find_child("FactoryBuildCardDetail", true, false) as Label if card != null else null
+	_check(card != null and int(card.get_meta("available_count", -1)) == 2 and count_label != null and count_label.text.ends_with(" 2") and card.accessibility_name.contains("Bulk Depot"), "the build palette exposes the unreserved finished-building count and an accessible building name")
 	workspace.call("_select_building_id", "grid_bulk_depot")
 	workspace.call("_request_construction", Vector2i(4, 4))
 	_check(intents.size() == 1, "placing a selected building emits one versioned deployment intent")
@@ -66,7 +67,8 @@ func _test_deployment_palette_and_intent(workspace, intents: Array) -> void:
 	workspace.apply_snapshot(updated)
 	await _settle()
 	card = workspace.find_child("FactoryBuildCardGridBulkDepot", true, false) as Button
-	_check(card != null and int(card.get_meta("available_count", -1)) == 0 and card.text.contains("×0") and not card.disabled, "a fresh snapshot updates the ready-building count while zero stock remains placeable as an automatic-deployment ghost")
+	count_label = card.find_child("FactoryBuildCardDetail", true, false) as Label if card != null else null
+	_check(card != null and int(card.get_meta("available_count", -1)) == 0 and count_label != null and count_label.text.ends_with(" 0") and card.accessibility_name.ends_with(" 0") and not card.disabled, "a fresh snapshot updates both visual and accessible counts while zero stock remains placeable as an automatic-deployment ghost")
 
 
 func _test_waiting_building_ghost_inspector(workspace, intents: Array) -> void:

@@ -1,0 +1,43 @@
+{
+  "source_url": "https://github.com/tburrows13/LunarLandings/blob/ed3ee60cea84dd1eca008ac9f398154b1690f11b/prototypes/core-extractor.lua",
+  "source_sha256": "4fb23e2fce4c619e65863d7dae57aebdcf7638612042922122462b84047ba39b",
+  "revision": "ed3ee60cea84dd1eca008ac9f398154b1690f11b",
+  "source_parameters": {
+    "width": 704,
+    "height": 704,
+    "frame_count": 120,
+    "animation_speed": 0.5,
+    "scale": 0.5,
+    "shift": [
+      0,
+      0
+    ],
+    "selection_box": [
+      [
+        -5.5,
+        -5.5
+      ],
+      [
+        5.5,
+        5.5
+      ]
+    ],
+    "shadow_size": [
+      1400,
+      1400
+    ],
+    "shadow_frame_count": 1
+  },
+  "normalization": {
+    "sheet_valid_counts": [
+      64,
+      56
+    ],
+    "fps": 30,
+    "footprint_tiles": [
+      11,
+      11
+    ]
+  },
+  "notes": "Factual parameter transcription; commented-out shift is not active. Full upstream Lua was inspected but is not redistributed with this pack."
+}

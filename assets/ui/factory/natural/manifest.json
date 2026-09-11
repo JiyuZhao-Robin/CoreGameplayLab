@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "package": "factory_natural_art",
+  "package_purpose": "Licensed terrain and resource field art for Factory",
+  "excluded_sources": [
+    {
+      "id": "factorio_plus_goblin_ore",
+      "reason": "The upstream FactorioPlus repository is AGPL-3.0; local curator metadata claiming MIT is not authoritative.",
+      "source_url": "https://github.com/FishyB/FactorioPlus/blob/main/LICENSE"
+    },
+    {
+      "id": "wube_factorio_resource_sprites",
+      "reason": "Official Factorio art is a rules/layout reference only and is not imported."
+    }
+  ],
+  "ground": [
+    {
+      "path": "assets/ui/factory/natural/ground/soil.jpg",
+      "source_local_path": "D:\\project\\ambientCG-Samples\\Ground037\\Ground037_2K-JPG_Color.jpg",
+      "source_sha256": "86af35a54593548543a291a54bddfd3568fd90268f8f65d0f8e743b37d714782",
+      "output_sha256": "86af35a54593548543a291a54bddfd3568fd90268f8f65d0f8e743b37d714782",
+      "bytes": 8674228,
+      "id": "ground_soil",
+      "purpose": "continuous industrial soil base",
+      "author": "ambientCG contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://docs.ambientcg.com/license/",
+      "source_url": "https://ambientcg.com/get?file=Ground037_2K-JPG.zip",
+      "derived": false
+    },
+    {
+      "path": "assets/ui/factory/natural/ground/grass.jpg",
+      "source_local_path": "D:\\project\\PolyHaven-Samples\\aerial_grass_rock\\textures\\aerial_grass_rock_diff_2k.jpg",
+      "source_sha256": "1a2ddfa4652adbe00447b940c40019d46f4b88245bc1b341cdf622c2110b7bc5",
+      "output_sha256": "1a2ddfa4652adbe00447b940c40019d46f4b88245bc1b341cdf622c2110b7bc5",
+      "bytes": 2624635,
+      "id": "ground_grass",
+      "purpose": "continuous grass and gravel terrain base",
+      "author": "Poly Haven contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://polyhaven.com/license",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/aerial_grass_rock/aerial_grass_rock_diff_2k.jpg",
+      "derived": false
+    },
+    {
+      "path": "assets/ui/factory/natural/ground/sand.jpg",
+      "source_local_path": "D:\\project\\PolyHaven-Samples\\aerial_sand\\textures\\aerial_sand_diff_2k.jpg",
+      "source_sha256": "98eddd01834e996cda3fa20dbc769ae38e87277ad0c62650604572fb2e646cd1",
+      "output_sha256": "98eddd01834e996cda3fa20dbc769ae38e87277ad0c62650604572fb2e646cd1",
+      "bytes": 1790070,
+      "id": "ground_sand",
+      "purpose": "continuous arid sand terrain base",
+      "author": "Poly Haven contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://polyhaven.com/license",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/aerial_sand/aerial_sand_diff_2k.jpg",
+      "derived": false
+    },
+    {
+      "path": "assets/ui/factory/natural/ground/rock.jpg",
+      "source_local_path": "D:\\project\\ambientCG-Samples\\Rock030\\Rock030_2K-JPG_Color.jpg",
+      "source_sha256": "c7169827afa47148833a3d778bd2827f12b124852efcabf3364910b1cb6d4beb",
+      "output_sha256": "c7169827afa47148833a3d778bd2827f12b124852efcabf3364910b1cb6d4beb",
+      "bytes": 5905796,
+      "id": "ground_rock",
+      "purpose": "continuous rocky terrain base",
+      "author": "ambientCG contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://docs.ambientcg.com/license/",
+      "source_url": "https://ambientcg.com/get?file=Rock030_2K-JPG.zip",
+      "derived": false
+    }
+  ],
+  "source_models": [
+    {
+      "path": "assets/ui/factory/natural/source/boulder/boulder_01_2k.blend",
+      "source_local_path": "D:\\project\\PolyHaven-Samples\\boulder_01\\boulder_01_2k.blend",
+      "source_sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04",
+      "output_sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04",
+      "bytes": 5370331,
+      "id": "boulder_model",
+      "purpose": "source model for project-authored ore cluster renders",
+      "author": "Poly Haven contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://polyhaven.com/license",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Models/blend/2k/boulder_01/boulder_01_2k.blend",
+      "derived": false
+    },
+    {
+      "path": "assets/ui/factory/natural/source/boulder/textures/boulder_01_diff_2k.jpg",
+      "source_local_path": "D:\\project\\PolyHaven-Samples\\boulder_01\\textures\\boulder_01_diff_2k.jpg",
+      "source_sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3",
+      "output_sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3",
+      "bytes": 3672483,
+      "id": "boulder_diffuse",
+      "purpose": "source boulder albedo for project-authored ore cluster renders",
+      "author": "Poly Haven contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://polyhaven.com/license",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/boulder_01/boulder_01_diff_2k.jpg",
+      "derived": false
+    },
+    {
+      "path": "assets/ui/factory/natural/source/boulder/textures/boulder_01_nor_gl_2k.exr",
+      "source_local_path": "D:\\project\\PolyHaven-Samples\\boulder_01\\textures\\boulder_01_nor_gl_2k.exr",
+      "source_sha256": "73683b485cf8e5768a62a3d56ddc5a511b4f8cf90348d9064755824a5207c060",
+      "output_sha256": "73683b485cf8e5768a62a3d56ddc5a511b4f8cf90348d9064755824a5207c060",
+      "bytes": 9451901,
+      "id": "boulder_normal",
+      "purpose": "source normal map retained for reproducible boulder rendering",
+      "author": "Poly Haven contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://polyhaven.com/license",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/2k/boulder_01/boulder_01_nor_gl_2k.exr",
+      "derived": false
+    },
+    {
+      "path": "assets/ui/factory/natural/source/boulder/textures/boulder_01_rough_2k.exr",
+      "source_local_path": "D:\\project\\PolyHaven-Samples\\boulder_01\\textures\\boulder_01_rough_2k.exr",
+      "source_sha256": "8d295ee0bcbebecfc1c92ab159828a33a69095fada961a7d6ae46df3cc986aca",
+      "output_sha256": "8d295ee0bcbebecfc1c92ab159828a33a69095fada961a7d6ae46df3cc986aca",
+      "bytes": 1767701,
+      "id": "boulder_roughness",
+      "purpose": "source roughness map retained for reproducible boulder rendering",
+      "author": "Poly Haven contributors",
+      "license": "CC0 1.0",
+      "license_url": "https://polyhaven.com/license",
+      "source_url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/2k/boulder_01/boulder_01_rough_2k.exr",
+      "derived": false
+    }
+  ],
+  "ores": [
+    {
+      "path": "assets/ui/factory/natural/ores/ice-ore.png",
+      "source_local_path": "D:\\project\\factorio_free_graphics_for_modders\\decoratives_resources\\resources\\Petraspace (MIT) - Petraspace - ice-ore.png",
+      "source_sha256": "fcbd042640da57b2ef0190727ae1a380742de90dceb203d9acdeef4a1f84e26f",
+      "output_sha256": "fcbd042640da57b2ef0190727ae1a380742de90dceb203d9acdeef4a1f84e26f",
+      "bytes": 1301453,
+      "id": "ice_ore",
+      "purpose": "static ice resource field sprite atlas",
+      "author": "Petrak; gamma-delta/the-first-frontier distribution",
+      "license": "MIT",
+      "license_url": "https://github.com/gamma-delta/the-first-frontier/blob/3374aae38673dcf5bcd265e446f5ab5a3a24db87/LICENSE.txt",
+      "source_url": "https://raw.githubusercontent.com/gamma-delta/the-first-frontier/3374aae38673dcf5bcd265e446f5ab5a3a24db87/graphics/entities/ice-ore.png",
+      "derived": false,
+      "source_revision": "3374aae38673dcf5bcd265e446f5ab5a3a24db87",
+      "source_blob": "61e90762b8abfdde6425515b86d468f04471a447"
+    },
+    {
+      "id": "iron_ore",
+      "path": "assets/ui/factory/natural/ores/iron-ore.png",
+      "output_sha256": "84a107ccd94268532aef9ccb9256e8df06cbfd79f5e86762619c62887fe1a290",
+      "bytes": 416442,
+      "derived": true,
+      "purpose": "Factory irregular resource field sprite atlas",
+      "license": "CC0 source; project-authored material derivation",
+      "source_assets": [
+        {
+          "path": "assets/ui/factory/natural/source/boulder/boulder_01_2k.blend",
+          "source_sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04",
+          "output_sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04"
+        },
+        {
+          "path": "assets/ui/factory/natural/source/boulder/textures/boulder_01_diff_2k.jpg",
+          "source_sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3",
+          "output_sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3"
+        }
+      ],
+      "generator": {
+        "path": "tools/render_factory_minerals.py",
+        "sha256": "a10773aa57c8f77005cf7ee4041752b30f1f35a7d63c6edc91fa169951bcfdbf"
+      },
+      "render_receipt": {
+        "path": "assets/ui/factory/natural/source/render-receipt.json",
+        "sha256": "b21cc36ad0d51c66a026088735de3bd53a1e88dfdbd374ef7264964dd5c0a80f",
+        "settings": {
+          "renderer": "Blender 4.5.9 LTS, EEVEE Next",
+          "camera": "orthographic, elevated top-down three-quarter view",
+          "camera_ortho_scale": 2.85,
+          "lighting": "fixed upper-left area key plus soft fill",
+          "seed": 18473,
+          "mirrored_instances": false,
+          "source_model_instances": true,
+          "grid": {
+            "sheet_width": 1024,
+            "sheet_height": 512,
+            "cell_px": 128,
+            "columns": 8,
+            "rows": 4,
+            "density_order": "top row 0 is dense; bottom row 3 is sparse"
+          },
+          "material_derivation": {
+            "iron": "blue-gray mineral screen tint over CC0 boulder albedo",
+            "copper": "orange-brown mineral screen tint over CC0 boulder albedo"
+          }
+        }
+      },
+      "grid": {
+        "sheet_width": 1024,
+        "sheet_height": 512,
+        "cell_px": 128,
+        "columns": 8,
+        "rows": 4,
+        "variation_count": 8,
+        "density_stages": 4,
+        "row_order": "top row 0 is dense; bottom row 3 is sparse",
+        "frame_semantics": "static deterministic variants; never animation frames"
+      },
+      "material_derivation": "blue-gray ore mineral tint over the CC0 boulder albedo"
+    },
+    {
+      "id": "copper_ore",
+      "path": "assets/ui/factory/natural/ores/copper-ore.png",
+      "output_sha256": "d5a7702c1f14059692873ee284a8defce12fa7656516ba0801f760def9aa15de",
+      "bytes": 421168,
+      "derived": true,
+      "purpose": "Factory irregular resource field sprite atlas",
+      "license": "CC0 source; project-authored material derivation",
+      "source_assets": [
+        {
+          "path": "assets/ui/factory/natural/source/boulder/boulder_01_2k.blend",
+          "source_sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04",
+          "output_sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04"
+        },
+        {
+          "path": "assets/ui/factory/natural/source/boulder/textures/boulder_01_diff_2k.jpg",
+          "source_sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3",
+          "output_sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3"
+        }
+      ],
+      "generator": {
+        "path": "tools/render_factory_minerals.py",
+        "sha256": "a10773aa57c8f77005cf7ee4041752b30f1f35a7d63c6edc91fa169951bcfdbf"
+      },
+      "render_receipt": {
+        "path": "assets/ui/factory/natural/source/render-receipt.json",
+        "sha256": "b21cc36ad0d51c66a026088735de3bd53a1e88dfdbd374ef7264964dd5c0a80f",
+        "settings": {
+          "renderer": "Blender 4.5.9 LTS, EEVEE Next",
+          "camera": "orthographic, elevated top-down three-quarter view",
+          "camera_ortho_scale": 2.85,
+          "lighting": "fixed upper-left area key plus soft fill",
+          "seed": 18473,
+          "mirrored_instances": false,
+          "source_model_instances": true,
+          "grid": {
+            "sheet_width": 1024,
+            "sheet_height": 512,
+            "cell_px": 128,
+            "columns": 8,
+            "rows": 4,
+            "density_order": "top row 0 is dense; bottom row 3 is sparse"
+          },
+          "material_derivation": {
+            "iron": "blue-gray mineral screen tint over CC0 boulder albedo",
+            "copper": "orange-brown mineral screen tint over CC0 boulder albedo"
+          }
+        }
+      },
+      "grid": {
+        "sheet_width": 1024,
+        "sheet_height": 512,
+        "cell_px": 128,
+        "columns": 8,
+        "rows": 4,
+        "variation_count": 8,
+        "density_stages": 4,
+        "row_order": "top row 0 is dense; bottom row 3 is sparse",
+        "frame_semantics": "static deterministic variants; never animation frames"
+      },
+      "material_derivation": "orange-brown ore mineral tint over the CC0 boulder albedo"
+    }
+  ],
+  "generator_sha256": "a10773aa57c8f77005cf7ee4041752b30f1f35a7d63c6edc91fa169951bcfdbf"
+}

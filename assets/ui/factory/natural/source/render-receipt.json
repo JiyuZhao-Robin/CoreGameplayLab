@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "kind": "factory_natural_mineral_render_receipt",
+  "generator": {
+    "path": "tools/render_factory_minerals.py",
+    "sha256": "a10773aa57c8f77005cf7ee4041752b30f1f35a7d63c6edc91fa169951bcfdbf"
+  },
+  "inputs": {
+    "source_blend": {
+      "path": "assets/ui/factory/natural/source/boulder/boulder_01_2k.blend",
+      "sha256": "13d651c28c309476cd89bbf8fbc722327b8a8597a467a70fc1f7c46454a38a04",
+      "bytes": 5370331
+    },
+    "albedo_texture": {
+      "path": "assets/ui/factory/natural/source/boulder/textures/boulder_01_diff_2k.jpg",
+      "sha256": "90bbaa17c1fe0254d2b0b6e5148264fa834953a72724d566f14af029eebe3ca3",
+      "bytes": 3672483
+    }
+  },
+  "settings": {
+    "renderer": "Blender 4.5.9 LTS, EEVEE Next",
+    "camera": "orthographic, elevated top-down three-quarter view",
+    "camera_ortho_scale": 2.85,
+    "lighting": "fixed upper-left area key plus soft fill",
+    "seed": 18473,
+    "mirrored_instances": false,
+    "source_model_instances": true,
+    "grid": {
+      "sheet_width": 1024,
+      "sheet_height": 512,
+      "cell_px": 128,
+      "columns": 8,
+      "rows": 4,
+      "density_order": "top row 0 is dense; bottom row 3 is sparse"
+    },
+    "material_derivation": {
+      "iron": "blue-gray mineral screen tint over CC0 boulder albedo",
+      "copper": "orange-brown mineral screen tint over CC0 boulder albedo"
+    }
+  },
+  "outputs": {
+    "iron": {
+      "path": "assets/ui/factory/natural/ores/iron-ore.png",
+      "sha256": "84a107ccd94268532aef9ccb9256e8df06cbfd79f5e86762619c62887fe1a290",
+      "bytes": 416442
+    },
+    "copper": {
+      "path": "assets/ui/factory/natural/ores/copper-ore.png",
+      "sha256": "d5a7702c1f14059692873ee284a8defce12fa7656516ba0801f760def9aa15de",
+      "bytes": 421168
+    }
+  }
+}

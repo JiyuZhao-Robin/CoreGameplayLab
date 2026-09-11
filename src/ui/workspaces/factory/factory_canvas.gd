@@ -42,7 +42,7 @@ const FOCUS_COLOR := Color("65d9d1")
 const CARGO_COLOR := Color("e5b467")
 const POWER_COLOR := Color("65d9d1")
 const BASE_TILE_PIXELS := 4.0
-const MAX_DETAIL_TILE_PIXELS := 10.0
+const MAX_DETAIL_TILE_PIXELS := 16.0
 const OVERVIEW_PADDING_PIXELS := 24.0
 const FLOW_REDRAW_INTERVAL_SECONDS := 0.05
 const DRAW_CULL_MARGIN_PIXELS := 32.0
@@ -132,7 +132,9 @@ var _shipment_chunk_size := 64
 func _ready() -> void:
 	name = "FactoryCanvas"
 	clip_contents = true
+	_terrain_renderer.attach(self)
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 	focus_mode = Control.FOCUS_ALL
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	custom_minimum_size = Vector2(360, 300)
@@ -156,6 +158,7 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	if world_changed or _snapshot.is_empty() or float(snapshot.get("elapsed_ms", 0.0)) != float(_snapshot.get("elapsed_ms", 0.0)) or int(snapshot.get("runtime_revision", 0)) != int(_snapshot.get("runtime_revision", 0)) or int(snapshot.get("topology_revision", 0)) != int(_snapshot.get("topology_revision", 0)):
 		_runtime_snapshot_age = 0.0
 	_snapshot = snapshot if already_normalized else _view_model.build(snapshot)
+	_terrain_renderer.configure(_snapshot)
 	_rebuild_snapshot_indexes()
 	for miner_id in _miner_animation_seconds.keys():
 		if not _entities_by_id.has(miner_id):
@@ -404,10 +407,12 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
+	_terrain_renderer.begin_frame()
 	_visible_active_flow = false
 	_visible_core_miners.clear()
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
+		_terrain_renderer.hide_ground()
+		draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
 		_visible_records.clear()
 		_invalidate_hit_geometry()
 		_hit_geometry_dirty = false
@@ -415,12 +420,14 @@ func _draw() -> void:
 		return
 	var world_rect := _world_screen_rect()
 	_visible_records = _chunk_index.query(_visible_world_query_rect())
-	draw_rect(world_rect, WORLD_COLOR, true)
-	_terrain_renderer.configure(_snapshot)
 	if bool(_snapshot.get("terrain_enabled", false)) and _terrain_renderer.has_art():
 		_terrain_renderer.draw_ground(self, _snapshot, _visible_world_query_rect().intersection(Rect2(Vector2(_bounds_origin()),Vector2(_bounds_size()))), _tile_scale(), _camera)
-	elif _regolith_tile != null and world_rect.has_area():
-		_draw_regolith_ground()
+	else:
+		_terrain_renderer.hide_ground()
+		draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
+		draw_rect(world_rect, WORLD_COLOR, true)
+		if _regolith_tile != null and world_rect.has_area():
+			_draw_regolith_ground()
 	_node_rects.clear()
 	_link_hit_rects.clear()
 	_construction_order_rects.clear()
@@ -463,7 +470,11 @@ func _draw_grid() -> void:
 	# Macro-grid lines use lower contrast and a slightly heavier stroke so they
 	# read as a navigation LOD, never as a misleading 1:1 placement lattice.
 	var is_building := not _placement_preview.is_empty() or not _road_tool_mode.is_empty()
-	var line_color := Color(GRID_COLOR, (0.34 if is_building else 0.16) if is_exact_tile_grid else 0.18)
+	# Idle terrain is a landscape. The construction grid appears with a tool;
+	# a very faint major lattice remains useful for distant navigation.
+	if not is_building and is_exact_tile_grid:
+		return
+	var line_color := Color("b7c5be", 0.20) if is_building else Color(GRID_COLOR, 0.08)
 	var line_width := 1.0 if is_exact_tile_grid else 1.35
 	var origin := _bounds_origin()
 	var first_x := _first_grid_coordinate(visible_world.position.x, origin.x, step_tiles)
@@ -733,27 +744,24 @@ func _draw_resource_fields() -> void:
 		_node_rects[str(field.get("id", ""))] = {"rect":rect, "data":field, "is_entity":false}
 		var color := _parse_color(str(field.get("resource_color", "#86936D")), Color("86936d"))
 		var selected := _selected_node_id == str(field.get("id", ""))
-		if detail_stage == "COMPACT" or _tile_scale() < 1.0 or detailed_fields >= 128:
-			# Overview uses the authored resource icon. Do not rebuild hundreds
-			# of irregular meshes through a 128-entry cache on every redraw.
-			var icon: Texture2D = CargoArt.texture_for_item(str(field.get("resource_id", "")))
-			if icon != null:
-				draw_texture_rect(icon, rect, false)
+		var overview := detail_stage == "COMPACT" or _tile_scale() < 1.0 or detailed_fields >= 128
+		if _terrain_renderer.has_art():
+			if not overview:
+				detailed_fields += 1
+			_terrain_renderer.draw_field(self, field, _tile_scale(), _camera, overview)
 			if selected:
-				draw_rect(rect, FOCUS_COLOR, false, 1.4)
-		elif str(field.get("shape", "")) == "IRREGULAR" and _terrain_renderer.has_art():
-			detailed_fields += 1
-			_terrain_renderer.draw_field(self, field, _tile_scale(), _camera)
-			if selected:
-				draw_rect(rect, FOCUS_COLOR, false, 1.4)
+				_terrain_renderer.draw_field_outline(self, field, _tile_scale(), _camera, FOCUS_COLOR)
 		else:
 			draw_rect(rect, Color(color, 0.18), true)
 			draw_rect(rect, FOCUS_COLOR if selected else Color(color, 0.72), false, 1.4)
 		var font := get_theme_default_font()
 		var resource_id := str(field.get("resource_id", ""))
-		if detail_stage != "COMPACT" and rect.size.x >= 48.0 and rect.size.y >= 18.0:
-			var label := str(field.get("resource_name", _item_name(resource_id))) + " ×" + ("%.2f" % float(field.get("grade", 1.0)))
-			draw_string(font, rect.position + Vector2(5, 15), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(0.0, rect.size.x - 8.0), 10, Color("d5ddd8"))
+		if rect.size.x >= 70.0 and rect.size.y >= 24.0 and (selected or overview or not _placement_preview.is_empty()):
+			var label := str(field.get("resource_name", _item_name(resource_id)))
+			var label_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12)
+			var label_rect := Rect2(Vector2(rect.get_center().x - label_size.x * 0.5 - 7.0, rect.position.y - 22.0), label_size + Vector2(14, 5))
+			draw_style_box(_node_style(Color("6e776f"), false), label_rect)
+			draw_string(font, label_rect.position + Vector2(7, 15), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e7ebe5"))
 
 
 func _draw_entities() -> void:
@@ -1708,6 +1716,13 @@ func _on_gui_input(event: InputEvent) -> void:
 					accept_event()
 					return
 			if mouse_event.pressed:
+				if not _placement_preview.is_empty():
+					var placement_tile := _screen_to_tile(mouse_event.position)
+					if _tile_in_bounds(placement_tile):
+						_left_pointer.clear()
+						tile_selected.emit(placement_tile)
+						accept_event()
+						return
 				if bool(_port_drag.get("click_mode", false)):
 					_finish_port_drag(mouse_event.position, true)
 					accept_event()
@@ -2213,7 +2228,10 @@ func _point_has_interactive_hit(point: Vector2) -> bool:
 		var node_row := node_value as Dictionary
 		var node_rect: Rect2 = node_row.get("rect", Rect2())
 		if node_rect.has_point(point):
-			return true
+			if bool(node_row.get("is_entity", false)):
+				return true
+			if Terrain.field_contains(node_row.get("data", {}), _screen_to_tile(point)):
+				return true
 	if not _visible_entity_icon_at(point).is_empty():
 		return true
 	return not _nearest_link_at(point).is_empty()

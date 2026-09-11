@@ -1,0 +1,396 @@
+{
+  "schema_version": 1,
+  "status": "original_model_prototype",
+  "building": {
+    "id": "helix_miner_01",
+    "footprint_tiles": [
+      4,
+      4
+    ],
+    "source_pixels_per_tile": 78.76923076923077,
+    "fit_multiplier": 1,
+    "anchor": "ground_origin",
+    "directions": [
+      "authored"
+    ],
+    "layers": [
+      {
+        "id": "shadow",
+        "frame_size": [
+          512,
+          512
+        ],
+        "frame_count": 1,
+        "columns": 1,
+        "source_scale": 1,
+        "shift_tiles": [
+          1.9371509552001953e-07,
+          -1.2873507142066956
+        ],
+        "fps": 0,
+        "blend": "mix",
+        "running_only": false,
+        "provenance_id": "helix-original",
+        "texture": "res://assets/models/helix_miner/sprites/shadow.png"
+      },
+      {
+        "id": "base",
+        "frame_size": [
+          512,
+          512
+        ],
+        "frame_count": 60,
+        "columns": 1,
+        "source_scale": 1,
+        "shift_tiles": [
+          1.9371509552001953e-07,
+          -1.2873507142066956
+        ],
+        "fps": 30,
+        "blend": "mix",
+        "running_only": false,
+        "provenance_id": "helix-original",
+        "textures": [
+          "res://assets/models/helix_miner/sprites/working/0000.png",
+          "res://assets/models/helix_miner/sprites/working/0001.png",
+          "res://assets/models/helix_miner/sprites/working/0002.png",
+          "res://assets/models/helix_miner/sprites/working/0003.png",
+          "res://assets/models/helix_miner/sprites/working/0004.png",
+          "res://assets/models/helix_miner/sprites/working/0005.png",
+          "res://assets/models/helix_miner/sprites/working/0006.png",
+          "res://assets/models/helix_miner/sprites/working/0007.png",
+          "res://assets/models/helix_miner/sprites/working/0008.png",
+          "res://assets/models/helix_miner/sprites/working/0009.png",
+          "res://assets/models/helix_miner/sprites/working/0010.png",
+          "res://assets/models/helix_miner/sprites/working/0011.png",
+          "res://assets/models/helix_miner/sprites/working/0012.png",
+          "res://assets/models/helix_miner/sprites/working/0013.png",
+          "res://assets/models/helix_miner/sprites/working/0014.png",
+          "res://assets/models/helix_miner/sprites/working/0015.png",
+          "res://assets/models/helix_miner/sprites/working/0016.png",
+          "res://assets/models/helix_miner/sprites/working/0017.png",
+          "res://assets/models/helix_miner/sprites/working/0018.png",
+          "res://assets/models/helix_miner/sprites/working/0019.png",
+          "res://assets/models/helix_miner/sprites/working/0020.png",
+          "res://assets/models/helix_miner/sprites/working/0021.png",
+          "res://assets/models/helix_miner/sprites/working/0022.png",
+          "res://assets/models/helix_miner/sprites/working/0023.png",
+          "res://assets/models/helix_miner/sprites/working/0024.png",
+          "res://assets/models/helix_miner/sprites/working/0025.png",
+          "res://assets/models/helix_miner/sprites/working/0026.png",
+          "res://assets/models/helix_miner/sprites/working/0027.png",
+          "res://assets/models/helix_miner/sprites/working/0028.png",
+          "res://assets/models/helix_miner/sprites/working/0029.png",
+          "res://assets/models/helix_miner/sprites/working/0030.png",
+          "res://assets/models/helix_miner/sprites/working/0031.png",
+          "res://assets/models/helix_miner/sprites/working/0032.png",
+          "res://assets/models/helix_miner/sprites/working/0033.png",
+          "res://assets/models/helix_miner/sprites/working/0034.png",
+          "res://assets/models/helix_miner/sprites/working/0035.png",
+          "res://assets/models/helix_miner/sprites/working/0036.png",
+          "res://assets/models/helix_miner/sprites/working/0037.png",
+          "res://assets/models/helix_miner/sprites/working/0038.png",
+          "res://assets/models/helix_miner/sprites/working/0039.png",
+          "res://assets/models/helix_miner/sprites/working/0040.png",
+          "res://assets/models/helix_miner/sprites/working/0041.png",
+          "res://assets/models/helix_miner/sprites/working/0042.png",
+          "res://assets/models/helix_miner/sprites/working/0043.png",
+          "res://assets/models/helix_miner/sprites/working/0044.png",
+          "res://assets/models/helix_miner/sprites/working/0045.png",
+          "res://assets/models/helix_miner/sprites/working/0046.png",
+          "res://assets/models/helix_miner/sprites/working/0047.png",
+          "res://assets/models/helix_miner/sprites/working/0048.png",
+          "res://assets/models/helix_miner/sprites/working/0049.png",
+          "res://assets/models/helix_miner/sprites/working/0050.png",
+          "res://assets/models/helix_miner/sprites/working/0051.png",
+          "res://assets/models/helix_miner/sprites/working/0052.png",
+          "res://assets/models/helix_miner/sprites/working/0053.png",
+          "res://assets/models/helix_miner/sprites/working/0054.png",
+          "res://assets/models/helix_miner/sprites/working/0055.png",
+          "res://assets/models/helix_miner/sprites/working/0056.png",
+          "res://assets/models/helix_miner/sprites/working/0057.png",
+          "res://assets/models/helix_miner/sprites/working/0058.png",
+          "res://assets/models/helix_miner/sprites/working/0059.png"
+        ]
+      },
+      {
+        "id": "mask",
+        "frame_size": [
+          512,
+          512
+        ],
+        "frame_count": 1,
+        "columns": 1,
+        "source_scale": 1,
+        "shift_tiles": [
+          1.9371509552001953e-07,
+          -1.2873507142066956
+        ],
+        "fps": 0,
+        "blend": "mix",
+        "running_only": false,
+        "provenance_id": "helix-original",
+        "texture": "res://assets/models/helix_miner/sprites/mask.png"
+      },
+      {
+        "id": "emission",
+        "frame_size": [
+          512,
+          512
+        ],
+        "frame_count": 1,
+        "columns": 1,
+        "source_scale": 1,
+        "shift_tiles": [
+          1.9371509552001953e-07,
+          -1.2873507142066956
+        ],
+        "fps": 0,
+        "blend": "add",
+        "running_only": true,
+        "provenance_id": "helix-original",
+        "texture": "res://assets/models/helix_miner/sprites/emission.png"
+      }
+    ]
+  },
+  "clips": {
+    "startup": {
+      "textures": [
+        "res://assets/models/helix_miner/sprites/startup/0000.png",
+        "res://assets/models/helix_miner/sprites/startup/0001.png",
+        "res://assets/models/helix_miner/sprites/startup/0002.png",
+        "res://assets/models/helix_miner/sprites/startup/0003.png",
+        "res://assets/models/helix_miner/sprites/startup/0004.png",
+        "res://assets/models/helix_miner/sprites/startup/0005.png",
+        "res://assets/models/helix_miner/sprites/startup/0006.png",
+        "res://assets/models/helix_miner/sprites/startup/0007.png",
+        "res://assets/models/helix_miner/sprites/startup/0008.png",
+        "res://assets/models/helix_miner/sprites/startup/0009.png",
+        "res://assets/models/helix_miner/sprites/startup/0010.png",
+        "res://assets/models/helix_miner/sprites/startup/0011.png",
+        "res://assets/models/helix_miner/sprites/startup/0012.png",
+        "res://assets/models/helix_miner/sprites/startup/0013.png",
+        "res://assets/models/helix_miner/sprites/startup/0014.png",
+        "res://assets/models/helix_miner/sprites/startup/0015.png",
+        "res://assets/models/helix_miner/sprites/startup/0016.png",
+        "res://assets/models/helix_miner/sprites/startup/0017.png",
+        "res://assets/models/helix_miner/sprites/startup/0018.png",
+        "res://assets/models/helix_miner/sprites/startup/0019.png",
+        "res://assets/models/helix_miner/sprites/startup/0020.png",
+        "res://assets/models/helix_miner/sprites/startup/0021.png",
+        "res://assets/models/helix_miner/sprites/startup/0022.png",
+        "res://assets/models/helix_miner/sprites/startup/0023.png"
+      ],
+      "fps": 30,
+      "frame_count": 24
+    },
+    "working": {
+      "textures": [
+        "res://assets/models/helix_miner/sprites/working/0000.png",
+        "res://assets/models/helix_miner/sprites/working/0001.png",
+        "res://assets/models/helix_miner/sprites/working/0002.png",
+        "res://assets/models/helix_miner/sprites/working/0003.png",
+        "res://assets/models/helix_miner/sprites/working/0004.png",
+        "res://assets/models/helix_miner/sprites/working/0005.png",
+        "res://assets/models/helix_miner/sprites/working/0006.png",
+        "res://assets/models/helix_miner/sprites/working/0007.png",
+        "res://assets/models/helix_miner/sprites/working/0008.png",
+        "res://assets/models/helix_miner/sprites/working/0009.png",
+        "res://assets/models/helix_miner/sprites/working/0010.png",
+        "res://assets/models/helix_miner/sprites/working/0011.png",
+        "res://assets/models/helix_miner/sprites/working/0012.png",
+        "res://assets/models/helix_miner/sprites/working/0013.png",
+        "res://assets/models/helix_miner/sprites/working/0014.png",
+        "res://assets/models/helix_miner/sprites/working/0015.png",
+        "res://assets/models/helix_miner/sprites/working/0016.png",
+        "res://assets/models/helix_miner/sprites/working/0017.png",
+        "res://assets/models/helix_miner/sprites/working/0018.png",
+        "res://assets/models/helix_miner/sprites/working/0019.png",
+        "res://assets/models/helix_miner/sprites/working/0020.png",
+        "res://assets/models/helix_miner/sprites/working/0021.png",
+        "res://assets/models/helix_miner/sprites/working/0022.png",
+        "res://assets/models/helix_miner/sprites/working/0023.png",
+        "res://assets/models/helix_miner/sprites/working/0024.png",
+        "res://assets/models/helix_miner/sprites/working/0025.png",
+        "res://assets/models/helix_miner/sprites/working/0026.png",
+        "res://assets/models/helix_miner/sprites/working/0027.png",
+        "res://assets/models/helix_miner/sprites/working/0028.png",
+        "res://assets/models/helix_miner/sprites/working/0029.png",
+        "res://assets/models/helix_miner/sprites/working/0030.png",
+        "res://assets/models/helix_miner/sprites/working/0031.png",
+        "res://assets/models/helix_miner/sprites/working/0032.png",
+        "res://assets/models/helix_miner/sprites/working/0033.png",
+        "res://assets/models/helix_miner/sprites/working/0034.png",
+        "res://assets/models/helix_miner/sprites/working/0035.png",
+        "res://assets/models/helix_miner/sprites/working/0036.png",
+        "res://assets/models/helix_miner/sprites/working/0037.png",
+        "res://assets/models/helix_miner/sprites/working/0038.png",
+        "res://assets/models/helix_miner/sprites/working/0039.png",
+        "res://assets/models/helix_miner/sprites/working/0040.png",
+        "res://assets/models/helix_miner/sprites/working/0041.png",
+        "res://assets/models/helix_miner/sprites/working/0042.png",
+        "res://assets/models/helix_miner/sprites/working/0043.png",
+        "res://assets/models/helix_miner/sprites/working/0044.png",
+        "res://assets/models/helix_miner/sprites/working/0045.png",
+        "res://assets/models/helix_miner/sprites/working/0046.png",
+        "res://assets/models/helix_miner/sprites/working/0047.png",
+        "res://assets/models/helix_miner/sprites/working/0048.png",
+        "res://assets/models/helix_miner/sprites/working/0049.png",
+        "res://assets/models/helix_miner/sprites/working/0050.png",
+        "res://assets/models/helix_miner/sprites/working/0051.png",
+        "res://assets/models/helix_miner/sprites/working/0052.png",
+        "res://assets/models/helix_miner/sprites/working/0053.png",
+        "res://assets/models/helix_miner/sprites/working/0054.png",
+        "res://assets/models/helix_miner/sprites/working/0055.png",
+        "res://assets/models/helix_miner/sprites/working/0056.png",
+        "res://assets/models/helix_miner/sprites/working/0057.png",
+        "res://assets/models/helix_miner/sprites/working/0058.png",
+        "res://assets/models/helix_miner/sprites/working/0059.png"
+      ],
+      "fps": 30,
+      "frame_count": 60
+    },
+    "shutdown": {
+      "textures": [
+        "res://assets/models/helix_miner/sprites/shutdown/0000.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0001.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0002.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0003.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0004.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0005.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0006.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0007.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0008.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0009.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0010.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0011.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0012.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0013.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0014.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0015.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0016.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0017.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0018.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0019.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0020.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0021.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0022.png",
+        "res://assets/models/helix_miner/sprites/shutdown/0023.png"
+      ],
+      "fps": 30,
+      "frame_count": 24
+    }
+  },
+  "ground": {
+    "texture": "res://assets/art_calibration/ground/aerial_sand_diff_2k.jpg",
+    "span_tiles": 8,
+    "provenance_id": "polyhaven-aerial-sand"
+  },
+  "ore": {
+    "texture": "res://assets/art_calibration/ore/iron-ore.png",
+    "purpose": "item render scattered for visual occlusion calibration; not a new terrain deposit set",
+    "provenance_id": "malcolm-riley"
+  },
+  "smoke": {
+    "textures": [
+      "res://assets/art_calibration/smoke/0001.png",
+      "res://assets/art_calibration/smoke/0002.png",
+      "res://assets/art_calibration/smoke/0003.png",
+      "res://assets/art_calibration/smoke/0004.png",
+      "res://assets/art_calibration/smoke/0005.png",
+      "res://assets/art_calibration/smoke/0006.png",
+      "res://assets/art_calibration/smoke/0007.png",
+      "res://assets/art_calibration/smoke/0008.png",
+      "res://assets/art_calibration/smoke/0009.png",
+      "res://assets/art_calibration/smoke/0010.png",
+      "res://assets/art_calibration/smoke/0011.png",
+      "res://assets/art_calibration/smoke/0012.png",
+      "res://assets/art_calibration/smoke/0013.png",
+      "res://assets/art_calibration/smoke/0014.png",
+      "res://assets/art_calibration/smoke/0015.png",
+      "res://assets/art_calibration/smoke/0016.png",
+      "res://assets/art_calibration/smoke/0017.png",
+      "res://assets/art_calibration/smoke/0018.png",
+      "res://assets/art_calibration/smoke/0019.png",
+      "res://assets/art_calibration/smoke/0020.png",
+      "res://assets/art_calibration/smoke/0021.png",
+      "res://assets/art_calibration/smoke/0022.png",
+      "res://assets/art_calibration/smoke/0023.png",
+      "res://assets/art_calibration/smoke/0024.png",
+      "res://assets/art_calibration/smoke/0025.png",
+      "res://assets/art_calibration/smoke/0026.png",
+      "res://assets/art_calibration/smoke/0027.png",
+      "res://assets/art_calibration/smoke/0028.png",
+      "res://assets/art_calibration/smoke/0029.png",
+      "res://assets/art_calibration/smoke/0030.png"
+    ],
+    "frame_size": [
+      128,
+      128
+    ],
+    "frame_count": 30,
+    "columns": 1,
+    "fps": 18,
+    "blend": "mix",
+    "provenance_id": "rubberduck-smoke",
+    "notes": "Source has ordered PNGs but no declared FPS/loop. 18 fps repeating preview is a local calibration choice."
+  },
+  "provenance": [
+    {
+      "id": "helix-original",
+      "author": "Original procedural model authored in this project with Codex",
+      "source_script": "tools/build_helix_miner.py",
+      "model": "source/helix_miner.blend",
+      "interchange": "helix_miner.glb",
+      "generator": "Blender 4.5.9 LTS",
+      "reference_meshes_used": false,
+      "reference_images_used_for_model": false,
+      "note": "Reference sand, ore and smoke in the preview retain their original separate credits."
+    },
+    {
+      "id": "malcolm-riley",
+      "author": "Malcolm Riley",
+      "source_url": "https://github.com/malcolmriley/unused-renders",
+      "revision": "0d2c456803dbdf1f10dd282b1fb9356526feb276",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "evidence": "res://assets/art_calibration/licenses/unused-renders-LICENSE.txt"
+    },
+    {
+      "id": "polyhaven-aerial-sand",
+      "author": "Rob Tuytel / Poly Haven",
+      "source_url": "https://polyhaven.com/a/aerial_sand",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "evidence": "res://assets/art_calibration/licenses/polyhaven-evidence.md"
+    },
+    {
+      "id": "rubberduck-smoke",
+      "author": "rubberduck",
+      "source_url": "https://opengameart.org/content/25-special-effects-rendered-with-blender",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "evidence": "res://assets/art_calibration/licenses/rubberduck-SOURCE.html",
+      "archive_sha256": "52fc2d3dca5621d1e2968365226021ded3de2ace43c7f09339405197066b0594"
+    }
+  ],
+  "animation_timeline": {
+    "fps": 30,
+    "startup": [
+      1,
+      24
+    ],
+    "working": [
+      25,
+      84
+    ],
+    "shutdown": [
+      85,
+      108
+    ]
+  },
+  "geometry": {
+    "objects": 182,
+    "meshes": 169
+  }
+}

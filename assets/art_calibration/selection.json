@@ -1,0 +1,364 @@
+{
+  "files": [
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-base.png",
+      "destination": "building/chemical-stager-base.png",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "77fc776d99e8bb9a96105488df8239b5bcc99039df47e24d40d3ea6ff0a95c5a"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-base.lua",
+      "destination": "building/chemical-stager-base.lua",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "ac0dc2f4a62fd6c22348fc01c44a21fe9b9fcdfc6d9c369299029a5bdc81e32c"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-shadow.png",
+      "destination": "building/chemical-stager-shadow.png",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "c3650179048adda816c11d7f0ea91706f760182e253566dd1a82a06b385cfd12"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-shadow.lua",
+      "destination": "building/chemical-stager-shadow.lua",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "c8a5d02daad321243d75951a119b57faa3e09381647aea5ccafe3f6b5bb26d60"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-mask.png",
+      "destination": "building/chemical-stager-mask.png",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "f93924e6af3ded15132dc5e3ade55f0c545e56e5114453adc3f97ecc22d16a69"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-mask.lua",
+      "destination": "building/chemical-stager-mask.lua",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "3b0fa3fe096878f6bb3de4da5fde26d8835a9422986460ab0771283f0efeec84"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-emission.png",
+      "destination": "building/chemical-stager-emission.png",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "9e2a21c14b1175297ed85894250c66e625f76919b172295c49b1eece4e13c740"
+    },
+    {
+      "source": "nullius-visual-overhaul/graphics/entity/chemical-stager/chemical-stager-emission.lua",
+      "destination": "building/chemical-stager-emission.lua",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "ac0dc2f4a62fd6c22348fc01c44a21fe9b9fcdfc6d9c369299029a5bdc81e32c"
+    },
+    {
+      "source": "nullius-visual-overhaul/LICENSE",
+      "destination": "licenses/nullius-LICENSE.txt",
+      "provenance_id": "hurricane-nullius",
+      "sha256": "7538890a7fe680e75496e34abc738254760de24c8fc9e6f7550857ef30f6c472"
+    },
+    {
+      "source": "unused-renders/item/original/pile-dust-crushed-iron-ore-1.png",
+      "destination": "ore/iron-ore.png",
+      "provenance_id": "malcolm-riley",
+      "sha256": "2d3c4744136e1d7478db52e3d7ecc635f3d589969195976a062e8a88c8623501"
+    },
+    {
+      "source": "unused-renders/LICENSE",
+      "destination": "licenses/unused-renders-LICENSE.txt",
+      "provenance_id": "malcolm-riley",
+      "sha256": "cbd5af318286b74656f145dff5091907cc23d6d8c9ad09e0291ec2497792ba41"
+    },
+    {
+      "source": "PolyHaven-Samples/aerial_sand/textures/aerial_sand_diff_2k.jpg",
+      "destination": "ground/aerial_sand_diff_2k.jpg",
+      "provenance_id": "polyhaven-aerial-sand",
+      "sha256": "98eddd01834e996cda3fa20dbc769ae38e87277ad0c62650604572fb2e646cd1"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/SOURCE.html",
+      "destination": "licenses/rubberduck-SOURCE.html",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "a848b9db8944fa9a86dd88a8b18b51fa17662f0710417de04758f5f0b59d2f67"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0001.png",
+      "destination": "smoke/0001.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "ee402098b5b518ad0f13d44f0149a81433163d54196412a8ab98124a0c3265ed"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0002.png",
+      "destination": "smoke/0002.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "f1e1e33cb218860f66a50d9f672eb288b8dc19d08e69ed6d1a191c9b1c57926e"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0003.png",
+      "destination": "smoke/0003.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "f2a4a018a261ddd978d74581f84af4a26baf05ae68785c4e001037d549008813"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0004.png",
+      "destination": "smoke/0004.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "6612ee2f42b44aa0fc13d71c85a40591de02462c1beb1f8455ab94b98ee65962"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0005.png",
+      "destination": "smoke/0005.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "c1005f94b30907c80504e6ccc16ec3273d2d4235006fe9b598e8f4d401704671"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0006.png",
+      "destination": "smoke/0006.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "f3570e6a822bde6cc749cebf79f53085e2a4f0262bc00e4253923a1de34e29fa"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0007.png",
+      "destination": "smoke/0007.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "eb91d336ca3a62095cea14a44c37d32714f78c06f853bb71597397fd2a75a4d2"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0008.png",
+      "destination": "smoke/0008.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "4482428e50dc377c93658e3b21145007d7991506404173c85c435532a03b5fff"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0009.png",
+      "destination": "smoke/0009.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "0239529dda4ca290c70a983f2a468b2293dbb6e05c13bb95d94a75afbde64e69"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0010.png",
+      "destination": "smoke/0010.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "79fea2f4ea2de8217804630ff2014e5d9bc9406dce93318816c53c5e550f4d2e"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0011.png",
+      "destination": "smoke/0011.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "ef6ff1de7dee004ba5513db25a041b34823bb1c4b93396b7316d5b2edf99b026"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0012.png",
+      "destination": "smoke/0012.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "add17201faad857f8b1345e52241f0a3b0f14fa0e6852d97234ff14557e3b652"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0013.png",
+      "destination": "smoke/0013.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "6fe8c8f0d818d859690d668b1866663775a30dbca6cda4bb45e568643f82b510"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0014.png",
+      "destination": "smoke/0014.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "20a31cb974477b61be6725d4701eb5aaac0b31ce004d4104cee6fa7fa3b85758"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0015.png",
+      "destination": "smoke/0015.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "8eb6e718efe1378b929174583a34c1f4019e76beb867f2a1026fa5eb276c4e90"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0016.png",
+      "destination": "smoke/0016.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "67a0f428afb150ba98879aa0713d95d43d4263f6baa3f99a7b2b28670029779a"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0017.png",
+      "destination": "smoke/0017.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "97bbb61e0ec8b062fa82c647960fc5c2b227da705f6c6a5cb57a520c1c4ccafa"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0018.png",
+      "destination": "smoke/0018.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "66602fab7def894334e15a9cbc177458dc81a7fe482acb0d9b45b96835383a8e"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0019.png",
+      "destination": "smoke/0019.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "96b50329fb51c16d271286e0299ccc92f49cc2212b22a10c105296798bdbd1d7"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0020.png",
+      "destination": "smoke/0020.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "a7b9e4f4583b0a22f0475d94586896d3a29a2be1536404f5524a8848e82cb74e"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0021.png",
+      "destination": "smoke/0021.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "57c38213d050cad7e52d5bb891869c3567cd26321e136b60b7fa5eb1ef93d21b"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0022.png",
+      "destination": "smoke/0022.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "7e8f5e637172ca94fb4d3ee521f8dc6b26e2ac1d47e18360717e457eb8d477af"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0023.png",
+      "destination": "smoke/0023.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "7f279f4186ff605f42e72c178265fb59b34cf1a9e40125b805c2478bc8b0cdd4"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0024.png",
+      "destination": "smoke/0024.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "13f3b03ff707d056f7ccada24e050fae1cccde76ce27ee5e985583f0adaf2071"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0025.png",
+      "destination": "smoke/0025.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "beba870728959a12f56a75eadf79a8576561f7567ca229849601c8ba78f49c3a"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0026.png",
+      "destination": "smoke/0026.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "93c2932fd0013e20ffb687cf6797b1a07426fb9334fe8744ddbe4fadd5af51da"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0027.png",
+      "destination": "smoke/0027.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "7680e0eb22dc954a9e338b07ca63b0c2782895509f53f028967f54646683bc53"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0028.png",
+      "destination": "smoke/0028.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "5abad701abc63610299638aebdba8ca2aaea2d64d94d786ed91f6449b1cc1058"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0029.png",
+      "destination": "smoke/0029.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "5ea2d981a9857c875feb708179373f55e8645c3fb1264172fdfecc9d8a39c1a8"
+    },
+    {
+      "source": "Rubberduck-Blender-VFX/files/effect-images/explosion/blueish_smoke/0030.png",
+      "destination": "smoke/0030.png",
+      "provenance_id": "rubberduck-smoke",
+      "sha256": "abd24ddb713e8a275b01263890b5fa2f759d1f23dbb99e5c0b09b24c08828bcd"
+    }
+  ],
+  "provenance": [
+    {
+      "id": "hurricane-nullius",
+      "author": "Hurricane046; processing by brickbrycebrick / SmokeStackGG",
+      "source_url": "https://www.figma.com/proto/y1IQG08ZG2jIeJ5sTyF4MP/Factorio-Buildings",
+      "repository": "https://github.com/SmokeStackGG/nullius-visual-overhaul",
+      "revision": "852d736052fbf32c22cb04102ce82367b12800d0",
+      "license": "CC-BY-4.0 (sprites); MIT (included Lua definitions)",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "evidence": "licenses/nullius-LICENSE.txt"
+    },
+    {
+      "id": "malcolm-riley",
+      "author": "Malcolm Riley",
+      "source_url": "https://github.com/malcolmriley/unused-renders",
+      "revision": "0d2c456803dbdf1f10dd282b1fb9356526feb276",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "evidence": "licenses/unused-renders-LICENSE.txt"
+    },
+    {
+      "id": "polyhaven-aerial-sand",
+      "author": "Rob Tuytel / Poly Haven",
+      "source_url": "https://polyhaven.com/a/aerial_sand",
+      "license": "CC0-1.0",
+      "license_url": "https://polyhaven.com/license",
+      "evidence": "Author asset page and license page checked 2026-09-10; licenses/polyhaven-evidence.md"
+    },
+    {
+      "id": "rubberduck-smoke",
+      "author": "rubberduck",
+      "source_url": "https://opengameart.org/content/25-special-effects-rendered-with-blender",
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "evidence": "licenses/rubberduck-SOURCE.html",
+      "archive_sha256": "52fc2d3dca5621d1e2968365226021ded3de2ace43c7f09339405197066b0594"
+    }
+  ],
+  "ground": {
+    "texture": "res://assets/art_calibration/ground/aerial_sand_diff_2k.jpg",
+    "span_tiles": 8,
+    "provenance_id": "polyhaven-aerial-sand"
+  },
+  "ore": {
+    "texture": "res://assets/art_calibration/ore/iron-ore.png",
+    "purpose": "item render scattered for visual occlusion calibration; not a new terrain deposit set",
+    "provenance_id": "malcolm-riley"
+  },
+  "smoke": {
+    "textures": [
+      "res://assets/art_calibration/smoke/0001.png",
+      "res://assets/art_calibration/smoke/0002.png",
+      "res://assets/art_calibration/smoke/0003.png",
+      "res://assets/art_calibration/smoke/0004.png",
+      "res://assets/art_calibration/smoke/0005.png",
+      "res://assets/art_calibration/smoke/0006.png",
+      "res://assets/art_calibration/smoke/0007.png",
+      "res://assets/art_calibration/smoke/0008.png",
+      "res://assets/art_calibration/smoke/0009.png",
+      "res://assets/art_calibration/smoke/0010.png",
+      "res://assets/art_calibration/smoke/0011.png",
+      "res://assets/art_calibration/smoke/0012.png",
+      "res://assets/art_calibration/smoke/0013.png",
+      "res://assets/art_calibration/smoke/0014.png",
+      "res://assets/art_calibration/smoke/0015.png",
+      "res://assets/art_calibration/smoke/0016.png",
+      "res://assets/art_calibration/smoke/0017.png",
+      "res://assets/art_calibration/smoke/0018.png",
+      "res://assets/art_calibration/smoke/0019.png",
+      "res://assets/art_calibration/smoke/0020.png",
+      "res://assets/art_calibration/smoke/0021.png",
+      "res://assets/art_calibration/smoke/0022.png",
+      "res://assets/art_calibration/smoke/0023.png",
+      "res://assets/art_calibration/smoke/0024.png",
+      "res://assets/art_calibration/smoke/0025.png",
+      "res://assets/art_calibration/smoke/0026.png",
+      "res://assets/art_calibration/smoke/0027.png",
+      "res://assets/art_calibration/smoke/0028.png",
+      "res://assets/art_calibration/smoke/0029.png",
+      "res://assets/art_calibration/smoke/0030.png"
+    ],
+    "frame_size": [
+      128,
+      128
+    ],
+    "frame_count": 30,
+    "columns": 1,
+    "fps": 18,
+    "blend": "mix",
+    "provenance_id": "rubberduck-smoke",
+    "notes": "Source has ordered PNGs but no declared FPS/loop. 18 fps repeating preview is a local calibration choice."
+  },
+  "local_evidence": [
+    {
+      "path": "ATTRIBUTION.md",
+      "sha256": "f7fbfa6a3898c338687897a757eda2b6bf8b76639c9b5590a76ce6fe6acd4931"
+    },
+    {
+      "path": "licenses/polyhaven-evidence.md",
+      "sha256": "7a0495e25342fbccea4cfb542a4ee8e2d18e1eae81c9a7ee27ebaa399b73bf9d"
+    }
+  ]
+}

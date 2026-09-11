@@ -1,6 +1,6 @@
 # 当前剩余工作
 
-> 更新：2026-09-10。此页只列当前道路工业方向的未完成项。原 1.29 Core Complete Ledger 已[原样归档](./archive/remaining-work-1.29.md)，其中的完成勾选、Golden Path 与旧聚合工业不构成当前承诺或验证证据。
+> 更新：2026-09-11。此页只列当前道路工业方向的未完成项。原 1.29 Core Complete Ledger 已[原样归档](./archive/remaining-work-1.29.md)，其中的完成勾选、Golden Path 与旧聚合工业不构成当前承诺或验证证据。
 
 当前已批准契约和状态标签见[内容同步状态](./Content_Synchronization_zh_CN.md)；Factory 的详细规则见[星球共享库存与道路工业](./Planetary_Industry_Roads_Design_zh_CN.md)。
 
@@ -9,6 +9,8 @@
 - 有限画布、确定性地形、不规则矿区、道路供电/运输、Location 单库存、成品部署、开发核心开局和 DSP 工厂内容均已有实现。
 - 这些能力的历史聚焦验证记录在道路设计文档中；内容、规则、尺寸或 UI 再变化后必须重跑受影响测试，不能沿用旧 PASS。
 - `factory_grid_simulation_test.gd` 仍硬编码道路前的世界尺寸，未同步前不能作为当前大星球规格的验收依据。
+- 工业画布的真实地表材质、矿簇、11×11 核心采掘设施、建造栏与检查器已在 2026-09-11 集成并通过当次聚焦检查，见[本轮记录](./Factory_Natural_Art_Refactor_zh_CN.md)。其它工作区美术与下述独立工作未被该完成项替代。
+- `factory_workspace_main_integration_test.gd` 的手动端口路径，以及 `factory_operations_ui_test.gd` 的旧默认页/现场资金断言仍待随旧端口清理更新；不能把这些历史合同当作当前部署要求。
 
 ## 已批准的后续工作
 

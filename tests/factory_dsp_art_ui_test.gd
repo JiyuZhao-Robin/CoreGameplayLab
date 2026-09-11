@@ -145,9 +145,11 @@ func _test_real_workspace_uses_dsp_icons_and_building_recipe() -> void:
 	workspace.apply_snapshot(_workspace_fixture())
 	await _settle()
 	var card := workspace.find_child("FactoryBuildCardGridDspWindTurbine", true, false) as Button
+	var icon_control := card.find_child("FactoryBuildCardIcon", true, false) as TextureRect if card != null else null
+	var card_icon := icon_control.texture as AtlasTexture if icon_control != null else null
 	var expected_building_icon := FactoryDspArtScript.texture("grid_dsp_wind_turbine") as AtlasTexture
 	_check(
-		workspace.size == Vector2(1920, 1080) and card != null and card.icon is AtlasTexture and expected_building_icon != null and _rect_matches((card.icon as AtlasTexture).region, expected_building_icon.region) and (card.icon as AtlasTexture).atlas.resource_path == BUILDING_ATLAS_PATH,
+		workspace.size == Vector2(1920, 1080) and card_icon != null and expected_building_icon != null and _rect_matches(card_icon.region, expected_building_icon.region) and card_icon.atlas.resource_path == BUILDING_ATLAS_PATH,
 		"the real 1920 logical Factory workspace renders the selectable DSP building with its authored atlas icon"
 	)
 	workspace.call("_on_entity_selected", _assembler_entity())

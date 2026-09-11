@@ -2212,7 +2212,7 @@ func _rebuild_industry() -> void:
 	var header := HBoxContainer.new()
 	header.name = "FactoryWorkspaceHeader"
 	header.add_theme_constant_override("separation", 10)
-	var title := _label(I18n.t("factory.operations.page_title", "Industrial operations"), 24, Color("e4ecef"))
+	var title := _label(I18n.t("factory.operations.page_title", "Industrial operations"), 18, Color("e4ecef"))
 	title.name = "FactoryPageTitle"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)

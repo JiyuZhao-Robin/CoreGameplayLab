@@ -1,0 +1,11 @@
+# These source copies, receipts and derivatives have byte-exact SHA-256 ledgers.
+# Preserve original bytes (including source whitespace) across checkouts.
+assets/art_calibration/** -text -whitespace
+assets/models/helix_miner/** -text -whitespace
+assets/ui/factory/miner/** -text -whitespace
+assets/ui/factory/natural/** -text -whitespace
+
+# Generator source hashes are also part of those ledgers.
+tools/build_helix_miner.py text eol=lf
+tools/build_core_extractor_factory_art.gd text eol=lf
+tools/render_factory_minerals.py text eol=lf
