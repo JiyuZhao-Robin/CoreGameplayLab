@@ -496,7 +496,9 @@ func place_entity_immediate(world: Dictionary, definition_id: String, origin: Ve
 
 func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i, recipe_id: String = "", ignored_order_id: String = "") -> Dictionary:
 	var definition: Dictionary = building_definitions.get(definition_id, {})
-	if definition.is_empty() or str(definition.get("kind", "")) not in ENTITY_KINDS:
+	# ROUTER definitions remain available only to historical domain fixtures;
+	# the application blocks them. Retired imported buildings cannot be deployed.
+	if definition.is_empty() or str(definition.get("kind", "")) not in ENTITY_KINDS or (bool(definition.get("legacy_only", false)) and str(definition.get("kind", "")) != "ROUTER"):
 		return _failure("UNKNOWN_BUILDING", "Unknown or invalid building definition")
 	if definition_id in ["grid_dsp_time_warp_device", "grid_dsp_space_station_construction_launcher"]:
 		for existing in world.get("entities", {}).values():
@@ -507,7 +509,7 @@ func can_place_entity(world: Dictionary, definition_id: String, origin: Vector2i
 		# supplied recipe still has to exist and be declared compatible by the
 		# building; the empty value is the intentional unconfigured state.
 		var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
-		if not recipe_id.is_empty() and (recipe.is_empty() or not definition.get("recipe_ids", []).has(recipe_id)):
+		if not recipe_id.is_empty() and (recipe.is_empty() or bool(recipe.get("legacy_only", false)) or not definition.get("recipe_ids", []).has(recipe_id)):
 			return _failure("INCOMPATIBLE_RECIPE", "Machine requires a compatible recipe")
 	var size_data: Dictionary = definition.get("footprint", {})
 	var footprint := _footprint(origin, Vector2i(maxi(1, int(size_data.get("width", 1))), maxi(1, int(size_data.get("height", 1)))))
@@ -642,7 +644,7 @@ func set_entity_recipe(world: Dictionary, entity_id: String, recipe_id: String) 
 		return _failure("INVALID_MACHINE", "Only a completed Factory machine can change recipe")
 	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
 	var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
-	if recipe.is_empty() or not definition.get("recipe_ids", []).has(recipe_id):
+	if recipe.is_empty() or bool(recipe.get("legacy_only", false)) or not definition.get("recipe_ids", []).has(recipe_id):
 		return _failure("INCOMPATIBLE_RECIPE", "The selected recipe is incompatible with this machine")
 	var previous_recipe_id := str(entity.get("recipe_id", ""))
 	if previous_recipe_id == recipe_id:
@@ -1289,7 +1291,7 @@ func _machine_operational_projection(entity_id: String, entity: Dictionary, powe
 	var definition: Dictionary = building_definitions.get(str(entity.get("definition_id", "")), {})
 	var recipe: Dictionary = recipe_definitions.get(str(entity.get("recipe_id", "")), {})
 	var projection := {"status":"NO_RECIPE", "actual_rate":0.0, "recipe":recipe, "available_cycles":0, "output_cycles":0}
-	if recipe.is_empty():
+	if recipe.is_empty() or bool(recipe.get("legacy_only", false)):
 		return projection
 	var factor := float(power_factors.get(entity_id, 0.0))
 	if factor <= EPSILON:
@@ -1897,6 +1899,8 @@ func _workspace_palette_snapshot(world: Dictionary) -> Dictionary:
 	for definition_id_value in _sorted_keys(building_definitions):
 		var definition_id := str(definition_id_value)
 		var definition: Dictionary = building_definitions.get(definition_id, {})
+		if bool(definition.get("legacy_only", false)):
+			continue
 		var nominal_generation_kw := FactoryEnvironmentEffects.nominal_generation_kw(definition)
 		var nominal_demand_kw := FactoryEnvironmentEffects.nominal_demand_kw(definition)
 		var effective_generation := effective_generation_kw(world, definition)
@@ -1924,6 +1928,8 @@ func _workspace_palette_snapshot(world: Dictionary) -> Dictionary:
 	for recipe_id_value in _sorted_keys(recipe_definitions):
 		var recipe_id := str(recipe_id_value)
 		var recipe: Dictionary = recipe_definitions.get(recipe_id, {})
+		if bool(recipe.get("legacy_only", false)):
+			continue
 		recipes.append({
 			"id":recipe_id,
 			"name":str(recipe.get("name", recipe_id)),

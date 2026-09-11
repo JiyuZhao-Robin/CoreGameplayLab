@@ -37,7 +37,7 @@ func _run() -> void:
 	_check(not bool(canvas.call("_road_feedback_animation_allowed")) and is_equal_approx(float(canvas.call("_cargo_draw_progress",row)),0.8),"Reduced Motion keeps current cargo position without interpolation")
 	canvas.set_reduced_motion(false)
 	canvas.set("_overview_mode",true)
-	_check(not bool(canvas.call("_road_feedback_animation_allowed")),"overview does not start a continuous animation redraw loop")
+	_check(bool(canvas.call("_road_feedback_animation_allowed")),"bounded local reset view retains animation within the visible-record budget")
 	canvas.set("_overview_mode",false)
 	canvas.set("_zoom",0.1)
 	_check(not bool(canvas.call("_road_feedback_animation_allowed")),"subtile LOD disables animated feedback")

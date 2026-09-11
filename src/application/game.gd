@@ -399,7 +399,7 @@ func factory_workspace_snapshot(world_id: String) -> Dictionary:
 func _factory_definition_available(definition: Dictionary, candidate_state: SpaceGameState = null) -> bool:
 	# Splitters and mergers belonged to the retired per-item port network.
 	# Keep old entity records recoverable, but never offer new useless routers.
-	if str(definition.get("kind", "")) == "ROUTER":
+	if str(definition.get("kind", "")) == "ROUTER" or bool(definition.get("legacy_only", false)):
 		return false
 	var evaluated_state := candidate_state if candidate_state != null else state
 	if definition.is_empty() or not simulation.definition_revealed(evaluated_state, definition):

@@ -20,7 +20,7 @@ func _run() -> void:
 		_check(database.items[product].get("building_definition_id") == building_id, "finished product identity: %s" % building_id)
 		var manufacture: Dictionary = database.factory_recipes["manufacture_%s" % building_id]
 		_check(manufacture["outputs"].size() == 1 and str(manufacture["outputs"][0]["item"]) == product and int(manufacture["outputs"][0]["quantity"]) == 1, "manufacturing produces exactly one installable building")
-		_check(database.factory_buildings["grid_engineering_works"]["recipe_ids"].has(manufacture["id"]), "starting assembler can manufacture every building")
+		_check(database.factory_buildings["grid_engineering_works"]["recipe_ids"].has(manufacture["id"]) == not bool(building.get("legacy_only", false)), "starting assembler manufactures only active buildings")
 	_test_catalog_batches()
 	_test_finite_power()
 	_test_proliferation_safety()
@@ -40,7 +40,7 @@ func _test_catalog_batches() -> void:
 	for source_recipe in database.dsp_industry.get("factory_recipes", []):
 		var recipe: Dictionary = database.factory_recipes[str(source_recipe["id"])]
 		var mode := str(recipe.get("runtime_metadata", {}).get("recipe_mode", ""))
-		if mode != "STANDARD" or recipe["id"] in ["dsp_accumulator_charge", "dsp_accumulator_discharge"]:
+		if bool(recipe.get("legacy_only", false)) or mode != "STANDARD" or recipe["id"] in ["dsp_accumulator_charge", "dsp_accumulator_discharge"]:
 			continue
 		var machine_id := "grid_engineering_works" if str(recipe["id"]).begins_with("manufacture_") else str(recipe.get("source_building_id", ""))
 		var definition: Dictionary = database.factory_buildings[machine_id]

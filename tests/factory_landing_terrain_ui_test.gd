@@ -3,6 +3,7 @@ extends SceneTree
 const Workspace = preload("res://src/ui/workspaces/factory/factory_workspace.gd")
 const Terrain = preload("res://src/core/factory_terrain.gd")
 const Renderer = preload("res://src/ui/workspaces/factory/factory_terrain_renderer.gd")
+const Canvas = preload("res://src/ui/workspaces/factory/factory_canvas.gd")
 var failures: Array[String] = []
 
 
@@ -49,11 +50,13 @@ func _run() -> void:
 	canvas.focus_tile(Vector2i(700,420))
 	await _settle()
 	_check(renderer.get("mesh_build_count") > meshes_before and renderer.call("cached_chunk_count") <= Renderer.MAX_CACHED_CHUNKS, "panning prepares newly visible chunks without loading the entire planet")
-	var field_meshes_before: int = renderer.get("field_mesh_build_count")
 	canvas.reset_camera()
 	await _settle()
-	_check(renderer.get("last_lod") > 1 and renderer.call("cached_chunk_count") <= Renderer.MAX_CACHED_CHUNKS, "planet overview uses bounded LOD rather than drawing every tile")
-	_check(int(renderer.get("field_mesh_build_count")) == field_meshes_before, "far overview draws resource icons without thrashing the irregular deposit mesh cache")
+	_check(canvas.size.x * canvas.size.y / pow(canvas._tile_scale(), 2) <= float(Canvas.MAX_VISIBLE_CAMERA_TILES) + 1.0 and renderer.call("cached_chunk_count") <= Renderer.MAX_CACHED_CHUNKS, "reset view keeps the visible-tile and terrain-cache budgets instead of fitting the planet")
+	var field_meshes_after_reset: int = renderer.get("field_mesh_build_count")
+	canvas.queue_redraw()
+	await _settle()
+	_check(int(renderer.get("field_mesh_build_count")) == field_meshes_after_reset, "stationary limited view reuses irregular deposit meshes")
 	if OS.get_cmdline_user_args().has("--capture"):
 		canvas.set("_zoom",1.8)
 		canvas.focus_tile(Vector2i(80,48))

@@ -430,13 +430,11 @@ func _test_canvas_scale_contract(workspace) -> void:
 		"Earth, Mars-size, and large planets retain proportional shared overview scale"
 	)
 	_check(
-		large_rect.position.x >= 23.9
-		and large_rect.position.y >= 23.9
-		and large_rect.end.x <= canvas.size.x - 23.9
-		and large_rect.end.y <= canvas.size.y - 23.9,
-		"the authored maximum factory canvas fits inside the overview padding"
+		large_rect.size.x > canvas.size.x
+		and large_rect.size.y > canvas.size.y,
+		"reset keeps a bounded local view instead of fitting the entire large planet"
 	)
-	_check(canvas._tile_scale() < 2.0 and is_equal_approx(canvas._tile_scale(), 4.0 * float(canvas.get("_zoom"))), "overview zoom has no hidden two-pixel dead band")
+	_check(canvas.size.x * canvas.size.y / pow(canvas._tile_scale(), 2) <= float(CanvasScript.MAX_VISIBLE_CAMERA_TILES) + 1.0 and is_equal_approx(canvas._tile_scale(), 4.0 * float(canvas.get("_zoom"))), "zoom-out preserves the visible-tile budget without a hidden scale multiplier")
 
 	var anchor: Vector2 = canvas.size * 0.5
 	var anchor_world: Vector2 = canvas._screen_to_world(anchor)
@@ -476,7 +474,7 @@ func _test_canvas_scale_contract(workspace) -> void:
 	canvas.apply_snapshot(malformed_snapshot)
 	canvas.reset_camera()
 	var malformed_rect: Rect2 = canvas._world_screen_rect()
-	_check(malformed_rect.position.x >= 23.9 and malformed_rect.position.y >= 23.9 and malformed_rect.end.x <= canvas.size.x - 23.9 and malformed_rect.end.y <= canvas.size.y - 23.9, "canvas defensively fits an oversized malformed snapshot even though the application boundary force-crops it")
+	_check(malformed_rect.size.x > canvas.size.x and canvas.size.x * canvas.size.y / pow(canvas._tile_scale(), 2) <= float(CanvasScript.MAX_VISIBLE_CAMERA_TILES) + 1.0, "oversized snapshot cannot force the camera outside its visible-tile budget")
 
 	var normal_canvas_size: Vector2 = canvas.size
 	var tiny_snapshot := _fixture_snapshot()

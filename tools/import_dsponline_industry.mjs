@@ -10,6 +10,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const DEFAULT_SOURCE = "/Volumes/T9/Developer/projects/DSPONLINE/src/game/content.ts";
+// Keep source IDs and art indices for old saves; retired content is never offered
+// for new deployment or manufacturing after regenerating this shard.
+const retiredBuildingIds = new Set(["splitter_4way"]);
 const cliArguments = process.argv.slice(2);
 const sourceArgument = cliArguments.find((argument) => !argument.startsWith("--"));
 const sourcePath = resolve(sourceArgument ?? process.env.DSPONLINE_CONTENT_PATH ?? DEFAULT_SOURCE);
@@ -373,7 +376,7 @@ const factoryBuildings = sourceBuildings.map((building, artIndex) => {
   const kind = sourceBuildingKind(building);
   const directRecipeIds = [...(factoryRecipesByBuilding.get(buildingId(building.id)) ?? [])];
   if (building.id === "matrix_lab") directRecipeIds.push(...matrixResearchVariants.slice(1).map((variant) => recipeId(variant.id)));
-  if (building.id === "construction_center") directRecipeIds.push(...sourceBuildings.map((entry) => manufactureRecipeId(entry.id)));
+  if (building.id === "construction_center") directRecipeIds.push(...sourceBuildings.filter((entry) => !retiredBuildingIds.has(entry.id)).map((entry) => manufactureRecipeId(entry.id)));
   const aliasSource = aliasRecipeSources[building.id];
   if (aliasSource) directRecipeIds.push(...(factoryRecipesByBuilding.get(buildingId(aliasSource)) ?? []));
   const buildingRecipeIds = [...new Set(directRecipeIds)];
@@ -437,6 +440,7 @@ const factoryBuildings = sourceBuildings.map((building, artIndex) => {
       loading_bays: building.id === "orbital_cargo_terminal" ? 4 : building.id === "material_delivery_hub" ? 3 : 1,
     });
   }
+  if (retiredBuildingIds.has(building.id)) result.legacy_only = true;
   return result;
 });
 
@@ -524,6 +528,7 @@ for (const building of sourceBuildings) {
     },
     runtime_metadata: { recipe_mode: "STANDARD", source_duration_unspecified: true },
     ...requirementMetadata(construction.requiredTechId),
+    ...(retiredBuildingIds.has(building.id) ? { legacy_only: true } : {}),
   });
 }
 
@@ -575,6 +580,7 @@ for (const building of sourceBuildings) {
     source_family: "dsponline_industry_adaptation",
     art_index: sourceBuildings.findIndex((entry) => entry.id === building.id),
     source_metadata: { item_role: "finished_building", source_building_id: building.id, source_name: building.name },
+    ...(retiredBuildingIds.has(building.id) ? { legacy_only: true } : {}),
   });
 }
 

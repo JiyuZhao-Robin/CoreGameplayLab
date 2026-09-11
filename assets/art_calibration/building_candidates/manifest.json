@@ -1,0 +1,471 @@
+{
+  "schema_version": 1,
+  "status": "awaiting_individual_visual_acceptance",
+  "author": "Hurricane046",
+  "processor": "brickbrycebrick / Nullius Hurricane Reskins",
+  "source_repository": "https://github.com/SmokeStackGG/nullius-visual-overhaul",
+  "source_revision": "852d736052fbf32c22cb04102ce82367b12800d0",
+  "art_license": "CC BY 4.0",
+  "definition_license": "MIT",
+  "modifications": "PNG and Lua copied byte-for-byte. Local preview uses copper-gold mask tint, additive emission, static stopped frame, and proposed footprints.",
+  "candidates": [
+    {
+      "id": "arc-furnace",
+      "title": "电弧炉",
+      "role": "锻炉 / 冶炼",
+      "recommendation": "建议用于基础冶炼或进阶熔炼；请确认炉体轮廓与工作亮度。",
+      "footprint_tiles": [
+        4,
+        4
+      ],
+      "footprint_authority": "local visual proposal, not approved gameplay footprint",
+      "fps": 30,
+      "fps_authority": "local preview clock, not an upstream simulation claim",
+      "layers": [
+        {
+          "id": "shadow",
+          "frame_size": [
+            400,
+            323
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.703125,
+            0.2734375
+          ],
+          "texture": "arc-furnace/shadow.png",
+          "definition": "arc-furnace/shadow.lua",
+          "source_relative": "graphics/entity/arc-furnace/arc-furnace-shadow.png"
+        },
+        {
+          "id": "base",
+          "frame_size": [
+            320,
+            315
+          ],
+          "frame_count": 50,
+          "columns": 7,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0390625
+          ],
+          "texture": "arc-furnace/base.png",
+          "definition": "arc-furnace/base.lua",
+          "source_relative": "graphics/entity/arc-furnace/arc-furnace-base.png"
+        },
+        {
+          "id": "mask",
+          "frame_size": [
+            215,
+            186
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -0.0390625,
+            -0.3125
+          ],
+          "texture": "arc-furnace/mask.png",
+          "definition": "arc-furnace/mask.lua",
+          "source_relative": "graphics/entity/arc-furnace/arc-furnace-mask.png"
+        },
+        {
+          "id": "emission",
+          "frame_size": [
+            320,
+            320
+          ],
+          "frame_count": 50,
+          "columns": 8,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0
+          ],
+          "texture": "arc-furnace/emission.png",
+          "definition": "arc-furnace/emission.lua",
+          "source_relative": "graphics/entity/arc-furnace/arc-furnace-emission.png"
+        }
+      ]
+    },
+    {
+      "id": "manufacturer",
+      "title": "制造工厂",
+      "role": "自动制造机 / 装配",
+      "recommendation": "建议用于零件与建筑成品制造；请确认机械动作与体量。",
+      "footprint_tiles": [
+        4,
+        4
+      ],
+      "footprint_authority": "local visual proposal, not approved gameplay footprint",
+      "fps": 30,
+      "fps_authority": "local preview clock, not an upstream simulation claim",
+      "layers": [
+        {
+          "id": "shadow",
+          "frame_size": [
+            303,
+            270
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.2421875,
+            0.390625
+          ],
+          "texture": "manufacturer/shadow.png",
+          "definition": "manufacturer/shadow.lua",
+          "source_relative": "graphics/entity/manufacturer/manufacturer-shadow.png"
+        },
+        {
+          "id": "base",
+          "frame_size": [
+            269,
+            281
+          ],
+          "frame_count": 128,
+          "columns": 12,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -0.0078125,
+            0.0078125
+          ],
+          "texture": "manufacturer/base.png",
+          "definition": "manufacturer/base.lua",
+          "source_relative": "graphics/entity/manufacturer/manufacturer-base.png"
+        },
+        {
+          "id": "mask",
+          "frame_size": [
+            259,
+            262
+          ],
+          "frame_count": 128,
+          "columns": 12,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -0.0546875,
+            0.0625
+          ],
+          "texture": "manufacturer/mask.png",
+          "definition": "manufacturer/mask.lua",
+          "source_relative": "graphics/entity/manufacturer/manufacturer-mask.png"
+        },
+        {
+          "id": "emission",
+          "frame_size": [
+            270,
+            282
+          ],
+          "frame_count": 128,
+          "columns": 12,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0
+          ],
+          "texture": "manufacturer/emission.png",
+          "definition": "manufacturer/emission.lua",
+          "source_relative": "graphics/entity/manufacturer/manufacturer-emission.png"
+        }
+      ]
+    },
+    {
+      "id": "fuel-refinery",
+      "title": "燃料精炼厂",
+      "role": "炼油 / 燃料加工",
+      "recommendation": "建议用于原油精炼与燃料加工；请确认储罐和管线造型。",
+      "footprint_tiles": [
+        5,
+        5
+      ],
+      "footprint_authority": "local visual proposal, not approved gameplay footprint",
+      "fps": 30,
+      "fps_authority": "local preview clock, not an upstream simulation claim",
+      "layers": [
+        {
+          "id": "shadow",
+          "frame_size": [
+            600,
+            500
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0
+          ],
+          "texture": "fuel-refinery/shadow.png",
+          "definition": "fuel-refinery/shadow.lua",
+          "source_relative": "graphics/entity/fuel-refinery/fuel-refinery-shadow.png"
+        },
+        {
+          "id": "base",
+          "frame_size": [
+            340,
+            340
+          ],
+          "frame_count": 64,
+          "columns": 8,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0
+          ],
+          "texture": "fuel-refinery/base.png",
+          "definition": "fuel-refinery/base.lua",
+          "source_relative": "graphics/entity/fuel-refinery/fuel-refinery-base.png"
+        },
+        {
+          "id": "mask",
+          "frame_size": [
+            124,
+            158
+          ],
+          "frame_count": 64,
+          "columns": 9,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -1.203125,
+            0.984375
+          ],
+          "texture": "fuel-refinery/mask.png",
+          "definition": "fuel-refinery/mask.lua",
+          "source_relative": "graphics/entity/fuel-refinery/fuel-refinery-mask.png"
+        },
+        {
+          "id": "emission",
+          "frame_size": [
+            340,
+            340
+          ],
+          "frame_count": 64,
+          "columns": 8,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0
+          ],
+          "texture": "fuel-refinery/emission.png",
+          "definition": "fuel-refinery/emission.lua",
+          "source_relative": "graphics/entity/fuel-refinery/fuel-refinery-emission.png"
+        }
+      ]
+    },
+    {
+      "id": "chemical-stager",
+      "title": "化工处理站",
+      "role": "化工 / 材料处理",
+      "recommendation": "建议用于化工合成；已有独立标定素材，此页便于逐项确认。",
+      "footprint_tiles": [
+        5,
+        5
+      ],
+      "footprint_authority": "local visual proposal, not approved gameplay footprint",
+      "fps": 30,
+      "fps_authority": "local preview clock, not an upstream simulation claim",
+      "layers": [
+        {
+          "id": "shadow",
+          "frame_size": [
+            557,
+            431
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.6484375,
+            0.2890625
+          ],
+          "texture": "chemical-stager/shadow.png",
+          "definition": "chemical-stager/shadow.lua",
+          "source_relative": "graphics/entity/chemical-stager/chemical-stager-shadow.png"
+        },
+        {
+          "id": "base",
+          "frame_size": [
+            394,
+            397
+          ],
+          "frame_count": 60,
+          "columns": 8,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -0.046875,
+            0.0234375
+          ],
+          "texture": "chemical-stager/base.png",
+          "definition": "chemical-stager/base.lua",
+          "source_relative": "graphics/entity/chemical-stager/chemical-stager-base.png"
+        },
+        {
+          "id": "mask",
+          "frame_size": [
+            279,
+            194
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -0.8046875,
+            -0.5625
+          ],
+          "texture": "chemical-stager/mask.png",
+          "definition": "chemical-stager/mask.lua",
+          "source_relative": "graphics/entity/chemical-stager/chemical-stager-mask.png"
+        },
+        {
+          "id": "emission",
+          "frame_size": [
+            394,
+            397
+          ],
+          "frame_count": 60,
+          "columns": 8,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            -0.046875,
+            0.0234375
+          ],
+          "texture": "chemical-stager/emission.png",
+          "definition": "chemical-stager/emission.lua",
+          "source_relative": "graphics/entity/chemical-stager/chemical-stager-emission.png"
+        }
+      ]
+    },
+    {
+      "id": "thermal-plant",
+      "title": "热能工厂",
+      "role": "火力发电 / 热能设施",
+      "recommendation": "建议用于燃料发电；仅为外观候选，未变更发电规则。",
+      "footprint_tiles": [
+        5,
+        5
+      ],
+      "footprint_authority": "local visual proposal, not approved gameplay footprint",
+      "fps": 30,
+      "fps_authority": "local preview clock, not an upstream simulation claim",
+      "layers": [
+        {
+          "id": "shadow",
+          "frame_size": [
+            462,
+            334
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            1.171875,
+            0.765625
+          ],
+          "texture": "thermal-plant/shadow.png",
+          "definition": "thermal-plant/shadow.lua",
+          "source_relative": "graphics/entity/thermal-plant/thermal-plant-shadow.png"
+        },
+        {
+          "id": "base",
+          "frame_size": [
+            315,
+            409
+          ],
+          "frame_count": 80,
+          "columns": 10,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0859375,
+            0.0078125
+          ],
+          "texture": "thermal-plant/base.png",
+          "definition": "thermal-plant/base.lua",
+          "source_relative": "graphics/entity/thermal-plant/thermal-plant-base.png"
+        },
+        {
+          "id": "mask",
+          "frame_size": [
+            265,
+            287
+          ],
+          "frame_count": 1,
+          "columns": 1,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.4453125,
+            -0.2734375
+          ],
+          "texture": "thermal-plant/mask.png",
+          "definition": "thermal-plant/mask.lua",
+          "source_relative": "graphics/entity/thermal-plant/thermal-plant-mask.png"
+        },
+        {
+          "id": "emission",
+          "frame_size": [
+            330,
+            410
+          ],
+          "frame_count": 80,
+          "columns": 10,
+          "source_scale": 0.5,
+          "shift_tiles": [
+            0.0,
+            0.0
+          ],
+          "texture": "thermal-plant/emission.png",
+          "definition": "thermal-plant/emission.lua",
+          "source_relative": "graphics/entity/thermal-plant/thermal-plant-emission.png"
+        }
+      ]
+    }
+  ],
+  "files": {
+    "arc-furnace/shadow.lua": "812a1b47eb288166cb519797089b61069f6b8d12f2f6bd4d827b9c6a0f4bbe36",
+    "arc-furnace/shadow.png": "6a919ad44700484ccaec4e6e758f1e932be45c3db91107688c23e138dbefdf31",
+    "arc-furnace/base.lua": "10f4e9c7d21826db0b4bf546d3c9d6f99f5530b5af82882732907a32c2799f59",
+    "arc-furnace/base.png": "25b2c346550aafe437715ec8fe89f1df136401ccbedec7f94cc5f79f11e6f384",
+    "arc-furnace/mask.lua": "44d660744ea714f809f1b252d4a7cadacee6dab13b05fb3e3473b35f45778267",
+    "arc-furnace/mask.png": "4c01b783000c6d60a14dcff2bb67bca92d61366138fe4bdcc5ce928354b63b40",
+    "arc-furnace/emission.lua": "16072a09440342da863d54b66ac226a10c3d4508d1eda291fe961477246cdea3",
+    "arc-furnace/emission.png": "7ab50648f0381c130e354bd0a8076577f6e801668159caabdbb9ff98a556d000",
+    "manufacturer/shadow.lua": "5f2e1b6d1c3dd2bc67be3f57da56b59e2c73145b54432aea8b23ba1dfe488739",
+    "manufacturer/shadow.png": "36ff0aaa29e7a47beb9d45565c768b59b85213cb2a9cdaaa441b4830612108af",
+    "manufacturer/base.lua": "e6b9d4a432d4e3d917ef7fdb5d755a0e404bf7f98693f850a86da4a538b052cb",
+    "manufacturer/base.png": "12393d0d525b05cd429fdf3a55e9a5bcf8a83d4fbe97bb4ac5989b82a36bbee5",
+    "manufacturer/mask.lua": "1ccd3d057e66bd76704d0f9524c802f12e95d0cfaac93388b2920eb14ebc1702",
+    "manufacturer/mask.png": "2c1a7a6e929df89ada2af02a7dcec8f8ff524d5c049461bb18f46efc5066e07c",
+    "manufacturer/emission.lua": "ee4cf7cd6d8d9f58b62604398c78269b5af15f337dd3d2c5d7c29da32103de30",
+    "manufacturer/emission.png": "6b53c9b0640c478b4afd1ee6bf72a8caf80dbacc47838d14ae5a53611f5a7a29",
+    "fuel-refinery/shadow.lua": "1b15fe7700f9ef2ad24610e6ce66af2021e92ce988d7b2fd98e96266c2adfdf6",
+    "fuel-refinery/shadow.png": "3723aec77d13e9e137766041ff89e9463235da10ef6937f224460268a333565a",
+    "fuel-refinery/base.lua": "d7588c3bdf06b6079cfc20a44516bcd5b6ed02854614c5d76f1ef9655588abb1",
+    "fuel-refinery/base.png": "33bdc1291cf4da8b4fe4b40f6db52e72c41ce40049028f71d1007ed3b2f9e360",
+    "fuel-refinery/mask.lua": "560972687ee7a6093719e0c8f6d7d91db3c2bd8314a72f2a110ac68d764c7257",
+    "fuel-refinery/mask.png": "fc0a0c5798b5de83efde8eacce558321adbc1204b36c20834501c5df199dd7db",
+    "fuel-refinery/emission.lua": "b3c244dd884f2f6f728fdcf98415cb7bb4dbb28b3eef7429e09b0e94f9c2b4bd",
+    "fuel-refinery/emission.png": "0f11e034133d117cd50bd62dfad9ca6a296f093bce910f8144c271cab66b9291",
+    "chemical-stager/shadow.lua": "c8a5d02daad321243d75951a119b57faa3e09381647aea5ccafe3f6b5bb26d60",
+    "chemical-stager/shadow.png": "c3650179048adda816c11d7f0ea91706f760182e253566dd1a82a06b385cfd12",
+    "chemical-stager/base.lua": "ac0dc2f4a62fd6c22348fc01c44a21fe9b9fcdfc6d9c369299029a5bdc81e32c",
+    "chemical-stager/base.png": "77fc776d99e8bb9a96105488df8239b5bcc99039df47e24d40d3ea6ff0a95c5a",
+    "chemical-stager/mask.lua": "3b0fa3fe096878f6bb3de4da5fde26d8835a9422986460ab0771283f0efeec84",
+    "chemical-stager/mask.png": "f93924e6af3ded15132dc5e3ade55f0c545e56e5114453adc3f97ecc22d16a69",
+    "chemical-stager/emission.lua": "ac0dc2f4a62fd6c22348fc01c44a21fe9b9fcdfc6d9c369299029a5bdc81e32c",
+    "chemical-stager/emission.png": "9e2a21c14b1175297ed85894250c66e625f76919b172295c49b1eece4e13c740",
+    "thermal-plant/shadow.lua": "52a9cc7c4c54f93a08f0f3c45c27ade602ba9823acd1922cf7d2d1b031db52dd",
+    "thermal-plant/shadow.png": "0a5ff3df943fd8b5910d1e1564e757415a423ca713d0440c2cbc4ab2226cca50",
+    "thermal-plant/base.lua": "d4378e57080deff90d42eed0ed1c816904229d9551330ce6df816360a498780c",
+    "thermal-plant/base.png": "2c9273c1010c340c0908d224265ee36dd9982ee1775b64acc202f7fbf91e2da1",
+    "thermal-plant/mask.lua": "be1a665bbd17f3ff2df5072ce4a4c803cd24bcdf89589a9698e36ef3c0130a74",
+    "thermal-plant/mask.png": "7b8a64efe4cc3ce414fb83a8c6ee9212c84fbb884eae50980a5f803c6993d3f0",
+    "thermal-plant/emission.lua": "2c3aa4aad74754def3731fbc9bfa5729d98e13bc32b0348f0daa5c6cd16015df",
+    "thermal-plant/emission.png": "9b32e80916b6e542a6dc10b626b699890f1083ef4532c234ac9bc7593c02d9f9",
+    "LICENSE.txt": "7538890a7fe680e75496e34abc738254760de24c8fc9e6f7550857ef30f6c472"
+  }
+}

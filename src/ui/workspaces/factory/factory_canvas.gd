@@ -29,6 +29,7 @@ const ViewModelScript = preload("res://src/ui/view_models/factory/factory_worksp
 const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas_chunk_index.gd")
 const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
 const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
+const ArcFurnaceArt = preload("res://src/ui/workspaces/factory/factory_arc_furnace_art.gd")
 const TerrainRenderer = preload("res://src/ui/workspaces/factory/factory_terrain_renderer.gd")
 const Terrain = preload("res://src/core/factory_terrain.gd")
 var _terrain_renderer := TerrainRenderer.new()
@@ -43,6 +44,10 @@ const CARGO_COLOR := Color("e5b467")
 const POWER_COLOR := Color("65d9d1")
 const BASE_TILE_PIXELS := 4.0
 const MAX_DETAIL_TILE_PIXELS := 16.0
+## Bound the player-visible ground area at the fixed logical design viewport.
+## A planet overview must never turn hundreds of thousands of tiles into one
+## frame. Physical Window scaling does not change this local canvas budget.
+const MAX_VISIBLE_CAMERA_TILES := 8192.0
 const OVERVIEW_PADDING_PIXELS := 24.0
 const FLOW_REDRAW_INTERVAL_SECONDS := 0.05
 const DRAW_CULL_MARGIN_PIXELS := 32.0
@@ -125,6 +130,8 @@ var _runtime_snapshot_age := 10.0
 ## Per-entity presentation clocks only. Never advance production or write state.
 var _miner_animation_seconds: Dictionary = {}
 var _visible_core_miners: Array[String] = []
+var _furnace_animation_seconds: Dictionary = {}
+var _visible_arc_furnaces: Array[String] = []
 var _shipment_ids_by_chunk: Dictionary = {}
 var _shipment_chunk_size := 64
 
@@ -154,6 +161,8 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	if world_changed:
 		_miner_animation_seconds.clear()
 		_visible_core_miners.clear()
+		_furnace_animation_seconds.clear()
+		_visible_arc_furnaces.clear()
 	_update_shipment_interpolation(snapshot)
 	if world_changed or _snapshot.is_empty() or float(snapshot.get("elapsed_ms", 0.0)) != float(_snapshot.get("elapsed_ms", 0.0)) or int(snapshot.get("runtime_revision", 0)) != int(_snapshot.get("runtime_revision", 0)) or int(snapshot.get("topology_revision", 0)) != int(_snapshot.get("topology_revision", 0)):
 		_runtime_snapshot_age = 0.0
@@ -163,6 +172,9 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	for miner_id in _miner_animation_seconds.keys():
 		if not _entities_by_id.has(miner_id):
 			_miner_animation_seconds.erase(miner_id)
+	for furnace_id in _furnace_animation_seconds.keys():
+		if not _entities_by_id.has(furnace_id):
+			_furnace_animation_seconds.erase(furnace_id)
 	_load_road_surface()
 	if not _port_drag.is_empty() and previous_topology_signature != _topology_signature():
 		cancel_port_drag()
@@ -253,6 +265,7 @@ func select_link(link_id: String) -> void:
 
 func focus_tile(tile: Vector2i) -> void:
 	_overview_mode = false
+	_zoom = _clamp_zoom(_zoom)
 	_keyboard_tile = _clamp_tile_to_bounds(tile)
 	var tile_position := _world_to_screen(Vector2(_keyboard_tile))
 	_camera += size * 0.5 - tile_position
@@ -326,7 +339,7 @@ func focus_operational_region() -> void:
 		available.x / (framed_extent.x * BASE_TILE_PIXELS),
 		available.y / (framed_extent.y * BASE_TILE_PIXELS)
 	)
-	_zoom = clampf(fitted_zoom, _overview_zoom(), minf(_maximum_zoom(), 1.75))
+	_zoom = _clamp_zoom(minf(fitted_zoom, 1.75))
 	_overview_mode = false
 	_keyboard_tile = _clamp_tile_to_bounds(focus_tile)
 	_camera = size * 0.5 - Vector2(_keyboard_tile) * _tile_scale()
@@ -396,6 +409,7 @@ func _process(delta: float) -> void:
 	_shipment_blend_elapsed = minf(ROAD_BLEND_SECONDS, _shipment_blend_elapsed + delta)
 	_runtime_snapshot_age += delta
 	_advance_core_extractors(delta)
+	_advance_arc_furnaces(delta)
 	if not _reduced_motion and is_visible_in_tree() and _visible_active_flow:
 		_flow_redraw_elapsed += delta
 		if _flow_redraw_elapsed >= FLOW_REDRAW_INTERVAL_SECONDS:
@@ -410,6 +424,7 @@ func _draw() -> void:
 	_terrain_renderer.begin_frame()
 	_visible_active_flow = false
 	_visible_core_miners.clear()
+	_visible_arc_furnaces.clear()
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
 		_terrain_renderer.hide_ground()
 		draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
@@ -441,6 +456,7 @@ func _draw() -> void:
 	if not _road_logistics_mode:
 		_draw_links()
 	_draw_core_extractor_shadows()
+	_draw_arc_furnace_shadows()
 	_draw_entities()
 	_draw_road_cargo()
 	_draw_construction_orders()
@@ -661,7 +677,7 @@ func _visible_shipment_ids() -> Array:
 
 
 func _road_feedback_animation_allowed() -> bool:
-	return not _reduced_motion and not _overview_mode and _tile_scale() >= 0.75 and _visible_record_count() + _road_shipments_by_id.size() <= MAX_ANIMATED_SNAPSHOT_RECORDS
+	return not _reduced_motion and _tile_scale() >= 0.75 and _visible_record_count() + _road_shipments_by_id.size() <= MAX_ANIMATED_SNAPSHOT_RECORDS
 
 
 func _draw_road_cargo() -> void:
@@ -868,6 +884,13 @@ func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: St
 			var layer := "working" if _core_extractor_working(entity) else "body"
 			var texture := CoreExtractorArt.frame_texture(layer, frame)
 			draw_texture_rect(texture if texture != null else art, art_rect, false)
+		elif BuildingArt.uses_arc_furnace(str(entity.get("definition_id", ""))):
+			var furnace_id := str(entity.get("id", ""))
+			_visible_arc_furnaces.append(furnace_id)
+			var seconds := float(_furnace_animation_seconds.get(furnace_id, 0.0))
+			var layer := "working" if _core_extractor_working(entity) else "body"
+			var texture := ArcFurnaceArt.frame_texture(layer, ArcFurnaceArt.frame_index(seconds))
+			draw_texture_rect(texture if texture != null else art, art_rect, false)
 		else:
 			draw_texture_rect(art, Rect2(art_rect.position + Vector2(2,4),art_rect.size), false, Color(0,0,0,0.45))
 			var brightness := _building_activity_brightness(entity)
@@ -915,6 +938,36 @@ func _draw_core_extractor_shadows() -> void:
 		var shadow := CoreExtractorArt.frame_texture("shadow", 0)
 		if shadow != null:
 			draw_texture_rect(shadow, CoreExtractorArt.shadow_rect(body_rect), false)
+
+
+func _advance_arc_furnaces(delta: float) -> void:
+	if not _road_logistics_mode or not is_visible_in_tree() or not _road_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+		return
+	var changed := false
+	for furnace_id in _visible_arc_furnaces:
+		var entity: Dictionary = _entities_by_id.get(furnace_id, {})
+		if not _core_extractor_working(entity):
+			continue
+		var previous := float(_furnace_animation_seconds.get(furnace_id, 0.0))
+		var next := fposmod(previous + maxf(0.0, delta), 50.0 / 30.0)
+		_furnace_animation_seconds[furnace_id] = next
+		changed = changed or ArcFurnaceArt.frame_index(previous) != ArcFurnaceArt.frame_index(next)
+	if changed:
+		queue_redraw()
+
+
+func _draw_arc_furnace_shadows() -> void:
+	if not _road_logistics_mode:
+		return
+	for entity_id in _visible_records.get("entity_ids", []):
+		var entity: Dictionary = _entities_by_id.get(str(entity_id), {})
+		if not BuildingArt.uses_arc_furnace(str(entity.get("definition_id", ""))):
+			continue
+		var art := ArcFurnaceArt.icon_texture()
+		var body_rect := _fit_art_rect(art, _entity_visible_icon_rect(_footprint_rect(entity.get("footprint", {})), _detail_stage()))
+		var shadow := ArcFurnaceArt.frame_texture("shadow", 0)
+		if shadow != null:
+			draw_texture_rect(shadow, ArcFurnaceArt.shadow_rect(body_rect), false, Color(1,1,1,0.48))
 
 
 func _mining_range_geometry(record: Dictionary) -> Dictionary:
@@ -1093,6 +1146,10 @@ func _draw_placement_preview() -> void:
 				var shadow := CoreExtractorArt.frame_texture("shadow", 0)
 				if shadow != null:
 					draw_texture_rect(shadow,CoreExtractorArt.shadow_rect(art_rect),false,Color(1,1,1,0.65))
+			elif BuildingArt.uses_arc_furnace(definition_id):
+				var shadow := ArcFurnaceArt.frame_texture("shadow", 0)
+				if shadow != null:
+					draw_texture_rect(shadow,ArcFurnaceArt.shadow_rect(art_rect),false,Color(1,1,1,0.312))
 			else:
 				draw_texture_rect(art,Rect2(art_rect.position + Vector2(2,3),art_rect.size),false,Color(0,0,0,0.48))
 			draw_texture_rect(art,art_rect,false,Color(0.76,1.0,0.9,0.83) if is_valid else Color(1.0,0.46,0.42,0.83))
@@ -1594,7 +1651,10 @@ func _overview_zoom() -> float:
 		available.x / (float(reference_size.x) * BASE_TILE_PIXELS),
 		available.y / (float(reference_size.y) * BASE_TILE_PIXELS)
 	)
-	return maxf(0.000001, minf(fitted_zoom, MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS))
+	var area_limited_zoom := sqrt(size.x * size.y / MAX_VISIBLE_CAMERA_TILES) / BASE_TILE_PIXELS
+	# Keep the existing detail ceiling for malformed oversized Controls as well.
+	# The supported 1920 x 1080 logical viewport fits this budget below that cap.
+	return clampf(maxf(fitted_zoom, area_limited_zoom), 0.000001, MAX_DETAIL_TILE_PIXELS / BASE_TILE_PIXELS)
 
 
 func _maximum_zoom() -> float:
@@ -1657,6 +1717,11 @@ func _on_canvas_resized() -> void:
 
 
 func _on_gui_input(event: InputEvent) -> void:
+	if event is InputEventMagnifyGesture:
+		var gesture := event as InputEventMagnifyGesture
+		_set_zoom_around(gesture.position, _screen_to_world(gesture.position), _zoom * gesture.factor)
+		accept_event()
+		return
 	var connection_active := not str(_connection_preview.get("kind", "")).is_empty()
 	var road_tool_active := _road_logistics_mode and not _road_tool_mode.is_empty()
 	if _is_placement_cancel_event(event) and (road_tool_active or not _road_drag.is_empty() or not _placement_preview.is_empty() or connection_active or not _port_drag.is_empty() or not _left_pointer.is_empty()):
@@ -2089,7 +2154,8 @@ func _move_keyboard_tile(offset: Vector2i) -> void:
 
 
 func _adjust_zoom(multiplier: float) -> void:
-	_set_zoom_around(size * 0.5, Vector2(_keyboard_tile), _zoom * multiplier)
+	var anchor := size * 0.5
+	_set_zoom_around(anchor, _screen_to_world(anchor), _zoom * multiplier)
 
 
 func _set_zoom_around(screen_anchor: Vector2, world_anchor: Vector2, requested_zoom: float) -> void:
@@ -2381,7 +2447,7 @@ func _has_active_flow() -> bool:
 
 
 func _flow_animation_allowed() -> bool:
-	if not _has_active_flow_cache or _overview_mode or _tile_scale() < 0.75:
+	if not _has_active_flow_cache or _tile_scale() < 0.75:
 		return false
 	var record_count := _visible_record_count()
 	return record_count <= MAX_ANIMATED_SNAPSHOT_RECORDS

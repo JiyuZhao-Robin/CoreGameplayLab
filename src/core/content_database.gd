@@ -199,6 +199,8 @@ func _merge_industry_shard(parsed: Dictionary, shard: Dictionary) -> void:
 		if id not in ["grid_engineering_works", "grid_arc_smelter"]:
 			continue
 		for recipe in shard.get("factory_recipes", []):
+			if bool(recipe.get("legacy_only", false)):
+				continue
 			var recipe_id := str(recipe.get("id", ""))
 			var family := str(recipe.get("source_building_id", ""))
 			if (id == "grid_engineering_works" and (recipe_id.begins_with("manufacture_") or family == "grid_dsp_assembling_machine_mk1")) or (id == "grid_arc_smelter" and family == "grid_dsp_arc_smelter"):
@@ -1582,7 +1584,7 @@ func factory_bootstrap_reachability_snapshot() -> Dictionary:
 	for definition_value in factory_buildings.values():
 		var catalog_definition := definition_value as Dictionary
 		var definition_id := str(catalog_definition.get("id", ""))
-		if definition_id.is_empty() or str(catalog_definition.get("kind", "")) == "ROUTER":
+		if definition_id.is_empty() or str(catalog_definition.get("kind", "")) == "ROUTER" or bool(catalog_definition.get("legacy_only", false)):
 			continue
 		var deployment_item_id := str(catalog_definition.get("deployment_item_id", ""))
 		var manufacture_recipe_id := "manufacture_%s" % definition_id

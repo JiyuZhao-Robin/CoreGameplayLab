@@ -10,6 +10,8 @@ const ATLAS_PATH := "res://assets/ui/factory/generated/factory_building_icon_atl
 const CORE_PATH := "res://assets/ui/factory/core/generated/planetary_core_v1.png"
 const DspArt = preload("res://src/ui/workspaces/factory/factory_dsp_art.gd")
 const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
+const ArcFurnaceArt = preload("res://src/ui/workspaces/factory/factory_arc_furnace_art.gd")
+const ARC_FURNACE_IDS := ["grid_arc_smelter", "grid_dsp_arc_smelter"]
 ## Explicit visual family: pumps, orbital collectors and the development core
 ## retain their own art. IDs, footprints and building-item contracts stay intact.
 const CORE_EXTRACTOR_IDS := [
@@ -72,6 +74,8 @@ static func atlas_region(texture: Texture2D, definition_id: String, kind: String
 
 
 static func icon_texture(texture: Texture2D, definition_id: String, kind: String) -> AtlasTexture:
+	if uses_arc_furnace(definition_id):
+		return ArcFurnaceArt.icon_texture()
 	if uses_core_extractor(definition_id):
 		var miner := CoreExtractorArt.icon_texture()
 		if miner != null:
@@ -97,3 +101,7 @@ static func icon_texture(texture: Texture2D, definition_id: String, kind: String
 
 static func uses_core_extractor(definition_id: String) -> bool:
 	return definition_id in CORE_EXTRACTOR_IDS and CoreExtractorArt.is_available()
+
+
+static func uses_arc_furnace(definition_id: String) -> bool:
+	return definition_id in ARC_FURNACE_IDS and ArcFurnaceArt.is_available()

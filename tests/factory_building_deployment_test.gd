@@ -70,7 +70,7 @@ func _test_content_and_start() -> void:
 	_check(game.state.item_quantity("building_grid_solar_array",LOCATION) == 0, "base generation replaces starter solar equipment")
 	for value in game.content.factory_buildings.values():
 		var definition: Dictionary = value
-		if definition.get("kind") == "ROUTER":
+		if definition.get("kind") == "ROUTER" or bool(definition.get("legacy_only", false)):
 			continue
 		var id := str(definition["id"])
 		var recipe: Dictionary = game.content.factory_recipes.get("manufacture_" + id, {})

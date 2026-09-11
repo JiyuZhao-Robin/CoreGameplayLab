@@ -47,6 +47,18 @@ Factory 的详细规则、数据契约和已记录的定向验证见[星球共�
 
 ## 工业画布美术同步（2026-09-11）
 
+### 相机上限、四相分流器与候选建筑（2026-09-11 追加）
+
+- **已批准**：Factory 地图缩小到局部视野上限，避免整张星球进入同一画面；四相分流器退出当前建造与制造；旧 Factorio 风格建筑通过独立 Demo 逐项确认。
+- **已实现**：四相分流器的建筑、成品及旧配方仅保留兼容身份；建造栏、配方列表和直接命令均禁止新放置/制造。旧建筑和物资可读、可拆，旧生产保留缓存并停止运行，可更换为当前配方。导入器保留稳定的美术索引并同步退休标记。
+- **已验证**：主代理实际重跑 `factory_splitter_retirement`、`factory_building_deployment`、`factory_dsp_integration`、`factory_bootstrap_content`、`content_planner_contract`、`asset_conservation`、`core_integrity`，全部退出码为 0；导入器输出与 DSP 内容分片 JSON 一致。
+- **已验证**：固定布局 policy、界面 scale contract、window matrix 和 UI domain 静态边界检查通过；这不替代实际地图操作、候选 Demo 画面或满负载性能验收。
+- **已实现并验证**：相机可见面积上限为 8192 格，所有缩放、重置、区域聚焦、旧缩放恢复与画布尺寸变化均共用限制；保留 16 逻辑像素/格的近景上限。主代理实际通过 `factory_camera_zoom_limit`、`factory_canvas_grid_contract`、`factory_workspace_ui`、`factory_landing_terrain_ui`，并以真实 OpenGL 4K 渲染通过 `factory_visual_layers`。
+- **已验证**：局部重置视图不再沿用旧全图模式暂停矿机与运输动画；`factory_road_animation` 和 `factory_core_extractor` 实机测试通过，降低动态效果、过期快照与可见对象预算仍限制动画工作。
+- **已实现并验证**：五个建筑候选 Demo 共用逐项导航和运行/停机/幽灵对照。41 个原始文件（约 22 MiB）与来源、许可、哈希随项目保存，检查不依赖源素材库。主代理通过 `import_building_candidates.py --check` 与实际 OpenGL `building_candidates_test.gd`，核对五张 4K 截图、真实动画差异、停机静止、旧图集释放和经济状态隔离。
+- **用户已确认**：第 1 项电弧炉用于锻炉/冶炼；原生 `grid_arc_smelter` 与 `grid_dsp_arc_smelter` 的实体、图标、成品物品及预览接入该外观。正式包按 50 帧/30 fps 离线合成，运行时只加载所需小帧并共享缓存；占地与配方保持原规则。
+- **待用户确认**：制造工厂、燃料精炼厂、化工处理站和热能工厂的正式外观映射。见[候选建筑说明](./Factory_Building_Candidates_zh_CN.md)。这四项 Demo 不代表正式美术替换或经济规则变更。
+
 - **已实现**：正式 Factory 采用入库的 CC0 连续地表照片、源模型烘焙铁/铜矿簇、MIT 冰矿图集，按权威地形与矿区采样呈现；保留 11×11 Core Extractor 与半径 18 格的圆形采掘范围。源文件、生成器、许可及哈希证据均随资产保存。
 - **已实现**：工业默认进入画布，采用固定宽度检查器、矿机信息优先层级和可显式收起的建造栏；活动工具取消、矿区透明角落拖动、建筑图层及画布点击已集成。
 - **已验证**：主代理在本轮实际重跑素材、地形/圆形采矿、成品部署 UI、采矿/道路动画、绘制层级、固定布局/缩放/窗口矩阵与资产完整性检查，并查看真实 Main 的 4K 截图。具体命令入口、范围与限制见[工业画布美术重构](./Factory_Natural_Art_Refactor_zh_CN.md)。
