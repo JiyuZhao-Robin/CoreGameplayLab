@@ -64,7 +64,7 @@ func _draw() -> void:
 func _build_ui() -> void:
 	_label("HELIOS  /  BUILDING STUDIES", Rect2(62, 28, 1100, 28), 18, Color("d2a05c"))
 	title_label = _label("工业建筑候选", Rect2(60, 62, 1280, 55), 38)
-	_label("五项外观已认可 · 电弧炉已接入 · 热能工厂底座已校准", Rect2(62, 119, 1250, 28), 18, Color("a8b8bd"))
+	_label("五项外观已认可并接入 · 热能工厂底座已校准", Rect2(62, 119, 1250, 28), 18, Color("a8b8bd"))
 	_label("HURRICANE046 / NULLIUS", Rect2(1434, 56, 430, 32), 22, Color("dfc49d"))
 	_label("建筑外观评审", Rect2(1434, 101, 430, 28), 18, Color("a8b8bd"))
 	for index in candidates.size():
@@ -97,7 +97,7 @@ func _build_ui() -> void:
 	controls.append(footprint)
 	previous_button = _button("← 上一个", Rect2(60, 948, 190, 48), func(): select_candidate(selected_index - 1))
 	next_button = _button("下一个 →", Rect2(268, 948, 190, 48), func(): select_candidate(selected_index + 1))
-	_label("外观已认可，电弧炉已接入；其余建筑待正式接入。", Rect2(504, 939, 1240, 35), 24)
+	_label("五项外观已接入正式建筑。", Rect2(504, 939, 1240, 35), 24)
 	_label("运行、停机和部署幽灵同屏对照；预览占地不会改变游戏规则。", Rect2(504, 984, 1300, 28), 18, Color("a8b8bd"))
 
 func select_candidate(index: int) -> void:
@@ -125,9 +125,13 @@ func select_candidate(index: int) -> void:
 	if str(candidate.id) == "arc-furnace" and errors.is_empty():
 		description_label.text = "已确认：用于原生电弧熔炉和 DSP 电弧熔炉。正式占地和配方保持现有规则。"
 	elif errors.is_empty():
-		description_label.text = "外观已认可，待正式接入。" + str(candidate.recommendation).split("；")[0] + "。"
-		if str(candidate.id) == "thermal-plant":
-			description_label.text = "外观已认可。预览占地已按底座校准为 5 × 6 格；正式发电设施待接入。"
+		var descriptions := {
+			"manufacturer": "已接入自动制造机和制造台 Mk.I / II / III，用于零件与成品建筑制造。",
+			"fuel-refinery": "已接入原油精炼厂，运行与停机外观随实际生产状态切换。",
+			"chemical-stager": "已接入化工厂和量子化工厂，图标、工作动画与部署预览共用该外观。",
+			"thermal-plant": "已接入火力发电厂。5 × 6 底座比例等比适配正式占地，动画随实际发电启停。",
+		}
+		description_label.text = str(descriptions.get(str(candidate.id), candidate.recommendation))
 	for button_index in candidate_buttons.size():
 		candidate_buttons[button_index].set_pressed_no_signal(button_index == selected_index)
 	stage.refresh()

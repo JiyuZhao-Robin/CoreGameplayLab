@@ -1,20 +1,28 @@
 # 工业建筑候选 Demo
 
-候选 Demo 用于确认旧 Factorio 风格素材的用途和外观。用户已认可全部五项外观；第 1 项电弧炉已正式接入原生电弧熔炉和 DSP 电弧熔炉，其余四项待正式接入。用户追加要求修正热能工厂的底座占地框，见下文校准记录。
+候选 Demo 用于确认旧 Factorio 风格素材的用途和外观。用户已认可全部五项外观，现均已接入对应正式建筑。用户追加要求修正热能工厂的底座占地框，见下文校准记录。
 
 ## 候选顺序
 
 | Demo | 原素材 | 建议游戏用途 | 当前状态 |
 | --- | --- | --- | --- |
 | 1 | Hurricane Arc Furnace | 锻炉 / 电弧熔炉 | **已确认**，接入 `grid_arc_smelter` 和 `grid_dsp_arc_smelter` |
-| 2 | Hurricane Manufacturer | 自动制造机 / 装配设备 | 外观已认可，待正式接入 |
-| 3 | Hurricane Fuel Refinery | 炼油厂 | 外观已认可，待正式接入 |
-| 4 | Hurricane Chemical Stager | 化工厂 | 外观已认可，待正式接入 |
-| 5 | Hurricane Thermal Plant | 火力发电站 | 外观已认可；预览底座框已校准，待正式接入 |
+| 2 | Hurricane Manufacturer | 自动制造机 / 装配设备 | 已接入 `grid_engineering_works`、`grid_dsp_assembling_machine_mk1/mk2/mk3` |
+| 3 | Hurricane Fuel Refinery | 炼油厂 | 已接入 `grid_dsp_oil_refinery` |
+| 4 | Hurricane Chemical Stager | 化工厂 | 已接入 `grid_dsp_chemical_plant`、`grid_dsp_quantum_chemical_plant` |
+| 5 | Hurricane Thermal Plant | 火力发电站 | 已接入 `grid_dsp_thermal_power_plant`，底座已校准 |
 
-这五个候选与当前已选的 Core Extractor 同属 Hurricane 美术体系。第 2–5 项外观已获认可，具体正式建筑 ID 映射和集成验证尚未完成。既有矿机映射保持当前已批准状态。
+这五个候选与当前已选的 Core Extractor 同属 Hurricane 美术体系。同家族各级建筑共用外观，等级与生产能力由既有名称及属性表达。
 
 热能工厂的预览框从居中的 5×5 改为按底座定位的 5×6 格，中心位于本体帧宽度的 50%、高度的 55%。保留图片尺寸与纵横比，底座完整落在框内，烟囱顶部允许高出地面占地。运行、停机、部署预览使用同一校准，并随预览缩放同步变化。校准保存在 `candidate_stage.gd`，不改写固定来源清单或正式发电设施的碰撞/道路规则。
+
+正式热能工厂保留原有 10×10 格占地，校准后的 5×6 地面矩形等比放入其中；制造/炼油/化工设备保留 12×10 格。完整图片依据地面锚点定位，实体、阴影、缺货幽灵、部署预览和可见图片点选共用该变换。
+
+四套正式资源在 `assets/ui/factory/approved_industry/`，全部使用项目内固定源素材离线生成。制造、炼油、化工、热能分别为 128/64/60/80 帧，30 fps，主体最大边 256 px，工作光照已合成，阴影独立。668 个 PNG 共约 83.5 MiB，导入配置预先生成 mipmap；运行时按需加载小帧并共享缓存。满缓存约 200 MiB 的估算不替代满负载性能基准。
+
+热能动画依据快照 `RUNNING` 与真实 `generation_kw > 0` 启停；制造/炼油/化工依据实际生产速率。缺燃料、无负荷、断电、输入不足及输出堵塞时停止对应动作并熄灯。降低动态效果、不可见对象、过期快照与可见对象预算继续限制动画。校验命令：`python tools/build_approved_industry_art.py --check`。
+
+正式接入后主代理实际通过 `factory_approved_industry_test.gd` 的 4K 渲染、三档缩放、原始导入 mipmap、物品/建筑映射、工作动画像素、停帧熄灯、幽灵/预览和状态隔离检查；热能使用真实煤炭供电与耗尽夹具，并按正式应用流程刷新运行快照。电弧炉、矿机、DSP 图标、物品图标、工厂图层、候选 Demo、UI domain 及固定 policy/scale/window-matrix 回归均通过。实际新建筑截图位于忽略目录 `artifacts/ui/approved-industry/`。
 
 ## 查看方法
 

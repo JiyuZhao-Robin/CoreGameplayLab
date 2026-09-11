@@ -11,6 +11,17 @@ const CORE_PATH := "res://assets/ui/factory/core/generated/planetary_core_v1.png
 const DspArt = preload("res://src/ui/workspaces/factory/factory_dsp_art.gd")
 const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
 const ArcFurnaceArt = preload("res://src/ui/workspaces/factory/factory_arc_furnace_art.gd")
+const IndustryArt = preload("res://src/ui/workspaces/factory/factory_approved_industry_art.gd")
+const INDUSTRY_FAMILIES := {
+	"grid_engineering_works": "manufacturer",
+	"grid_dsp_assembling_machine_mk1": "manufacturer",
+	"grid_dsp_assembling_machine_mk2": "manufacturer",
+	"grid_dsp_assembling_machine_mk3": "manufacturer",
+	"grid_dsp_oil_refinery": "fuel-refinery",
+	"grid_dsp_chemical_plant": "chemical-stager",
+	"grid_dsp_quantum_chemical_plant": "chemical-stager",
+	"grid_dsp_thermal_power_plant": "thermal-plant",
+}
 const ARC_FURNACE_IDS := ["grid_arc_smelter", "grid_dsp_arc_smelter"]
 ## Explicit visual family: pumps, orbital collectors and the development core
 ## retain their own art. IDs, footprints and building-item contracts stay intact.
@@ -74,6 +85,9 @@ static func atlas_region(texture: Texture2D, definition_id: String, kind: String
 
 
 static func icon_texture(texture: Texture2D, definition_id: String, kind: String) -> AtlasTexture:
+	var family := industry_family(definition_id)
+	if not family.is_empty():
+		return IndustryArt.icon_texture(family)
 	if uses_arc_furnace(definition_id):
 		return ArcFurnaceArt.icon_texture()
 	if uses_core_extractor(definition_id):
@@ -105,3 +119,8 @@ static func uses_core_extractor(definition_id: String) -> bool:
 
 static func uses_arc_furnace(definition_id: String) -> bool:
 	return definition_id in ARC_FURNACE_IDS and ArcFurnaceArt.is_available()
+
+
+static func industry_family(definition_id: String) -> String:
+	var family := str(INDUSTRY_FAMILIES.get(definition_id, ""))
+	return family if not family.is_empty() and IndustryArt.is_available(family) else ""

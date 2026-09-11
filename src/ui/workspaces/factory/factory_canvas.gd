@@ -30,6 +30,7 @@ const ChunkIndexScript = preload("res://src/ui/workspaces/factory/factory_canvas
 const BuildingArt = preload("res://src/ui/workspaces/factory/factory_building_art.gd")
 const CoreExtractorArt = preload("res://src/ui/workspaces/factory/factory_core_extractor_art.gd")
 const ArcFurnaceArt = preload("res://src/ui/workspaces/factory/factory_arc_furnace_art.gd")
+const IndustryArt = preload("res://src/ui/workspaces/factory/factory_approved_industry_art.gd")
 const TerrainRenderer = preload("res://src/ui/workspaces/factory/factory_terrain_renderer.gd")
 const Terrain = preload("res://src/core/factory_terrain.gd")
 var _terrain_renderer := TerrainRenderer.new()
@@ -132,6 +133,8 @@ var _miner_animation_seconds: Dictionary = {}
 var _visible_core_miners: Array[String] = []
 var _furnace_animation_seconds: Dictionary = {}
 var _visible_arc_furnaces: Array[String] = []
+var _industry_animation_seconds: Dictionary = {}
+var _visible_industry_buildings: Array[String] = []
 var _shipment_ids_by_chunk: Dictionary = {}
 var _shipment_chunk_size := 64
 
@@ -163,6 +166,8 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 		_visible_core_miners.clear()
 		_furnace_animation_seconds.clear()
 		_visible_arc_furnaces.clear()
+		_industry_animation_seconds.clear()
+		_visible_industry_buildings.clear()
 	_update_shipment_interpolation(snapshot)
 	if world_changed or _snapshot.is_empty() or float(snapshot.get("elapsed_ms", 0.0)) != float(_snapshot.get("elapsed_ms", 0.0)) or int(snapshot.get("runtime_revision", 0)) != int(_snapshot.get("runtime_revision", 0)) or int(snapshot.get("topology_revision", 0)) != int(_snapshot.get("topology_revision", 0)):
 		_runtime_snapshot_age = 0.0
@@ -175,6 +180,9 @@ func apply_snapshot(snapshot: Dictionary, already_normalized: bool = false) -> v
 	for furnace_id in _furnace_animation_seconds.keys():
 		if not _entities_by_id.has(furnace_id):
 			_furnace_animation_seconds.erase(furnace_id)
+	for entity_id in _industry_animation_seconds.keys():
+		if not _entities_by_id.has(entity_id):
+			_industry_animation_seconds.erase(entity_id)
 	_load_road_surface()
 	if not _port_drag.is_empty() and previous_topology_signature != _topology_signature():
 		cancel_port_drag()
@@ -410,6 +418,7 @@ func _process(delta: float) -> void:
 	_runtime_snapshot_age += delta
 	_advance_core_extractors(delta)
 	_advance_arc_furnaces(delta)
+	_advance_industry_buildings(delta)
 	if not _reduced_motion and is_visible_in_tree() and _visible_active_flow:
 		_flow_redraw_elapsed += delta
 		if _flow_redraw_elapsed >= FLOW_REDRAW_INTERVAL_SECONDS:
@@ -425,6 +434,7 @@ func _draw() -> void:
 	_visible_active_flow = false
 	_visible_core_miners.clear()
 	_visible_arc_furnaces.clear()
+	_visible_industry_buildings.clear()
 	if _snapshot.is_empty() or not bool(_snapshot.get("valid", true)):
 		_terrain_renderer.hide_ground()
 		draw_rect(Rect2(Vector2.ZERO, size), CANVAS_COLOR)
@@ -457,6 +467,7 @@ func _draw() -> void:
 		_draw_links()
 	_draw_core_extractor_shadows()
 	_draw_arc_furnace_shadows()
+	_draw_industry_shadows()
 	_draw_entities()
 	_draw_road_cargo()
 	_draw_construction_orders()
@@ -872,7 +883,7 @@ func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: St
 	if selected:
 		draw_rect(footprint, Color(FOCUS_COLOR, 0.14), true)
 	if art != null:
-		art_rect = _fit_art_rect(art, art_rect)
+		art_rect = _building_art_rect(str(entity.get("definition_id", "")), art, footprint, detail_stage)
 		# Use the actual transparent building sprite, with its authored colors.
 		# Operational information lives in the inspector, not across its roof.
 		if BuildingArt.uses_core_extractor(str(entity.get("definition_id", ""))):
@@ -890,6 +901,14 @@ func _draw_world_building(entity: Dictionary, footprint: Rect2, detail_stage: St
 			var seconds := float(_furnace_animation_seconds.get(furnace_id, 0.0))
 			var layer := "working" if _core_extractor_working(entity) else "body"
 			var texture := ArcFurnaceArt.frame_texture(layer, ArcFurnaceArt.frame_index(seconds))
+			draw_texture_rect(texture if texture != null else art, art_rect, false)
+		elif not BuildingArt.industry_family(str(entity.get("definition_id", ""))).is_empty():
+			var family := BuildingArt.industry_family(str(entity.get("definition_id", "")))
+			var entity_id := str(entity.get("id", ""))
+			_visible_industry_buildings.append(entity_id)
+			var seconds := float(_industry_animation_seconds.get(entity_id, 0.0))
+			var layer := "working" if _industry_working(entity) else "body"
+			var texture := IndustryArt.frame_texture(family, layer, IndustryArt.frame_index(family, seconds))
 			draw_texture_rect(texture if texture != null else art, art_rect, false)
 		else:
 			draw_texture_rect(art, Rect2(art_rect.position + Vector2(2,4),art_rect.size), false, Color(0,0,0,0.45))
@@ -968,6 +987,50 @@ func _draw_arc_furnace_shadows() -> void:
 		var shadow := ArcFurnaceArt.frame_texture("shadow", 0)
 		if shadow != null:
 			draw_texture_rect(shadow, ArcFurnaceArt.shadow_rect(body_rect), false, Color(1,1,1,0.48))
+
+
+func _industry_working(entity: Dictionary) -> bool:
+	if BuildingArt.industry_family(str(entity.get("definition_id", ""))) == "thermal-plant":
+		return str(entity.get("status", "")) == "RUNNING" and float(entity.get("generation_kw", 0.0)) > 0.00001
+	return _core_extractor_working(entity)
+
+
+func _advance_industry_buildings(delta: float) -> void:
+	if not _road_logistics_mode or not is_visible_in_tree() or not _road_feedback_animation_allowed() or _runtime_snapshot_age > 1.25:
+		return
+	var changed := false
+	for entity_id in _visible_industry_buildings:
+		var entity: Dictionary = _entities_by_id.get(entity_id, {})
+		var family := BuildingArt.industry_family(str(entity.get("definition_id", "")))
+		if family.is_empty() or not _industry_working(entity):
+			continue
+		var previous := float(_industry_animation_seconds.get(entity_id, 0.0))
+		var next := fposmod(previous + maxf(0.0, delta), float(IndustryArt.frame_count(family)) / 30.0)
+		_industry_animation_seconds[entity_id] = next
+		changed = changed or IndustryArt.frame_index(family, previous) != IndustryArt.frame_index(family, next)
+	if changed:
+		queue_redraw()
+
+
+func _draw_industry_shadows() -> void:
+	if not _road_logistics_mode:
+		return
+	for entity_id in _visible_records.get("entity_ids", []):
+		var entity: Dictionary = _entities_by_id.get(str(entity_id), {})
+		var family := BuildingArt.industry_family(str(entity.get("definition_id", "")))
+		if family.is_empty():
+			continue
+		var body_rect := IndustryArt.body_rect(family, _footprint_rect(entity.get("footprint", {})))
+		var shadow := IndustryArt.frame_texture(family, "shadow", 0)
+		if shadow != null:
+			draw_texture_rect(shadow, IndustryArt.shadow_rect(family, body_rect), false, Color(1,1,1,0.48))
+
+
+func _building_art_rect(definition_id: String, art: Texture2D, footprint: Rect2, detail_stage: String) -> Rect2:
+	var family := BuildingArt.industry_family(definition_id)
+	if not family.is_empty():
+		return IndustryArt.body_rect(family, footprint)
+	return _fit_art_rect(art, _entity_visible_icon_rect(footprint, detail_stage))
 
 
 func _mining_range_geometry(record: Dictionary) -> Dictionary:
@@ -1102,7 +1165,8 @@ func _draw_construction_orders() -> void:
 			var art := BuildingArt.icon_texture(_building_atlas,str(order.get("definition_id","")),"MACHINE")
 			var art_rect := _entity_visible_icon_rect(rect,_detail_stage())
 			if art != null:
-				draw_texture_rect(art,_fit_art_rect(art,art_rect),false,Color(0.62,0.9,1.0,0.52))
+				art_rect = _building_art_rect(str(order.get("definition_id", "")), art, rect, _detail_stage())
+				draw_texture_rect(art,art_rect,false,Color(0.62,0.9,1.0,0.52))
 			_draw_footprint_outline(rect, tone, 1.3)
 			if _detail_stage() != "COMPACT" and _tile_scale() >= 4.0:
 				_draw_world_label(I18n.t("factory.canvas.waiting_building", "Awaiting building"),Vector2(art_rect.position.x,art_rect.position.y - 7.0),tone)
@@ -1141,7 +1205,7 @@ func _draw_placement_preview() -> void:
 	if not definition_id.is_empty():
 		var art := BuildingArt.icon_texture(_building_atlas,definition_id,str(_placement_preview.get("node_kind","MACHINE")))
 		if art != null:
-			art_rect = _fit_art_rect(art,art_rect)
+			art_rect = _building_art_rect(definition_id,art,rect,_detail_stage())
 			if BuildingArt.uses_core_extractor(definition_id):
 				var shadow := CoreExtractorArt.frame_texture("shadow", 0)
 				if shadow != null:
@@ -1150,6 +1214,11 @@ func _draw_placement_preview() -> void:
 				var shadow := ArcFurnaceArt.frame_texture("shadow", 0)
 				if shadow != null:
 					draw_texture_rect(shadow,ArcFurnaceArt.shadow_rect(art_rect),false,Color(1,1,1,0.312))
+			elif not BuildingArt.industry_family(definition_id).is_empty():
+				var family := BuildingArt.industry_family(definition_id)
+				var shadow := IndustryArt.frame_texture(family, "shadow", 0)
+				if shadow != null:
+					draw_texture_rect(shadow,IndustryArt.shadow_rect(family,art_rect),false,Color(1,1,1,0.312))
 			else:
 				draw_texture_rect(art,Rect2(art_rect.position + Vector2(2,3),art_rect.size),false,Color(0,0,0,0.48))
 			draw_texture_rect(art,art_rect,false,Color(0.76,1.0,0.9,0.83) if is_valid else Color(1.0,0.46,0.42,0.83))
@@ -2316,6 +2385,9 @@ func _visible_entity_icon_at(point: Vector2) -> Dictionary:
 		for entity_id in draw_ids:
 			var entity: Dictionary = _entities_by_id.get(str(entity_id),{})
 			var rect := _entity_visible_icon_rect(_footprint_rect(entity.get("footprint",{})),detail_stage)
+			var family := BuildingArt.industry_family(str(entity.get("definition_id", "")))
+			if not family.is_empty():
+				rect = IndustryArt.body_rect(family, _footprint_rect(entity.get("footprint", {})))
 			if rect.has_point(point):
 				return entity
 		return {}

@@ -36,8 +36,10 @@ func _run() -> void:
 		if texture != null and texture.atlas != null:
 			_check(texture.region.has_area() and Rect2(Vector2.ZERO, texture.atlas.get_size()).encloses(texture.region), "item %s stays inside its own art atlas" % item_id)
 			if texture.atlas is ImageTexture:
-				# The furnace adapter may build mipmaps from its local frame.
-				_check(MaterialArt.BuildingArt.uses_arc_furnace(str(item_id).trim_prefix("building_")) and texture.atlas.get_image().has_mipmaps(), "item %s uses the approved mipmapped frame" % item_id)
+				# Approved animation adapters may build mipmaps from local frames.
+				var definition_id := str(item_id).trim_prefix("building_")
+				var approved := MaterialArt.BuildingArt.uses_arc_furnace(definition_id) or not MaterialArt.BuildingArt.industry_family(definition_id).is_empty()
+				_check(approved and texture.atlas.get_image().has_mipmaps(), "item %s uses the approved mipmapped frame" % item_id)
 			else:
 				_check(texture.atlas.resource_path.begins_with("res://"), "item %s uses project-local artwork" % item_id)
 			_check(texture == MaterialArt.texture_for_item(str(item_id)), "item %s reuses its cached sprite" % item_id)
